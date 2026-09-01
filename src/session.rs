@@ -46,6 +46,20 @@ pub enum Step {
 /// the session consume whatever outcomes have arrived and make further
 /// progress.
 ///
+/// ```text
+///              ┌────────────────────────────────────────────────┐
+///              │                      HOST                      │
+///              │   owns files, the network, keys, the clock,    │
+///              │            and all async scheduling            │
+///              └────┬───────────────────────▲───────────────────┘
+///         advance() │                       │ fulfill(id, reply)
+///                   ▼                       │
+///              ┌────────────────────────────────────────────────┐
+///              │                    SESSION                     │
+///              │  synchronous state machine + request tracker   │
+///              └────────────────────────────────────────────────┘
+/// ```
+///
 /// 1. Create the session (each implementation defines its own constructor
 ///    and settings).
 /// 2. Call [`Self::advance`]. It returns [`Step::AwaitHost`] when blocked on

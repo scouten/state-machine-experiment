@@ -14,6 +14,39 @@ on independently. Concrete C2PA workflows (reading and validating a
 manifest store, generating and signing one, and so on) are expected to live
 in their own crates built on top of this one.
 
+## Interaction contract
+
+A session never blocks: when it cannot make further progress on its own, it
+parks itself and reports the operations it needs its host to perform. The
+host services them — concurrently and in any order, if it likes — and
+reports each outcome back. Calling `advance` again lets the session consume
+whatever outcomes have arrived and make further progress.
+
+```text
+             ┌────────────────────────────────────────────────┐
+             │                      HOST                      │
+             │   owns files, the network, keys, the clock,    │
+             │            and all async scheduling            │
+             └────┬───────────────────────▲───────────────────┘
+        advance() │                       │ fulfill(id, reply)
+                  ▼                       │
+             ┌────────────────────────────────────────────────┐
+             │                    SESSION                     │
+             │  synchronous state machine + request tracker   │
+             └────────────────────────────────────────────────┘
+```
+
+1. Create the session.
+2. Call `advance`. It returns `Step::AwaitHost` when blocked on the host, or
+   `Step::Complete` once the workflow has finished.
+3. While `AwaitHost`: service any subset of `outstanding_requests` and
+   report each outcome via `fulfill`, then call `advance` again. Outcomes
+   may be reported in any order.
+4. On `Complete`: consume the session with `finish` to obtain its result.
+
+See the `Session` trait and `SessionCore` in [`src/session.rs`](src/session.rs)
+for the concrete API.
+
 ## Building
 
 ```sh
