@@ -76,7 +76,7 @@ pub enum Step {
 /// harness, an FFI dispatcher, a generic driver loop) can be written once
 /// against any session built on this engine, whatever workflow it carries
 /// out.
-pub trait Session {
+pub trait Session: Send {
     /// This session's request vocabulary.
     type Request: Request;
 
