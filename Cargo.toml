@@ -1,0 +1,23 @@
+[package]
+name = "contentauth-state-machine"
+version = "0.1.0"
+description = "Reusable engine for building synchronous, sans-I/O state machines"
+authors = ["Eric Scouten <scouten@adobe.com>"]
+license = "MIT OR Apache-2.0"
+edition = "2021"
+rust-version = "1.88.0"
+repository = "https://github.com/scouten-adobe/contentauth-state-machine"
+readme = "README.md"
+keywords = ["c2pa", "content-credentials", "sans-io"]
+categories = ["api-bindings"]
+publish = false
+
+[features]
+# Exposes `RequestTracker::fulfill_unchecked` outside this crate, for
+# downstream sessions' own tests that need to exercise a state machine's
+# defense-in-depth check against a reply payload `fulfill` itself would
+# reject.
+test-util = []
+
+[dependencies]
+thiserror = "2.0.20"

@@ -1,0 +1,205 @@
+# CI for the contentauth-state-machine prototype.
+#
+# Inspired by (and simplified from) the c2pa-rs tier-1a workflow. This repo
+# is a single crate, so the feature-matrix and multi-platform machinery from
+# c2pa-rs is omitted; it can be reintroduced if/when the experiment grows.
+
+name: CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Unit tests + code coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master@2026-06-30
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@4684b8405694ae9dd42c9f39ba901a70ae83f4a3 # v2.82.9
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Generate code coverage
+        env:
+          RUST_BACKTRACE: "1"
+        run: cargo llvm-cov --all-features --tests --lcov --output-path lcov.info
+
+      # Test code itself shouldn't count for or against coverage.
+      - name: Filter out tests
+        uses: scouten/uncover-tests@af7baaca5bf5189b968573d5f14627c2e1ea0704 # v1.1.0
+        with:
+          input-file: lcov.info
+          output-file: lcov.filtered.info
+
+      # Tokens aren't available for PRs originating from forks,
+      # so we don't attempt to upload code coverage in that case.
+      - name: Upload code coverage results
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: true
+          verbose: true
+          files: ./lcov.filtered.info
+
+  doc-tests:
+    name: Doc tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master@2026-06-30
+        with:
+          toolchain: stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Run doc tests
+        env:
+          RUST_BACKTRACE: "1"
+        run: cargo test --all-features --doc
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master@2026-06-30
+        with:
+          toolchain: stable
+          components: clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Run Clippy
+        run: cargo clippy --all-features --all-targets -- -Dwarnings
+
+  cargo_fmt:
+    name: Enforce Rust code format
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master@2026-06-30
+        with:
+          # rustfmt.toml uses unstable options; pinned to match c2pa-rs.
+          toolchain: nightly-2026-01-16
+          components: rustfmt
+
+      - name: Check format
+        run: cargo +nightly-2026-01-16 fmt --all -- --check
+
+  docs:
+    name: Doc build (stable, warnings denied)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master@2026-06-30
+        with:
+          toolchain: stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Build docs
+        env:
+          RUSTDOCFLAGS: -Dwarnings
+        run: cargo doc --no-deps --all-features
+
+  wasm:
+    name: Wasm build checks
+    runs-on: ubuntu-latest
+
+    # This is meant to become a portable core with no I/O, threads, network,
+    # or clock dependencies, so it should build for Wasm targets unmodified.
+    # Enforced from day one.
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master@2026-06-30
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown, wasm32-wasip2
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: "`cargo check` for wasm32-unknown-unknown"
+        run: cargo check --all-features --target wasm32-unknown-unknown
+
+      - name: "`cargo check` for wasm32-wasip2"
+        run: cargo check --all-features --target wasm32-wasip2
+
+  msrv:
+    name: MSRV build check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust toolchain (MSRV)
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master@2026-06-30
+        with:
+          # Keep in sync with rust-version in Cargo.toml.
+          toolchain: 1.88.0
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: "`cargo check` with MSRV"
+        run: cargo check --all-features --all-targets
+
+  cargo-deny:
+    name: License / vulnerability audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Audit crate dependencies
+        uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2.0.20
+        with:
+          command: check advisories bans licenses sources
