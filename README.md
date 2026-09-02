@@ -1,54 +1,35 @@
-# contentauth-state-machine
+# state-machine-experiment
 
-A reusable engine for building synchronous, sans-I/O state machines: a
-session type that runs entirely synchronously and externalizes anything that
-might need to be asynchronous (I/O, the network, a clock, signing) to its
-host through an explicit request/reply protocol, rather than blocking or
-spawning.
+A suite of prototypes exploring synchronous, sans-I/O state machines for
+C2PA workflows.
 
-This crate carries no C2PA-specific logic. It distills the session shape
-into pieces — a request/reply vocabulary trait, request tracking, a
-protocol-error vocabulary, and the `advance` / `fulfill` / `finish`
-interaction contract — that any subcomponent of a larger workflow can build
-on independently. Concrete C2PA workflows (reading and validating a
-manifest store, generating and signing one, and so on) are expected to live
-in their own crates built on top of this one.
+The foundation is [`contentauth-state-machine`](contentauth-state-machine),
+a reusable engine for building sessions that never block: a session runs
+entirely synchronously and externalizes anything that might need to be
+asynchronous (I/O, the network, a clock, signing) to its host through an
+explicit request/reply protocol, rather than blocking or spawning. It
+carries no C2PA-specific logic of its own — it just distills the session
+shape (a request/reply vocabulary trait, request tracking, a protocol-error
+vocabulary, and the `advance` / `fulfill` / `finish` interaction contract)
+into pieces any subcomponent of a larger workflow can build on
+independently.
 
-## Interaction contract
+Concrete C2PA workflows built on top of that engine — reading and
+validating a manifest store, generating and signing one, and so on — are
+expected to live in their own crates alongside it in this workspace as the
+experiment grows.
 
-A session never blocks: when it cannot make further progress on its own, it
-parks itself and reports the operations it needs its host to perform. The
-host services them — concurrently and in any order, if it likes — and
-reports each outcome back. Calling `advance` again lets the session consume
-whatever outcomes have arrived and make further progress.
+## Crates
 
-```text
-             ┌────────────────────────────────────────────────┐
-             │                      HOST                      │
-             │   owns files, the network, keys, the clock,    │
-             │            and all async scheduling            │
-             └────┬───────────────────────▲───────────────────┘
-        advance() │                       │ fulfill(id, reply)
-                  ▼                       │
-             ┌────────────────────────────────────────────────┐
-             │                    SESSION                     │
-             │  synchronous state machine + request tracker   │
-             └────────────────────────────────────────────────┘
-```
-
-1. Create the session.
-2. Call `advance`. It returns `Step::AwaitHost` when blocked on the host, or
-   `Step::Complete` once the workflow has finished.
-3. While `AwaitHost`: service any subset of `outstanding_requests` and
-   report each outcome via `fulfill`, then call `advance` again. Outcomes
-   may be reported in any order.
-4. On `Complete`: consume the session with `finish` to obtain its result.
-
-See the `Session` trait and `SessionCore` in
-[`contentauth-state-machine/src/session.rs`](contentauth-state-machine/src/session.rs)
-for the concrete API.
+* [`contentauth-state-machine`](contentauth-state-machine) — the
+  sans-I/O session engine. See its
+  [README](contentauth-state-machine/README.md) for the interaction
+  contract and build instructions.
 
 ## Building
+
+This repo is a Cargo workspace; the usual commands run across all members
+from the repository root:
 
 ```sh
 cargo test
