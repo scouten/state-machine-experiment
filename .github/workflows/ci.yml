@@ -1,8 +1,9 @@
 # CI for the contentauth-state-machine prototype.
 #
 # Inspired by (and simplified from) the c2pa-rs tier-1a workflow. This repo
-# is a single crate, so the feature-matrix and multi-platform machinery from
-# c2pa-rs is omitted; it can be reintroduced if/when the experiment grows.
+# is a workspace with a single member crate today, so the feature-matrix and
+# multi-platform machinery from c2pa-rs is omitted; it can be reintroduced if
+# / when the experiment grows.
 
 name: CI
 

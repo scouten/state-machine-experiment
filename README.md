@@ -44,7 +44,8 @@ whatever outcomes have arrived and make further progress.
    may be reported in any order.
 4. On `Complete`: consume the session with `finish` to obtain its result.
 
-See the `Session` trait and `SessionCore` in [`src/session.rs`](src/session.rs)
+See the `Session` trait and `SessionCore` in
+[`contentauth-state-machine/src/session.rs`](contentauth-state-machine/src/session.rs)
 for the concrete API.
 
 ## Building
