@@ -20,8 +20,8 @@
 //! [`contentauth_state_machine::HostRequest`]. The host services them —
 //! possibly concurrently, using whatever async machinery its runtime
 //! provides — and reports each outcome back via
-//! [`ReadSession::fulfill`](crate::ReadSession::fulfill) with a matching
-//! [`HostReply`] (or [`HostReply::Failed`]).
+//! [`Session::fulfill`](contentauth_state_machine::Session::fulfill) with a
+//! matching [`HostReply`] (or [`HostReply::Failed`]).
 //!
 //! [`RequestKind`] implements [`contentauth_state_machine::Request`], which
 //! is what lets the engine's [`contentauth_state_machine::RequestTracker`]
@@ -29,8 +29,10 @@
 
 use contentauth_state_machine::Request;
 
-use crate::error::HostError;
-use crate::types::{ByteRange, HashAlgorithm, StreamId};
+use crate::{
+    error::HostError,
+    types::{ByteRange, StreamId},
+};
 
 /// The operations a read session may ask its host to perform.
 ///

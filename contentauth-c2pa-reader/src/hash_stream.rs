@@ -473,10 +473,12 @@ mod tests {
 
         assert!(matches!(
             stream.absorb(&mut core),
-            Err(Error::Protocol(contentauth_state_machine::ProtocolError::ReplyMismatch {
-                expected: "AssetBytes",
-                ..
-            }))
+            Err(Error::Protocol(
+                contentauth_state_machine::ProtocolError::ReplyMismatch {
+                    expected: "AssetBytes",
+                    ..
+                }
+            ))
         ));
     }
 

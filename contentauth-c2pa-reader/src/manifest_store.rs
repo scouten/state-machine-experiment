@@ -71,9 +71,6 @@ pub(crate) const SIGNATURE_UUID: [u8; 16] = type_uuid(*b"c2cs");
 /// Box type of a CBOR content box.
 pub(crate) const CBOR: BoxType = BoxType(*b"cbor");
 
-/// Type UUID of a manifest superbox.
-pub(crate) const MANIFEST_UUID: [u8; 16] = type_uuid(*b"c2ma");
-
 /// One manifest read out of a manifest store.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]

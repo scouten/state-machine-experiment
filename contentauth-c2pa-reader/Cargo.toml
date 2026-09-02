@@ -1,0 +1,65 @@
+[package]
+name = "contentauth-c2pa-reader"
+version = "0.1.0"
+description = "Reads and validates C2PA manifest stores over a synchronous, sans-I/O interface"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["c2pa", "content-credentials", "sans-io"]
+categories = ["api-bindings"]
+publish = false
+
+[dependencies]
+contentauth-state-machine = { path = "../contentauth-state-machine" }
+
+# Raw signature verification primitives, from the ContentAuth project. It
+# deliberately knows nothing about COSE, RFC 3161 or OCSP — exactly the
+# layering this crate wants, since those live here. `rust_native_crypto`
+# only: the `openssl` feature vendors OpenSSL, which would end the Wasm
+# story.
+c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
+    "rust_native_crypto",
+] }
+# CMS (RFC 5652) decoding, used only to unwrap an RFC 3161 timestamp token
+# down to its `SignedData`. Same RustCrypto `der` 0.7 and `const-oid` 0.9
+# generation as `x509-cert` below, so no second copy of either enters the
+# tree — and, like them, a hand-written codec rather than a
+# parser-combinator library, so still no `nom`.
+#
+# `alloc` only: the default features pull in AES, RSA and SHA for building
+# and decrypting CMS, none of which this crate does.
+cms = { version = "0.2.3", default-features = false, features = ["alloc"] }
+# CBOR decoding for claims — the same decoder c2pa-rs uses. Consumed via
+# `c2pa_cbor::Value` (walked by hand in `claim.rs`) rather than serde
+# derives, so the set of claim fields this crate understands stays explicit.
+c2pa_cbor = "0.77.2"
+# Zero-copy JUMBF parser. This crate only reads, so only the parser half of
+# the crate is used.
+jumbf = "0.7.0"
+sha2 = "0.11.0"
+thiserror = "2.0.20"
+# X.509 decoding, confined to `cert.rs`. RustCrypto's `der` is a
+# hand-written codec rather than a parser-combinator library, so unlike
+# `x509-parser`/`asn1-rs`/`rasn` it brings no `nom`. Pinned to the 0.7
+# `der` line, which is the one `c2pa-raw-crypto` already pulls in through
+# `spki`/`pkcs8` — so no second `der` generation enters the tree.
+#
+# `cert.rs` is a deliberate seam: nothing outside it names an `x509_cert`
+# type.
+der = "0.7.10"
+# Decodes RSASSA-PSS `AlgorithmIdentifier` parameters, whose hash is
+# carried in context-tagged optionals with defaults rather than named by
+# the algorithm OID. Same `der` 0.7 line; already in the tree via `rsa`.
+pkcs1 = "0.7.5"
+x509-cert = { version = "0.2.5", default-features = false }
+
+[dev-dependencies]
+# Enables `SessionCore::fulfill_unchecked`, which this crate's own tests use
+# to exercise `ReadSession`'s defense-in-depth check against a reply payload
+# `fulfill` itself would reject.
+contentauth-state-machine = { path = "../contentauth-state-machine", features = [
+    "test-util",
+] }

@@ -13,7 +13,13 @@
 
 //! The read/validate workflow: [`ReadSession`].
 
-use contentauth_state_machine::{HostRequest, ProtocolError, RequestId, Session, SessionCore, Step};
+/// [`Step::AwaitHost`] / [`Step::Complete`], under the name this crate's
+/// docs and tests use for [`ReadSession`]'s own steps. This is the very
+/// same type as [`contentauth_state_machine::Step`] — see the crate root.
+pub use contentauth_state_machine::Step as ReadStep;
+use contentauth_state_machine::{
+    HostRequest, ProtocolError, RequestId, Session, SessionCore, Step,
+};
 
 use crate::{
     cert::{self, Certificate},
@@ -26,11 +32,6 @@ use crate::{
     types::{ByteRange, HashAlgorithm, StreamId},
     validation::{status_code, ValidationState, ValidationStatus},
 };
-
-/// [`Step::AwaitHost`] / [`Step::Complete`], under the name this crate's
-/// docs and tests use for [`ReadSession`]'s own steps. This is the very
-/// same type as [`contentauth_state_machine::Step`] — see the crate root.
-pub use contentauth_state_machine::Step as ReadStep;
 
 /// Configuration for a [`ReadSession`].
 ///
@@ -803,7 +804,9 @@ mod tests {
         // Bypass `fulfill`'s payload validation to exercise the state
         // machine's own defense-in-depth check.
         let id = session.outstanding_requests()[0].id;
-        session.core.fulfill_unchecked(id, HostReply::AssetLength(0));
+        session
+            .core
+            .fulfill_unchecked(id, HostReply::AssetLength(0));
 
         assert!(matches!(
             session.advance(),
@@ -1018,7 +1021,9 @@ mod tests {
         // Bypass `fulfill`'s payload validation to reach the session's own
         // defence-in-depth check.
         let id = session.outstanding_requests()[0].id;
-        session.core.fulfill_unchecked(id, HostReply::AssetLength(0));
+        session
+            .core
+            .fulfill_unchecked(id, HostReply::AssetLength(0));
 
         assert!(matches!(
             session.advance(),
@@ -1093,7 +1098,6 @@ mod tests {
                     RequestKind::CurrentDateTime => Ask::Time(request.id),
                     RequestKind::AssetLength { .. } => Ask::Length(request.id),
                     RequestKind::AssetBytes { range, .. } => Ask::Bytes(request.id, *range),
-                    other => panic!("unexpected request {other:?}"),
                 })
                 .collect();
 
@@ -1293,7 +1297,9 @@ mod tests {
         // Bypass `fulfill`'s payload validation to reach the session's own
         // defence-in-depth check.
         let id = session.outstanding_requests()[0].id;
-        session.core.fulfill_unchecked(id, HostReply::CurrentDateTime(0));
+        session
+            .core
+            .fulfill_unchecked(id, HostReply::CurrentDateTime(0));
 
         assert!(matches!(
             session.advance(),
@@ -1462,20 +1468,15 @@ mod tests {
 
         assert_eq!(session.advance().unwrap(), ReadStep::AwaitHost);
 
-        // The engine's `RequestId` carries no public constructor, so an
-        // "unknown" one is manufactured by issuing (and discarding) an
-        // extra request on a scratch session sharing the same numbering.
-        let mut scratch = ReadSession::new(ReadSettings::default());
-        assert_eq!(scratch.advance().unwrap(), ReadStep::AwaitHost);
-        let bogus = scratch.outstanding_requests()[0].id;
-        scratch
-            .fulfill(bogus, HostReply::ManifestStore(None))
-            .unwrap();
-        assert_eq!(scratch.advance().unwrap(), ReadStep::Complete);
+        let id = session.outstanding_requests()[0].id;
+        session.fulfill(id, HostReply::ManifestStore(None)).unwrap();
 
+        // The request has already been answered and removed from what is
+        // outstanding — fulfilling it again (before `advance` has
+        // consumed the reply) finds nothing left to answer.
         assert!(matches!(
-            session.fulfill(bogus, HostReply::ManifestStore(None)),
-            Err(Error::Protocol(ProtocolError::UnknownRequest(id))) if id == bogus
+            session.fulfill(id, HostReply::ManifestStore(None)),
+            Err(Error::Protocol(ProtocolError::UnknownRequest(unknown))) if unknown == id
         ));
     }
 

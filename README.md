@@ -25,6 +25,10 @@ experiment grows.
   sans-I/O session engine. See its
   [README](contentauth-state-machine/README.md) for the interaction
   contract and build instructions.
+* [`contentauth-c2pa-reader`](contentauth-c2pa-reader) — reads and
+  validates C2PA manifest stores, built on top of the engine above. See its
+  [README](contentauth-c2pa-reader/README.md) for what it validates and its
+  request vocabulary.
 
 ## Building
 
