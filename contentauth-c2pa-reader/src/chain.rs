@@ -91,7 +91,7 @@ pub(crate) struct PendingChain {
 /// The rules for building and checking a path are the same whether the
 /// credential at the bottom signed a claim or stamped a time — but the C2PA
 /// status vocabulary names the two sets of findings differently. Rather
-/// than duplicate the checks, the words are a parameter.
+/// than duplicate the checks, the status code vocabulary is a parameter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Vocabulary {
     /// The path is broken, or a certificate is outside the profile.
@@ -167,7 +167,7 @@ pub(crate) fn validate(
     anchors: &[Certificate],
     now: i64,
     url: &str,
-    words: Vocabulary,
+    status_code_vocabulary: Vocabulary,
     statuses: &mut Vec<ValidationStatus>,
 ) -> Trust {
     let Some((leaf, rest)) = chain.split_first() else {
@@ -175,14 +175,14 @@ pub(crate) fn validate(
         // always has a signer. Reported rather than assumed.
         statuses.push(invalid(
             url,
-            words,
+            status_code_vocabulary,
             "the credential carries no certificates",
         ));
         return Trust::Rejected;
     };
 
     if let Err(reason) = end_entity_profile(leaf) {
-        statuses.push(invalid(url, words, reason));
+        statuses.push(invalid(url, status_code_vocabulary, reason));
         return Trust::Rejected;
     }
 
@@ -196,7 +196,7 @@ pub(crate) fn validate(
         if subject.issuer != issuer.subject {
             statuses.push(invalid(
                 url,
-                words,
+                status_code_vocabulary,
                 format!(
                     "certificate {:?} names issuer {:?}, but the next certificate in the chain is {:?}",
                     subject.subject, subject.issuer, issuer.subject
@@ -209,14 +209,14 @@ pub(crate) fn validate(
         // the end-entity certificate, which is what `pathLenConstraint`
         // bounds (RFC 5280 §4.2.1.9).
         if let Err(reason) = issuer_profile(issuer, below) {
-            statuses.push(invalid(url, words, reason));
+            statuses.push(invalid(url, status_code_vocabulary, reason));
             return Trust::Rejected;
         }
 
         if let Err(reason) = verify(subject, issuer) {
             statuses.push(invalid(
                 url,
-                words,
+                status_code_vocabulary,
                 format!("certificate {:?}: {reason}", subject.subject),
             ));
             return Trust::Rejected;
@@ -232,9 +232,9 @@ pub(crate) fn validate(
         // claim signature's validity; a certificate further up the path is
         // reported against the credential as a whole.
         let code = if position == 0 {
-            words.outside_validity
+            status_code_vocabulary.outside_validity
         } else {
-            words.expired
+            status_code_vocabulary.expired
         };
 
         statuses.push(ValidationStatus::for_url(
@@ -249,21 +249,21 @@ pub(crate) fn validate(
     }
 
     statuses.push(ValidationStatus::for_url(
-        words.inside_validity,
+        status_code_vocabulary.inside_validity,
         url,
         "every certificate in the path was inside its validity window",
     ));
 
     if anchored {
         statuses.push(ValidationStatus::for_url(
-            words.trusted,
+            status_code_vocabulary.trusted,
             url,
             "the credential chains to a configured trust anchor",
         ));
         Trust::Anchored
     } else {
         statuses.push(ValidationStatus::for_url(
-            words.untrusted,
+            status_code_vocabulary.untrusted,
             url,
             if anchors.is_empty() {
                 "no trust anchors are configured, so the chain reaches none"
@@ -476,8 +476,12 @@ fn issuer_profile(certificate: &Certificate, intermediates_below: usize) -> Resu
 }
 
 /// Builds the vocabulary's "this credential is not usable" status.
-fn invalid(url: &str, words: Vocabulary, explanation: impl Into<String>) -> ValidationStatus {
-    ValidationStatus::for_url(words.invalid, url, explanation)
+fn invalid(
+    url: &str,
+    status_code_vocabulary: Vocabulary,
+    explanation: impl Into<String>,
+) -> ValidationStatus {
+    ValidationStatus::for_url(status_code_vocabulary.invalid, url, explanation)
 }
 
 /// `id-kp-emailProtection`.
