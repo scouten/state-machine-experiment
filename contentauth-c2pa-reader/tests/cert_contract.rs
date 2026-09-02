@@ -15,9 +15,9 @@
 //!
 //! # Why this file exists
 //!
-//! `cert.rs` is a seam (see its module docs and `docs/architecture.md`
-//! §10): the plan is to replace `x509-cert` with a DER reader of our own,
-//! scoped to exactly the structures the C2PA certificate profile needs.
+//! `cert.rs` is a seam (see its module docs): the plan is to replace
+//! `x509-cert` with a DER reader of our own, scoped to exactly the
+//! structures the C2PA certificate profile needs.
 //! Hand-written parsing of attacker-controlled input is only responsible
 //! if the replacement can be held against something. This is that
 //! something.

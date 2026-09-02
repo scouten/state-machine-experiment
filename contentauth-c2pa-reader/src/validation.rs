@@ -17,7 +17,7 @@
 //! produces a complete report wherever it can, recording what it found as
 //! [`ValidationStatus`] entries in the vocabulary of the C2PA
 //! specification. Errors are reserved for protocol misuse and structural
-//! damage (see `docs/architecture.md` §9).
+//! damage.
 //!
 //! # What is checked so far
 //!

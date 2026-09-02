@@ -14,10 +14,9 @@
 //! Interpretation of a C2PA manifest store's JUMBF structure.
 //!
 //! JUMBF parsing itself comes from the [`jumbf`] crate, whose parser is
-//! zero-copy — parsed boxes borrow from the host's bytes, in keeping with
-//! the commitment in `docs/architecture.md` §4.5. This module walks the box
-//! tree it produces, decodes each manifest's claim, and builds the owned
-//! summaries that populate a [`ReadReport`].
+//! zero-copy — parsed boxes borrow from the host's bytes. This module walks
+//! the box tree it produces, decodes each manifest's claim, and builds the
+//! owned summaries that populate a [`ReadReport`].
 //!
 //! [`ReadReport`]: crate::read::ReadReport
 

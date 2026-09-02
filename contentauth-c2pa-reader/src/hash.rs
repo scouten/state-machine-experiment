@@ -16,8 +16,7 @@
 //! Hashing during *validation* is always performed here, in the core, over
 //! bytes the host supplies — never delegated to the host. A digest computed
 //! elsewhere would let a buggy or hostile host layer vouch for content the
-//! core never saw, so validation results must not depend on host arithmetic
-//! (see `docs/architecture.md` §7).
+//! core never saw, so validation results must not depend on host arithmetic.
 //!
 //! Hashing is incremental internally, so that a digest over a large asset
 //! can be accumulated from host-streamed chunks without ever holding the

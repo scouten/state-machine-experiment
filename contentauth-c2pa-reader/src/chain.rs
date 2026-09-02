@@ -50,7 +50,7 @@
 //! rules, the signature-algorithm and named-curve allowlists, and the RSA
 //! minimum modulus size. The last three want detail that
 //! [`crate::cert::Certificate`] does not surface today; the rest want
-//! machinery this core does not have yet. See `docs/architecture.md` §14.
+//! machinery this crate does not have yet.
 
 use c2pa_raw_crypto::{validator_for_sig_and_hash_algs, Oid};
 
