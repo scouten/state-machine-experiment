@@ -18,7 +18,7 @@
 //! SHA-2 is a Merkle–Damgård construction: each block folds into the
 //! previous chaining value, so the *hashing* is irreducibly sequential.
 //! What can overlap is the *fetching* — the host may service several
-//! [`RequestKind::AssetBytes`] requests concurrently and fulfil them in any
+//! [`ReadRequest::AssetBytes`] requests concurrently and fulfil them in any
 //! order, which is usually where the latency is anyway.
 //!
 //! # How the bytes are reassembled correctly
@@ -53,7 +53,7 @@ use contentauth_state_machine::{ProtocolError, RequestId, SessionCore};
 use crate::{
     error::Error,
     hash::Hasher,
-    request::{HostReply, RequestKind},
+    request::{ReadHostReply, ReadRequest},
     types::{ByteRange, HashAlgorithm, StreamId},
 };
 
@@ -136,12 +136,12 @@ impl HashStream {
     }
 
     /// Issues chunk requests until the window is full.
-    pub(crate) fn issue(&mut self, core: &mut SessionCore<RequestKind>, stream: StreamId) {
+    pub(crate) fn issue(&mut self, core: &mut SessionCore<ReadRequest>, stream: StreamId) {
         while self.next_to_issue < self.chunks.len()
             && self.next_to_issue - self.next_to_fold < self.window
         {
             let index = self.next_to_issue;
-            let id = core.issue(RequestKind::AssetBytes {
+            let id = core.issue(ReadRequest::AssetBytes {
                 stream,
                 range: self.chunks[index],
             });
@@ -153,7 +153,7 @@ impl HashStream {
 
     /// Consumes whatever replies the host has provided, folding them in
     /// order and buffering any that arrived early.
-    pub(crate) fn absorb(&mut self, core: &mut SessionCore<RequestKind>) -> Result<(), Error> {
+    pub(crate) fn absorb(&mut self, core: &mut SessionCore<ReadRequest>) -> Result<(), Error> {
         let mut position = 0;
 
         while position < self.outstanding.len() {
@@ -162,7 +162,7 @@ impl HashStream {
             match core.take_reply(id) {
                 None => position += 1,
 
-                Some(HostReply::AssetBytes(bytes)) => {
+                Some(ReadHostReply::AssetBytes(bytes)) => {
                     self.outstanding.remove(position);
 
                     let expected = self.chunks[index].len;
@@ -180,7 +180,7 @@ impl HashStream {
                     self.place(index, bytes);
                 }
 
-                Some(HostReply::Failed(source)) => {
+                Some(ReadHostReply::Failed(source)) => {
                     self.outstanding.remove(position);
                     return Err(Error::HostFailure { id, source });
                 }
@@ -360,7 +360,7 @@ mod tests {
                 .outstanding_requests()
                 .iter()
                 .map(|request| match request.kind {
-                    RequestKind::AssetBytes { range, .. } => (request.id, range),
+                    ReadRequest::AssetBytes { range, .. } => (request.id, range),
                     _ => unreachable!(),
                 })
                 .collect();
@@ -372,7 +372,7 @@ mod tests {
                 let (id, range) = pending[position];
                 let start = range.start as usize;
                 let bytes = asset[start..start + range.len as usize].to_vec();
-                core.fulfill(id, HostReply::AssetBytes(bytes)).unwrap();
+                core.fulfill(id, ReadHostReply::AssetBytes(bytes)).unwrap();
                 stream.absorb(&mut core).unwrap();
             }
         }
@@ -427,8 +427,11 @@ mod tests {
         // window stays full and nothing new is issued.
         let last = core.outstanding_requests()[2].id;
         let range = range(200, 100);
-        core.fulfill(last, HostReply::AssetBytes(vec![0u8; range.len as usize]))
-            .unwrap();
+        core.fulfill(
+            last,
+            ReadHostReply::AssetBytes(vec![0u8; range.len as usize]),
+        )
+        .unwrap();
         stream.absorb(&mut core).unwrap();
         stream.issue(&mut core, StreamId(0));
 
@@ -448,7 +451,7 @@ mod tests {
         let id = core.outstanding_requests()[0].id;
 
         // One byte short: tolerating this would shift every later byte.
-        core.fulfill(id, HostReply::AssetBytes(vec![0u8; 99]))
+        core.fulfill(id, ReadHostReply::AssetBytes(vec![0u8; 99]))
             .unwrap();
 
         assert!(matches!(
@@ -467,7 +470,7 @@ mod tests {
 
         // Bypass `fulfill`'s payload validation to reach the stream's own
         // defence-in-depth check.
-        core.fulfill_unchecked(id, HostReply::CurrentDateTime(0));
+        core.fulfill_unchecked(id, ReadHostReply::CurrentDateTime(0));
 
         assert!(matches!(
             stream.absorb(&mut core),
@@ -485,7 +488,7 @@ mod tests {
 
         stream.issue(&mut core, StreamId(0));
         let id = core.outstanding_requests()[0].id;
-        core.fulfill(id, HostReply::Failed(HostError::new("unreadable")))
+        core.fulfill(id, ReadHostReply::Failed(HostError::new("unreadable")))
             .unwrap();
 
         assert!(matches!(

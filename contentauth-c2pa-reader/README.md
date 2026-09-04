@@ -49,7 +49,7 @@ vocabulary and the checks that produce it.
 ## Request vocabulary
 
 Defined in [`src/request.rs`](src/request.rs). Any request may be answered
-with `HostReply::Failed`.
+with `ReadHostReply::Failed`.
 
 | Request | Answered with | Purpose |
 |---|---|---|

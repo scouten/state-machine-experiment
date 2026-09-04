@@ -20,8 +20,8 @@
 //! fixtures' provenance.
 
 use contentauth_c2pa_reader::{
-    validation::status_code, ByteRange, Error, HostError, HostReply, ReadReport, ReadSession,
-    ReadSettings, ReadStep, RequestId, RequestKind, ValidationState,
+    validation::status_code, ByteRange, Error, HostError, ReadHostReply, ReadReport, ReadRequest,
+    ReadSession, ReadSettings, ReadStep, RequestId, ValidationState,
 };
 use contentauth_state_machine::Session;
 
@@ -68,7 +68,7 @@ struct Host<'a> {
     /// The asset, or `None` for a host that has none to offer.
     asset: Option<&'a [u8]>,
 
-    /// The instant to report for [`RequestKind::CurrentDateTime`].
+    /// The instant to report for [`ReadRequest::CurrentDateTime`].
     now: i64,
 
     /// DER-encoded trust anchors to configure the session with.
@@ -109,10 +109,10 @@ impl Host<'_> {
                 .outstanding_requests()
                 .iter()
                 .map(|request| match &request.kind {
-                    RequestKind::ManifestStore { .. } => Ask::Store(request.id),
-                    RequestKind::CurrentDateTime => Ask::Time(request.id),
-                    RequestKind::AssetLength { .. } => Ask::Length(request.id),
-                    RequestKind::AssetBytes { range, .. } => Ask::Bytes(request.id, *range),
+                    ReadRequest::ManifestStore { .. } => Ask::Store(request.id),
+                    ReadRequest::CurrentDateTime => Ask::Time(request.id),
+                    ReadRequest::AssetLength { .. } => Ask::Length(request.id),
+                    ReadRequest::AssetBytes { range, .. } => Ask::Bytes(request.id, *range),
                     other => panic!("unexpected request {other:?}"),
                 })
                 .collect();
@@ -127,24 +127,27 @@ impl Host<'_> {
                 match ask {
                     Ask::Store(id) => session.fulfill(
                         id,
-                        HostReply::ManifestStore(Some(self.manifest_store.to_vec())),
+                        ReadHostReply::ManifestStore(Some(self.manifest_store.to_vec())),
                     )?,
 
-                    Ask::Time(id) => session.fulfill(id, HostReply::CurrentDateTime(self.now))?,
+                    Ask::Time(id) => {
+                        session.fulfill(id, ReadHostReply::CurrentDateTime(self.now))?
+                    }
 
                     Ask::Length(id) => match self.asset {
                         Some(asset) => {
-                            session.fulfill(id, HostReply::AssetLength(asset.len() as u64))?
+                            session.fulfill(id, ReadHostReply::AssetLength(asset.len() as u64))?
                         }
                         None => session
-                            .fulfill(id, HostReply::Failed(HostError::new("no asset here")))?,
+                            .fulfill(id, ReadHostReply::Failed(HostError::new("no asset here")))?,
                     },
 
                     Ask::Bytes(id, range) => {
                         let asset = self.asset.expect("bytes asked for without an asset");
                         let start = range.start as usize;
                         let end = start + range.len as usize;
-                        session.fulfill(id, HostReply::AssetBytes(asset[start..end].to_vec()))?
+                        session
+                            .fulfill(id, ReadHostReply::AssetBytes(asset[start..end].to_vec()))?
                     }
                 }
             }
@@ -446,13 +449,16 @@ fn a_trusted_timestamp_carries_a_host_that_has_no_clock() {
     assert_eq!(session.advance().unwrap(), ReadStep::AwaitHost);
     let id = session.outstanding_requests()[0].id;
     session
-        .fulfill(id, HostReply::ManifestStore(Some(MANIFEST_STORE.to_vec())))
+        .fulfill(
+            id,
+            ReadHostReply::ManifestStore(Some(MANIFEST_STORE.to_vec())),
+        )
         .unwrap();
 
     assert_eq!(session.advance().unwrap(), ReadStep::AwaitHost);
     let id = session.outstanding_requests()[0].id;
     session
-        .fulfill(id, HostReply::Failed(HostError::new("no clock here")))
+        .fulfill(id, ReadHostReply::Failed(HostError::new("no clock here")))
         .unwrap();
 
     loop {
@@ -464,18 +470,18 @@ fn a_trusted_timestamp_carries_a_host_that_has_no_clock() {
             .outstanding_requests()
             .iter()
             .map(|request| match &request.kind {
-                RequestKind::AssetLength { .. } => (request.id, None),
-                RequestKind::AssetBytes { range, .. } => (request.id, Some(*range)),
+                ReadRequest::AssetLength { .. } => (request.id, None),
+                ReadRequest::AssetBytes { range, .. } => (request.id, Some(*range)),
                 other => panic!("unexpected request {other:?}"),
             })
             .collect();
 
         for (id, range) in asks {
             let reply = match range {
-                None => HostReply::AssetLength(ASSET.len() as u64),
+                None => ReadHostReply::AssetLength(ASSET.len() as u64),
                 Some(range) => {
                     let start = range.start as usize;
-                    HostReply::AssetBytes(ASSET[start..start + range.len as usize].to_vec())
+                    ReadHostReply::AssetBytes(ASSET[start..start + range.len as usize].to_vec())
                 }
             };
             session.fulfill(id, reply).unwrap();
@@ -522,13 +528,16 @@ fn a_host_with_no_clock_leaves_the_chain_unevaluated() {
 
     let id = session.outstanding_requests()[0].id;
     session
-        .fulfill(id, HostReply::ManifestStore(Some(MANIFEST_STORE.to_vec())))
+        .fulfill(
+            id,
+            ReadHostReply::ManifestStore(Some(MANIFEST_STORE.to_vec())),
+        )
         .unwrap();
 
     assert_eq!(session.advance().unwrap(), ReadStep::AwaitHost);
     let id = session.outstanding_requests()[0].id;
     session
-        .fulfill(id, HostReply::Failed(HostError::new("no clock here")))
+        .fulfill(id, ReadHostReply::Failed(HostError::new("no clock here")))
         .unwrap();
 
     // The rest of the workflow carries on: the asset is still hashed.
@@ -541,18 +550,18 @@ fn a_host_with_no_clock_leaves_the_chain_unevaluated() {
             .outstanding_requests()
             .iter()
             .map(|request| match &request.kind {
-                RequestKind::AssetLength { .. } => (request.id, None),
-                RequestKind::AssetBytes { range, .. } => (request.id, Some(*range)),
+                ReadRequest::AssetLength { .. } => (request.id, None),
+                ReadRequest::AssetBytes { range, .. } => (request.id, Some(*range)),
                 other => panic!("unexpected request {other:?}"),
             })
             .collect();
 
         for (id, range) in asks {
             let reply = match range {
-                None => HostReply::AssetLength(ASSET.len() as u64),
+                None => ReadHostReply::AssetLength(ASSET.len() as u64),
                 Some(range) => {
                     let start = range.start as usize;
-                    HostReply::AssetBytes(ASSET[start..start + range.len as usize].to_vec())
+                    ReadHostReply::AssetBytes(ASSET[start..start + range.len as usize].to_vec())
                 }
             };
             session.fulfill(id, reply).unwrap();

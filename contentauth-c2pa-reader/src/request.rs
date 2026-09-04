@@ -21,9 +21,9 @@
 //! possibly concurrently, using whatever async machinery its runtime
 //! provides — and reports each outcome back via
 //! [`Session::fulfill`](contentauth_state_machine::Session::fulfill) with a
-//! matching [`HostReply`] (or [`HostReply::Failed`]).
+//! matching [`ReadHostReply`] (or [`ReadHostReply::Failed`]).
 //!
-//! [`RequestKind`] implements [`contentauth_state_machine::Request`], which
+//! [`ReadRequest`] implements [`contentauth_state_machine::Request`], which
 //! is what lets the engine's [`contentauth_state_machine::RequestTracker`]
 //! validate replies without knowing what the requests mean.
 
@@ -36,16 +36,16 @@ use crate::{
 
 /// The operations a read session may ask its host to perform.
 ///
-/// Each variant documents the [`HostReply`] variant that fulfills it. Any
-/// request may also be fulfilled with [`HostReply::Failed`].
+/// Each variant documents the [`ReadHostReply`] variant that fulfills it. Any
+/// request may also be fulfilled with [`ReadHostReply::Failed`].
 #[derive(Clone, Debug)]
 #[non_exhaustive]
-pub enum RequestKind {
+pub enum ReadRequest {
     /// Locate the C2PA manifest store within the asset's container format
     /// and return its raw (JUMBF) bytes.
     ///
     /// The host owns all knowledge of the container format (JPEG, PNG, BMFF,
-    /// …). Reply with [`HostReply::ManifestStore`]; use `None` if the asset
+    /// …). Reply with [`ReadHostReply::ManifestStore`]; use `None` if the asset
     /// contains no manifest store.
     ManifestStore {
         /// The asset stream to inspect.
@@ -55,7 +55,7 @@ pub enum RequestKind {
     /// Read a range of bytes from a stream and return them to the crate.
     ///
     /// Used to feed asset bytes into the crate's internal hashing (hard
-    /// binding validation). Reply with [`HostReply::AssetBytes`].
+    /// binding validation). Reply with [`ReadHostReply::AssetBytes`].
     AssetBytes {
         /// The stream to read from.
         stream: StreamId,
@@ -68,8 +68,8 @@ pub enum RequestKind {
     ///
     /// Needed to hash an asset: the hard binding names the ranges to
     /// *exclude*, so the crate must know where the asset ends to work out
-    /// what to include. Reply with [`HostReply::AssetLength`], or with
-    /// [`HostReply::Failed`] if no asset is available — reading a detached
+    /// what to include. Reply with [`ReadHostReply::AssetLength`], or with
+    /// [`ReadHostReply::Failed`] if no asset is available — reading a detached
     /// manifest, say — in which case the hard binding is reported as
     /// unchecked rather than failed.
     AssetLength {
@@ -81,12 +81,12 @@ pub enum RequestKind {
     ///
     /// This crate reads no clock of its own; certificate validity windows
     /// and similar checks use time supplied by the host. Reply with
-    /// [`HostReply::CurrentDateTime`].
+    /// [`ReadHostReply::CurrentDateTime`].
     CurrentDateTime,
 }
 
-impl Request for RequestKind {
-    type Reply = HostReply;
+impl Request for ReadRequest {
+    type Reply = ReadHostReply;
 
     /// Describes the reply payload this request expects, for diagnostics.
     fn expected_reply(&self) -> &'static str {
@@ -99,14 +99,14 @@ impl Request for RequestKind {
     }
 
     /// Reports whether `reply` is an acceptable fulfillment of this request.
-    fn accepts(&self, reply: &HostReply) -> bool {
+    fn accepts(&self, reply: &ReadHostReply) -> bool {
         matches!(
             (self, reply),
-            (_, HostReply::Failed(_))
-                | (Self::ManifestStore { .. }, HostReply::ManifestStore(_))
-                | (Self::AssetBytes { .. }, HostReply::AssetBytes(_))
-                | (Self::AssetLength { .. }, HostReply::AssetLength(_))
-                | (Self::CurrentDateTime, HostReply::CurrentDateTime(_))
+            (_, ReadHostReply::Failed(_))
+                | (Self::ManifestStore { .. }, ReadHostReply::ManifestStore(_))
+                | (Self::AssetBytes { .. }, ReadHostReply::AssetBytes(_))
+                | (Self::AssetLength { .. }, ReadHostReply::AssetLength(_))
+                | (Self::CurrentDateTime, ReadHostReply::CurrentDateTime(_))
         )
     }
 }
@@ -114,19 +114,19 @@ impl Request for RequestKind {
 /// The host's report of the outcome of one host request.
 #[derive(Debug)]
 #[non_exhaustive]
-pub enum HostReply {
-    /// Answers [`RequestKind::ManifestStore`]: the manifest store bytes, or
+pub enum ReadHostReply {
+    /// Answers [`ReadRequest::ManifestStore`]: the manifest store bytes, or
     /// `None` if the asset contains no manifest store.
     ManifestStore(Option<Vec<u8>>),
 
-    /// Answers [`RequestKind::AssetBytes`]: the requested bytes.
+    /// Answers [`ReadRequest::AssetBytes`]: the requested bytes.
     AssetBytes(Vec<u8>),
 
-    /// Answers [`RequestKind::AssetLength`]: the stream's total length in
+    /// Answers [`ReadRequest::AssetLength`]: the stream's total length in
     /// bytes.
     AssetLength(u64),
 
-    /// Answers [`RequestKind::CurrentDateTime`]: seconds since the Unix
+    /// Answers [`ReadRequest::CurrentDateTime`]: seconds since the Unix
     /// epoch (UTC).
     CurrentDateTime(i64),
 
@@ -143,28 +143,31 @@ mod tests {
     use crate::types::ByteRange;
 
     /// One instance of every request kind.
-    fn all_requests() -> Vec<RequestKind> {
+    fn all_requests() -> Vec<ReadRequest> {
         let stream = StreamId(0);
         let range = ByteRange { start: 0, len: 16 };
 
         vec![
-            RequestKind::ManifestStore { stream },
-            RequestKind::AssetBytes { stream, range },
-            RequestKind::AssetLength { stream },
-            RequestKind::CurrentDateTime,
+            ReadRequest::ManifestStore { stream },
+            ReadRequest::AssetBytes { stream, range },
+            ReadRequest::AssetLength { stream },
+            ReadRequest::CurrentDateTime,
         ]
     }
 
     /// One instance of every reply, paired with the `expected_reply` string
     /// of the request(s) it answers (empty for `Failed`, which answers
     /// anything).
-    fn all_replies() -> Vec<(HostReply, &'static str)> {
+    fn all_replies() -> Vec<(ReadHostReply, &'static str)> {
         vec![
-            (HostReply::ManifestStore(None), "ManifestStore"),
-            (HostReply::AssetBytes(vec![1]), "AssetBytes"),
-            (HostReply::AssetLength(1024), "AssetLength"),
-            (HostReply::CurrentDateTime(1_756_400_000), "CurrentDateTime"),
-            (HostReply::Failed(HostError::new("nope")), ""),
+            (ReadHostReply::ManifestStore(None), "ManifestStore"),
+            (ReadHostReply::AssetBytes(vec![1]), "AssetBytes"),
+            (ReadHostReply::AssetLength(1024), "AssetLength"),
+            (
+                ReadHostReply::CurrentDateTime(1_756_400_000),
+                "CurrentDateTime",
+            ),
+            (ReadHostReply::Failed(HostError::new("nope")), ""),
         ]
     }
 
@@ -174,8 +177,8 @@ mod tests {
     fn accepts_matches_expected_reply_exactly() {
         for request in &all_requests() {
             for (reply, answers) in all_replies() {
-                let should_accept =
-                    matches!(reply, HostReply::Failed(_)) || *answers == *request.expected_reply();
+                let should_accept = matches!(reply, ReadHostReply::Failed(_))
+                    || *answers == *request.expected_reply();
                 assert_eq!(
                     request.accepts(&reply),
                     should_accept,

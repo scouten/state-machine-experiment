@@ -149,11 +149,11 @@ pub enum Error {
 /// a host request.
 ///
 /// The host reports failures by fulfilling a request with
-/// [`HostReply::Failed`]. Depending on the request and the workflow, the
+/// [`ReadHostReply::Failed`]. Depending on the request and the workflow, the
 /// crate may be able to continue (recording a validation status) or may
 /// terminate the session with [`Error::HostFailure`].
 ///
-/// [`HostReply::Failed`]: crate::request::HostReply::Failed
+/// [`ReadHostReply::Failed`]: crate::request::ReadHostReply::Failed
 #[derive(Clone, Debug, thiserror::Error)]
 #[error("{message}")]
 #[non_exhaustive]

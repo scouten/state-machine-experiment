@@ -30,7 +30,7 @@ use crate::{
     error::Error,
     hash_stream::{self, HashStream},
     manifest_store::{self, Manifest},
-    request::{HostReply, RequestKind},
+    request::{ReadHostReply, ReadRequest},
     timestamp,
     types::{ByteRange, HashAlgorithm, StreamId},
     validation::{status_code, ValidationState, ValidationStatus},
@@ -115,7 +115,7 @@ pub struct ReadSettings {
 /// A host whose asset contains no manifest store:
 ///
 /// ```
-/// use contentauth_c2pa_reader::{Error, HostReply, ReadSession, ReadSettings, ReadStep};
+/// use contentauth_c2pa_reader::{Error, ReadHostReply, ReadSession, ReadSettings, ReadStep};
 /// use contentauth_state_machine::Session;
 ///
 /// let mut session = ReadSession::new(ReadSettings::default());
@@ -125,7 +125,7 @@ pub struct ReadSettings {
 /// // The host looks inside the asset's container format... and finds no
 /// // C2PA manifest store.
 /// let id = session.outstanding_requests()[0].id;
-/// session.fulfill(id, HostReply::ManifestStore(None))?;
+/// session.fulfill(id, ReadHostReply::ManifestStore(None))?;
 ///
 /// assert_eq!(session.advance()?, ReadStep::Complete);
 ///
@@ -136,7 +136,7 @@ pub struct ReadSettings {
 #[derive(Debug)]
 pub struct ReadSession {
     settings: ReadSettings,
-    core: SessionCore<RequestKind>,
+    core: SessionCore<ReadRequest>,
     state: State,
 
     /// The decoded form of [`ReadSettings::trust_anchors`], decoded once at
@@ -358,7 +358,7 @@ impl ReadSession {
         self.anchors = decode_anchors(&self.settings.trust_anchors, false)?;
         self.timestamp_anchors = decode_anchors(&self.settings.timestamp_trust_anchors, true)?;
 
-        let request = self.core.issue(RequestKind::ManifestStore {
+        let request = self.core.issue(ReadRequest::ManifestStore {
             stream: Self::PRIMARY_STREAM,
         });
         self.state = State::AwaitingManifestStore { request };
@@ -367,7 +367,7 @@ impl ReadSession {
     }
 
     /// Handles [`State::AwaitingManifestStore`]: consumes the host's reply
-    /// to the [`RequestKind::ManifestStore`] request.
+    /// to the [`ReadRequest::ManifestStore`] request.
     fn handle_awaiting_manifest_store(
         &mut self,
         request: RequestId,
@@ -378,12 +378,12 @@ impl ReadSession {
                 return Ok(Some(Step::AwaitHost));
             }
 
-            Some(HostReply::ManifestStore(None)) => {
+            Some(ReadHostReply::ManifestStore(None)) => {
                 // The report already reads as "nothing found".
                 self.finish_report();
             }
 
-            Some(HostReply::ManifestStore(Some(bytes))) => {
+            Some(ReadHostReply::ManifestStore(Some(bytes))) => {
                 let parsed = manifest_store::parse(&bytes)?;
                 let mut statuses = parsed.statuses;
 
@@ -408,7 +408,7 @@ impl ReadSession {
                     // host is never asked for one.
                     self.begin_binding(binding);
                 } else {
-                    let request = self.core.issue(RequestKind::CurrentDateTime);
+                    let request = self.core.issue(ReadRequest::CurrentDateTime);
                     self.state = State::AwaitingSigningTime {
                         request,
                         chains: parsed.chains,
@@ -417,7 +417,7 @@ impl ReadSession {
                 }
             }
 
-            Some(HostReply::Failed(source)) => {
+            Some(ReadHostReply::Failed(source)) => {
                 return Err(Error::HostFailure {
                     id: request,
                     source,
@@ -440,7 +440,7 @@ impl ReadSession {
     }
 
     /// Handles [`State::AwaitingSigningTime`]: consumes the host's reply to
-    /// the [`RequestKind::CurrentDateTime`] request and evaluates trust for
+    /// the [`ReadRequest::CurrentDateTime`] request and evaluates trust for
     /// every pending certificate chain.
     fn handle_awaiting_signing_time(
         &mut self,
@@ -458,7 +458,7 @@ impl ReadSession {
                 return Ok(Some(Step::AwaitHost));
             }
 
-            Some(HostReply::CurrentDateTime(now)) => {
+            Some(ReadHostReply::CurrentDateTime(now)) => {
                 self.evaluate_trust(&chains, Some(now));
                 self.begin_binding(binding);
             }
@@ -467,7 +467,7 @@ impl ReadSession {
             // necessarily stuck: a signature carrying a trusted
             // timestamp brings its own instant, and only the
             // ones that do not are left unevaluated.
-            Some(HostReply::Failed(_)) => {
+            Some(ReadHostReply::Failed(_)) => {
                 self.evaluate_trust(&chains, None);
                 self.begin_binding(binding);
             }
@@ -485,7 +485,7 @@ impl ReadSession {
     }
 
     /// Handles [`State::AwaitingAssetLength`]: consumes the host's reply to
-    /// the [`RequestKind::AssetLength`] request and starts hashing, if the
+    /// the [`ReadRequest::AssetLength`] request and starts hashing, if the
     /// asset was available.
     fn handle_awaiting_asset_length(
         &mut self,
@@ -498,14 +498,14 @@ impl ReadSession {
                 return Ok(Some(Step::AwaitHost));
             }
 
-            Some(HostReply::AssetLength(asset_len)) => {
+            Some(ReadHostReply::AssetLength(asset_len)) => {
                 self.begin_hashing(binding, asset_len);
             }
 
             // A host with no asset to offer — reading a
             // detached manifest, say — leaves the binding
             // unchecked rather than failed.
-            Some(HostReply::Failed(_)) => {
+            Some(ReadHostReply::Failed(_)) => {
                 self.record(ValidationStatus::for_url(
                     status_code::GENERAL_ERROR,
                     &binding.url,
@@ -566,7 +566,7 @@ impl ReadSession {
     /// the configured anchors.
     ///
     /// `now` is the fallback instant — the host's current time, in seconds
-    /// since the Unix epoch (see [`HostReply::CurrentDateTime`]). A signature
+    /// since the Unix epoch (see [`ReadHostReply::CurrentDateTime`]). A signature
     /// carrying a timestamp from an authority that chains to a configured
     /// timestamp anchor is judged against *that* instant instead, which is
     /// the whole point of carrying one: it is what lets a manifest signed
@@ -633,7 +633,7 @@ impl ReadSession {
     fn begin_binding(&mut self, binding: Option<PendingBinding>) {
         match binding {
             Some(binding) => {
-                let request = self.core.issue(RequestKind::AssetLength {
+                let request = self.core.issue(ReadRequest::AssetLength {
                     stream: Self::PRIMARY_STREAM,
                 });
                 self.state = State::AwaitingAssetLength { request, binding };
@@ -718,7 +718,7 @@ impl ReadSession {
 impl Session for ReadSession {
     type Error = Error;
     type Output = ReadReport;
-    type Request = RequestKind;
+    type Request = ReadRequest;
 
     /// Performs as much synchronous work as possible.
     ///
@@ -745,7 +745,7 @@ impl Session for ReadSession {
     }
 
     /// Returns the requests the host has not yet fulfilled.
-    fn outstanding_requests(&self) -> &[HostRequest<RequestKind>] {
+    fn outstanding_requests(&self) -> &[HostRequest<ReadRequest>] {
         self.core.outstanding_requests()
     }
 
@@ -753,7 +753,7 @@ impl Session for ReadSession {
     ///
     /// Outcomes may be reported in any order and at any pace; call
     /// [`Session::advance`] afterward to let the session consume them.
-    fn fulfill(&mut self, id: RequestId, reply: HostReply) -> Result<(), Error> {
+    fn fulfill(&mut self, id: RequestId, reply: ReadHostReply) -> Result<(), Error> {
         Ok(self.core.fulfill(id, reply)?)
     }
 
@@ -829,13 +829,15 @@ mod tests {
         assert_eq!(requests.len(), 1);
         assert!(matches!(
             requests[0].kind,
-            RequestKind::ManifestStore {
+            ReadRequest::ManifestStore {
                 stream: ReadSession::PRIMARY_STREAM
             }
         ));
 
         let id = requests[0].id;
-        session.fulfill(id, HostReply::ManifestStore(None)).unwrap();
+        session
+            .fulfill(id, ReadHostReply::ManifestStore(None))
+            .unwrap();
 
         assert_eq!(session.advance().unwrap(), ReadStep::Complete);
 
@@ -868,7 +870,7 @@ mod tests {
         let id = session.outstanding_requests()[0].id;
         session
             .core
-            .fulfill_unchecked(id, HostReply::AssetLength(0));
+            .fulfill_unchecked(id, ReadHostReply::AssetLength(0));
 
         assert!(matches!(
             session.advance(),
@@ -903,17 +905,17 @@ mod tests {
                 .outstanding_requests()
                 .iter()
                 .map(|request| match &request.kind {
-                    RequestKind::ManifestStore { .. } => (request.id, true),
-                    RequestKind::CurrentDateTime => (request.id, false),
+                    ReadRequest::ManifestStore { .. } => (request.id, true),
+                    ReadRequest::CurrentDateTime => (request.id, false),
                     other => panic!("unexpected request {other:?}"),
                 })
                 .collect();
 
             for (id, is_store) in asks {
                 let reply = if is_store {
-                    HostReply::ManifestStore(Some(bytes.clone()))
+                    ReadHostReply::ManifestStore(Some(bytes.clone()))
                 } else {
-                    HostReply::CurrentDateTime(NOW)
+                    ReadHostReply::CurrentDateTime(NOW)
                 };
                 session.fulfill(id, reply)?;
             }
@@ -1031,7 +1033,7 @@ mod tests {
         session
             .fulfill(
                 id,
-                HostReply::ManifestStore(Some(test_support::manifest_store(&[
+                ReadHostReply::ManifestStore(Some(test_support::manifest_store(&[
                     test_support::manifest("urn:uuid:one", "one.jpg", &[]),
                 ]))),
             )
@@ -1041,10 +1043,10 @@ mod tests {
         let id = session.outstanding_requests()[0].id;
         assert!(matches!(
             session.outstanding_requests()[0].kind,
-            RequestKind::CurrentDateTime
+            ReadRequest::CurrentDateTime
         ));
         session
-            .fulfill(id, HostReply::Failed(HostError::new("no clock here")))
+            .fulfill(id, ReadHostReply::Failed(HostError::new("no clock here")))
             .unwrap();
 
         assert_eq!(session.advance().unwrap(), ReadStep::Complete);
@@ -1072,7 +1074,7 @@ mod tests {
         session
             .fulfill(
                 id,
-                HostReply::ManifestStore(Some(test_support::manifest_store(&[
+                ReadHostReply::ManifestStore(Some(test_support::manifest_store(&[
                     test_support::manifest("urn:uuid:one", "one.jpg", &[]),
                 ]))),
             )
@@ -1085,7 +1087,7 @@ mod tests {
         let id = session.outstanding_requests()[0].id;
         session
             .core
-            .fulfill_unchecked(id, HostReply::AssetLength(0));
+            .fulfill_unchecked(id, ReadHostReply::AssetLength(0));
 
         assert!(matches!(
             session.advance(),
@@ -1105,7 +1107,7 @@ mod tests {
         session
             .fulfill(
                 id,
-                HostReply::ManifestStore(Some(test_support::manifest_store(&[
+                ReadHostReply::ManifestStore(Some(test_support::manifest_store(&[
                     test_support::manifest_with_broken_signature(
                         "urn:uuid:broken",
                         &[],
@@ -1145,25 +1147,26 @@ mod tests {
                 return session.finish();
             }
 
-            let requests: Vec<HostRequest<RequestKind>> = session.outstanding_requests().to_vec();
+            let requests: Vec<HostRequest<ReadRequest>> = session.outstanding_requests().to_vec();
 
             for request in requests {
                 match request.kind {
-                    RequestKind::ManifestStore { .. } => session
-                        .fulfill(request.id, HostReply::ManifestStore(Some(store.clone())))?,
+                    ReadRequest::ManifestStore { .. } => session.fulfill(
+                        request.id,
+                        ReadHostReply::ManifestStore(Some(store.clone())),
+                    )?,
 
-                    RequestKind::CurrentDateTime => {
-                        session.fulfill(request.id, HostReply::CurrentDateTime(NOW))?
+                    ReadRequest::CurrentDateTime => {
+                        session.fulfill(request.id, ReadHostReply::CurrentDateTime(NOW))?
                     }
 
-                    RequestKind::AssetLength { .. } => {
-                        session.fulfill(request.id, HostReply::AssetLength(asset.len() as u64))?
-                    }
+                    ReadRequest::AssetLength { .. } => session
+                        .fulfill(request.id, ReadHostReply::AssetLength(asset.len() as u64))?,
 
-                    RequestKind::AssetBytes { range, .. } => {
+                    ReadRequest::AssetBytes { range, .. } => {
                         let start = range.start as usize;
                         let bytes = asset[start..start + range.len as usize].to_vec();
-                        session.fulfill(request.id, HostReply::AssetBytes(bytes))?
+                        session.fulfill(request.id, ReadHostReply::AssetBytes(bytes))?
                     }
                 }
             }
@@ -1332,14 +1335,18 @@ mod tests {
         session
             .fulfill(
                 id,
-                HostReply::ManifestStore(Some(store_bound_with_algs(None, None, vec![0u8; 32]))),
+                ReadHostReply::ManifestStore(Some(store_bound_with_algs(
+                    None,
+                    None,
+                    vec![0u8; 32],
+                ))),
             )
             .unwrap();
 
         assert_eq!(session.advance().unwrap(), ReadStep::AwaitHost);
         let id = session.outstanding_requests()[0].id;
         session
-            .fulfill(id, HostReply::CurrentDateTime(NOW))
+            .fulfill(id, ReadHostReply::CurrentDateTime(NOW))
             .unwrap();
 
         assert_eq!(session.advance().unwrap(), ReadStep::AwaitHost);
@@ -1349,7 +1356,7 @@ mod tests {
         let id = session.outstanding_requests()[0].id;
         session
             .core
-            .fulfill_unchecked(id, HostReply::CurrentDateTime(0));
+            .fulfill_unchecked(id, ReadHostReply::CurrentDateTime(0));
 
         assert!(matches!(
             session.advance(),
@@ -1369,7 +1376,7 @@ mod tests {
         session
             .fulfill(
                 id,
-                HostReply::ManifestStore(Some(test_support::manifest_store(&[
+                ReadHostReply::ManifestStore(Some(test_support::manifest_store(&[
                     test_support::manifest("urn:uuid:none", "none.jpg", &["c2pa.actions"]),
                 ]))),
             )
@@ -1381,10 +1388,10 @@ mod tests {
         let id = session.outstanding_requests()[0].id;
         assert!(matches!(
             session.outstanding_requests()[0].kind,
-            RequestKind::CurrentDateTime
+            ReadRequest::CurrentDateTime
         ));
         session
-            .fulfill(id, HostReply::CurrentDateTime(NOW))
+            .fulfill(id, ReadHostReply::CurrentDateTime(NOW))
             .unwrap();
 
         // No asset request is issued, so a host holding only a manifest
@@ -1417,7 +1424,7 @@ mod tests {
 
         let id = session.outstanding_requests()[0].id;
         session
-            .fulfill(id, HostReply::Failed(HostError::new("disk on fire")))
+            .fulfill(id, ReadHostReply::Failed(HostError::new("disk on fire")))
             .unwrap();
 
         match session.advance() {
@@ -1438,7 +1445,7 @@ mod tests {
 
         let id = session.outstanding_requests()[0].id;
         session
-            .fulfill(id, HostReply::ManifestStore(Some(vec![0u8; 4])))
+            .fulfill(id, ReadHostReply::ManifestStore(Some(vec![0u8; 4])))
             .unwrap();
 
         assert!(matches!(
@@ -1454,7 +1461,7 @@ mod tests {
             Err(Error::Protocol(ProtocolError::SessionFailed))
         ));
         assert!(matches!(
-            session.fulfill(id, HostReply::ManifestStore(None)),
+            session.fulfill(id, ReadHostReply::ManifestStore(None)),
             Err(Error::Protocol(ProtocolError::SessionFailed))
         ));
         assert!(matches!(
@@ -1474,20 +1481,20 @@ mod tests {
         session
             .fulfill(
                 id,
-                HostReply::ManifestStore(Some(store_bound_to(&[], vec![0u8; 32]))),
+                ReadHostReply::ManifestStore(Some(store_bound_to(&[], vec![0u8; 32]))),
             )
             .unwrap();
 
         assert_eq!(session.advance().unwrap(), ReadStep::AwaitHost);
         let id = session.outstanding_requests()[0].id;
         session
-            .fulfill(id, HostReply::CurrentDateTime(NOW))
+            .fulfill(id, ReadHostReply::CurrentDateTime(NOW))
             .unwrap();
 
         assert_eq!(session.advance().unwrap(), ReadStep::AwaitHost);
         let id = session.outstanding_requests()[0].id;
         session
-            .fulfill(id, HostReply::AssetLength(asset.len() as u64))
+            .fulfill(id, ReadHostReply::AssetLength(asset.len() as u64))
             .unwrap();
 
         assert_eq!(session.advance().unwrap(), ReadStep::AwaitHost);
@@ -1495,7 +1502,7 @@ mod tests {
         // A chunk the host returns short can never be folded in.
         let id = session.outstanding_requests()[0].id;
         session
-            .fulfill(id, HostReply::AssetBytes(vec![4u8; 10]))
+            .fulfill(id, ReadHostReply::AssetBytes(vec![4u8; 10]))
             .unwrap();
 
         assert!(matches!(
@@ -1519,13 +1526,15 @@ mod tests {
         assert_eq!(session.advance().unwrap(), ReadStep::AwaitHost);
 
         let id = session.outstanding_requests()[0].id;
-        session.fulfill(id, HostReply::ManifestStore(None)).unwrap();
+        session
+            .fulfill(id, ReadHostReply::ManifestStore(None))
+            .unwrap();
 
         // The request has already been answered and removed from what is
         // outstanding — fulfilling it again (before `advance` has
         // consumed the reply) finds nothing left to answer.
         assert!(matches!(
-            session.fulfill(id, HostReply::ManifestStore(None)),
+            session.fulfill(id, ReadHostReply::ManifestStore(None)),
             Err(Error::Protocol(ProtocolError::UnknownRequest(unknown))) if unknown == id
         ));
     }
@@ -1538,13 +1547,15 @@ mod tests {
 
         let id = session.outstanding_requests()[0].id;
         assert!(matches!(
-            session.fulfill(id, HostReply::AssetLength(0)),
+            session.fulfill(id, ReadHostReply::AssetLength(0)),
             Err(Error::Protocol(ProtocolError::ReplyMismatch { expected, .. })) if expected == "ManifestStore"
         ));
 
         // The request is still outstanding and can be fulfilled correctly.
         assert_eq!(session.outstanding_requests().len(), 1);
-        session.fulfill(id, HostReply::ManifestStore(None)).unwrap();
+        session
+            .fulfill(id, ReadHostReply::ManifestStore(None))
+            .unwrap();
         assert_eq!(session.advance().unwrap(), ReadStep::Complete);
     }
 
@@ -1555,11 +1566,13 @@ mod tests {
         assert_eq!(session.advance().unwrap(), ReadStep::AwaitHost);
 
         let id = session.outstanding_requests()[0].id;
-        session.fulfill(id, HostReply::ManifestStore(None)).unwrap();
+        session
+            .fulfill(id, ReadHostReply::ManifestStore(None))
+            .unwrap();
         assert_eq!(session.advance().unwrap(), ReadStep::Complete);
 
         assert!(matches!(
-            session.fulfill(id, HostReply::ManifestStore(None)),
+            session.fulfill(id, ReadHostReply::ManifestStore(None)),
             Err(Error::Protocol(ProtocolError::SessionComplete))
         ));
     }

@@ -95,6 +95,6 @@ pub use data_hash::DataHash;
 pub use error::{Error, HostError};
 pub use manifest_store::Manifest;
 pub use read::{ReadReport, ReadSession, ReadSettings, ReadStep};
-pub use request::{HostReply, RequestKind};
+pub use request::{ReadHostReply, ReadRequest};
 pub use types::{ByteRange, HashAlgorithm, SigningAlg, StreamId};
 pub use validation::{ValidationState, ValidationStatus};
