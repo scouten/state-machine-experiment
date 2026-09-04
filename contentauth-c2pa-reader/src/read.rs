@@ -26,7 +26,7 @@ use contentauth_state_machine::{
 use crate::{
     cert::{self, Certificate},
     chain::{self, PendingChain, Trust},
-    data_hash::LABEL,
+    data_hash,
     error::Error,
     hash_stream::{self, HashStream},
     manifest_store::{self, Manifest},
@@ -230,7 +230,7 @@ fn plan_hard_binding(
     // the latter already recorded while parsing.
     let data_hash = active.data_hash.as_ref()?;
 
-    let url = format!("self#jumbf=c2pa.assertions/{}", LABEL);
+    let url = format!("self#jumbf=c2pa.assertions/{}", data_hash::LABEL);
     let named = data_hash.alg.as_deref().or(active.claim.alg.as_deref());
 
     let algorithm = match named {

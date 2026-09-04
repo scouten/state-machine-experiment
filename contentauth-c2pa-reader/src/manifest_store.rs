@@ -281,7 +281,7 @@ mod tests {
 
     use std::collections::BTreeMap;
 
-    use c2pa_cbor::{to_vec, Value};
+    use c2pa_cbor::Value;
 
     use super::*;
     use crate::{
@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn stray_data_boxes_are_skipped() {
-        let cbor = to_vec(&Value::Map(BTreeMap::from([(
+        let cbor = c2pa_cbor::to_vec(&Value::Map(BTreeMap::from([(
             Value::Text("dc:title".to_string()),
             Value::Text("mixed.jpg".to_string()),
         )])))

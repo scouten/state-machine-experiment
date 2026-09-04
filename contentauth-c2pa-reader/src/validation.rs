@@ -548,11 +548,11 @@ mod tests {
 
     use std::collections::BTreeMap;
 
-    use c2pa_cbor::{to_vec, Value};
+    use c2pa_cbor::Value;
 
     use super::*;
     use crate::{
-        manifest_store::{parse, ParsedManifestStore},
+        manifest_store::{self, ParsedManifestStore},
         test_support::{
             self, claim_box, manifest_with_broken_signature, manifest_with_empty_signature_box,
             manifest_without_signature_box, TEST_SIGNER_CERT,
@@ -601,7 +601,8 @@ mod tests {
     /// Runs the signature check over a manifest built by `build`, and
     /// returns the codes it recorded.
     fn signature_codes(manifest_bytes: Vec<u8>) -> Vec<String> {
-        let parsed = parse(&test_support::manifest_store(&[manifest_bytes])).unwrap();
+        let parsed =
+            manifest_store::parse(&test_support::manifest_store(&[manifest_bytes])).unwrap();
 
         signature_codes_of(&parsed)
     }
@@ -658,7 +659,7 @@ mod tests {
         // Driven through the real manifest walk, because the point of the
         // distinction is that it must agree with `Manifest::has_signature`
         // — which only the walk sets.
-        let parsed = parse(&test_support::manifest_store(&[
+        let parsed = manifest_store::parse(&test_support::manifest_store(&[
             manifest_with_empty_signature_box("urn:uuid:empty", claim_box("empty.jpg")),
         ]))
         .unwrap();
@@ -675,7 +676,7 @@ mod tests {
 
         // And the contrasting case: genuinely no signature box, which is
         // the finding the empty box must not be confused with.
-        let parsed = parse(&test_support::manifest_store(&[
+        let parsed = manifest_store::parse(&test_support::manifest_store(&[
             manifest_without_signature_box("urn:uuid:none", claim_box("none.jpg")),
         ]))
         .unwrap();
@@ -707,9 +708,9 @@ mod tests {
         let mut protected = BTreeMap::new();
         protected.insert(Value::Integer(1), Value::Integer(-7));
         protected.insert(Value::Integer(33), chain);
-        let protected = to_vec(&Value::Map(protected)).unwrap();
+        let protected = c2pa_cbor::to_vec(&Value::Map(protected)).unwrap();
 
-        to_vec(&Value::Tag(
+        c2pa_cbor::to_vec(&Value::Tag(
             18,
             Box::new(Value::Array(vec![
                 Value::Bytes(protected),
