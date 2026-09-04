@@ -279,6 +279,10 @@ fn read_data_hash(
 mod tests {
     #![allow(clippy::unwrap_used)]
 
+    use std::collections::BTreeMap;
+
+    use c2pa_cbor::{to_vec, Value};
+
     use super::*;
     use crate::{
         test_support::{
@@ -429,12 +433,10 @@ mod tests {
 
     #[test]
     fn stray_data_boxes_are_skipped() {
-        let cbor = c2pa_cbor::to_vec(&c2pa_cbor::Value::Map(std::collections::BTreeMap::from([
-            (
-                c2pa_cbor::Value::Text("dc:title".to_string()),
-                c2pa_cbor::Value::Text("mixed.jpg".to_string()),
-            ),
-        ])))
+        let cbor = to_vec(&Value::Map(BTreeMap::from([(
+            Value::Text("dc:title".to_string()),
+            Value::Text("mixed.jpg".to_string()),
+        )])))
         .unwrap();
 
         // The claim box carries an unrelated JSON data box ahead of its

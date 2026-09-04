@@ -66,15 +66,18 @@
 //! not implemented in this crate at all — it is a signing-side concern;
 //! this module only reads.
 
+use c2pa_raw_crypto::{validator_for_sig_and_hash_algs, Oid};
 use cms::{
+    cert::CertificateChoices,
     content_info::ContentInfo,
     signed_data::{SignedData, SignerIdentifier, SignerInfo},
 };
 use der::{
-    asn1::{GeneralizedTime, Int, OctetString},
+    asn1::{BitString, GeneralizedTime, Int, OctetString},
     oid::ObjectIdentifier,
     Any, Decode, Encode, Sequence,
 };
+use x509_cert::spki::AlgorithmIdentifierOwned;
 
 use crate::{
     cert::{self, Certificate},
@@ -361,9 +364,9 @@ fn verify_signature(
         .to_der()
         .map_err(|_| "the timestamp token's signed attributes could not be re-encoded")?;
 
-    let validator = c2pa_raw_crypto::validator_for_sig_and_hash_algs(
-        &c2pa_raw_crypto::Oid::new(signer_info.signature_algorithm.oid.as_bytes()),
-        &c2pa_raw_crypto::Oid::new(signer_info.digest_alg.oid.as_bytes()),
+    let validator = validator_for_sig_and_hash_algs(
+        &Oid::new(signer_info.signature_algorithm.oid.as_bytes()),
+        &Oid::new(signer_info.digest_alg.oid.as_bytes()),
     )
     .ok_or("the timestamp token is signed with an algorithm this core cannot verify")?;
 
@@ -467,12 +470,11 @@ fn certificates(signed_data: &SignedData) -> Vec<Vec<u8>> {
             set.0
                 .iter()
                 .filter_map(|choice| match choice {
-                    cms::cert::CertificateChoices::Certificate(certificate) => {
-                        certificate.to_der().ok()
-                    }
+                    CertificateChoices::Certificate(certificate) => certificate.to_der().ok(),
+
                     // Attribute certificates carry no public key and so can
                     // never be part of a path.
-                    cms::cert::CertificateChoices::Other(_) => None,
+                    CertificateChoices::Other(_) => None,
                 })
                 .collect()
         })
@@ -520,7 +522,7 @@ struct PkiStatusInfo {
     status_string: Option<Any>,
 
     #[asn1(optional = "true")]
-    fail_info: Option<der::asn1::BitString>,
+    fail_info: Option<BitString>,
 }
 
 /// `TSTInfo` (RFC 3161 §2.4.2).
@@ -556,7 +558,7 @@ struct TstInfo {
 /// `MessageImprint` (RFC 3161 §2.4.1): what the token stamps.
 #[derive(Debug, Sequence)]
 struct MessageImprint {
-    hash_algorithm: x509_cert::spki::AlgorithmIdentifierOwned,
+    hash_algorithm: AlgorithmIdentifierOwned,
     hashed_message: OctetString,
 }
 
@@ -579,6 +581,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
+    use crate::test_support::{FIXTURE_ISSUER_CERT, FIXTURE_LEAF_CERT, TEST_SIGNER_CERT};
 
     /// The `TimeStampResp` from the claim signature in
     /// `tests/fixtures/manifest_data.c2pa`, extracted verbatim.
@@ -832,7 +835,7 @@ mod tests {
     /// link by name alone a coin toss.
     fn same_name_wrong_key(certificate: &Certificate) -> Certificate {
         let mut impostor = certificate.clone();
-        impostor.public_key = cert::decode(crate::test_support::TEST_SIGNER_CERT)
+        impostor.public_key = cert::decode(TEST_SIGNER_CERT)
             .expect("the test signer decodes")
             .public_key;
         impostor
@@ -840,8 +843,8 @@ mod tests {
 
     #[test]
     fn the_path_picks_the_issuer_whose_key_actually_signed() {
-        let leaf = cert::decode(crate::test_support::FIXTURE_LEAF_CERT).expect("decodes");
-        let issuer = cert::decode(crate::test_support::FIXTURE_ISSUER_CERT).expect("decodes");
+        let leaf = cert::decode(FIXTURE_LEAF_CERT).expect("decodes");
+        let issuer = cert::decode(FIXTURE_ISSUER_CERT).expect("decodes");
 
         // The impostor comes first, so a name-only match would take it.
         let pool = vec![same_name_wrong_key(&issuer), issuer.clone()];
@@ -863,8 +866,8 @@ mod tests {
         // When nothing in the pool holds the right key, the name match is
         // still taken: "this signature does not verify" is a more accurate
         // finding than a path that quietly stops one link short.
-        let leaf = cert::decode(crate::test_support::FIXTURE_LEAF_CERT).expect("decodes");
-        let issuer = cert::decode(crate::test_support::FIXTURE_ISSUER_CERT).expect("decodes");
+        let leaf = cert::decode(FIXTURE_LEAF_CERT).expect("decodes");
+        let issuer = cert::decode(FIXTURE_ISSUER_CERT).expect("decodes");
 
         let path = order_path(&leaf, vec![same_name_wrong_key(&issuer)]);
 

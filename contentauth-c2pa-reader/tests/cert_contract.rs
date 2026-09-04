@@ -47,7 +47,7 @@
 //! symptom is "this valid manifest is invalid". Comparing the exact bytes
 //! leaves no room for that.
 
-use contentauth_c2pa_reader::Certificate;
+use contentauth_c2pa_reader::{cert::decode, Certificate};
 use sha2::{Digest, Sha256};
 
 /// A certificate in the corpus, with what OpenSSL says about it.
@@ -125,8 +125,8 @@ fn hex(bytes: &[u8]) -> String {
 #[test]
 fn every_certificate_in_the_corpus_decodes_as_openssl_reads_it() {
     for expected in CORPUS {
-        let cert: Certificate = contentauth_c2pa_reader::cert::decode(expected.der)
-            .unwrap_or_else(|e| panic!("{}: {e}", expected.name));
+        let cert: Certificate =
+            decode(expected.der).unwrap_or_else(|e| panic!("{}: {e}", expected.name));
 
         let name = expected.name;
 

@@ -15,6 +15,8 @@
 
 use contentauth_state_machine::{ProtocolError, RequestId};
 
+use crate::{cert::CertError, claim::ClaimError, types::ByteRange};
+
 /// Errors surfaced by [`ReadSession`](crate::ReadSession).
 ///
 /// Two broad families live here:
@@ -87,7 +89,7 @@ pub enum Error {
         timestamp: bool,
 
         /// Why it could not be decoded.
-        source: crate::cert::CertError,
+        source: CertError,
     },
 
     /// A manifest's claim could not be decoded.
@@ -97,7 +99,7 @@ pub enum Error {
         manifest: String,
 
         /// Why the claim could not be decoded.
-        source: crate::claim::ClaimError,
+        source: ClaimError,
     },
 
     /// The host returned a different number of bytes than the range it was
@@ -109,7 +111,7 @@ pub enum Error {
     #[error("host returned {actual} bytes for a request of {} at offset {}", range.len, range.start)]
     AssetBytesLengthMismatch {
         /// The range that was requested.
-        range: crate::types::ByteRange,
+        range: ByteRange,
 
         /// How many bytes the host actually returned.
         actual: u64,

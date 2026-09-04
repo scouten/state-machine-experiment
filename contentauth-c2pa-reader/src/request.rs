@@ -164,7 +164,7 @@ mod tests {
             (HostReply::AssetBytes(vec![1]), "AssetBytes"),
             (HostReply::AssetLength(1024), "AssetLength"),
             (HostReply::CurrentDateTime(1_756_400_000), "CurrentDateTime"),
-            (HostReply::Failed(crate::error::HostError::new("nope")), ""),
+            (HostReply::Failed(HostError::new("nope")), ""),
         ]
     }
 

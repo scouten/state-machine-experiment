@@ -13,6 +13,8 @@
 
 //! The read/validate workflow: [`ReadSession`].
 
+use core::mem::replace;
+
 /// [`Step::AwaitHost`] / [`Step::Complete`], under the name this crate's
 /// docs and tests use for [`ReadSession`]'s own steps. This is the very
 /// same type as [`contentauth_state_machine::Step`] — see the crate root.
@@ -24,6 +26,7 @@ use contentauth_state_machine::{
 use crate::{
     cert::{self, Certificate},
     chain::{self, PendingChain, Trust},
+    data_hash::LABEL,
     error::Error,
     hash_stream::{self, HashStream},
     manifest_store::{self, Manifest},
@@ -227,7 +230,7 @@ fn plan_hard_binding(
     // the latter already recorded while parsing.
     let data_hash = active.data_hash.as_ref()?;
 
-    let url = format!("self#jumbf=c2pa.assertions/{}", crate::data_hash::LABEL);
+    let url = format!("self#jumbf=c2pa.assertions/{}", LABEL);
     let named = data_hash.alg.as_deref().or(active.claim.alg.as_deref());
 
     let algorithm = match named {
@@ -308,206 +311,262 @@ impl ReadSession {
             // behind is `Poisoned`, so any exit that does not deliberately
             // install a successor state — every `?` and every `return
             // Err(…)` below — leaves it behind for the next call to find.
-            match core::mem::replace(&mut self.state, State::Poisoned) {
-                State::Start => {
-                    // Before the host is asked to do any work: a trust
-                    // anchor that is not a certificate is a configuration
-                    // mistake, and it should surface the same way every
-                    // time rather than only when a store happens to carry
-                    // a chain that would have consulted it.
-                    self.anchors = decode_anchors(&self.settings.trust_anchors, false)?;
-                    self.timestamp_anchors =
-                        decode_anchors(&self.settings.timestamp_trust_anchors, true)?;
-
-                    let request = self.core.issue(RequestKind::ManifestStore {
-                        stream: Self::PRIMARY_STREAM,
-                    });
-                    self.state = State::AwaitingManifestStore { request };
-                    return Ok(Step::AwaitHost);
-                }
+            //
+            // Each handler reports `Ok(Some(step))` to return that step from
+            // `run()`, or `Ok(None)` to let the loop go around again and
+            // match on whatever successor state it installed.
+            let outcome = match replace(&mut self.state, State::Poisoned) {
+                State::Start => self.handle_start(),
 
                 State::AwaitingManifestStore { request } => {
-                    match self.core.take_reply(request) {
-                        None => {
-                            self.state = State::AwaitingManifestStore { request };
-                            return Ok(Step::AwaitHost);
-                        }
-
-                        Some(HostReply::ManifestStore(None)) => {
-                            // The report already reads as "nothing found".
-                            self.finish_report();
-                        }
-
-                        Some(HostReply::ManifestStore(Some(bytes))) => {
-                            let parsed = manifest_store::parse(&bytes)?;
-                            let mut statuses = parsed.statuses;
-
-                            // Planned before the report is built, so the
-                            // plan is a pure function of what was parsed.
-                            let binding = parsed
-                                .active_manifest
-                                .as_deref()
-                                .and_then(|label| {
-                                    parsed.manifests.iter().find(|m| m.label == label)
-                                })
-                                .and_then(|active| plan_hard_binding(active, &mut statuses));
-
-                            self.report = ReadReport {
-                                manifest_store_found: true,
-                                manifests: parsed.manifests,
-                                active_manifest: parsed.active_manifest,
-                                validation_state: None,
-                                statuses,
-                            };
-
-                            if parsed.chains.is_empty() {
-                                // Nothing to judge against a clock, so the
-                                // host is never asked for one.
-                                self.begin_binding(binding);
-                            } else {
-                                let request = self.core.issue(RequestKind::CurrentDateTime);
-                                self.state = State::AwaitingSigningTime {
-                                    request,
-                                    chains: parsed.chains,
-                                    binding,
-                                };
-                            }
-                        }
-
-                        Some(HostReply::Failed(source)) => {
-                            return Err(Error::HostFailure {
-                                id: request,
-                                source,
-                            });
-                        }
-
-                        // `RequestTracker::fulfill` rejects mismatched
-                        // reply payloads, so this arm is unreachable in
-                        // practice.
-                        Some(_) => {
-                            return Err(ProtocolError::ReplyMismatch {
-                                id: request,
-                                expected: "ManifestStore",
-                            }
-                            .into());
-                        }
-                    }
+                    self.handle_awaiting_manifest_store(request)
                 }
 
                 State::AwaitingSigningTime {
                     request,
                     chains,
                     binding,
-                } => {
-                    match self.core.take_reply(request) {
-                        None => {
-                            self.state = State::AwaitingSigningTime {
-                                request,
-                                chains,
-                                binding,
-                            };
-                            return Ok(Step::AwaitHost);
-                        }
-
-                        Some(HostReply::CurrentDateTime(now)) => {
-                            self.evaluate_trust(&chains, Some(now));
-                            self.begin_binding(binding);
-                        }
-
-                        // A host that cannot tell the time is not
-                        // necessarily stuck: a signature carrying a trusted
-                        // timestamp brings its own instant, and only the
-                        // ones that do not are left unevaluated.
-                        Some(HostReply::Failed(_)) => {
-                            self.evaluate_trust(&chains, None);
-                            self.begin_binding(binding);
-                        }
-
-                        Some(_) => {
-                            return Err(ProtocolError::ReplyMismatch {
-                                id: request,
-                                expected: "CurrentDateTime",
-                            }
-                            .into());
-                        }
-                    }
-                }
+                } => self.handle_awaiting_signing_time(request, chains, binding),
 
                 State::AwaitingAssetLength { request, binding } => {
-                    match self.core.take_reply(request) {
-                        None => {
-                            self.state = State::AwaitingAssetLength { request, binding };
-                            return Ok(Step::AwaitHost);
-                        }
-
-                        Some(HostReply::AssetLength(asset_len)) => {
-                            self.begin_hashing(binding, asset_len);
-                        }
-
-                        // A host with no asset to offer — reading a
-                        // detached manifest, say — leaves the binding
-                        // unchecked rather than failed.
-                        Some(HostReply::Failed(_)) => {
-                            self.record(ValidationStatus::for_url(
-                                status_code::GENERAL_ERROR,
-                                &binding.url,
-                                "asset not available, so the hard binding was not checked",
-                            ));
-                            self.finish_report();
-                        }
-
-                        Some(_) => {
-                            return Err(ProtocolError::ReplyMismatch {
-                                id: request,
-                                expected: "AssetLength",
-                            }
-                            .into());
-                        }
-                    }
+                    self.handle_awaiting_asset_length(request, binding)
                 }
 
-                State::HashingAsset {
-                    mut stream,
-                    binding,
-                } => {
-                    stream.absorb(&mut self.core)?;
-
-                    if !stream.is_complete() {
-                        stream.issue(&mut self.core, Self::PRIMARY_STREAM);
-                        self.state = State::HashingAsset { stream, binding };
-                        return Ok(Step::AwaitHost);
-                    }
-
-                    let actual = stream.finish()?;
-
-                    self.record(if actual == binding.expected {
-                        ValidationStatus::for_url(
-                            status_code::ASSERTION_DATAHASH_MATCH,
-                            &binding.url,
-                            "asset hashed as recorded in the hard binding",
-                        )
-                    } else {
-                        ValidationStatus::for_url(
-                            status_code::ASSERTION_DATAHASH_MISMATCH,
-                            &binding.url,
-                            "asset does not hash to the value recorded in the hard binding",
-                        )
-                    });
-
-                    self.finish_report();
+                State::HashingAsset { stream, binding } => {
+                    self.handle_hashing_asset(stream, binding)
                 }
 
                 // Left poisoned by an earlier error; `self.core` was marked
                 // failed by `Session::advance` at the same time.
                 State::Poisoned => return Err(ProtocolError::SessionFailed.into()),
+            }?;
+
+            if let Some(step) = outcome {
+                return Ok(step);
             }
         }
+    }
+
+    /// Handles [`State::Start`]: decodes the configured trust anchors and
+    /// asks the host for the manifest store.
+    fn handle_start(&mut self) -> Result<Option<Step>, Error> {
+        // Before the host is asked to do any work: a trust
+        // anchor that is not a certificate is a configuration
+        // mistake, and it should surface the same way every
+        // time rather than only when a store happens to carry
+        // a chain that would have consulted it.
+        self.anchors = decode_anchors(&self.settings.trust_anchors, false)?;
+        self.timestamp_anchors = decode_anchors(&self.settings.timestamp_trust_anchors, true)?;
+
+        let request = self.core.issue(RequestKind::ManifestStore {
+            stream: Self::PRIMARY_STREAM,
+        });
+        self.state = State::AwaitingManifestStore { request };
+
+        Ok(Some(Step::AwaitHost))
+    }
+
+    /// Handles [`State::AwaitingManifestStore`]: consumes the host's reply
+    /// to the [`RequestKind::ManifestStore`] request.
+    fn handle_awaiting_manifest_store(
+        &mut self,
+        request: RequestId,
+    ) -> Result<Option<Step>, Error> {
+        match self.core.take_reply(request) {
+            None => {
+                self.state = State::AwaitingManifestStore { request };
+                return Ok(Some(Step::AwaitHost));
+            }
+
+            Some(HostReply::ManifestStore(None)) => {
+                // The report already reads as "nothing found".
+                self.finish_report();
+            }
+
+            Some(HostReply::ManifestStore(Some(bytes))) => {
+                let parsed = manifest_store::parse(&bytes)?;
+                let mut statuses = parsed.statuses;
+
+                // Planned before the report is built, so the
+                // plan is a pure function of what was parsed.
+                let binding = parsed
+                    .active_manifest
+                    .as_deref()
+                    .and_then(|label| parsed.manifests.iter().find(|m| m.label == label))
+                    .and_then(|active| plan_hard_binding(active, &mut statuses));
+
+                self.report = ReadReport {
+                    manifest_store_found: true,
+                    manifests: parsed.manifests,
+                    active_manifest: parsed.active_manifest,
+                    validation_state: None,
+                    statuses,
+                };
+
+                if parsed.chains.is_empty() {
+                    // Nothing to judge against a clock, so the
+                    // host is never asked for one.
+                    self.begin_binding(binding);
+                } else {
+                    let request = self.core.issue(RequestKind::CurrentDateTime);
+                    self.state = State::AwaitingSigningTime {
+                        request,
+                        chains: parsed.chains,
+                        binding,
+                    };
+                }
+            }
+
+            Some(HostReply::Failed(source)) => {
+                return Err(Error::HostFailure {
+                    id: request,
+                    source,
+                });
+            }
+
+            // `RequestTracker::fulfill` rejects mismatched
+            // reply payloads, so this arm is unreachable in
+            // practice.
+            Some(_) => {
+                return Err(ProtocolError::ReplyMismatch {
+                    id: request,
+                    expected: "ManifestStore",
+                }
+                .into());
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Handles [`State::AwaitingSigningTime`]: consumes the host's reply to
+    /// the [`RequestKind::CurrentDateTime`] request and evaluates trust for
+    /// every pending certificate chain.
+    fn handle_awaiting_signing_time(
+        &mut self,
+        request: RequestId,
+        chains: Vec<PendingChain>,
+        binding: Option<PendingBinding>,
+    ) -> Result<Option<Step>, Error> {
+        match self.core.take_reply(request) {
+            None => {
+                self.state = State::AwaitingSigningTime {
+                    request,
+                    chains,
+                    binding,
+                };
+                return Ok(Some(Step::AwaitHost));
+            }
+
+            Some(HostReply::CurrentDateTime(now)) => {
+                self.evaluate_trust(&chains, Some(now));
+                self.begin_binding(binding);
+            }
+
+            // A host that cannot tell the time is not
+            // necessarily stuck: a signature carrying a trusted
+            // timestamp brings its own instant, and only the
+            // ones that do not are left unevaluated.
+            Some(HostReply::Failed(_)) => {
+                self.evaluate_trust(&chains, None);
+                self.begin_binding(binding);
+            }
+
+            Some(_) => {
+                return Err(ProtocolError::ReplyMismatch {
+                    id: request,
+                    expected: "CurrentDateTime",
+                }
+                .into());
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Handles [`State::AwaitingAssetLength`]: consumes the host's reply to
+    /// the [`RequestKind::AssetLength`] request and starts hashing, if the
+    /// asset was available.
+    fn handle_awaiting_asset_length(
+        &mut self,
+        request: RequestId,
+        binding: PendingBinding,
+    ) -> Result<Option<Step>, Error> {
+        match self.core.take_reply(request) {
+            None => {
+                self.state = State::AwaitingAssetLength { request, binding };
+                return Ok(Some(Step::AwaitHost));
+            }
+
+            Some(HostReply::AssetLength(asset_len)) => {
+                self.begin_hashing(binding, asset_len);
+            }
+
+            // A host with no asset to offer — reading a
+            // detached manifest, say — leaves the binding
+            // unchecked rather than failed.
+            Some(HostReply::Failed(_)) => {
+                self.record(ValidationStatus::for_url(
+                    status_code::GENERAL_ERROR,
+                    &binding.url,
+                    "asset not available, so the hard binding was not checked",
+                ));
+                self.finish_report();
+            }
+
+            Some(_) => {
+                return Err(ProtocolError::ReplyMismatch {
+                    id: request,
+                    expected: "AssetLength",
+                }
+                .into());
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Handles [`State::HashingAsset`]: streams asset bytes into the hard-
+    /// binding hasher until it is done, then records the outcome.
+    fn handle_hashing_asset(
+        &mut self,
+        mut stream: Box<HashStream>,
+        binding: PendingBinding,
+    ) -> Result<Option<Step>, Error> {
+        stream.absorb(&mut self.core)?;
+
+        if !stream.is_complete() {
+            stream.issue(&mut self.core, Self::PRIMARY_STREAM);
+            self.state = State::HashingAsset { stream, binding };
+            return Ok(Some(Step::AwaitHost));
+        }
+
+        let actual = stream.finish()?;
+
+        self.record(if actual == binding.expected {
+            ValidationStatus::for_url(
+                status_code::ASSERTION_DATAHASH_MATCH,
+                &binding.url,
+                "asset hashed as recorded in the hard binding",
+            )
+        } else {
+            ValidationStatus::for_url(
+                status_code::ASSERTION_DATAHASH_MISMATCH,
+                &binding.url,
+                "asset does not hash to the value recorded in the hard binding",
+            )
+        });
+
+        self.finish_report();
+
+        Ok(None)
     }
 
     /// Validates each verified claim signature's certificate chain against
     /// the configured anchors.
     ///
-    /// `now` is the fallback instant — the host's current time. A signature
+    /// `now` is the fallback instant — the host's current time, in seconds
+    /// since the Unix epoch (see [`HostReply::CurrentDateTime`]). A signature
     /// carrying a timestamp from an authority that chains to a configured
     /// timestamp anchor is judged against *that* instant instead, which is
     /// the whole point of carrying one: it is what lets a manifest signed
@@ -537,6 +596,9 @@ impl ReadSession {
             let Some(instant) = instant else {
                 // No timestamp worth using and no clock either, so nothing
                 // can be said about validity windows.
+                //
+                // TODO: confirm `GENERAL_ERROR` is the correct status code
+                // for this case (#2).
                 statuses.push(ValidationStatus::for_url(
                     status_code::GENERAL_ERROR,
                     &pending.url,
@@ -751,7 +813,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
-    use crate::{error::HostError, test_support, types::ByteRange};
+    use crate::{error::HostError, test_support};
 
     /// 2027-01-15T08:00:00Z — inside the validity window of every
     /// certificate fixture in this repository.
@@ -1083,37 +1145,25 @@ mod tests {
                 return session.finish();
             }
 
-            enum Ask {
-                Store(RequestId),
-                Time(RequestId),
-                Length(RequestId),
-                Bytes(RequestId, ByteRange),
-            }
+            let requests: Vec<HostRequest<RequestKind>> = session.outstanding_requests().to_vec();
 
-            let asks: Vec<Ask> = session
-                .outstanding_requests()
-                .iter()
-                .map(|request| match &request.kind {
-                    RequestKind::ManifestStore { .. } => Ask::Store(request.id),
-                    RequestKind::CurrentDateTime => Ask::Time(request.id),
-                    RequestKind::AssetLength { .. } => Ask::Length(request.id),
-                    RequestKind::AssetBytes { range, .. } => Ask::Bytes(request.id, *range),
-                })
-                .collect();
+            for request in requests {
+                match request.kind {
+                    RequestKind::ManifestStore { .. } => session
+                        .fulfill(request.id, HostReply::ManifestStore(Some(store.clone())))?,
 
-            for ask in asks {
-                match ask {
-                    Ask::Store(id) => {
-                        session.fulfill(id, HostReply::ManifestStore(Some(store.clone())))?
+                    RequestKind::CurrentDateTime => {
+                        session.fulfill(request.id, HostReply::CurrentDateTime(NOW))?
                     }
-                    Ask::Time(id) => session.fulfill(id, HostReply::CurrentDateTime(NOW))?,
-                    Ask::Length(id) => {
-                        session.fulfill(id, HostReply::AssetLength(asset.len() as u64))?
+
+                    RequestKind::AssetLength { .. } => {
+                        session.fulfill(request.id, HostReply::AssetLength(asset.len() as u64))?
                     }
-                    Ask::Bytes(id, range) => {
+
+                    RequestKind::AssetBytes { range, .. } => {
                         let start = range.start as usize;
                         let bytes = asset[start..start + range.len as usize].to_vec();
-                        session.fulfill(id, HostReply::AssetBytes(bytes))?
+                        session.fulfill(request.id, HostReply::AssetBytes(bytes))?
                     }
                 }
             }
@@ -1144,7 +1194,7 @@ mod tests {
         }
         covered.extend_from_slice(&asset[cursor..]);
 
-        crate::types::HashAlgorithm::Sha256.digest(&covered)
+        HashAlgorithm::Sha256.digest(&covered)
     }
 
     #[test]
@@ -1216,7 +1266,7 @@ mod tests {
     #[test]
     fn a_binding_naming_no_algorithm_defaults_to_sha256() {
         let asset = vec![9u8; 5000];
-        let expected = crate::types::HashAlgorithm::Sha256.digest(&asset);
+        let expected = HashAlgorithm::Sha256.digest(&asset);
 
         // Neither the binding nor the claim names an algorithm.
         let report = read_with_asset(store_bound_with_algs(None, None, expected), asset).unwrap();
@@ -1230,7 +1280,7 @@ mod tests {
     #[test]
     fn a_binding_algorithm_overrides_the_claims() {
         let asset = vec![3u8; 5000];
-        let expected = crate::types::HashAlgorithm::Sha512.digest(&asset);
+        let expected = HashAlgorithm::Sha512.digest(&asset);
 
         // The claim says sha256; the binding says sha512 and wins.
         let report = read_with_asset(

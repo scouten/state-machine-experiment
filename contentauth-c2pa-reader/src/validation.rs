@@ -546,7 +546,18 @@ fn assertion_path(url: &str) -> Option<&str> {
 mod tests {
     #![allow(clippy::unwrap_used)]
 
+    use std::collections::BTreeMap;
+
+    use c2pa_cbor::{to_vec, Value};
+
     use super::*;
+    use crate::{
+        manifest_store::{parse, ParsedManifestStore},
+        test_support::{
+            self, claim_box, manifest_with_broken_signature, manifest_with_empty_signature_box,
+            manifest_without_signature_box, TEST_SIGNER_CERT,
+        },
+    };
 
     #[test]
     fn extracts_assertion_paths_from_both_uri_forms() {
@@ -590,15 +601,13 @@ mod tests {
     /// Runs the signature check over a manifest built by `build`, and
     /// returns the codes it recorded.
     fn signature_codes(manifest_bytes: Vec<u8>) -> Vec<String> {
-        let parsed =
-            crate::manifest_store::parse(&crate::test_support::manifest_store(&[manifest_bytes]))
-                .unwrap();
+        let parsed = parse(&test_support::manifest_store(&[manifest_bytes])).unwrap();
 
         signature_codes_of(&parsed)
     }
 
     /// The signature-related status codes a parsed store recorded.
-    fn signature_codes_of(parsed: &crate::manifest_store::ParsedManifestStore) -> Vec<String> {
+    fn signature_codes_of(parsed: &ParsedManifestStore) -> Vec<String> {
         parsed
             .statuses
             .iter()
@@ -609,10 +618,10 @@ mod tests {
 
     #[test]
     fn a_signature_over_different_bytes_is_a_mismatch() {
-        let codes = signature_codes(crate::test_support::manifest_with_broken_signature(
+        let codes = signature_codes(manifest_with_broken_signature(
             "urn:uuid:broken",
             &[],
-            crate::test_support::claim_box("broken.jpg"),
+            claim_box("broken.jpg"),
         ));
 
         assert_eq!(codes, [status_code::CLAIM_SIGNATURE_MISMATCH]);
@@ -649,11 +658,8 @@ mod tests {
         // Driven through the real manifest walk, because the point of the
         // distinction is that it must agree with `Manifest::has_signature`
         // — which only the walk sets.
-        let parsed = crate::manifest_store::parse(&crate::test_support::manifest_store(&[
-            crate::test_support::manifest_with_empty_signature_box(
-                "urn:uuid:empty",
-                crate::test_support::claim_box("empty.jpg"),
-            ),
+        let parsed = parse(&test_support::manifest_store(&[
+            manifest_with_empty_signature_box("urn:uuid:empty", claim_box("empty.jpg")),
         ]))
         .unwrap();
 
@@ -669,11 +675,8 @@ mod tests {
 
         // And the contrasting case: genuinely no signature box, which is
         // the finding the empty box must not be confused with.
-        let parsed = crate::manifest_store::parse(&crate::test_support::manifest_store(&[
-            crate::test_support::manifest_without_signature_box(
-                "urn:uuid:none",
-                crate::test_support::claim_box("none.jpg"),
-            ),
+        let parsed = parse(&test_support::manifest_store(&[
+            manifest_without_signature_box("urn:uuid:none", claim_box("none.jpg")),
         ]))
         .unwrap();
 
@@ -700,19 +703,19 @@ mod tests {
 
     /// Builds a well-formed `COSE_Sign1` over a garbage signature, whose
     /// `x5chain` carries exactly the given entries.
-    fn signature_with_chain(chain: c2pa_cbor::Value) -> Vec<u8> {
-        let mut protected = std::collections::BTreeMap::new();
-        protected.insert(c2pa_cbor::Value::Integer(1), c2pa_cbor::Value::Integer(-7));
-        protected.insert(c2pa_cbor::Value::Integer(33), chain);
-        let protected = c2pa_cbor::to_vec(&c2pa_cbor::Value::Map(protected)).unwrap();
+    fn signature_with_chain(chain: Value) -> Vec<u8> {
+        let mut protected = BTreeMap::new();
+        protected.insert(Value::Integer(1), Value::Integer(-7));
+        protected.insert(Value::Integer(33), chain);
+        let protected = to_vec(&Value::Map(protected)).unwrap();
 
-        c2pa_cbor::to_vec(&c2pa_cbor::Value::Tag(
+        to_vec(&Value::Tag(
             18,
-            Box::new(c2pa_cbor::Value::Array(vec![
-                c2pa_cbor::Value::Bytes(protected),
-                c2pa_cbor::Value::Map(std::collections::BTreeMap::new()),
-                c2pa_cbor::Value::Null,
-                c2pa_cbor::Value::Bytes(vec![0u8; 64]),
+            Box::new(Value::Array(vec![
+                Value::Bytes(protected),
+                Value::Map(BTreeMap::new()),
+                Value::Null,
+                Value::Bytes(vec![0u8; 64]),
             ])),
         ))
         .unwrap()
@@ -721,7 +724,7 @@ mod tests {
     #[test]
     fn a_signature_carrying_a_junk_certificate_is_an_invalid_credential() {
         // Well-formed COSE, but the x5chain entry is not a certificate.
-        let signature = signature_with_chain(c2pa_cbor::Value::Bytes(vec![0u8; 16]));
+        let signature = signature_with_chain(Value::Bytes(vec![0u8; 16]));
 
         let mut statuses = Vec::new();
         check_claim_signature(
@@ -747,9 +750,9 @@ mod tests {
         // signer's key — but the chain could never be walked, so the
         // finding is about the credential rather than about the signature,
         // and it says which link is unreadable.
-        let signature = signature_with_chain(c2pa_cbor::Value::Array(vec![
-            c2pa_cbor::Value::Bytes(crate::test_support::TEST_SIGNER_CERT.to_vec()),
-            c2pa_cbor::Value::Bytes(vec![0u8; 16]),
+        let signature = signature_with_chain(Value::Array(vec![
+            Value::Bytes(TEST_SIGNER_CERT.to_vec()),
+            Value::Bytes(vec![0u8; 16]),
         ]));
 
         let mut statuses = Vec::new();

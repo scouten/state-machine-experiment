@@ -53,7 +53,13 @@
 
 use der::{oid::ObjectIdentifier, Decode, Encode};
 use pkcs1::RsaPssParams;
-use x509_cert::ext::pkix::{BasicConstraints as X509BasicConstraints, KeyUsage as X509KeyUsage};
+use x509_cert::{
+    ext::pkix::{
+        BasicConstraints as X509BasicConstraints, ExtendedKeyUsage, KeyUsage as X509KeyUsage,
+    },
+    spki::AlgorithmIdentifierOwned,
+    time::Time,
+};
 
 /// Reasons a certificate could not be decoded.
 ///
@@ -228,7 +234,7 @@ pub fn decode(der: &[u8]) -> Result<Certificate, CertError> {
         });
 
     let extended_key_usage = tbs
-        .get::<x509_cert::ext::pkix::ExtendedKeyUsage>()
+        .get::<ExtendedKeyUsage>()
         .map_err(|_| CertError::MalformedExtension {
             extension: "extended key usage",
         })?
@@ -261,9 +267,7 @@ pub fn decode(der: &[u8]) -> Result<Certificate, CertError> {
 /// Only RSASSA-PSS does this, and its parameters are context-tagged
 /// optionals with defaults — fiddly enough that they are decoded properly
 /// rather than walked by hand.
-fn signature_hash(
-    algorithm: &x509_cert::spki::AlgorithmIdentifierOwned,
-) -> Result<Option<Vec<u8>>, CertError> {
+fn signature_hash(algorithm: &AlgorithmIdentifierOwned) -> Result<Option<Vec<u8>>, CertError> {
     if algorithm.oid != RSA_PSS_OID {
         return Ok(None);
     }
@@ -296,7 +300,7 @@ const RSA_PSS_OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.1135
 ///
 /// The underlying representation cannot express a pre-1970 instant, so the
 /// conversion is total.
-fn unix_seconds(time: &x509_cert::time::Time) -> i64 {
+fn unix_seconds(time: &Time) -> i64 {
     // `as` is lossless here for every representable certificate date:
     // GeneralizedTime tops out at year 9999.
     time.to_unix_duration().as_secs() as i64
@@ -308,11 +312,12 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
+    use crate::test_support::{FIXTURE_ISSUER_CERT, FIXTURE_LEAF_CERT, TEST_SIGNER_CERT};
 
     /// The end-entity certificate from `tests/fixtures/manifest_data.c2pa`,
     /// extracted from the claim signature's `x5chain`.
     fn leaf() -> Certificate {
-        decode(crate::test_support::FIXTURE_LEAF_CERT).unwrap()
+        decode(FIXTURE_LEAF_CERT).unwrap()
     }
 
     #[test]
@@ -364,7 +369,7 @@ mod tests {
 
     #[test]
     fn decodes_a_ca_certificate() {
-        let cert = decode(crate::test_support::FIXTURE_ISSUER_CERT).unwrap();
+        let cert = decode(FIXTURE_ISSUER_CERT).unwrap();
 
         assert!(cert.subject.contains("CN=Intermediate CA"));
         assert_eq!(
@@ -394,7 +399,7 @@ mod tests {
     /// is replaced with `05` (NULL), which is well-formed DER of the wrong
     /// type.
     fn corrupt_extension(oid_suffix: [u8; 3]) -> Vec<u8> {
-        let mut der = crate::test_support::TEST_SIGNER_CERT.to_vec();
+        let mut der = TEST_SIGNER_CERT.to_vec();
         let needle = [0x06, 0x03, oid_suffix[0], oid_suffix[1], oid_suffix[2]];
 
         let at = der
@@ -424,7 +429,7 @@ mod tests {
 
         // The uncorrupted fixture still decodes, so the test is not simply
         // rejecting everything.
-        assert!(decode(crate::test_support::TEST_SIGNER_CERT).is_ok());
+        assert!(decode(TEST_SIGNER_CERT).is_ok());
     }
 
     #[test]
@@ -434,7 +439,7 @@ mod tests {
 
         // A truncated certificate is structurally damaged, not merely
         // unacceptable.
-        let truncated = &crate::test_support::FIXTURE_LEAF_CERT[..200];
+        let truncated = &FIXTURE_LEAF_CERT[..200];
         assert!(matches!(decode(truncated), Err(CertError::Malformed)));
     }
 }

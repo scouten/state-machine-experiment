@@ -52,6 +52,8 @@
 //! [`crate::cert::Certificate`] does not surface today; the rest want
 //! machinery this crate does not have yet.
 
+use core::iter::once;
+
 use c2pa_raw_crypto::{validator_for_sig_and_hash_algs, Oid};
 
 use crate::{
@@ -290,7 +292,7 @@ fn build_path<'a>(
     rest: &'a [Certificate],
     anchors: &'a [Certificate],
 ) -> (Vec<&'a Certificate>, bool) {
-    let mut path: Vec<&Certificate> = core::iter::once(leaf).chain(rest).collect();
+    let mut path: Vec<&Certificate> = once(leaf).chain(rest).collect();
 
     // An anchor inside the chain ends the path there. Anything the chain
     // carries above an anchor is irrelevant, and the anchor's own signature
@@ -519,7 +521,10 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
-    use crate::cert;
+    use crate::{
+        cert::{self, KeyUsage},
+        test_support::{FIXTURE_ISSUER_CERT, FIXTURE_LEAF_CERT, TEST_SIGNER_CERT},
+    };
 
     /// An instant inside every trust fixture's validity window, and inside
     /// the c2pa-rs fixture chain's too.
@@ -634,11 +639,7 @@ mod tests {
     #[test]
     fn an_anchor_that_did_not_issue_the_chain_does_not_trust_it() {
         // A well-formed anchor with no relationship to this chain.
-        let (trust, codes) = run(
-            &chain(),
-            &[decode(crate::test_support::TEST_SIGNER_CERT)],
-            NOW,
-        );
+        let (trust, codes) = run(&chain(), &[decode(TEST_SIGNER_CERT)], NOW);
 
         assert_eq!(trust, Trust::Unanchored);
         assert_eq!(
@@ -649,7 +650,7 @@ mod tests {
 
     #[test]
     fn an_anchor_matching_by_name_but_not_by_key_does_not_trust_the_chain() {
-        let stranger = decode(crate::test_support::TEST_SIGNER_CERT).public_key;
+        let stranger = decode(TEST_SIGNER_CERT).public_key;
 
         // Carrying the real root's name but somebody else's key: the chain
         // stops below this anchor, so it is reached through the "issued the
@@ -708,7 +709,7 @@ mod tests {
     #[test]
     fn a_chain_that_does_not_link_up_by_name_is_rejected() {
         // A leaf paired with an issuer that did not issue it.
-        let chain = vec![decode(LEAF), decode(crate::test_support::TEST_SIGNER_CERT)];
+        let chain = vec![decode(LEAF), decode(TEST_SIGNER_CERT)];
 
         let explanation = rejection(&chain, &[], NOW);
         assert!(
@@ -750,7 +751,7 @@ mod tests {
 
         // Key usage that does not permit signing.
         let mut cert = good.clone();
-        cert.key_usage = Some(crate::cert::KeyUsage {
+        cert.key_usage = Some(KeyUsage {
             digital_signature: false,
             ..good.key_usage.unwrap()
         });
@@ -760,7 +761,7 @@ mod tests {
 
         // An end-entity certificate claiming it may sign certificates.
         let mut cert = good.clone();
-        cert.key_usage = Some(crate::cert::KeyUsage {
+        cert.key_usage = Some(KeyUsage {
             key_cert_sign: true,
             ..good.key_usage.unwrap()
         });
@@ -830,7 +831,7 @@ mod tests {
         // The self-signed test signer asserts cA=false, so it cannot stand
         // as anyone's issuer — even its own name-alike.
         let mut leaf = decode(LEAF);
-        let signer = decode(crate::test_support::TEST_SIGNER_CERT);
+        let signer = decode(TEST_SIGNER_CERT);
         leaf.issuer = signer.subject.clone();
 
         let explanation = rejection(&[leaf, signer], &[], NOW);
@@ -858,7 +859,7 @@ mod tests {
     #[test]
     fn an_issuer_without_key_cert_sign_is_rejected() {
         let mut chain = chain();
-        chain[1].key_usage = Some(crate::cert::KeyUsage {
+        chain[1].key_usage = Some(KeyUsage {
             key_cert_sign: false,
             ..chain[1].key_usage.unwrap()
         });
@@ -993,10 +994,7 @@ mod tests {
         // parameters it has to read out of the algorithm identifier. Its
         // root is not in the chain and this repository does not have it, so
         // the best reachable outcome is `Unanchored`.
-        let chain = vec![
-            decode(crate::test_support::FIXTURE_LEAF_CERT),
-            decode(crate::test_support::FIXTURE_ISSUER_CERT),
-        ];
+        let chain = vec![decode(FIXTURE_LEAF_CERT), decode(FIXTURE_ISSUER_CERT)];
 
         let (trust, codes) = run(&chain, &[], NOW);
 
@@ -1006,12 +1004,7 @@ mod tests {
         // `Trusted`, which is the path an operator with a partial chain
         // takes.
         assert_eq!(
-            run(
-                &chain,
-                &[decode(crate::test_support::FIXTURE_ISSUER_CERT)],
-                NOW
-            )
-            .0,
+            run(&chain, &[decode(FIXTURE_ISSUER_CERT)], NOW).0,
             Trust::Anchored
         );
     }

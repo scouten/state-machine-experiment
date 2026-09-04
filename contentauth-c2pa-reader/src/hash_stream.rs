@@ -48,7 +48,7 @@
 //! buffered), bounding peak memory at `WINDOW × CHUNK_SIZE` no matter how
 //! large the asset is.
 
-use contentauth_state_machine::SessionCore;
+use contentauth_state_machine::{ProtocolError, RequestId, SessionCore};
 
 use crate::{
     error::Error,
@@ -83,7 +83,7 @@ pub(crate) struct HashStream {
     window: usize,
 
     /// Requests the host has not yet answered, with the chunk each covers.
-    outstanding: Vec<(contentauth_state_machine::RequestId, usize)>,
+    outstanding: Vec<(RequestId, usize)>,
 
     /// Chunks that arrived before their turn.
     buffered: Vec<(usize, Vec<u8>)>,
@@ -189,7 +189,7 @@ impl HashStream {
                 // payloads, so this arm is unreachable in practice.
                 Some(_) => {
                     self.outstanding.remove(position);
-                    return Err(contentauth_state_machine::ProtocolError::ReplyMismatch {
+                    return Err(ProtocolError::ReplyMismatch {
                         id,
                         expected: "AssetBytes",
                     }
@@ -290,8 +290,6 @@ pub(crate) fn included_ranges(exclusions: &[ByteRange], asset_len: u64) -> Optio
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
-
-    use contentauth_state_machine::RequestId;
 
     use super::*;
     use crate::{error::HostError, types::HashAlgorithm};
@@ -473,12 +471,10 @@ mod tests {
 
         assert!(matches!(
             stream.absorb(&mut core),
-            Err(Error::Protocol(
-                contentauth_state_machine::ProtocolError::ReplyMismatch {
-                    expected: "AssetBytes",
-                    ..
-                }
-            ))
+            Err(Error::Protocol(ProtocolError::ReplyMismatch {
+                expected: "AssetBytes",
+                ..
+            }))
         ));
     }
 
