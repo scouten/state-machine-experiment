@@ -35,7 +35,7 @@ cms = { version = "0.2.3", default-features = false, features = ["alloc"] }
 # CBOR decoding for claims — the same decoder c2pa-rs uses. Consumed via
 # `c2pa_cbor::Value` (walked by hand in `claim.rs`) rather than serde
 # derives, so the set of claim fields this crate understands stays explicit.
-c2pa_cbor = "0.77.2"
+c2pa_cbor = "0.77.4"
 # Zero-copy JUMBF parser. This crate only reads, so only the parser half of
 # the crate is used.
 jumbf = "0.7.0"
