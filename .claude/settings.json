@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo test*)",
+      "Bash(cargo build*)",
+      "Bash(cargo check*)",
+      "Bash(cargo fmt*)",
+      "Bash(cargo +nightly fmt*)",
+      "Bash(cargo +nightly-2026-01-16 fmt*)",
+      "Bash(cargo clippy*)",
+      "Bash(cargo doc*)",
+      "Bash(cargo llvm-cov*)",
+      "Bash(cargo deny check*)",
+      "Bash(rustup toolchain add*)",
+      "Bash(rustup component add*)",
+      "Bash(rustup target add*)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)"
+    ]
+  }
+}
