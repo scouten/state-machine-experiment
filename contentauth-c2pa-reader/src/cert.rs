@@ -442,4 +442,38 @@ mod tests {
         let truncated = &FIXTURE_LEAF_CERT[..200];
         assert!(matches!(decode(truncated), Err(CertError::Malformed)));
     }
+
+    #[test]
+    fn rsa_pss_without_parameters_is_a_malformed_extension() {
+        let algorithm = AlgorithmIdentifierOwned {
+            oid: RSA_PSS_OID,
+            parameters: None,
+        };
+
+        assert_eq!(
+            signature_hash(&algorithm),
+            Err(CertError::MalformedExtension {
+                extension: "RSASSA-PSS parameters"
+            })
+        );
+    }
+
+    #[test]
+    fn rsa_pss_parameters_that_are_not_an_rsa_pss_sequence_are_malformed() {
+        use der::{Any, Tag};
+
+        // Well-formed DER, but not the SEQUENCE `RsaPssParams` expects.
+        let parameters = Any::new(Tag::Integer, vec![0x01]).unwrap();
+        let algorithm = AlgorithmIdentifierOwned {
+            oid: RSA_PSS_OID,
+            parameters: Some(parameters),
+        };
+
+        assert_eq!(
+            signature_hash(&algorithm),
+            Err(CertError::MalformedExtension {
+                extension: "RSASSA-PSS parameters"
+            })
+        );
+    }
 }

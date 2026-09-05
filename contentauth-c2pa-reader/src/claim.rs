@@ -260,6 +260,14 @@ mod tests {
     }
 
     #[test]
+    fn generator_info_new_sets_both_fields() {
+        let info = GeneratorInfo::new("test", "1.0");
+
+        assert_eq!(info.name.as_deref(), Some("test"));
+        assert_eq!(info.version.as_deref(), Some("1.0"));
+    }
+
+    #[test]
     fn decodes_a_full_v1_claim() {
         let claim = map(vec![
             (text_value("dc:title"), text_value("C.jpg")),

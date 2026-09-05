@@ -580,8 +580,24 @@ mod tests {
     #![allow(clippy::expect_used)]
     #![allow(clippy::unwrap_used)]
 
+    use core::time::Duration;
+
+    use cms::{
+        cert::{IssuerAndSerialNumber, OtherCertificateFormat},
+        content_info::CmsVersion,
+        signed_data::{CertificateSet, EncapsulatedContentInfo, SignerInfos},
+    };
+    use der::asn1::SetOfVec;
+    use x509_cert::{
+        attr::{Attribute, Attributes},
+        ext::pkix::SubjectKeyIdentifier,
+        serial_number::SerialNumber,
+    };
+
     use super::*;
-    use crate::test_support::{FIXTURE_ISSUER_CERT, FIXTURE_LEAF_CERT, TEST_SIGNER_CERT};
+    use crate::test_support::{
+        FIXTURE_ISSUER_CERT, FIXTURE_LEAF_CERT, TEST_SIGNER_CERT, TEST_SIGNER_KEY,
+    };
 
     /// The `TimeStampResp` from the claim signature in
     /// `tests/fixtures/manifest_data.c2pa`, extracted verbatim.
@@ -821,10 +837,27 @@ mod tests {
 
         let mut altered = TstInfo::from_der(&content).expect("decodes");
         altered.version = 2;
+        let altered_der = altered.to_der().expect("re-encodes");
 
         assert_eq!(
-            tst_info(&altered.to_der().expect("re-encodes")).err(),
+            tst_info(&altered_der).err(),
             Some("the token's TSTInfo names a version this core does not read")
+        );
+
+        // And through the full `validate` pipeline, which is what actually
+        // turns this into a `timeStamp.malformed` finding.
+        let mut mutated = signed_data.clone();
+        mutated.encap_content_info.econtent = Some(
+            Any::encode_from(&OctetString::new(altered_der).expect("encodes")).expect("encodes"),
+        );
+
+        let (outcome, codes, explanation) =
+            run(&pending(token_from(mutated), b"anything"), &anchors());
+        assert_eq!(outcome, Timestamped::Rejected);
+        assert_eq!(codes, [status_code::TIMESTAMP_MALFORMED]);
+        assert!(
+            explanation.contains("names a version this core does not read"),
+            "unexpected: {explanation}"
         );
     }
 
@@ -919,5 +952,374 @@ mod tests {
         // which is the ordering this test exists to pin: a token is never
         // called trusted on the strength of its authority alone.
         assert_eq!(run(&stamped, &anchors()).0, Timestamped::Rejected);
+    }
+
+    /// The token's `SignedData`, decoded fresh so mutations in one test
+    /// cannot bleed into another.
+    fn fixture_signed_data() -> SignedData {
+        signed_data(TOKEN, TimestampStorage::SigTst).expect("unwraps")
+    }
+
+    /// Rewraps a `SignedData` into a `sigTst`-framed token, the reverse of
+    /// [`fixture_signed_data`].
+    fn token_from(signed_data: SignedData) -> Vec<u8> {
+        let response = TimeStampResp {
+            status: PkiStatusInfo {
+                status: 0,
+                status_string: None,
+                fail_info: None,
+            },
+            token: Some(ContentInfo {
+                content_type: ID_SIGNED_DATA,
+                content: Any::encode_from(&signed_data).expect("encodes"),
+            }),
+        };
+        response.to_der().expect("encodes")
+    }
+
+    /// The token's own (single) `SignerInfo`, to mutate a copy of.
+    fn fixture_signer_info(signed_data: &SignedData) -> SignerInfo {
+        signed_data
+            .signer_infos
+            .0
+            .as_slice()
+            .first()
+            .expect("the fixture carries a signer")
+            .clone()
+    }
+
+    /// Replaces a token's one `SignerInfo` with a mutated copy.
+    fn with_signer_info(mut signed_data: SignedData, info: SignerInfo) -> SignedData {
+        signed_data.signer_infos = SignerInfos(SetOfVec::try_from(vec![info]).expect("orders"));
+        signed_data
+    }
+
+    /// A copy of `attrs` with `oid`'s attribute, if any, removed.
+    fn without_attribute(attrs: &Attributes, oid: ObjectIdentifier) -> Attributes {
+        let kept: Vec<Attribute> = attrs.iter().filter(|a| a.oid != oid).cloned().collect();
+        Attributes::try_from(kept).expect("orders")
+    }
+
+    /// A copy of `attrs` with `oid`'s attribute replaced by an OID value —
+    /// the shape the `content-type` attribute takes.
+    fn with_oid_attribute(
+        attrs: &Attributes,
+        oid: ObjectIdentifier,
+        value: ObjectIdentifier,
+    ) -> Attributes {
+        let mut kept: Vec<Attribute> = attrs.iter().filter(|a| a.oid != oid).cloned().collect();
+        kept.push(Attribute {
+            oid,
+            values: SetOfVec::try_from(vec![Any::encode_from(&value).expect("encodes")])
+                .expect("orders"),
+        });
+        Attributes::try_from(kept).expect("orders")
+    }
+
+    #[test]
+    fn tst_info_der_rejects_the_wrong_econtent_type() {
+        let mut signed_data = fixture_signed_data();
+        signed_data.encap_content_info.econtent_type = ID_SIGNED_DATA;
+
+        assert_eq!(
+            tst_info_der(&signed_data),
+            Err("the timestamp token does not encapsulate a TSTInfo")
+        );
+
+        // And through the full `validate` pipeline, which is what actually
+        // turns this into a `timeStamp.malformed` finding.
+        let (outcome, codes, explanation) =
+            run(&pending(token_from(signed_data), b"anything"), &anchors());
+        assert_eq!(outcome, Timestamped::Rejected);
+        assert_eq!(codes, [status_code::TIMESTAMP_MALFORMED]);
+        assert!(
+            explanation.contains("does not encapsulate a TSTInfo"),
+            "unexpected: {explanation}"
+        );
+    }
+
+    #[test]
+    fn tst_info_der_rejects_missing_content() {
+        let mut signed_data = fixture_signed_data();
+        signed_data.encap_content_info.econtent = None;
+
+        assert_eq!(
+            tst_info_der(&signed_data),
+            Err("the timestamp token encapsulates no content")
+        );
+    }
+
+    #[test]
+    fn tst_info_der_rejects_content_that_is_not_an_octet_string() {
+        let mut signed_data = fixture_signed_data();
+        signed_data.encap_content_info.econtent = Some(Any::null());
+
+        assert_eq!(
+            tst_info_der(&signed_data),
+            Err("the timestamp token's content is not an octet string")
+        );
+    }
+
+    #[test]
+    fn verify_signature_rejects_a_content_type_that_is_not_tst_info() {
+        let signed_data = fixture_signed_data();
+        let mut info = fixture_signer_info(&signed_data);
+        info.signed_attrs = info
+            .signed_attrs
+            .as_ref()
+            .map(|attrs| with_oid_attribute(attrs, ID_CONTENT_TYPE, ID_SIGNED_DATA));
+        let signed_data = with_signer_info(signed_data, info);
+        let content = tst_info_der(&signed_data).expect("has a TSTInfo");
+
+        assert_eq!(
+            verify_signature(&signed_data, &content),
+            Err("the timestamp token's content-type attribute is not a TSTInfo")
+        );
+    }
+
+    #[test]
+    fn verify_signature_rejects_a_missing_content_type_attribute() {
+        let signed_data = fixture_signed_data();
+        let mut info = fixture_signer_info(&signed_data);
+        info.signed_attrs = info
+            .signed_attrs
+            .as_ref()
+            .map(|attrs| without_attribute(attrs, ID_CONTENT_TYPE));
+        let signed_data = with_signer_info(signed_data, info);
+        let content = tst_info_der(&signed_data).expect("has a TSTInfo");
+
+        assert_eq!(
+            verify_signature(&signed_data, &content),
+            Err("the timestamp token carries no content-type attribute")
+        );
+    }
+
+    #[test]
+    fn verify_signature_rejects_a_missing_message_digest_attribute() {
+        let signed_data = fixture_signed_data();
+        let mut info = fixture_signer_info(&signed_data);
+        info.signed_attrs = info
+            .signed_attrs
+            .as_ref()
+            .map(|attrs| without_attribute(attrs, ID_MESSAGE_DIGEST));
+        let signed_data = with_signer_info(signed_data, info);
+        let content = tst_info_der(&signed_data).expect("has a TSTInfo");
+
+        assert_eq!(
+            verify_signature(&signed_data, &content),
+            Err("the timestamp token carries no message-digest attribute")
+        );
+    }
+
+    #[test]
+    fn verify_signature_rejects_an_unsupported_digest_algorithm() {
+        let signed_data = fixture_signed_data();
+        let mut info = fixture_signer_info(&signed_data);
+        info.digest_alg = AlgorithmIdentifierOwned {
+            // 1.2.840.113549.2.5 - MD5, not a hash this core computes.
+            oid: ObjectIdentifier::new_unwrap("1.2.840.113549.2.5"),
+            parameters: None,
+        };
+        let signed_data = with_signer_info(signed_data, info);
+        let content = tst_info_der(&signed_data).expect("has a TSTInfo");
+
+        assert_eq!(
+            verify_signature(&signed_data, &content),
+            Err("the timestamp token names a digest this core cannot compute")
+        );
+    }
+
+    #[test]
+    fn verify_signature_rejects_a_signer_identified_by_key_identifier() {
+        let signed_data = fixture_signed_data();
+        let mut info = fixture_signer_info(&signed_data);
+        info.sid = SignerIdentifier::SubjectKeyIdentifier(SubjectKeyIdentifier(
+            OctetString::new(vec![0u8; 20]).expect("encodes"),
+        ));
+        let signed_data = with_signer_info(signed_data, info);
+        let content = tst_info_der(&signed_data).expect("has a TSTInfo");
+
+        assert_eq!(
+            verify_signature(&signed_data, &content),
+            Err(
+                "the timestamp token identifies its signer by key identifier, which this core does not resolve"
+            )
+        );
+    }
+
+    #[test]
+    fn verify_signature_rejects_a_signer_no_certificate_matches() {
+        let signed_data = fixture_signed_data();
+        let mut info = fixture_signer_info(&signed_data);
+
+        let SignerIdentifier::IssuerAndSerialNumber(mut wanted) = info.sid.clone() else {
+            panic!("the fixture identifies its signer by issuer and serial number");
+        };
+        wanted.serial_number = SerialNumber::new(&[0x7f]).expect("encodes");
+        info.sid = SignerIdentifier::IssuerAndSerialNumber(wanted);
+
+        let signed_data = with_signer_info(signed_data, info);
+        let content = tst_info_der(&signed_data).expect("has a TSTInfo");
+
+        assert_eq!(
+            verify_signature(&signed_data, &content),
+            Err("the timestamp token does not carry the certificate that signed it")
+        );
+    }
+
+    #[test]
+    fn certificates_filters_out_non_certificate_choices() {
+        let mut signed_data = fixture_signed_data();
+        let before = certificates(&signed_data).len();
+
+        let mut choices: Vec<CertificateChoices> = signed_data
+            .certificates
+            .as_ref()
+            .expect("the fixture carries certificates")
+            .0
+            .as_slice()
+            .to_vec();
+
+        // An attribute certificate carries no public key, so it can never
+        // be part of a path — `certificates` drops it rather than passing
+        // it through for `x509_cert::Certificate::from_der` to choke on.
+        choices.push(CertificateChoices::Other(OtherCertificateFormat {
+            other_cert_format: ObjectIdentifier::new_unwrap("1.2.3.4"),
+            other_cert: Any::null(),
+        }));
+        signed_data.certificates =
+            Some(CertificateSet(SetOfVec::try_from(choices).expect("orders")));
+
+        assert_eq!(certificates(&signed_data).len(), before);
+    }
+
+    /// `2.16.840.1.101.3.4.2.1` — SHA-256, used to build the CMS
+    /// `message-digest` attribute below.
+    const SHA256_OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.2.1");
+
+    /// `1.2.840.10045.4.3.2` — `ecdsa-with-SHA256`, the CMS signature
+    /// algorithm that matches [`TEST_SIGNER_KEY`].
+    const ECDSA_WITH_SHA256_OID: ObjectIdentifier =
+        ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.2");
+
+    /// Builds a `sigTst`-framed token, signed for real with
+    /// [`TEST_SIGNER_KEY`], whose `TSTInfo` is exactly `tst_info`.
+    ///
+    /// Unlike the other tests in this module, which mutate fields the real
+    /// fixture's already-verified signature never covers, this one has to
+    /// sign its own: every check `verify_signature` runs before the
+    /// message-imprint-algorithm check below happens to reach passes only
+    /// when the signature genuinely verifies, and altering the `TSTInfo`
+    /// changes what the `message-digest` attribute must cover.
+    fn self_signed_token(tst_info: &TstInfo) -> Vec<u8> {
+        let tst_info_der = tst_info.to_der().expect("encodes");
+        let digest = HashAlgorithm::Sha256.digest(&tst_info_der);
+
+        let signed_attrs: Attributes = SetOfVec::try_from(vec![
+            Attribute {
+                oid: ID_CONTENT_TYPE,
+                values: SetOfVec::try_from(vec![
+                    Any::encode_from(&ID_CT_TST_INFO).expect("encodes")
+                ])
+                .expect("orders"),
+            },
+            Attribute {
+                oid: ID_MESSAGE_DIGEST,
+                values: SetOfVec::try_from(vec![Any::encode_from(
+                    &OctetString::new(digest).expect("encodes"),
+                )
+                .expect("encodes")])
+                .expect("orders"),
+            },
+        ])
+        .expect("orders");
+
+        let signer = c2pa_raw_crypto::signer_from_private_key(
+            TEST_SIGNER_KEY,
+            c2pa_raw_crypto::SigningAlg::Es256,
+        )
+        .expect("the test key is valid");
+        let signature = signer
+            .sign(&signed_attrs.to_der().expect("encodes"))
+            .expect("signs");
+
+        let signer_cert = x509_cert::Certificate::from_der(TEST_SIGNER_CERT).expect("decodes");
+
+        let signer_info = SignerInfo {
+            version: CmsVersion::V1,
+            sid: SignerIdentifier::IssuerAndSerialNumber(IssuerAndSerialNumber {
+                issuer: signer_cert.tbs_certificate.issuer.clone(),
+                serial_number: signer_cert.tbs_certificate.serial_number.clone(),
+            }),
+            digest_alg: AlgorithmIdentifierOwned {
+                oid: SHA256_OID,
+                parameters: None,
+            },
+            signed_attrs: Some(signed_attrs),
+            signature_algorithm: AlgorithmIdentifierOwned {
+                oid: ECDSA_WITH_SHA256_OID,
+                parameters: None,
+            },
+            signature: OctetString::new(signature).expect("encodes"),
+            unsigned_attrs: None,
+        };
+
+        let signed_data = SignedData {
+            version: CmsVersion::V1,
+            digest_algorithms: SetOfVec::try_from(vec![AlgorithmIdentifierOwned {
+                oid: SHA256_OID,
+                parameters: None,
+            }])
+            .expect("orders"),
+            encap_content_info: EncapsulatedContentInfo {
+                econtent_type: ID_CT_TST_INFO,
+                econtent: Some(
+                    Any::encode_from(&OctetString::new(tst_info_der).expect("encodes"))
+                        .expect("encodes"),
+                ),
+            },
+            certificates: Some(CertificateSet(
+                SetOfVec::try_from(vec![CertificateChoices::Certificate(signer_cert)])
+                    .expect("orders"),
+            )),
+            crls: None,
+            signer_infos: SignerInfos(SetOfVec::try_from(vec![signer_info]).expect("orders")),
+        };
+
+        token_from(signed_data)
+    }
+
+    #[test]
+    fn an_unsupported_message_imprint_algorithm_is_rejected() {
+        let tst_info = TstInfo {
+            version: TST_INFO_VERSION,
+            policy: ObjectIdentifier::new_unwrap("1.2.3.4"),
+            message_imprint: MessageImprint {
+                hash_algorithm: AlgorithmIdentifierOwned {
+                    // 1.2.840.113549.2.5 - MD5, not a hash this core computes.
+                    oid: ObjectIdentifier::new_unwrap("1.2.840.113549.2.5"),
+                    parameters: None,
+                },
+                hashed_message: OctetString::new(vec![0u8; 16]).expect("encodes"),
+            },
+            serial_number: Int::new(&[1]).expect("encodes"),
+            gen_time: GeneralizedTime::from_unix_duration(Duration::from_secs(GEN_TIME as u64))
+                .expect("encodes"),
+            accuracy: None,
+            ordering: false,
+            nonce: None,
+            tsa: None,
+            extensions: None,
+        };
+
+        let (outcome, codes, explanation) =
+            run(&pending(self_signed_token(&tst_info), b"anything"), &[]);
+
+        assert_eq!(outcome, Timestamped::Rejected);
+        assert_eq!(codes, [status_code::TIMESTAMP_MALFORMED]);
+        assert!(
+            explanation.contains("uses a hash this core cannot compute"),
+            "unexpected: {explanation}"
+        );
     }
 }

@@ -772,4 +772,43 @@ mod tests {
             Some("certificate 1 in the chain: not a well-formed X.509 certificate")
         );
     }
+
+    #[test]
+    fn a_malformed_timestamp_header_is_reported_but_does_not_spoil_the_signature() {
+        // A `sigTst` value this crate cannot read as a timestamp header —
+        // distinct from every other test here, which sends a genuinely
+        // *broken* signature through: this one verifies just fine, and
+        // only its optional timestamp is unreadable.
+        let unprotected = Value::Map(BTreeMap::from([(
+            Value::Text("sigTst".to_string()),
+            Value::Null,
+        )]));
+        let signature = test_support::claim_signature_with_unprotected(b"claim", unprotected);
+
+        let mut statuses = Vec::new();
+        let chain = check_claim_signature(
+            "urn:uuid:x",
+            b"claim",
+            SignatureBox::Present(&signature),
+            &mut statuses,
+        );
+
+        let chain = chain.expect("the signature itself still verifies");
+        assert!(
+            chain.timestamp.is_none(),
+            "an unreadable timestamp is not carried forward as a pending one"
+        );
+
+        assert_eq!(
+            statuses.iter().map(|s| s.code.as_str()).collect::<Vec<_>>(),
+            [
+                status_code::CLAIM_SIGNATURE_VALIDATED,
+                status_code::TIMESTAMP_MALFORMED
+            ]
+        );
+        assert_eq!(
+            statuses[1].explanation.as_deref(),
+            Some("timestamp header is not a map")
+        );
+    }
 }

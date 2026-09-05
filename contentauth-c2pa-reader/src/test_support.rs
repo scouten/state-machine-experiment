@@ -44,7 +44,7 @@ pub(crate) const TEST_SIGNER_CERT: &[u8] = include_bytes!("../tests/fixtures/tes
 
 /// The matching private key. Generated for this repository and used only
 /// to sign test data; it protects nothing.
-const TEST_SIGNER_KEY: &[u8] = include_bytes!("../tests/fixtures/test-signer.key.pem");
+pub(crate) const TEST_SIGNER_KEY: &[u8] = include_bytes!("../tests/fixtures/test-signer.key.pem");
 
 /// Builds a `COSE_Sign1` claim signature over `claim_cbor` that verifies
 /// against [`TEST_SIGNER_CERT`].
@@ -54,6 +54,17 @@ const TEST_SIGNER_KEY: &[u8] = include_bytes!("../tests/fixtures/test-signer.key
 /// proving the reader agrees with itself. If the two constructions ever
 /// disagree, the signature stops verifying and the test says so.
 pub(crate) fn claim_signature(claim_cbor: &[u8]) -> Vec<u8> {
+    claim_signature_with_unprotected(claim_cbor, Value::Map(BTreeMap::new()))
+}
+
+/// As [`claim_signature`], but with a caller-chosen unprotected header
+/// bucket — for tests that need to control what a timestamp header there
+/// looks like.
+///
+/// The unprotected bucket carries no weight in the `Sig_structure` (RFC
+/// 9052 only signs the protected one), so varying it here never touches
+/// the signature itself.
+pub(crate) fn claim_signature_with_unprotected(claim_cbor: &[u8], unprotected: Value) -> Vec<u8> {
     let protected = {
         let mut map = BTreeMap::new();
         // 1 = alg, -7 = ES256; 33 = x5chain.
@@ -84,7 +95,7 @@ pub(crate) fn claim_signature(claim_cbor: &[u8]) -> Vec<u8> {
         18,
         Box::new(Value::Array(vec![
             Value::Bytes(protected),
-            Value::Map(BTreeMap::new()),
+            unprotected,
             Value::Null,
             Value::Bytes(signature),
         ])),
