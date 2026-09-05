@@ -201,15 +201,18 @@ fn byte_string(out: &mut Vec<u8>, bytes: &[u8]) {
 pub(crate) fn parse(bytes: &[u8]) -> Result<ClaimSignature, &'static str> {
     let value: Value = c2pa_cbor::from_slice(bytes).map_err(|_| "signature is not valid CBOR")?;
 
-    // The decoder discards CBOR tags, so the `COSE_Sign1` tag (18) never
-    // reaches here and cannot be checked (c2pa-cbor#27). That is
-    // tolerable but worth naming: a `COSE_Sign` (tag 98) would arrive
-    // looking the same. It is still rejected, because its fourth element
-    // is an array of signatures where this requires a byte string — by
-    // structure rather than by tag. If that issue is fixed, this is where
-    // the tag check belongs.
-    //
-    // [c2pa-cbor#27]: https://github.com/contentauth/c2pa-cbor/issues/27
+    // `COSE_Sign1` carries tag 18; C2PA claim signatures use it. A
+    // `COSE_Sign` (tag 98) is otherwise the same shape — a four-element
+    // array — so now that c2pa-cbor round-trips tags (c2pa-cbor#27 is
+    // fixed), it is rejected by its tag rather than left to be caught
+    // later by its fourth element being an array of signatures instead of
+    // a byte string.
+    let value = match value {
+        Value::Tag(18, inner) => *inner,
+        Value::Tag(_, _) => return Err("signature does not carry the COSE_Sign1 tag"),
+        untagged => untagged,
+    };
+
     let Value::Array(items) = value else {
         return Err("signature is not a COSE_Sign1 array");
     };
@@ -426,6 +429,21 @@ mod tests {
         assert_eq!(
             parse(&sign1(good.clone(), Value::Bytes(vec![1]), vec![0; 4])),
             Err("COSE_Sign1 payload is not detached")
+        );
+
+        // A `COSE_Sign` (tag 98) is the same shape as a `COSE_Sign1`, but
+        // is not one.
+        assert_eq!(
+            parse(&encode(&Value::Tag(
+                98,
+                Box::new(Value::Array(vec![
+                    Value::Bytes(good.clone()),
+                    Value::Map(BTreeMap::new()),
+                    Value::Null,
+                    Value::Bytes(vec![0; 4]),
+                ])),
+            ))),
+            Err("signature does not carry the COSE_Sign1 tag")
         );
 
         // Wrong shape.
