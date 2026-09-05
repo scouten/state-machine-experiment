@@ -22,7 +22,7 @@ use contentauth_state_machine::{
 };
 
 use crate::{
-    cose,
+    cose, data_hash,
     error::Error,
     hash_stream::{self, HashStream},
     jumbf::{AssertionInput, ManifestBuilder, ManifestInputs},
@@ -367,6 +367,13 @@ impl BuilderSession {
             ));
         }
 
+        let mut assertion_labels = std::collections::HashSet::from([data_hash::LABEL]);
+        for assertion in &self.settings.assertions {
+            if !assertion_labels.insert(assertion.label.as_str()) {
+                return Err(Error::InvalidAssertionLabel(assertion.label.clone()));
+            }
+        }
+
         let signature_len =
             cose::signature_len(self.settings.signing_alg, self.settings.rsa_signature_len)?;
         let generator = &self.settings.claim_generator_info[0];
@@ -423,6 +430,13 @@ impl BuilderSession {
             }
 
             Some(BuilderHostReply::PlaceholderReserved(exclusion)) => {
+                if exclusion.len != manifest.placeholder_bytes().len() as u64 {
+                    return Err(Error::PlaceholderRangeInvalid(
+                        "the reserved range's length does not match the placeholder that was \
+                         embedded",
+                    ));
+                }
+
                 let request = self.core.issue(BuilderRequest::AssetLength {
                     stream: Self::PRIMARY_STREAM,
                 });

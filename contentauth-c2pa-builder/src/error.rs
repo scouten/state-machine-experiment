@@ -62,6 +62,18 @@ pub enum Error {
     #[error("host-reported range is unusable: {0}")]
     PlaceholderRangeInvalid(&'static str),
 
+    /// [`BuilderSettings::assertions`](crate::BuilderSettings::assertions)
+    /// used the same label twice, or used the label this crate reserves
+    /// for the hard binding assertion it appends
+    /// (`c2pa.hash.data`).
+    ///
+    /// Either would leave two assertion boxes claiming the same
+    /// `self#jumbf=...` URI, which the reader resolves to whichever box
+    /// it encounters first — silently corrupting hard-binding validation
+    /// rather than failing loudly.
+    #[error("assertion label {0:?} is duplicated or reserved for the hard binding assertion")]
+    InvalidAssertionLabel(String),
+
     /// The host returned a different number of bytes than the range it was
     /// asked for.
     ///

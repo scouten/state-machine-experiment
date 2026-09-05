@@ -403,3 +403,68 @@ fn a_host_that_refuses_to_sign_fails_the_session() {
         }
     }
 }
+
+/// An assertion labeled `c2pa.hash.data` would collide with the hard
+/// binding assertion this crate appends itself, leaving two boxes
+/// claiming the same `self#jumbf=...` URI. The session must refuse to
+/// build rather than silently produce an ambiguous manifest.
+#[test]
+fn an_assertion_reusing_the_hard_binding_label_is_rejected() {
+    let assertion = Assertion::new("c2pa.hash.data", vec![0xa0]);
+    let mut session = BuilderSession::new(settings(vec![assertion], None));
+    assert!(session.advance().is_err());
+}
+
+/// Two caller-supplied assertions with the same label would collide in
+/// exactly the same way as reusing the hard binding's own label.
+#[test]
+fn duplicate_assertion_labels_are_rejected() {
+    let assertions = vec![
+        Assertion::new("c2pa.actions", vec![0xa0]),
+        Assertion::new("c2pa.actions", vec![0xa0]),
+    ];
+    let mut session = BuilderSession::new(settings(assertions, None));
+    assert!(session.advance().is_err());
+}
+
+/// If the host reports a placeholder reservation range whose length
+/// doesn't match the placeholder it was actually asked to embed, the
+/// session must refuse to use it as the hard binding's exclusion range
+/// rather than sign and commit against the wrong span.
+#[test]
+fn a_reservation_range_of_the_wrong_length_is_rejected() {
+    let mut session = BuilderSession::new(settings(vec![], None));
+    let mut asset = vec![0u8; 5000];
+
+    assert_eq!(session.advance().unwrap(), BuilderStep::AwaitHost);
+
+    let requests: Vec<_> = session.outstanding_requests().to_vec();
+    match requests.as_slice() {
+        [request] => match &request.kind {
+            BuilderRequest::ReservePlaceholder { placeholder, .. } => {
+                let offset = 100u64;
+                asset.splice(
+                    offset as usize..offset as usize,
+                    placeholder.iter().copied(),
+                );
+                session
+                    .fulfill(
+                        request.id,
+                        BuilderHostReply::PlaceholderReserved(
+                            contentauth_c2pa_builder::ByteRange {
+                                start: offset,
+                                // One byte short of the placeholder that was
+                                // actually embedded.
+                                len: placeholder.len() as u64 - 1,
+                            },
+                        ),
+                    )
+                    .unwrap();
+            }
+            other => panic!("unexpected request: {other:?}"),
+        },
+        other => panic!("unexpected requests: {other:?}"),
+    }
+
+    assert!(session.advance().is_err());
+}
