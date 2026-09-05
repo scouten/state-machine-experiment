@@ -13,9 +13,11 @@
 
 //! Error types for the sans-I/O reader.
 
+use contentauth_c2pa_primitives::ByteRange;
+pub use contentauth_c2pa_primitives::HostError;
 use contentauth_state_machine::{ProtocolError, RequestId};
 
-use crate::{cert::CertError, claim::ClaimError, types::ByteRange};
+use crate::{cert::CertError, claim::ClaimError};
 
 /// Errors surfaced by [`ReadSession`](crate::ReadSession).
 ///
@@ -143,31 +145,4 @@ pub enum Error {
     /// The code path is not yet implemented in this experimental crate.
     #[error("not yet implemented: {0}")]
     Unimplemented(&'static str),
-}
-
-/// Describes a failure that occurred in the host environment while servicing
-/// a host request.
-///
-/// The host reports failures by fulfilling a request with
-/// [`ReadHostReply::Failed`]. Depending on the request and the workflow, the
-/// crate may be able to continue (recording a validation status) or may
-/// terminate the session with [`Error::HostFailure`].
-///
-/// [`ReadHostReply::Failed`]: crate::request::ReadHostReply::Failed
-#[derive(Clone, Debug, thiserror::Error)]
-#[error("{message}")]
-#[non_exhaustive]
-pub struct HostError {
-    /// Human-readable description of the failure, intended for logs and
-    /// error reports.
-    pub message: String,
-}
-
-impl HostError {
-    /// Creates a new host error with the given description.
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
 }

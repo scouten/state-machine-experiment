@@ -11,21 +11,33 @@
 // specific language governing permissions and limitations under
 // each license.
 
-//! Foundation types shared by the read state machine.
+//! Foundation types shared by every sans-I/O C2PA session in this
+//! workspace.
 //!
-//! [`contentauth_state_machine::RequestId`] is this crate's request-ID type
-//! too — see the crate root for the re-export — so it is not duplicated
-//! here.
+//! `contentauth_state_machine::RequestId` is a session's request-ID type
+//! too, but it lives in the engine crate rather than here since it carries
+//! no C2PA-specific meaning.
 
 use std::fmt;
 
 /// Identifies one byte stream (typically one asset file) within a session.
 ///
-/// [`ReadSession`](crate::ReadSession) never opens or names files; it refers
-/// to streams the host has introduced (the primary asset being read) by
-/// these opaque handles.
+/// A session never opens or names files; it refers to streams the host has
+/// introduced (the primary asset being read or written) by these opaque
+/// handles.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct StreamId(pub(crate) u64);
+pub struct StreamId(u64);
+
+impl StreamId {
+    /// Creates a new stream identifier.
+    ///
+    /// Only a session itself is expected to call this — hosts receive
+    /// `StreamId` values from the session and echo them back, rather than
+    /// minting their own.
+    pub const fn new(id: u64) -> Self {
+        Self(id)
+    }
+}
 
 impl fmt::Display for StreamId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -43,7 +55,7 @@ pub struct ByteRange {
     pub len: u64,
 }
 
-/// Cryptographic hash algorithms the crate can compute internally.
+/// Cryptographic hash algorithms a session can compute internally.
 ///
 /// Mirrors the algorithms accepted by c2pa-rs for hard bindings.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -61,9 +73,10 @@ pub enum HashAlgorithm {
 
 /// Signature algorithms supported for C2PA claim signatures.
 ///
-/// Mirrors `SigningAlg` in c2pa-rs. This crate never holds key material;
-/// this is used to describe the signature the host's claim signer produced
-/// and to assemble/validate the corresponding COSE structures.
+/// Mirrors `SigningAlg` in c2pa-rs. Neither the reader nor the builder ever
+/// holds key material; this is used to describe the signature a claim
+/// signer produced (or must produce) and to assemble or validate the
+/// corresponding COSE structures.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub enum SigningAlg {
@@ -138,6 +151,28 @@ impl SigningAlg {
         }
     }
 
+    /// The fixed length, in bytes, of a signature produced by this
+    /// algorithm, when that length does not depend on a key's own size.
+    ///
+    /// `Es256`/`Es384`/`Es512` signatures are the fixed-width (P1363)
+    /// concatenation of two field elements, and `Ed25519` signatures are
+    /// always 64 bytes — none of these vary by key. RSASSA-PSS signatures
+    /// are exactly the modulus size of the signing key, which this type
+    /// has no way to know on its own, so this returns `None` for the
+    /// `Ps*` variants; a caller that needs their length must supply it
+    /// (typically from the signing certificate's public key).
+    pub fn fixed_signature_len(self) -> Option<usize> {
+        match self {
+            Self::Es256 => Some(64),
+            Self::Es384 => Some(96),
+            // P-521 field elements are 66 bytes each (521 bits, rounded up
+            // to a whole byte), so a P1363 signature is 132 bytes.
+            Self::Es512 => Some(132),
+            Self::Ed25519 => Some(64),
+            Self::Ps256 | Self::Ps384 | Self::Ps512 => None,
+        }
+    }
+
     /// The corresponding algorithm in the raw-crypto backend.
     ///
     /// This crate keeps its own `SigningAlg` rather than re-exporting the
@@ -146,7 +181,7 @@ impl SigningAlg {
     /// over *our* variants, so adding one here fails to compile until it
     /// is mapped; the backend gaining a variant we do not know about is
     /// harmless, since an algorithm we cannot name is one we must refuse.
-    pub(crate) fn raw(self) -> c2pa_raw_crypto::SigningAlg {
+    pub fn raw(self) -> c2pa_raw_crypto::SigningAlg {
         use c2pa_raw_crypto::SigningAlg as Raw;
 
         match self {
@@ -237,6 +272,20 @@ mod tests {
     }
 
     #[test]
+    fn fixed_lengths_are_known_for_non_rsa_algorithms() {
+        assert_eq!(SigningAlg::Es256.fixed_signature_len(), Some(64));
+        assert_eq!(SigningAlg::Es384.fixed_signature_len(), Some(96));
+        assert_eq!(SigningAlg::Es512.fixed_signature_len(), Some(132));
+        assert_eq!(SigningAlg::Ed25519.fixed_signature_len(), Some(64));
+
+        // RSA-PSS signature length is the modulus size, which this type
+        // cannot know on its own.
+        assert_eq!(SigningAlg::Ps256.fixed_signature_len(), None);
+        assert_eq!(SigningAlg::Ps384.fixed_signature_len(), None);
+        assert_eq!(SigningAlg::Ps512.fixed_signature_len(), None);
+    }
+
+    #[test]
     fn every_algorithm_maps_to_a_backend_validator() {
         for alg in ALL_ALGS {
             assert!(
@@ -248,6 +297,6 @@ mod tests {
 
     #[test]
     fn display_impls_identify_their_subjects() {
-        assert_eq!(StreamId(0).to_string(), "stream #0");
+        assert_eq!(StreamId::new(0).to_string(), "stream #0");
     }
 }

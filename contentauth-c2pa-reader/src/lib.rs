@@ -76,13 +76,11 @@ pub mod claim;
 pub(crate) mod cose;
 pub mod data_hash;
 pub mod error;
-pub mod hash;
 pub(crate) mod hash_stream;
 pub mod manifest_store;
 pub mod read;
 pub mod request;
 pub(crate) mod timestamp;
-pub mod types;
 pub mod validation;
 
 #[cfg(test)]
@@ -90,11 +88,11 @@ pub(crate) mod test_support;
 
 pub use cert::{BasicConstraints, CertError, Certificate, KeyUsage};
 pub use claim::{Claim, ClaimError, GeneratorInfo, HashedUri};
+pub use contentauth_c2pa_primitives::{ByteRange, HashAlgorithm, HostError, SigningAlg, StreamId};
 pub use contentauth_state_machine::{HostRequest, ProtocolError, RequestId, Session};
 pub use data_hash::DataHash;
-pub use error::{Error, HostError};
+pub use error::Error;
 pub use manifest_store::Manifest;
 pub use read::{ReadReport, ReadSession, ReadSettings, ReadStep};
 pub use request::{ReadHostReply, ReadRequest};
-pub use types::{ByteRange, HashAlgorithm, SigningAlg, StreamId};
 pub use validation::{ValidationState, ValidationStatus};

@@ -72,6 +72,7 @@ use cms::{
     content_info::ContentInfo,
     signed_data::{SignedData, SignerIdentifier, SignerInfo},
 };
+use contentauth_c2pa_primitives::HashAlgorithm;
 use der::{
     asn1::{BitString, GeneralizedTime, Int, OctetString},
     oid::ObjectIdentifier,
@@ -83,7 +84,6 @@ use crate::{
     cert::{self, Certificate},
     chain,
     cose::TimestampStorage,
-    types::HashAlgorithm,
     validation::{status_code, ValidationStatus},
 };
 

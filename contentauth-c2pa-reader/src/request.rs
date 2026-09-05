@@ -27,12 +27,10 @@
 //! is what lets the engine's [`contentauth_state_machine::RequestTracker`]
 //! validate replies without knowing what the requests mean.
 
+use contentauth_c2pa_primitives::{ByteRange, StreamId};
 use contentauth_state_machine::Request;
 
-use crate::{
-    error::HostError,
-    types::{ByteRange, StreamId},
-};
+use crate::error::HostError;
 
 /// The operations a read session may ask its host to perform.
 ///
@@ -140,11 +138,10 @@ mod tests {
     #![allow(clippy::panic)]
 
     use super::*;
-    use crate::types::ByteRange;
 
     /// One instance of every request kind.
     fn all_requests() -> Vec<ReadRequest> {
-        let stream = StreamId(0);
+        let stream = StreamId::new(0);
         let range = ByteRange { start: 0, len: 16 };
 
         vec![

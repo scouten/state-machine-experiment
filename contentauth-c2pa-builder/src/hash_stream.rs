@@ -11,36 +11,15 @@
 // specific language governing permissions and limitations under
 // each license.
 
-//! Hashing an asset from chunks the host streams in.
+//! Hashing an asset from chunks the host streams in, to compute the hard
+//! binding this crate is about to sign.
 //!
-//! # Why this is not "parallel hashing"
-//!
-//! SHA-2 is a Merkle–Damgård construction: each block folds into the
-//! previous chaining value, so the *hashing* is irreducibly sequential.
-//! What can overlap is the *fetching* — the host may service several
-//! [`ReadRequest::AssetBytes`] requests concurrently and fulfil them in any
-//! order, which is usually where the latency is anyway.
-//!
-//! # How the bytes are reassembled correctly
-//!
-//! This module chooses every range, so the host never decides where bytes
-//! belong:
-//!
-//! * each chunk request is remembered against its position in the sequence,
-//!   so a reply is placed by its request ID rather than by arrival order;
-//! * a reply whose length differs from the requested range is rejected
-//!   outright — a short read would otherwise silently shift every
-//!   subsequent byte;
-//! * chunks are folded into the hasher strictly in order, with
-//!   early arrivals buffered until their turn;
-//! * the total folded is checked against the total requested before the
-//!   digest is finalized.
-//!
-//! Deliberately *not* relied upon: the eventual hash comparison. It would
-//! catch a reassembly bug, but it cannot tell one apart from a genuinely
-//! altered asset — so the bug would surface to a user as "your content is
-//! invalid", which is the worst way to report it. The invariants above
-//! stand on their own; the hash only answers the question it is for.
+//! This is the write-side twin of `contentauth-c2pa-reader`'s own
+//! `hash_stream` module — same windowed, order-independent chunk protocol,
+//! same invariants — kept as its own copy rather than shared, since it is
+//! generic over which `Request` enum it issues chunk requests against. See
+//! `contentauth-c2pa-primitives`'s README for what *is* shared between the
+//! two crates and why this is not.
 //!
 //! # Memory
 //!
@@ -53,7 +32,7 @@ use contentauth_state_machine::{ProtocolError, RequestId, SessionCore};
 
 use crate::{
     error::Error,
-    request::{ReadHostReply, ReadRequest},
+    request::{BuilderHostReply, BuilderRequest},
 };
 
 /// Bytes requested per chunk.
@@ -135,12 +114,12 @@ impl HashStream {
     }
 
     /// Issues chunk requests until the window is full.
-    pub(crate) fn issue(&mut self, core: &mut SessionCore<ReadRequest>, stream: StreamId) {
+    pub(crate) fn issue(&mut self, core: &mut SessionCore<BuilderRequest>, stream: StreamId) {
         while self.next_to_issue < self.chunks.len()
             && self.next_to_issue - self.next_to_fold < self.window
         {
             let index = self.next_to_issue;
-            let id = core.issue(ReadRequest::AssetBytes {
+            let id = core.issue(BuilderRequest::AssetBytes {
                 stream,
                 range: self.chunks[index],
             });
@@ -152,7 +131,7 @@ impl HashStream {
 
     /// Consumes whatever replies the host has provided, folding them in
     /// order and buffering any that arrived early.
-    pub(crate) fn absorb(&mut self, core: &mut SessionCore<ReadRequest>) -> Result<(), Error> {
+    pub(crate) fn absorb(&mut self, core: &mut SessionCore<BuilderRequest>) -> Result<(), Error> {
         let mut position = 0;
 
         while position < self.outstanding.len() {
@@ -161,7 +140,7 @@ impl HashStream {
             match core.take_reply(id) {
                 None => position += 1,
 
-                Some(ReadHostReply::AssetBytes(bytes)) => {
+                Some(BuilderHostReply::AssetBytes(bytes)) => {
                     self.outstanding.remove(position);
 
                     let expected = self.chunks[index].len;
@@ -179,7 +158,7 @@ impl HashStream {
                     self.place(index, bytes);
                 }
 
-                Some(ReadHostReply::Failed(source)) => {
+                Some(BuilderHostReply::Failed(source)) => {
                     self.outstanding.remove(position);
                     return Err(Error::HostFailure { id, source });
                 }
@@ -249,8 +228,7 @@ impl HashStream {
 /// exclusions.
 ///
 /// Returns `None` if the exclusions are not a sane description of the
-/// asset — overlapping, or reaching past its end — which makes the hard
-/// binding malformed rather than merely unmatched.
+/// asset — overlapping, or reaching past its end.
 pub(crate) fn included_ranges(exclusions: &[ByteRange], asset_len: u64) -> Option<Vec<ByteRange>> {
     let mut sorted: Vec<ByteRange> = exclusions.to_vec();
     sorted.sort_by_key(|range| range.start);
@@ -290,8 +268,9 @@ pub(crate) fn included_ranges(exclusions: &[ByteRange], asset_len: u64) -> Optio
 mod tests {
     #![allow(clippy::unwrap_used)]
 
+    use contentauth_c2pa_primitives::HostError;
+
     use super::*;
-    use crate::error::HostError;
 
     fn range(start: u64, len: u64) -> ByteRange {
         ByteRange { start, len }
@@ -359,7 +338,7 @@ mod tests {
                 .outstanding_requests()
                 .iter()
                 .map(|request| match request.kind {
-                    ReadRequest::AssetBytes { range, .. } => (request.id, range),
+                    BuilderRequest::AssetBytes { range, .. } => (request.id, range),
                     _ => unreachable!(),
                 })
                 .collect();
@@ -371,7 +350,8 @@ mod tests {
                 let (id, range) = pending[position];
                 let start = range.start as usize;
                 let bytes = asset[start..start + range.len as usize].to_vec();
-                core.fulfill(id, ReadHostReply::AssetBytes(bytes)).unwrap();
+                core.fulfill(id, BuilderHostReply::AssetBytes(bytes))
+                    .unwrap();
                 stream.absorb(&mut core).unwrap();
             }
         }
@@ -428,7 +408,7 @@ mod tests {
         let range = range(200, 100);
         core.fulfill(
             last,
-            ReadHostReply::AssetBytes(vec![0u8; range.len as usize]),
+            BuilderHostReply::AssetBytes(vec![0u8; range.len as usize]),
         )
         .unwrap();
         stream.absorb(&mut core).unwrap();
@@ -450,7 +430,7 @@ mod tests {
         let id = core.outstanding_requests()[0].id;
 
         // One byte short: tolerating this would shift every later byte.
-        core.fulfill(id, ReadHostReply::AssetBytes(vec![0u8; 99]))
+        core.fulfill(id, BuilderHostReply::AssetBytes(vec![0u8; 99]))
             .unwrap();
 
         assert!(matches!(
@@ -469,7 +449,7 @@ mod tests {
 
         // Bypass `fulfill`'s payload validation to reach the stream's own
         // defence-in-depth check.
-        core.fulfill_unchecked(id, ReadHostReply::CurrentDateTime(0));
+        core.fulfill_unchecked(id, BuilderHostReply::AssetLength(0));
 
         assert!(matches!(
             stream.absorb(&mut core),
@@ -487,7 +467,7 @@ mod tests {
 
         stream.issue(&mut core, StreamId::new(0));
         let id = core.outstanding_requests()[0].id;
-        core.fulfill(id, ReadHostReply::Failed(HostError::new("unreadable")))
+        core.fulfill(id, BuilderHostReply::Failed(HostError::new("unreadable")))
             .unwrap();
 
         assert!(matches!(

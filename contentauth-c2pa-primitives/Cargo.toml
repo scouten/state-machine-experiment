@@ -1,0 +1,25 @@
+[package]
+name = "contentauth-c2pa-primitives"
+version = "0.1.0"
+description = "Shared C2PA vocabulary and deterministic encoders used by contentauth-c2pa-reader and contentauth-c2pa-builder"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["c2pa", "content-credentials", "sans-io"]
+categories = ["api-bindings"]
+publish = false
+
+[dependencies]
+# Raw signature primitives, from the ContentAuth project. This crate only
+# needs `SigningAlg`'s mapping into it (used by the reader to pick a
+# validator, and by the builder to size a signature) — never a key.
+# `rust_native_crypto` only: the `openssl` feature vendors OpenSSL, which
+# would end the Wasm story.
+c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
+    "rust_native_crypto",
+] }
+sha2 = "0.11.0"
+thiserror = "2.0.20"

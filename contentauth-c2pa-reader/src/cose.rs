@@ -19,19 +19,23 @@
 //! be. Verification therefore has to reassemble the `Sig_structure` from
 //! two boxes that sit side by side in the manifest.
 //!
-//! # Why the `Sig_structure` is encoded by hand
+//! # Why the `Sig_structure` is built by
+//! [`contentauth_c2pa_primitives::cbor::sig_structure`]
 //!
-//! [`sig_structure`] writes the four-element array itself rather than going
-//! through a serializer. RFC 9052 requires deterministic encoding, and the
-//! structure is fixed: one text string and three byte strings. Writing the
-//! heads directly makes shortest-form lengths a property of ten auditable
-//! lines instead of an assumption about a general-purpose encoder — and a
-//! mistake here does not fail loudly, it silently produces a digest over
-//! the wrong bytes and reports a valid signature as broken.
+//! That function writes the four-element array by hand rather than going
+//! through a serializer, since RFC 9052 requires deterministic encoding and
+//! the structure is fixed: one text string and three byte strings. It lives
+//! in the shared primitives crate rather than here because a
+//! `contentauth-c2pa-builder` session needs to build the *identical* bytes
+//! in order to sign them — a mistake here does not fail loudly, it silently
+//! produces a digest over the wrong bytes and reports a valid signature as
+//! broken, or a correct one as invalid.
 
 use c2pa_cbor::Value;
-
-use crate::types::SigningAlg;
+use contentauth_c2pa_primitives::{
+    cbor::{byte_string, sig_structure, CONTEXT_COUNTERSIGNATURE, CONTEXT_SIGNATURE1},
+    SigningAlg,
+};
 
 /// COSE header label for the signature algorithm (RFC 9052 §3.1).
 const HEADER_ALG: i64 = 1;
@@ -132,66 +136,6 @@ pub(crate) enum TimestampHeader {
         /// Which header carried it.
         storage: TimestampStorage,
     },
-}
-
-/// Context string of a `COSE_Sign1` signature (RFC 9052 §4.4).
-pub(crate) const CONTEXT_SIGNATURE1: &str = "Signature1";
-
-/// Context string of a countersignature (RFC 9052 §4.5), which is what an
-/// RFC 3161 timestamp on a C2PA claim signature is.
-pub(crate) const CONTEXT_COUNTERSIGNATURE: &str = "CounterSignature";
-
-/// Builds the `Sig_structure` a COSE signature or countersignature covers.
-///
-/// `context` selects which structure this is. The countersignature form
-/// used here is the four-element one, with no `sign_protected` bucket:
-/// verified against a real timestamp in `tests/read_fixture.rs`, whose
-/// message imprint only reproduces this way.
-pub(crate) fn sig_structure(context: &str, protected: &[u8], payload: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(protected.len() + payload.len() + 32);
-
-    // Sig_structure = [ context, body_protected, external_aad, payload ]
-    head(&mut out, MAJOR_ARRAY, 4);
-    head(&mut out, MAJOR_TEXT, context.len() as u64);
-    out.extend_from_slice(context.as_bytes());
-    byte_string(&mut out, protected);
-    // C2PA supplies no external additional authenticated data.
-    byte_string(&mut out, &[]);
-    byte_string(&mut out, payload);
-
-    out
-}
-
-const MAJOR_BYTES: u8 = 2;
-const MAJOR_TEXT: u8 = 3;
-const MAJOR_ARRAY: u8 = 4;
-
-/// Writes a CBOR definite-length head in shortest form.
-fn head(out: &mut Vec<u8>, major: u8, argument: u64) {
-    let major = major << 5;
-
-    match argument {
-        0..=23 => out.push(major | argument as u8),
-        24..=0xff => out.extend_from_slice(&[major | 24, argument as u8]),
-        0x100..=0xffff => {
-            out.push(major | 25);
-            out.extend_from_slice(&(argument as u16).to_be_bytes());
-        }
-        0x1_0000..=0xffff_ffff => {
-            out.push(major | 26);
-            out.extend_from_slice(&(argument as u32).to_be_bytes());
-        }
-        _ => {
-            out.push(major | 27);
-            out.extend_from_slice(&argument.to_be_bytes());
-        }
-    }
-}
-
-/// Writes a CBOR byte string.
-fn byte_string(out: &mut Vec<u8>, bytes: &[u8]) {
-    head(out, MAJOR_BYTES, bytes.len() as u64);
-    out.extend_from_slice(bytes);
 }
 
 /// Decodes a `COSE_Sign1` claim signature.
@@ -759,22 +703,5 @@ mod tests {
             ),
             "the wrapping is part of what is countersigned"
         );
-    }
-
-    #[test]
-    fn head_uses_shortest_form_at_every_width() {
-        let widths: [(u64, &[u8]); 5] = [
-            (23, &[0x77]),
-            (24, &[0x78, 24]),
-            (0x100, &[0x79, 0x01, 0x00]),
-            (0x1_0000, &[0x7a, 0x00, 0x01, 0x00, 0x00]),
-            (0x1_0000_0000, &[0x7b, 0, 0, 0, 1, 0, 0, 0, 0]),
-        ];
-
-        for (argument, expected) in widths {
-            let mut out = Vec::new();
-            head(&mut out, MAJOR_TEXT, argument);
-            assert_eq!(out, expected, "argument {argument}");
-        }
     }
 }
