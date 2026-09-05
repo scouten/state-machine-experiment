@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["contentauth-state-machine"]
+members = ["contentauth-c2pa-reader", "contentauth-state-machine"]
 
 [workspace.package]
 authors = ["Eric Scouten <scouten@adobe.com>"]

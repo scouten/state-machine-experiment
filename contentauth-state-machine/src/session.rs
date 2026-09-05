@@ -331,4 +331,16 @@ impl<Req: Request> SessionCore<Req> {
             Lifecycle::Running => Err(ProtocolError::SessionNotComplete),
         }
     }
+
+    /// Records a reply without the payload validation [`Self::fulfill`]
+    /// performs.
+    ///
+    /// For a concrete session's own tests that need to exercise its
+    /// defense-in-depth check against a mismatched stored reply — one that
+    /// should be unreachable through [`Self::fulfill`], but that the session
+    /// still guards against.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn fulfill_unchecked(&mut self, id: RequestId, reply: Req::Reply) {
+        self.tracker.fulfill_unchecked(id, reply);
+    }
 }

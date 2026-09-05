@@ -16,9 +16,52 @@ targets = [
 
 [advisories]
 yanked = "deny"
+ignore = [
+    # RUSTSEC-2023-0071 — the Marvin Attack: `rsa` 0.9's private-key
+    # operations leak timing information an attacker who can observe them
+    # may use to recover the key. There is no fixed release.
+    #
+    # It reaches `contentauth-c2pa-reader` through `c2pa_raw_crypto` ->
+    # `rsa`, and does not apply to what that crate does with it. The attack
+    # is against RSA *private-key* operations — decryption and signing.
+    # `contentauth-c2pa-reader` performs neither, and structurally cannot:
+    # private keys never enter a read-only crate at all. The only RSA
+    # operation reachable from here is signature *verification*, which
+    # touches nothing secret.
+    #
+    # Revisit if a future signing crate built on `contentauth-state-machine`
+    # needs an in-crate signing path, or if `rsa` ships a fix, at which
+    # point this goes away.
+    "RUSTSEC-2023-0071",
+]
 
 [bans]
 multiple-versions = "deny"
+skip = [
+    # `syn` is duplicated only among build-time proc-macro crates
+    # (serde_derive wants one major version, zerocopy-derive another).
+    # Nothing of it reaches the compiled library, and the resolution is not
+    # ours to make, so this one duplicate is tolerated while the ban stays
+    # in force for everything else.
+    { crate = "syn" },
+
+    # The rest are one situation, not five: `c2pa_raw_crypto` straddles a
+    # RustCrypto generation boundary. It uses `sha2` 0.11 directly (the
+    # version `contentauth-c2pa-reader` uses too), while the signature
+    # crates it wraps — `rsa` 0.9, `p256`/`p384`/`p521` 0.13, `ed25519-dalek`
+    # 2 — are still on the 0.10 generation and pull `digest` 0.10 with it.
+    #
+    # None of this is ours to resolve: it clears when RustCrypto ships 0.11
+    # for the signature crates and `c2pa_raw_crypto` moves up. Listed crate
+    # by crate rather than switching the check to "warn", so a *new*
+    # duplicate outside this set still fails the build.
+    { crate = "block-buffer" },
+    { crate = "const-oid" },
+    { crate = "cpufeatures" },
+    { crate = "crypto-common" },
+    { crate = "digest" },
+    { crate = "sha2" },
+]
 
 [licenses]
 allow = [
