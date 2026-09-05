@@ -1153,7 +1153,7 @@ mod tests {
         let mut info = fixture_signer_info(&signed_data);
 
         let SignerIdentifier::IssuerAndSerialNumber(mut wanted) = info.sid.clone() else {
-            panic!("the fixture identifies its signer by issuer and serial number");
+            unreachable!("the fixture identifies its signer by issuer and serial number");
         };
         wanted.serial_number = SerialNumber::new(&[0x7f]).expect("encodes");
         info.sid = SignerIdentifier::IssuerAndSerialNumber(wanted);

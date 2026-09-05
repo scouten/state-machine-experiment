@@ -793,7 +793,8 @@ mod tests {
             &mut statuses,
         );
 
-        let chain = chain.expect("the signature itself still verifies");
+        // The signature itself still verifies.
+        let chain = chain.unwrap();
         assert!(
             chain.timestamp.is_none(),
             "an unreadable timestamp is not carried forward as a pending one"
