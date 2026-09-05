@@ -115,8 +115,13 @@ pub(crate) struct ParsedManifestStore {
     /// Validation findings recorded while reading.
     pub(crate) statuses: Vec<ValidationStatus>,
 
-    /// The certificate chains of the claim signatures that verified, in
-    /// store order, awaiting a time to be evaluated against.
+    /// The certificate chains of the claim signatures that verified,
+    /// awaiting a time to be evaluated against.
+    ///
+    /// Correlated back to [`Self::manifests`] by
+    /// [`PendingChain::manifest_label`](crate::chain::PendingChain), not by
+    /// position: not every manifest's claim signature verifies, so this is
+    /// shorter than `manifests` whenever one does not.
     ///
     /// Owned rather than borrowed from `bytes`: the evaluation happens
     /// after the host has been asked for the current time, by which point
