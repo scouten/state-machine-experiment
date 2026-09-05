@@ -203,8 +203,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ClaimSignature, &'static str> {
 
     // `COSE_Sign1` carries tag 18; C2PA claim signatures use it. A
     // `COSE_Sign` (tag 98) is otherwise the same shape — a four-element
-    // array — so now that c2pa-cbor round-trips tags (c2pa-cbor#27 is
-    // fixed), it is rejected by its tag rather than left to be caught
+    // array — so it is rejected by its tag rather than left to be caught
     // later by its fourth element being an array of signatures instead of
     // a byte string.
     let value = match value {
