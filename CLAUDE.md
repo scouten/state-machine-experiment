@@ -51,6 +51,23 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   clock, drives `FileReadSession` directly instead (see
   [`contentauth-c2pa-file-reader`](contentauth-c2pa-file-reader/examples/custom_host.rs)'s
   example). Read-only; a future orchestrator crate would cover writing.
+- **`contentauth-c2pa-file-builder`** — the write-side mirror of the
+  crate above: `FileBuilderSession` (`src/session.rs`) is a sans-I/O
+  session that composes a `FormatHandler`'s `plan_embed`/`commit` with a
+  `BuilderSession`. It answers `ReservePlaceholder`, `AssetLength`,
+  `AssetBytes`, and `CommitManifest` internally — holding the source
+  asset, and the output it assembles, in memory, since
+  `EmbedPlan::materialize` works on a whole asset rather than a range at
+  a time — and forwards only `FileBuilderRequest::{Sign, Timestamp}` to
+  its host, since nothing in this workspace can sign or timestamp on a
+  host's behalf. `build_and_sign`/`build_and_sign_file` (`src/drive.rs`)
+  are one such host, for a caller with plain synchronous `Read + Seek`
+  source access and a plain signing function (no timestamping); a host
+  that needs timestamping, or async/network source access, drives
+  `FileBuilderSession` directly. Its own test suite round-trips a signed
+  asset through `contentauth-c2pa-file-reader` and checks it reads back
+  as `Trusted` — the two crates' only relationship is that both implement
+  the `contentauth-c2pa-format` contract.
 
 Container-format handling is deliberately *outside* the reader and
 builder: they ask their host for "the manifest store's bytes" and to
