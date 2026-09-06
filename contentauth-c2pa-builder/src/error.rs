@@ -48,14 +48,6 @@ pub enum Error {
     #[error("no signing certificate supplied (see `BuilderSettings::certificates`)")]
     NoCertificates,
 
-    /// [`BuilderSettings::claim_generator_info`](crate::BuilderSettings::claim_generator_info)
-    /// did not name exactly one generator.
-    ///
-    /// c2pa-rs itself requires exactly one for v2 claims, and this crate
-    /// does not yet support more than one.
-    #[error("exactly one claim_generator_info entry is required, found {0}")]
-    InvalidGeneratorInfoCount(usize),
-
     /// The host reported a placeholder byte range, or an asset length,
     /// that cannot be used to compute a hard binding.
     #[error("host-reported range is unusable: {0}")]

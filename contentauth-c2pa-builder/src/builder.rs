@@ -57,9 +57,10 @@ pub struct BuilderSettings {
 
     /// Describes the software that generated this manifest.
     ///
-    /// Must contain exactly one entry: c2pa-rs itself requires exactly one
-    /// for v2 claims, and this crate does not yet support more than one.
-    pub claim_generator_info: Vec<GeneratorInfo>,
+    /// A single entry: c2pa-rs itself requires exactly one for v2 claims,
+    /// and this crate does not yet support more than one. A future version
+    /// of this crate that does would widen this to a `Vec<GeneratorInfo>`.
+    pub claim_generator_info: GeneratorInfo,
 
     /// Assertions to embed, beyond the hard binding this session adds
     /// itself.
@@ -114,7 +115,7 @@ impl BuilderSettings {
             title: None,
             instance_id: instance_id.into(),
             manifest_label: manifest_label.into(),
-            claim_generator_info: vec![claim_generator_info],
+            claim_generator_info,
             assertions: Vec::new(),
             signing_alg,
             certificates,
@@ -397,11 +398,6 @@ impl BuilderSession {
         if self.settings.certificates.is_empty() {
             return Err(Error::NoCertificates);
         }
-        if self.settings.claim_generator_info.len() != 1 {
-            return Err(Error::InvalidGeneratorInfoCount(
-                self.settings.claim_generator_info.len(),
-            ));
-        }
 
         let mut assertion_labels = std::collections::HashSet::from([data_hash::LABEL]);
         for assertion in &self.settings.assertions {
@@ -412,7 +408,7 @@ impl BuilderSession {
 
         let signature_len =
             cose::signature_len(self.settings.signing_alg, self.settings.rsa_signature_len)?;
-        let generator = &self.settings.claim_generator_info[0];
+        let generator = &self.settings.claim_generator_info;
 
         let assertions: Vec<AssertionInput<'_>> = self
             .settings
