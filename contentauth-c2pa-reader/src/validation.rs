@@ -46,6 +46,7 @@
 //! actually ran — see [`ValidationState::Incomplete`].
 
 use c2pa_raw_crypto::validator_for_signing_alg;
+use contentauth_c2pa_primitives::HashAlgorithm;
 use jumbf::parser::{DataBox, SuperBox};
 
 use crate::{
@@ -54,7 +55,6 @@ use crate::{
     claim::Claim,
     cose::{self, TimestampHeader},
     timestamp::PendingTimestamp,
-    types::HashAlgorithm,
 };
 
 /// Label of a manifest's assertion store, used to anchor JUMBF URIs.

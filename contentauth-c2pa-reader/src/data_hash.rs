@@ -21,8 +21,7 @@
 //! does from chunks the host streams in.
 
 use c2pa_cbor::Value;
-
-use crate::types::ByteRange;
+use contentauth_c2pa_primitives::ByteRange;
 
 /// Label of the data hash assertion.
 pub(crate) const LABEL: &str = "c2pa.hash.data";

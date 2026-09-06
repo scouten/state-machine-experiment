@@ -15,6 +15,7 @@
 
 use core::mem::replace;
 
+use contentauth_c2pa_primitives::{ByteRange, HashAlgorithm, StreamId};
 /// [`Step::AwaitHost`] / [`Step::Complete`], under the name this crate's
 /// docs and tests use for [`ReadSession`]'s own steps. This is the very
 /// same type as [`contentauth_state_machine::Step`] — see the crate root.
@@ -32,7 +33,6 @@ use crate::{
     manifest_store::{self, Manifest},
     request::{ReadHostReply, ReadRequest},
     timestamp,
-    types::{ByteRange, HashAlgorithm, StreamId},
     validation::{status_code, ValidationState, ValidationStatus},
 };
 
@@ -268,7 +268,7 @@ struct PendingBinding {
 
 impl ReadSession {
     /// The primary asset stream being read.
-    pub const PRIMARY_STREAM: StreamId = StreamId(0);
+    pub const PRIMARY_STREAM: StreamId = StreamId::new(0);
 
     /// Creates a new read session for a single asset.
     ///

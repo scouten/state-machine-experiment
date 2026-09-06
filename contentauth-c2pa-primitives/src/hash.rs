@@ -13,10 +13,11 @@
 
 //! Cryptographic hashing.
 //!
-//! Hashing during *validation* is always performed here, in the core, over
-//! bytes the host supplies — never delegated to the host. A digest computed
-//! elsewhere would let a buggy or hostile host layer vouch for content the
-//! core never saw, so validation results must not depend on host arithmetic.
+//! Hashing is always performed here, over bytes the caller supplies,
+//! whether that caller is validating a hash it was told to expect or
+//! computing one to record. A digest computed elsewhere would let a buggy
+//! or hostile host layer vouch for content the session never saw, so
+//! outcomes must not depend on host arithmetic.
 //!
 //! Hashing is incremental internally, so that a digest over a large asset
 //! can be accumulated from host-streamed chunks without ever holding the
@@ -28,9 +29,9 @@ use crate::types::HashAlgorithm;
 
 impl HashAlgorithm {
     /// Resolves a C2PA algorithm name (`"sha256"`, `"sha384"`, `"sha512"`)
-    /// to an algorithm this core can compute.
+    /// to an algorithm that can be computed here.
     ///
-    /// Returns `None` for names the core does not implement, so callers can
+    /// Returns `None` for names that are not implemented, so callers can
     /// report the omission rather than silently substituting a different
     /// algorithm.
     pub fn from_c2pa_name(name: &str) -> Option<Self> {
@@ -47,12 +48,11 @@ impl HashAlgorithm {
     /// ASN.1 structures name a digest by OID rather than by the C2PA
     /// string — an RFC 3161 message imprint and a CMS `digestAlgorithm`
     /// both do — so the same three algorithms need a second way in.
-    /// Matching on the encoded octets keeps this free of any ASN.1 type,
-    /// like the rest of the boundary in `cert.rs`.
+    /// Matching on the encoded octets keeps this free of any ASN.1 type.
     ///
     /// Returns `None` for anything else, including the SHA-1 and MD5 OIDs
-    /// that a legacy token might carry: a digest this core will not compute
-    /// is reported, never quietly swapped for one it will.
+    /// that a legacy token might carry: a digest that cannot be computed
+    /// here is reported, never quietly swapped for one that can.
     pub fn from_oid(content_octets: &[u8]) -> Option<Self> {
         match content_octets {
             SHA256_OID => Some(Self::Sha256),
@@ -68,6 +68,15 @@ impl HashAlgorithm {
             Self::Sha256 => "sha256",
             Self::Sha384 => "sha384",
             Self::Sha512 => "sha512",
+        }
+    }
+
+    /// The digest length, in bytes, this algorithm produces.
+    pub fn digest_len(self) -> usize {
+        match self {
+            Self::Sha256 => 32,
+            Self::Sha384 => 48,
+            Self::Sha512 => 64,
         }
     }
 
@@ -88,10 +97,10 @@ const SHA384_OID: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02
 /// `2.16.840.1.101.3.4.2.3` — SHA-512.
 const SHA512_OID: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03];
 
-/// An incremental hasher, so a digest can be accumulated from chunks the
-/// host streams in rather than from one contiguous buffer.
+/// An incremental hasher, so a digest can be accumulated from chunks a host
+/// streams in rather than from one contiguous buffer.
 #[derive(Debug)]
-pub(crate) enum Hasher {
+pub enum Hasher {
     /// SHA-256
     Sha256(Sha256),
 
@@ -104,7 +113,7 @@ pub(crate) enum Hasher {
 
 impl Hasher {
     /// Starts a hash using the given algorithm.
-    pub(crate) fn new(algorithm: HashAlgorithm) -> Self {
+    pub fn new(algorithm: HashAlgorithm) -> Self {
         match algorithm {
             HashAlgorithm::Sha256 => Self::Sha256(Sha256::new()),
             HashAlgorithm::Sha384 => Self::Sha384(Sha384::new()),
@@ -113,7 +122,7 @@ impl Hasher {
     }
 
     /// Feeds the next chunk of input.
-    pub(crate) fn update(&mut self, bytes: &[u8]) {
+    pub fn update(&mut self, bytes: &[u8]) {
         match self {
             Self::Sha256(h) => h.update(bytes),
             Self::Sha384(h) => h.update(bytes),
@@ -122,7 +131,7 @@ impl Hasher {
     }
 
     /// Consumes the hasher and returns the digest.
-    pub(crate) fn finish(self) -> Vec<u8> {
+    pub fn finish(self) -> Vec<u8> {
         match self {
             Self::Sha256(h) => h.finalize().to_vec(),
             Self::Sha384(h) => h.finalize().to_vec(),
@@ -208,7 +217,7 @@ mod tests {
         assert_eq!(HashAlgorithm::from_oid(sha512), Some(HashAlgorithm::Sha512));
 
         // 1.3.14.3.2.26 is SHA-1: a real OID a legacy token might name,
-        // and one this core will not compute. It must come back `None`
+        // and one that is not implemented here. It must come back `None`
         // rather than being rounded up to something stronger.
         assert_eq!(
             HashAlgorithm::from_oid(&[0x2b, 0x0e, 0x03, 0x02, 0x1a]),
@@ -234,6 +243,17 @@ mod tests {
         assert_eq!(HashAlgorithm::Sha256.digest(b"x").len(), 32);
         assert_eq!(HashAlgorithm::Sha384.digest(b"x").len(), 48);
         assert_eq!(HashAlgorithm::Sha512.digest(b"x").len(), 64);
+    }
+
+    #[test]
+    fn digest_len_matches_actual_output() {
+        for algorithm in [
+            HashAlgorithm::Sha256,
+            HashAlgorithm::Sha384,
+            HashAlgorithm::Sha512,
+        ] {
+            assert_eq!(algorithm.digest_len(), algorithm.digest(b"x").len());
+        }
     }
 
     fn hex(bytes: &[u8]) -> String {

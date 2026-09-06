@@ -21,17 +21,24 @@ ignore = [
     # operations leak timing information an attacker who can observe them
     # may use to recover the key. There is no fixed release.
     #
-    # It reaches `contentauth-c2pa-reader` through `c2pa_raw_crypto` ->
-    # `rsa`, and does not apply to what that crate does with it. The attack
-    # is against RSA *private-key* operations — decryption and signing.
-    # `contentauth-c2pa-reader` performs neither, and structurally cannot:
-    # private keys never enter a read-only crate at all. The only RSA
-    # operation reachable from here is signature *verification*, which
-    # touches nothing secret.
+    # It reaches this workspace two ways, neither of which touches a
+    # private key:
     #
-    # Revisit if a future signing crate built on `contentauth-state-machine`
-    # needs an in-crate signing path, or if `rsa` ships a fix, at which
-    # point this goes away.
+    # * `contentauth-c2pa-primitives` -> `c2pa_raw_crypto` -> `rsa`, used
+    #   only for `SigningAlg::raw()`, a pure enum mapping with no key
+    #   material anywhere near it. `contentauth-c2pa-reader` reaches it
+    #   transitively through this: the only RSA operation reachable from a
+    #   read-only crate is signature *verification*, which is what the
+    #   attack does not touch.
+    # * `contentauth-c2pa-builder`'s *dev*-dependency on `c2pa_raw_crypto`,
+    #   which plays the "host signer" in its own integration tests. Real
+    #   signing keys never enter the shipped crate — it only ever asks a
+    #   host to sign, over its `BuilderRequest::Sign` request — so this
+    #   exposure is test-only and never reaches a published artifact.
+    #
+    # Revisit if `contentauth-c2pa-builder` ever grows an in-crate signing
+    # path (contrary to its sans-I/O design), or if `rsa` ships a fix, at
+    # which point this goes away.
     "RUSTSEC-2023-0071",
 ]
 

@@ -15,6 +15,12 @@ publish = false
 [dependencies]
 contentauth-state-machine = { path = "../contentauth-state-machine" }
 
+# Shared C2PA vocabulary (StreamId, ByteRange, HashAlgorithm, SigningAlg,
+# HostError) and the deterministic Sig_structure encoder, held in common
+# with contentauth-c2pa-builder. See that crate's README for why these in
+# particular are shared rather than crate-local.
+contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
+
 # Raw signature verification primitives, from the ContentAuth project. It
 # deliberately knows nothing about COSE, RFC 3161 or OCSP — exactly the
 # layering this crate wants, since those live here. `rust_native_crypto`
@@ -39,7 +45,6 @@ c2pa_cbor = "0.77.4"
 # Zero-copy JUMBF parser. This crate only reads, so only the parser half of
 # the crate is used.
 jumbf = "0.7.0"
-sha2 = "0.11.0"
 thiserror = "2.0.20"
 # X.509 decoding, confined to `cert.rs`. RustCrypto's `der` is a
 # hand-written codec rather than a parser-combinator library, so unlike
@@ -63,3 +68,6 @@ x509-cert = { version = "0.2.5", default-features = false }
 contentauth-state-machine = { path = "../contentauth-state-machine", features = [
     "test-util",
 ] }
+# Used only by `test_support.rs`, to compute an assertion's expected hash
+# independently of how the reader itself derives one.
+sha2 = "0.11.0"

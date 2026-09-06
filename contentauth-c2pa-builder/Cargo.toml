@@ -1,0 +1,41 @@
+[package]
+name = "contentauth-c2pa-builder"
+version = "0.1.0"
+description = "Generates and signs C2PA manifest stores over a synchronous, sans-I/O interface"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["c2pa", "content-credentials", "sans-io"]
+categories = ["api-bindings"]
+publish = false
+
+[dependencies]
+contentauth-state-machine = { path = "../contentauth-state-machine" }
+contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
+# CBOR encoding for the claim and its assertions — the same encoder
+# contentauth-c2pa-reader uses to decode them.
+c2pa_cbor = "0.77.4"
+# JUMBF box assembly. This crate uses only the *builder* half; the reader
+# uses only the parser half.
+jumbf = "0.7.0"
+thiserror = "2.0.20"
+
+[dev-dependencies]
+# Enables `SessionCore::fulfill_unchecked`, which this crate's own tests use
+# to exercise `BuilderSession`'s defense-in-depth check against a reply
+# payload `fulfill` itself would reject.
+contentauth-state-machine = { path = "../contentauth-state-machine", features = [
+    "test-util",
+] }
+# Round-trip verification: every manifest this crate builds in its own
+# tests is fed back into the independently-written reader and must pass
+# validation there.
+contentauth-c2pa-reader = { path = "../contentauth-c2pa-reader" }
+# Test-only: plays the "host signer" in integration tests, standing in for
+# whatever real signer a host would use.
+c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
+    "rust_native_crypto",
+] }
