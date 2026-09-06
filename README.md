@@ -44,6 +44,9 @@ experiment grows.
 * [`contentauth-c2pa-format-jpeg`](contentauth-c2pa-format-jpeg) — the
   first such handler: locating and embedding manifest stores in a JPEG's
   `APP11` segments, byte-compatible with c2pa-rs.
+* [`contentauth-c2pa-file-reader`](contentauth-c2pa-file-reader) — reads
+  and validates a manifest store directly from a file (or any in-memory
+  asset), gluing a `contentauth-c2pa-format` handler to the reader above.
 
 ## Building
 

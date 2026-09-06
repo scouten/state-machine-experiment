@@ -39,6 +39,14 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   and embedding manifest stores in a JPEG's `APP11` segments, following
   c2pa-rs's conventions byte for byte. The template for further
   `contentauth-c2pa-format-*` crates.
+- **`contentauth-c2pa-file-reader`** — the missing glue between the two:
+  reads and validates a manifest store directly from a file (or any
+  in-memory asset), for any `FormatHandler`, by driving that handler's
+  `locate` operation and a `ReadSession` from the same bytes
+  (`src/drive.rs` in
+  [`contentauth-c2pa-file-reader`](contentauth-c2pa-file-reader/src/drive.rs)).
+  Whole-asset-in-memory only; a future streaming orchestrator crate would
+  cover writing and large assets.
 
 Container-format handling is deliberately *outside* the reader and
 builder: they ask their host for "the manifest store's bytes" and to
