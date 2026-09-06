@@ -14,11 +14,15 @@
 //! Reads a real, on-disk JPEG file — not bytes embedded at compile time via
 //! `include_bytes!` — proving `read_manifest_from_file` actually performs
 //! file I/O rather than assuming its caller already has the asset in
-//! memory.
+//! memory. A companion test proves the lower-level `read_manifest` works
+//! just as well over an in-memory `Read + Seek` source, for a caller that
+//! already has the asset loaded.
 
 #![allow(clippy::unwrap_used)]
 
-use contentauth_c2pa_file_reader::{read_manifest_from_file, ReadSettings};
+use std::io::Cursor;
+
+use contentauth_c2pa_file_reader::{read_manifest, read_manifest_from_file, ReadSettings};
 use contentauth_c2pa_format_jpeg::JpegFormat;
 use contentauth_c2pa_reader::{ByteRange, ValidationState};
 
@@ -28,6 +32,10 @@ const C_JPG_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../contentauth-c2pa-reader/tests/fixtures/C.jpg"
 );
+
+/// The same bytes as [`C_JPG_PATH`], embedded at compile time for the
+/// in-memory `Cursor` test.
+const C_JPG: &[u8] = include_bytes!("../../contentauth-c2pa-reader/tests/fixtures/C.jpg");
 
 /// The intermediate CA that issued the fixture's claim signer.
 const FIXTURE_ISSUER: &[u8] =
@@ -60,6 +68,21 @@ fn reads_a_real_jpeg_file_from_disk() {
             len: 45884
         }]
     );
+}
+
+#[test]
+fn reads_the_same_jpeg_from_an_in_memory_cursor() {
+    let report = read_manifest(
+        &JpegFormat,
+        Cursor::new(C_JPG),
+        ReadSettings {
+            trust_anchors: vec![FIXTURE_ISSUER.to_vec()],
+            ..ReadSettings::default()
+        },
+    )
+    .expect("C.jpg should read cleanly from an in-memory cursor");
+
+    assert_eq!(report.validation_state, Some(ValidationState::Trusted));
 }
 
 #[test]

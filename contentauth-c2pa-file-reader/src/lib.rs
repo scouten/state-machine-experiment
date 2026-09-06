@@ -12,7 +12,7 @@
 // each license.
 
 //! Reads and validates a C2PA manifest store straight from a file — or any
-//! byte buffer already in memory — for any container format with a
+//! `Read + Seek` source — for any container format with a
 //! [`contentauth_c2pa_format::FormatHandler`].
 //!
 //! # The gap this fills
@@ -27,23 +27,32 @@
 //! glue duplicated in every format handler crate's own tests.
 //!
 //! This crate is that glue, generalized to any handler and reused as
-//! library code: [`read_manifest`] and [`read_manifest_from_file`] hold the
-//! whole asset in memory, run a handler's `locate` operation over it to
-//! find the manifest store, then drive a [`ReadSession`] over the same
-//! bytes.
+//! library code: [`read_manifest`] and [`read_manifest_from_file`] run a
+//! handler's `locate` operation over the source to find the manifest
+//! store, then drive a [`ReadSession`] over the same source.
+//!
+//! # Why `Read + Seek` rather than bytes
+//!
+//! Both the [`IoRequest`] a format handler issues and the [`ReadRequest`]
+//! a read session issues name an absolute byte range, in no particular
+//! order — a large asset is hashed out of sequence when its host answers
+//! that way (`contentauth-c2pa-reader` is explicitly tested against it).
+//! `Read + Seek` is the smallest standard-library shape that answers any
+//! such range without first loading the whole asset into memory: any
+//! `std::fs::File`, an in-memory buffer wrapped in `std::io::Cursor`, or a
+//! host's own reader over whatever storage it actually has, satisfies it.
 //!
 //! # What this does not do
 //!
-//! It reads the whole asset into memory up front rather than streaming it,
-//! and it only reads — nothing here embeds a manifest store. A production
-//! host reading gigabyte-scale video, or writing as well as reading, wants
-//! more than this: streaming I/O, and the two-stream (source/output) model
-//! a future orchestrator crate is expected to provide. For a manifest
-//! store in an already-loaded image or document, this is enough.
+//! It only reads — nothing here embeds a manifest store. A host that also
+//! writes wants more than this: the two-stream (source/output) model a
+//! future orchestrator crate is expected to provide.
 //!
 //! [`ReadSession`]: contentauth_c2pa_reader::ReadSession
 //! [`FormatHandler`]: contentauth_c2pa_format::FormatHandler
 //! [`FormatHandler::locate`]: contentauth_c2pa_format::FormatHandler::locate
+//! [`IoRequest`]: contentauth_c2pa_format::IoRequest
+//! [`ReadRequest`]: contentauth_c2pa_reader::ReadRequest
 
 #![deny(clippy::expect_used)]
 #![deny(clippy::panic)]
@@ -54,42 +63,46 @@
 mod drive;
 mod error;
 
-use std::path::Path;
+use std::{
+    io::{Read, Seek},
+    path::Path,
+};
 
 pub use contentauth_c2pa_format::FormatHandler;
 pub use contentauth_c2pa_reader::{ReadReport, ReadSettings};
 pub use error::Error;
 
-/// Locates and reads the C2PA manifest store embedded in `bytes`,
+/// Locates and reads the C2PA manifest store embedded in `source`,
 /// validating it per `settings`.
 ///
-/// `handler` locates the manifest store within `bytes`'s container format;
-/// `bytes` also serves every [`ReadRequest::AssetBytes`] and
+/// `handler` locates the manifest store within `source`'s container
+/// format; `source` also serves every [`ReadRequest::AssetBytes`] and
 /// [`ReadRequest::AssetLength`] the read issues for hard-binding
 /// verification, since those cover the whole asset rather than just the
-/// manifest store.
+/// manifest store. Neither operation assumes forward-only access: both
+/// seek to whatever range they were asked for.
 ///
 /// [`ReadRequest::AssetBytes`]: contentauth_c2pa_reader::ReadRequest::AssetBytes
 /// [`ReadRequest::AssetLength`]: contentauth_c2pa_reader::ReadRequest::AssetLength
-pub fn read_manifest<H: FormatHandler>(
+pub fn read_manifest<H: FormatHandler, R: Read + Seek>(
     handler: &H,
-    bytes: &[u8],
+    source: R,
     settings: ReadSettings,
 ) -> Result<ReadReport, Error> {
-    drive::read(handler, bytes, settings)
+    drive::read(handler, source, settings)
 }
 
-/// Reads `path` from disk in full, then locates and reads the C2PA
-/// manifest store embedded in it, as [`read_manifest`].
+/// Opens `path`, then locates and reads the C2PA manifest store embedded
+/// in it, as [`read_manifest`].
 pub fn read_manifest_from_file<H: FormatHandler>(
     handler: &H,
     path: impl AsRef<Path>,
     settings: ReadSettings,
 ) -> Result<ReadReport, Error> {
     let path = path.as_ref();
-    let bytes = std::fs::read(path).map_err(|source| Error::Io {
+    let file = std::fs::File::open(path).map_err(|source| Error::Io {
         path: path.to_path_buf(),
         source,
     })?;
-    read_manifest(handler, &bytes, settings)
+    read_manifest(handler, file, settings)
 }
