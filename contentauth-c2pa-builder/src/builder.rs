@@ -57,9 +57,8 @@ pub struct BuilderSettings {
 
     /// Describes the software that generated this manifest.
     ///
-    /// Must contain exactly one entry: a v1 simplification (c2pa-rs itself
-    /// requires exactly one for v2 claims; this crate does not yet support
-    /// more than one for any claim version).
+    /// Must contain exactly one entry: c2pa-rs itself requires exactly one
+    /// for v2 claims, and this crate does not yet support more than one.
     pub claim_generator_info: Vec<GeneratorInfo>,
 
     /// Assertions to embed, beyond the hard binding this session adds

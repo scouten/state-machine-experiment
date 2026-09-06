@@ -11,13 +11,15 @@
 // specific language governing permissions and limitations under
 // each license.
 
-//! Encoder for the C2PA v1 claim. The counterpart to
-//! `contentauth-c2pa-reader`'s `claim` module, which only decodes.
+//! Encoder for the C2PA v2 claim. The counterpart to
+//! `contentauth-c2pa-reader`'s `claim` module, which decodes both claim
+//! versions — this crate only ever builds v2 claims (v1 is a read-only
+//! concern, for interoperating with manifests this crate did not write).
 //!
-//! Mirrors that decoder's field set exactly: `dc:title`, `dc:format`,
-//! `instanceID`, `claim_generator_info`, `signature`, `alg`, `assertions`.
-//! Every field the decoder does not read (v2's `created_assertions`, for
-//! instance) is out of scope here too — see this crate's README.
+//! Emits `dc:title`, `dc:format`, `instanceID`, `claim_generator_info`,
+//! `signature`, `alg`, and `created_assertions`. `gathered_assertions`
+//! (assertions carried over from an ingredient) is out of scope, since
+//! this crate does not yet support ingredients — see this crate's README.
 //!
 //! # Why this needs no padding
 //!
@@ -35,7 +37,7 @@ use crate::error::Error;
 
 /// JUMBF URI of a manifest's own claim signature, relative to the
 /// manifest. Matches the literal string
-/// `contentauth_c2pa_reader::claim`'s decoder tests expect a v1 claim to
+/// `contentauth_c2pa_reader::claim`'s decoder tests expect a claim to
 /// carry.
 const SIGNATURE_URI: &str = "self#jumbf=c2pa.signature";
 
@@ -51,13 +53,15 @@ pub(crate) struct ClaimFields<'a> {
     pub(crate) alg_name: &'a str,
 }
 
-/// Encodes a C2PA v1 claim.
+/// Encodes a C2PA v2 claim.
 ///
 /// `assertion_refs` is every assertion this claim covers, as
 /// `(url, hash)` pairs, in the order they should appear — including the
-/// hard binding. Reused unchanged between this crate's placeholder and
-/// final passes except for the hard binding's own `hash` value, which is
-/// fixed-length either way (see the module docs).
+/// hard binding. Every one is a *created* assertion: this crate has no
+/// notion of an assertion gathered from an ingredient. Reused unchanged
+/// between this crate's placeholder and final passes except for the hard
+/// binding's own `hash` value, which is fixed-length either way (see the
+/// module docs).
 pub(crate) fn encode(
     fields: &ClaimFields<'_>,
     assertion_refs: &[(String, Vec<u8>)],
@@ -101,7 +105,7 @@ pub(crate) fn encode(
         Value::Text(fields.alg_name.to_string()),
     );
     map.insert(
-        Value::Text("assertions".to_string()),
+        Value::Text("created_assertions".to_string()),
         Value::Array(
             assertion_refs
                 .iter()
@@ -181,8 +185,10 @@ mod tests {
         };
         assert_eq!(generators.len(), 1);
 
-        let Some(Value::Array(assertions)) = map.get(&Value::Text("assertions".to_string())) else {
-            panic!("expected assertions array");
+        let Some(Value::Array(assertions)) =
+            map.get(&Value::Text("created_assertions".to_string()))
+        else {
+            panic!("expected created_assertions array");
         };
         assert_eq!(assertions.len(), 2);
     }

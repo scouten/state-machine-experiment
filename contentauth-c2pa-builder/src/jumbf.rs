@@ -66,7 +66,7 @@ const CBOR_BOX_TYPE: BoxType = BoxType(*b"cbor");
 
 const MANIFEST_STORE_LABEL: &str = "c2pa";
 const ASSERTIONS_LABEL: &str = "c2pa.assertions";
-const CLAIM_LABEL: &str = "c2pa.claim";
+const CLAIM_LABEL: &str = "c2pa.claim.v2";
 const SIGNATURE_LABEL: &str = "c2pa.signature";
 
 /// One assertion to be embedded, as supplied by

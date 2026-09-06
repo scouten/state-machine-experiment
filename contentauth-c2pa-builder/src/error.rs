@@ -51,9 +51,8 @@ pub enum Error {
     /// [`BuilderSettings::claim_generator_info`](crate::BuilderSettings::claim_generator_info)
     /// did not name exactly one generator.
     ///
-    /// A v1 simplification: c2pa-rs itself requires exactly one for v2
-    /// claims, and this crate does not yet support more than one for any
-    /// claim version.
+    /// c2pa-rs itself requires exactly one for v2 claims, and this crate
+    /// does not yet support more than one.
     #[error("exactly one claim_generator_info entry is required, found {0}")]
     InvalidGeneratorInfoCount(usize),
 

@@ -23,6 +23,15 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   (integrity, claim signature, trust chain, RFC 3161 timestamps) and the
   full request-vocabulary table.
 
+## Stability
+
+This is a very experimental prototype, not a shipping product: nothing
+here has a compatibility guarantee. Feel free to revise, rename, or break
+existing public APIs when it genuinely improves the design — do not
+contort a change to preserve backward compatibility or add deprecation
+shims for its own sake. Update call sites, tests, and docs to match
+rather than layering on compatibility scaffolding.
+
 ## The core architectural pattern (sans-I/O sessions)
 
 Both crates hinge on one idea, worth understanding before editing either:
