@@ -43,7 +43,14 @@ things this crate, or any format handler, can stand in for.
 session, for the common case: a caller with plain, synchronous
 `Read + Seek` access to the source asset, `Read + Write + Seek` access to
 write the output (read-back is needed for the hashing above), and a plain
-signing function — no timestamping. `build_and_sign_file` additionally
+signing function — no timestamping. `build_and_sign` never touches
+`output`'s physical length — it writes exactly the planned bytes and
+nothing else, so reusing a stream with old content past that point never
+gets signed as part of the asset, but the old bytes are still physically
+there for anyone who reads `output` back directly rather than trusting
+only what the manifest declares. Pass a stream that starts empty (an
+empty `Vec`/`Cursor`, or a freshly created or explicitly truncated file)
+if that disclosure would matter to you. `build_and_sign_file` additionally
 never leaves a partial or corrupt file at the requested output path: it
 builds into a freshly, exclusively created temporary file with an
 unpredictable name beside it — never one a symlink pre-created at a

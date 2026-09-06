@@ -119,12 +119,21 @@ pub use session::{FileBuilderReply, FileBuilderReport, FileBuilderRequest, FileB
 /// has no way to perform. Reach for [`FileBuilderSession`] directly for
 /// that, or for source/output access that cannot be driven synchronously.
 ///
-/// The hard binding's length is always computed from the plan itself, not
-/// measured from `output`, so reusing a stream that already contains more
-/// than the new build writes cannot corrupt the signature with stale
-/// trailing bytes — but `output` will still physically contain them
-/// afterward. Pass a stream that starts empty if that matters to you;
-/// [`build_and_sign_file`] always does.
+/// This function never touches `output`'s physical length: it writes
+/// exactly the bytes the plan calls for and nothing else, so anything
+/// already there past the new content — from reusing a stream with old
+/// data in it — is left untouched rather than truncated away. That is
+/// safe for the manifest itself: the hard binding's length comes from the
+/// plan, not from measuring `output`, so those leftover bytes are never
+/// signed or treated as part of the asset. It is not safe for whatever
+/// was in them: a caller who reads `output` back as a plain file or
+/// buffer, rather than trusting only what the manifest declares, would
+/// still see that old content sitting right after the new asset. If
+/// disclosing that would be a problem, pass a stream that starts empty —
+/// an empty `Vec`/`Cursor`, or a freshly created or explicitly truncated
+/// (`File::set_len(0)`) file — rather than reusing one that already has
+/// content in it. [`build_and_sign_file`] always does this for you, via a
+/// fresh temporary file.
 pub fn build_and_sign<H, S, O>(
     handler: H,
     source: S,

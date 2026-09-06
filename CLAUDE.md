@@ -69,13 +69,17 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   without holding it in memory), but answers `AssetLength` from the
   plan's own known output length rather than asking the host, so a
   reused, longer-than-needed output stream can never leak stale trailing
-  bytes into the hash; and only `Sign`/`Timestamp` ever reach the host as
-  themselves, since nothing in this workspace can sign or timestamp on a
-  host's behalf. `build_and_sign`/`build_and_sign_file` (`src/drive.rs`)
-  are one such host, for a caller with plain synchronous `Read + Seek`
-  source access, `Read + Write + Seek` output access (read-back is needed
-  for the hashing above), and a plain signing function (no timestamping);
-  a host that needs timestamping, or async/network access, drives
+  bytes into the hash — though those bytes are still physically present
+  in `output` afterward for anyone who reads it back directly rather than
+  trusting only what the manifest declares; `build_and_sign`'s own doc
+  comment tells a caller who cares to pass a stream that starts empty —
+  and only `Sign`/`Timestamp` ever reach the host as themselves, since
+  nothing in this workspace can sign or timestamp on a host's behalf.
+  `build_and_sign`/`build_and_sign_file` (`src/drive.rs`) are one such
+  host, for a caller with plain synchronous `Read + Seek` source access,
+  `Read + Write + Seek` output access (read-back is needed for the
+  hashing above), and a plain signing function (no timestamping); a host
+  that needs timestamping, or async/network access, drives
   `FileBuilderSession` directly. `build_and_sign_file` builds into a
   freshly, exclusively created (`create_new`, never `create` +
   `truncate`) temporary file with an unpredictable name beside the
