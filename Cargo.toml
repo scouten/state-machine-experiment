@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "contentauth-c2pa-builder",
+    "contentauth-c2pa-compat",
     "contentauth-c2pa-file-builder",
     "contentauth-c2pa-file-reader",
     "contentauth-c2pa-format",

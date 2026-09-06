@@ -52,6 +52,11 @@ experiment grows.
   write-side mirror: a sans-I/O session gluing a `contentauth-c2pa-format`
   handler to the builder above, plus a `Read + Seek` / `Read + Write +
   Seek` and signing-function host for the common case.
+* [`contentauth-c2pa-compat`](contentauth-c2pa-compat) — an experimental
+  compatibility layer reproducing a slice of [c2pa-rs]'s own `Reader` API
+  (reading a manifest store from a file and reporting it as JSON) on top
+  of the crates above, for a caller that wants c2pa-rs's existing surface
+  rather than this workspace's `Session` contract.
 
 ## Building
 
@@ -75,3 +80,5 @@ cargo +nightly fmt
 
 Licensed under either the [Apache License, Version 2.0](LICENSE-APACHE) or
 the [MIT license](LICENSE-MIT), at your option.
+
+[c2pa-rs]: https://github.com/contentauth/c2pa-rs
