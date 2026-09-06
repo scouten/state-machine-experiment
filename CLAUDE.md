@@ -117,3 +117,8 @@ MSRV is 1.88.0 (kept in sync between `Cargo.toml`'s `rust-version` and the
 upload (Codecov), doc tests, Clippy, nightly `cargo fmt --check`, doc
 build, Wasm target checks, an MSRV check, and `cargo-deny`. All must pass
 on a PR into `main`.
+
+## Merging PRs
+
+This repository disallows merge commits (GitHub rejects them). Merge
+pull requests with squash, not merge.
