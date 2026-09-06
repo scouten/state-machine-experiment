@@ -61,14 +61,36 @@ impl GeneratorInfo {
     }
 }
 
+/// Which C2PA claim version a [`Claim`] was decoded from.
+///
+/// Determined by the claim box's own JUMBF label (`c2pa.claim` for v1,
+/// `c2pa.claim.v2` for v2) — a structural fact about which box the claim
+/// came from, not something guessed from which of
+/// [`Claim::assertions`]/[`Claim::created_assertions`] happen to be
+/// populated.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ClaimVersion {
+    /// A v1 claim: assertions in a flat [`Claim::assertions`] list.
+    #[default]
+    V1,
+
+    /// A v2 claim: assertions split into [`Claim::created_assertions`]
+    /// and [`Claim::gathered_assertions`].
+    V2,
+}
+
 /// A decoded C2PA claim.
 ///
-/// Every field is optional: a claim that omits one is structurally valid
-/// CBOR, and whether the omission is *legal* is a validation question
-/// (roadmap step 4) rather than a decoding one.
+/// Every field but [`Self::version`] is optional: a claim that omits one
+/// is structurally valid CBOR, and whether the omission is *legal* is a
+/// validation question (roadmap step 4) rather than a decoding one.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct Claim {
+    /// Which claim version this claim was decoded from.
+    pub version: ClaimVersion,
+
     /// `dc:title` — human-readable title of the asset.
     pub title: Option<String>,
 
@@ -150,15 +172,20 @@ pub struct HashedUri {
     pub alg: Option<String>,
 }
 
-/// Decodes a claim from the CBOR payload of a `c2pa.claim` box.
-pub(crate) fn decode(cbor: &[u8]) -> Result<Claim, ClaimError> {
+/// Decodes a claim from the CBOR payload of a claim box, tagging the
+/// result with the claim version its caller determined from the box's
+/// JUMBF label.
+pub(crate) fn decode(cbor: &[u8], version: ClaimVersion) -> Result<Claim, ClaimError> {
     // `from_slice` bounds allocation and rejects trailing bytes, which
     // suits a claim box payload: exactly one CBOR item, from an untrusted
     // source.
     let value: Value = c2pa_cbor::from_slice(cbor).map_err(|_| ClaimError::MalformedCbor)?;
     let map = value.as_map().ok_or(ClaimError::NotAMap)?;
 
-    let mut claim = Claim::default();
+    let mut claim = Claim {
+        version,
+        ..Claim::default()
+    };
 
     for (key, value) in map {
         let Some(key) = key.as_str() else {
@@ -348,8 +375,9 @@ mod tests {
             (text_value("future_field"), Value::Integer(42)),
         ]);
 
-        let decoded = decode(&encode(&claim)).unwrap();
+        let decoded = decode(&encode(&claim), ClaimVersion::V1).unwrap();
 
+        assert_eq!(decoded.version, ClaimVersion::V1);
         assert_eq!(decoded.title.as_deref(), Some("C.jpg"));
         assert_eq!(decoded.format.as_deref(), Some("image/jpeg"));
         assert_eq!(decoded.instance_id.as_deref(), Some("xmp:iid:1234"));
@@ -413,8 +441,9 @@ mod tests {
             ),
         ]);
 
-        let decoded = decode(&encode(&claim)).unwrap();
+        let decoded = decode(&encode(&claim), ClaimVersion::V2).unwrap();
 
+        assert_eq!(decoded.version, ClaimVersion::V2);
         assert!(decoded.assertions.is_empty());
 
         assert_eq!(decoded.created_assertions.len(), 1);
@@ -444,10 +473,13 @@ mod tests {
     #[test]
     fn rejects_wrong_field_type_for_created_assertions() {
         assert_eq!(
-            decode(&encode(&map(vec![(
-                text_value("created_assertions"),
-                text_value("not-an-array"),
-            )]))),
+            decode(
+                &encode(&map(vec![(
+                    text_value("created_assertions"),
+                    text_value("not-an-array"),
+                )])),
+                ClaimVersion::V2
+            ),
             Err(ClaimError::UnexpectedType {
                 field: "created_assertions"
             })
@@ -457,10 +489,13 @@ mod tests {
     #[test]
     fn rejects_wrong_field_type_for_gathered_assertions() {
         assert_eq!(
-            decode(&encode(&map(vec![(
-                text_value("gathered_assertions"),
-                text_value("not-an-array"),
-            )]))),
+            decode(
+                &encode(&map(vec![(
+                    text_value("gathered_assertions"),
+                    text_value("not-an-array"),
+                )])),
+                ClaimVersion::V2
+            ),
             Err(ClaimError::UnexpectedType {
                 field: "gathered_assertions"
             })
@@ -469,7 +504,7 @@ mod tests {
 
     #[test]
     fn decodes_a_minimal_claim() {
-        let decoded = decode(&encode(&map(vec![]))).unwrap();
+        let decoded = decode(&encode(&map(vec![])), ClaimVersion::V1).unwrap();
         assert_eq!(decoded, Claim::default());
     }
 
@@ -481,7 +516,10 @@ mod tests {
         ]);
 
         assert_eq!(
-            decode(&encode(&claim)).unwrap().title.as_deref(),
+            decode(&encode(&claim), ClaimVersion::V1)
+                .unwrap()
+                .title
+                .as_deref(),
             Some("kept")
         );
     }
@@ -499,7 +537,7 @@ mod tests {
             ])]),
         )]);
 
-        let decoded = decode(&encode(&claim)).unwrap();
+        let decoded = decode(&encode(&claim), ClaimVersion::V1).unwrap();
         assert_eq!(decoded.assertions[0].alg.as_deref(), Some("sha512"));
         assert_eq!(decoded.assertions[0].hash, vec![1, 2, 3]);
     }
@@ -514,7 +552,7 @@ mod tests {
             ])]),
         )]);
 
-        let decoded = decode(&encode(&claim)).unwrap();
+        let decoded = decode(&encode(&claim), ClaimVersion::V1).unwrap();
         assert_eq!(
             decoded.claim_generator_info[0].name.as_deref(),
             Some("tool")
@@ -524,13 +562,16 @@ mod tests {
 
     #[test]
     fn rejects_malformed_cbor() {
-        assert_eq!(decode(&[0xff, 0xff]), Err(ClaimError::MalformedCbor));
+        assert_eq!(
+            decode(&[0xff, 0xff], ClaimVersion::V1),
+            Err(ClaimError::MalformedCbor)
+        );
     }
 
     #[test]
     fn rejects_non_map_claim() {
         assert_eq!(
-            decode(&encode(&Value::Array(vec![]))),
+            decode(&encode(&Value::Array(vec![])), ClaimVersion::V1),
             Err(ClaimError::NotAMap)
         );
     }
@@ -567,7 +608,7 @@ mod tests {
 
         for (value, field) in cases {
             assert_eq!(
-                decode(&encode(&value)),
+                decode(&encode(&value), ClaimVersion::V1),
                 Err(ClaimError::UnexpectedType { field }),
                 "expected {field} to be rejected"
             );
@@ -585,7 +626,7 @@ mod tests {
         )]);
 
         assert_eq!(
-            decode(&encode(&claim)),
+            decode(&encode(&claim), ClaimVersion::V1),
             Err(ClaimError::UnexpectedType {
                 field: "assertions.url"
             })

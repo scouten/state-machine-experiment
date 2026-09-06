@@ -26,7 +26,7 @@ use contentauth_c2pa_builder::{
     GeneratorInfo, HashAlgorithm, SigningAlg, TimestampSettings,
 };
 use contentauth_c2pa_reader::{
-    ReadHostReply, ReadRequest, ReadSession, ReadSettings, ReadStep, ValidationState,
+    ClaimVersion, ReadHostReply, ReadRequest, ReadSession, ReadSettings, ReadStep, ValidationState,
 };
 use contentauth_state_machine::Session;
 
@@ -223,6 +223,7 @@ fn a_signed_manifest_with_no_assertions_reads_back_as_trusted() {
 
     let active = parsed.active().unwrap();
     assert_eq!(active.label, "urn:uuid:test-manifest");
+    assert_eq!(active.claim.version, ClaimVersion::V2);
     assert_eq!(active.claim.title.as_deref(), Some("test.jpg"));
     assert_eq!(active.claim.format.as_deref(), Some("image/jpeg"));
     assert_eq!(

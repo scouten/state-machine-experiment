@@ -27,7 +27,7 @@ use jumbf::{
 
 use crate::{
     chain::PendingChain,
-    claim::{self, Claim},
+    claim::{self, Claim, ClaimVersion},
     data_hash::{self, DataHash},
     error::Error,
     validation::{self, status_code, ValidationStatus},
@@ -63,6 +63,9 @@ pub(crate) const ASSERTIONS_UUID: [u8; 16] = type_uuid(*b"c2as");
 
 /// Type UUID of a manifest's claim superbox.
 pub(crate) const CLAIM_UUID: [u8; 16] = type_uuid(*b"c2cl");
+
+/// JUMBF label of a v2 claim box, as opposed to a v1 claim's `c2pa.claim`.
+pub(crate) const CLAIM_V2_LABEL: &str = "c2pa.claim.v2";
 
 /// Type UUID of a manifest's claim signature superbox.
 pub(crate) const SIGNATURE_UUID: [u8; 16] = type_uuid(*b"c2cs");
@@ -208,7 +211,17 @@ fn read_manifest(
         reason: "claim box has no CBOR content",
     })?;
 
-    let claim = claim::decode(claim_cbor).map_err(|source| Error::MalformedClaim {
+    // The claim box's own label is what the C2PA specification uses to
+    // distinguish a v2 claim from a v1 one; anything other than the
+    // reserved v2 label (including no label at all) reads as v1, the
+    // long-standing default.
+    let version = if claim_box.desc.label == Some(CLAIM_V2_LABEL) {
+        ClaimVersion::V2
+    } else {
+        ClaimVersion::V1
+    };
+
+    let claim = claim::decode(claim_cbor, version).map_err(|source| Error::MalformedClaim {
         manifest: label.clone(),
         source,
     })?;
@@ -316,6 +329,7 @@ mod tests {
 
         let m = &parsed.manifests[0];
         assert_eq!(m.label, "urn:uuid:one");
+        assert_eq!(m.claim.version, ClaimVersion::V1);
         assert_eq!(m.claim.title.as_deref(), Some("A.jpg"));
         assert_eq!(m.assertion_labels, ["c2pa.actions", "c2pa.hash.data"]);
         assert!(m.has_signature);
@@ -561,6 +575,7 @@ mod tests {
 
         let parsed = parse(&bytes).unwrap();
 
+        assert_eq!(parsed.manifests[0].claim.version, ClaimVersion::V2);
         assert_eq!(parsed.manifests[0].claim.created_assertions.len(), 1);
         assert_eq!(parsed.manifests[0].claim.gathered_assertions.len(), 1);
         assert!(parsed.manifests[0].claim.assertions.is_empty());
