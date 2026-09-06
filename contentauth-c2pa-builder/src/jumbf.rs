@@ -37,6 +37,7 @@ use jumbf::{
 };
 
 use crate::{
+    builder::AssertionKind,
     claim::{self, ClaimFields},
     cose, data_hash,
     error::Error,
@@ -69,11 +70,21 @@ const ASSERTIONS_LABEL: &str = "c2pa.assertions";
 const CLAIM_LABEL: &str = "c2pa.claim.v2";
 const SIGNATURE_LABEL: &str = "c2pa.signature";
 
+/// A hashed-URI reference to an assertion, as `(url, hash)` — what
+/// `claim::encode` takes for each of `created_assertions` and
+/// `gathered_assertions`.
+type AssertionRef = (String, Vec<u8>);
+
+/// An [`AssertionRef`] paired with the [`AssertionKind`] that says which
+/// of the claim's two assertion lists it belongs in.
+type KindedAssertionRef = (String, Vec<u8>, AssertionKind);
+
 /// One assertion to be embedded, as supplied by
 /// [`BuilderSettings::assertions`](crate::BuilderSettings::assertions).
 pub(crate) struct AssertionInput<'a> {
     pub(crate) label: &'a str,
     pub(crate) cbor: &'a [u8],
+    pub(crate) kind: AssertionKind,
 }
 
 /// Everything [`ManifestBuilder::build_placeholder`] needs, decoupled from
@@ -107,7 +118,7 @@ pub(crate) struct ManifestBuilder {
     claim_placeholder: PlaceholderDataBox,
     signature_placeholder: PlaceholderDataBox,
 
-    assertion_refs: Vec<(String, Vec<u8>)>,
+    assertion_refs: Vec<KindedAssertionRef>,
     hash_alg: HashAlgorithm,
     protected_header: Vec<u8>,
     signature_len: usize,
@@ -150,6 +161,7 @@ impl ManifestBuilder {
             assertion_refs.push((
                 format!("self#jumbf=c2pa.assertions/{}", assertion.label),
                 hash_alg.digest(&rendered[8..]),
+                assertion.kind,
             ));
 
             assertions_builder = assertions_builder.add_child_box(sbox);
@@ -169,12 +181,15 @@ impl ManifestBuilder {
         let assertions_sbox = assertions_builder.add_borrowed_child_box(&data_hash_sbox);
 
         // The claim: every reference final except the hard binding's own,
-        // which is a fixed-length digest either way.
+        // which is a fixed-length digest either way. The hard binding is
+        // always this session's own creation, never gathered.
         let mut dummy_claim_refs = assertion_refs.clone();
         dummy_claim_refs.push((
             format!("self#jumbf=c2pa.assertions/{}", data_hash::LABEL),
             vec![0u8; hash_alg.digest_len()],
+            AssertionKind::Created,
         ));
+        let (dummy_created, dummy_gathered) = partition_by_kind(&dummy_claim_refs);
 
         let claim_fields = ClaimFields {
             title: inputs.title,
@@ -184,7 +199,7 @@ impl ManifestBuilder {
             generator_version: inputs.generator_version,
             alg_name: hash_alg.c2pa_name(),
         };
-        let dummy_claim_cbor = claim::encode(&claim_fields, &dummy_claim_refs)?;
+        let dummy_claim_cbor = claim::encode(&claim_fields, &dummy_created, &dummy_gathered)?;
         let claim_placeholder = PlaceholderDataBox::new(CBOR_BOX_TYPE, dummy_claim_cbor.len());
 
         let claim_sbox = SuperBoxBuilder::new(&CLAIM_UUID)
@@ -272,7 +287,9 @@ impl ManifestBuilder {
         claim_refs.push((
             format!("self#jumbf=c2pa.assertions/{}", data_hash::LABEL),
             data_hash_ref_hash,
+            AssertionKind::Created,
         ));
+        let (created, gathered) = partition_by_kind(&claim_refs);
 
         let claim_fields = ClaimFields {
             title: self.title.as_deref(),
@@ -282,7 +299,7 @@ impl ManifestBuilder {
             generator_version: &self.generator_version,
             alg_name: self.hash_alg.c2pa_name(),
         };
-        let real_claim_cbor = claim::encode(&claim_fields, &claim_refs)?;
+        let real_claim_cbor = claim::encode(&claim_fields, &created, &gathered)?;
         check_len(&self.claim_placeholder, real_claim_cbor.len())?;
         let to_be_signed = cose::claim_to_be_signed(&self.protected_header, &real_claim_cbor);
 
@@ -340,6 +357,28 @@ impl std::fmt::Debug for ManifestBuilder {
             .field("timestamp_reserve", &self.timestamp_reserve)
             .finish_non_exhaustive()
     }
+}
+
+/// Splits assertion references into the claim's `created_assertions` and
+/// `gathered_assertions` lists, each in original order.
+///
+/// The split is static — it depends only on which kind the host declared
+/// each assertion to be, never on a value that changes between the
+/// placeholder and final passes — so which key a reference lands under
+/// never changes either, preserving the two-pass length invariant.
+fn partition_by_kind(refs: &[KindedAssertionRef]) -> (Vec<AssertionRef>, Vec<AssertionRef>) {
+    let mut created = Vec::new();
+    let mut gathered = Vec::new();
+
+    for (url, hash, kind) in refs {
+        let target = match kind {
+            AssertionKind::Created => &mut created,
+            AssertionKind::Gathered => &mut gathered,
+        };
+        target.push((url.clone(), hash.clone()));
+    }
+
+    (created, gathered)
 }
 
 /// Verifies a real encoding matches its placeholder's reserved size
@@ -429,6 +468,7 @@ mod tests {
         let assertions = [AssertionInput {
             label: "c2pa.actions",
             cbor: &[0xa0], // an empty CBOR map, as a stand-in
+            kind: AssertionKind::Created,
         }];
 
         let (placeholder_len, final_bytes) = build_and_finish(&assertions);

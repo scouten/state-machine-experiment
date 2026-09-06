@@ -67,11 +67,18 @@ reader, is this crate's primary correctness proof.
 This crate never builds a v1 claim: v1 is a read-only concern, for
 interoperating with manifests this crate did not write.
 
-Deliberately out of scope for now: ingredients and update manifests (so
-claim v2's `gathered_assertions`, which only an ingredient can populate,
-is never emitted), BMFF/box-hash hard bindings, OCSP, and certificate
-decoding or validation (certificates are passed through opaquely into the
-COSE `x5chain`; the host vouches for them).
+Each caller-supplied assertion carries an `AssertionKind` — `Created` or
+`Gathered` — that the host sets: the host supplies the assertion's
+content, so it is the one that knows whether this claim's generator
+authored it or gathered it from elsewhere, and this crate has no way to
+infer that on its own. The claim's `created_assertions` and
+`gathered_assertions` are populated accordingly; the hard binding this
+session adds itself is always `Created`.
+
+Deliberately out of scope for now: ingredients and update manifests,
+BMFF/box-hash hard bindings, OCSP, and certificate decoding or validation
+(certificates are passed through opaquely into the COSE `x5chain`; the
+host vouches for them).
 
 ## Request vocabulary
 

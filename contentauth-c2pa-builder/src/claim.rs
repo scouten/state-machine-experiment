@@ -17,9 +17,9 @@
 //! concern, for interoperating with manifests this crate did not write).
 //!
 //! Emits `dc:title`, `dc:format`, `instanceID`, `claim_generator_info`,
-//! `signature`, `alg`, and `created_assertions`. `gathered_assertions`
-//! (assertions carried over from an ingredient) is out of scope, since
-//! this crate does not yet support ingredients — see this crate's README.
+//! `signature`, `alg`, and `created_assertions` — plus `gathered_assertions`
+//! when the host marked any assertion as gathered rather than created (see
+//! [`crate::AssertionKind`]).
 //!
 //! # Why this needs no padding
 //!
@@ -55,16 +55,18 @@ pub(crate) struct ClaimFields<'a> {
 
 /// Encodes a C2PA v2 claim.
 ///
-/// `assertion_refs` is every assertion this claim covers, as
-/// `(url, hash)` pairs, in the order they should appear — including the
-/// hard binding. Every one is a *created* assertion: this crate has no
-/// notion of an assertion gathered from an ingredient. Reused unchanged
-/// between this crate's placeholder and final passes except for the hard
-/// binding's own `hash` value, which is fixed-length either way (see the
-/// module docs).
+/// `created_assertion_refs` and `gathered_assertion_refs` are this claim's
+/// assertions, split by the [`AssertionKind`](crate::AssertionKind) the
+/// host declared each to be, each as `(url, hash)` pairs in the order they
+/// should appear — the hard binding is always among the former, since a
+/// hard binding this session computes itself is never gathered. Reused
+/// unchanged between this crate's placeholder and final passes except for
+/// the hard binding's own `hash` value, which is fixed-length either way
+/// (see the module docs).
 pub(crate) fn encode(
     fields: &ClaimFields<'_>,
-    assertion_refs: &[(String, Vec<u8>)],
+    created_assertion_refs: &[(String, Vec<u8>)],
+    gathered_assertion_refs: &[(String, Vec<u8>)],
 ) -> Result<Vec<u8>, Error> {
     let mut map = BTreeMap::new();
 
@@ -106,20 +108,33 @@ pub(crate) fn encode(
     );
     map.insert(
         Value::Text("created_assertions".to_string()),
-        Value::Array(
-            assertion_refs
-                .iter()
-                .map(|(url, hash)| {
-                    Value::Map(BTreeMap::from([
-                        (Value::Text("url".to_string()), Value::Text(url.clone())),
-                        (Value::Text("hash".to_string()), Value::Bytes(hash.clone())),
-                    ]))
-                })
-                .collect(),
-        ),
+        Value::Array(hashed_uri_array(created_assertion_refs)),
     );
 
+    // Omitted rather than encoded as an empty array when there is nothing
+    // gathered, matching how `dc:title` is omitted when absent: this
+    // module never encodes a field that a real writer would leave out.
+    if !gathered_assertion_refs.is_empty() {
+        map.insert(
+            Value::Text("gathered_assertions".to_string()),
+            Value::Array(hashed_uri_array(gathered_assertion_refs)),
+        );
+    }
+
     Ok(c2pa_cbor::to_vec(&Value::Map(map))?)
+}
+
+/// Encodes a list of `(url, hash)` pairs as the CBOR array of hashed-URI
+/// maps `created_assertions`/`gathered_assertions` both use.
+fn hashed_uri_array(refs: &[(String, Vec<u8>)]) -> Vec<Value> {
+    refs.iter()
+        .map(|(url, hash)| {
+            Value::Map(BTreeMap::from([
+                (Value::Text("url".to_string()), Value::Text(url.clone())),
+                (Value::Text("hash".to_string()), Value::Bytes(hash.clone())),
+            ]))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -153,7 +168,7 @@ mod tests {
             ),
         ];
 
-        let bytes = encode(&fields(), &refs).unwrap();
+        let bytes = encode(&fields(), &refs, &[]).unwrap();
         let decoded: Value = c2pa_cbor::from_slice(&bytes).unwrap();
         let map = decoded.as_map().unwrap();
 
@@ -191,13 +206,49 @@ mod tests {
             panic!("expected created_assertions array");
         };
         assert_eq!(assertions.len(), 2);
+
+        assert!(
+            map.get(&Value::Text("gathered_assertions".to_string()))
+                .is_none(),
+            "an empty gathered list should be omitted, not encoded as an empty array"
+        );
+    }
+
+    #[test]
+    fn encodes_gathered_assertions_separately_from_created() {
+        let created = vec![(
+            "self#jumbf=c2pa.assertions/c2pa.actions".to_string(),
+            vec![1u8; 32],
+        )];
+        let gathered = vec![(
+            "self#jumbf=c2pa.assertions/c2pa.metadata".to_string(),
+            vec![2u8; 32],
+        )];
+
+        let bytes = encode(&fields(), &created, &gathered).unwrap();
+        let decoded: Value = c2pa_cbor::from_slice(&bytes).unwrap();
+        let map = decoded.as_map().unwrap();
+
+        let Some(Value::Array(created_out)) =
+            map.get(&Value::Text("created_assertions".to_string()))
+        else {
+            panic!("expected created_assertions array");
+        };
+        assert_eq!(created_out.len(), 1);
+
+        let Some(Value::Array(gathered_out)) =
+            map.get(&Value::Text("gathered_assertions".to_string()))
+        else {
+            panic!("expected gathered_assertions array");
+        };
+        assert_eq!(gathered_out.len(), 1);
     }
 
     #[test]
     fn omits_title_when_absent() {
         let mut f = fields();
         f.title = None;
-        let bytes = encode(&f, &[]).unwrap();
+        let bytes = encode(&f, &[], &[]).unwrap();
         let decoded: Value = c2pa_cbor::from_slice(&bytes).unwrap();
         assert!(decoded
             .as_map()
@@ -211,8 +262,8 @@ mod tests {
         let refs_zero = vec![("self#jumbf=x".to_string(), vec![0u8; 32])];
         let refs_real = vec![("self#jumbf=x".to_string(), vec![0xab; 32])];
 
-        let zero = encode(&fields(), &refs_zero).unwrap();
-        let real = encode(&fields(), &refs_real).unwrap();
+        let zero = encode(&fields(), &refs_zero, &[]).unwrap();
+        let real = encode(&fields(), &refs_real, &[]).unwrap();
 
         assert_eq!(zero.len(), real.len());
         assert_ne!(zero, real);

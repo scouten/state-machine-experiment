@@ -66,7 +66,9 @@ pub struct BuilderSettings {
     ///
     /// Each is opaque, pre-encoded CBOR: this crate does not yet model
     /// specific assertion schemas (actions, thumbnails, …) — see this
-    /// crate's README.
+    /// crate's README. Each also carries an [`AssertionKind`], set by the
+    /// host, saying whether this claim's generator created it or gathered
+    /// it from elsewhere.
     pub assertions: Vec<Assertion>,
 
     /// The algorithm to sign the claim with.
@@ -165,17 +167,52 @@ pub struct Assertion {
 
     /// The assertion's CBOR-encoded content.
     pub cbor: Vec<u8>,
+
+    /// Whether this claim's generator created the assertion itself, or
+    /// gathered it from elsewhere — for example, content produced by
+    /// another tool or plugin, or otherwise not authored fresh for this
+    /// claim. The host supplies the assertion's content in the first
+    /// place, so it is the one that knows which; this crate has no way to
+    /// infer it. Determines whether the assertion is encoded in the
+    /// claim's `created_assertions` or `gathered_assertions`.
+    pub kind: AssertionKind,
 }
 
 impl Assertion {
-    /// Creates an assertion with the given label and pre-encoded CBOR
-    /// content.
+    /// Creates an assertion this claim's generator created itself, with
+    /// the given label and pre-encoded CBOR content.
     pub fn new(label: impl Into<String>, cbor: Vec<u8>) -> Self {
         Self {
             label: label.into(),
             cbor,
+            kind: AssertionKind::Created,
         }
     }
+
+    /// Creates an assertion gathered from elsewhere, rather than created
+    /// by this claim's generator, with the given label and pre-encoded
+    /// CBOR content.
+    pub fn gathered(label: impl Into<String>, cbor: Vec<u8>) -> Self {
+        Self {
+            label: label.into(),
+            cbor,
+            kind: AssertionKind::Gathered,
+        }
+    }
+}
+
+/// Whether an assertion was created by this claim's generator or
+/// gathered from elsewhere. See [`Assertion::kind`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum AssertionKind {
+    /// Created by this claim's generator; encoded in the claim's
+    /// `created_assertions`.
+    Created,
+
+    /// Gathered from elsewhere rather than created by this claim's
+    /// generator; encoded in the claim's `gathered_assertions`.
+    Gathered,
 }
 
 /// Describes the software that generated a claim.
@@ -384,6 +421,7 @@ impl BuilderSession {
             .map(|a| AssertionInput {
                 label: &a.label,
                 cbor: &a.cbor,
+                kind: a.kind,
             })
             .collect();
 
