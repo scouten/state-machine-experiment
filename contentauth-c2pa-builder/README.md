@@ -37,7 +37,9 @@ trip:
    (the hard binding's hash, the claim signature, an RFC 3161 timestamp if
    requested) zero-filled at exactly its final encoded length — and asks
    the host to embed it (`BuilderRequest::ReservePlaceholder`).
-2. The host reports back the byte range the placeholder now occupies.
+2. The host reports back the byte range of the container structure now
+   carrying the placeholder — framing included, since a JPEG's `APP11`
+   segment headers belong inside the exclusion too.
 3. The session hashes the asset outside that range, patches in the real
    hash, and asks the host to sign the claim (`BuilderRequest::Sign`) and,
    if configured, obtain a timestamp (`BuilderRequest::Timestamp`).
@@ -89,7 +91,7 @@ consequential to persist than an incomplete read report.
 
 | Request | Answered with | Purpose |
 |---|---|---|
-| `ReservePlaceholder { stream, placeholder }` | the byte range it now occupies | Host embeds a complete, zero-filled-where-pending manifest store into the asset. |
+| `ReservePlaceholder { stream, placeholder }` | the byte range of the container structure now carrying it, framing included | Host embeds a complete, zero-filled-where-pending manifest store into the asset (typically via a [`contentauth-c2pa-format`](../contentauth-c2pa-format) handler). |
 | `AssetLength { stream }` | total length in bytes | Needed to know what lies after the reserved placeholder. |
 | `AssetBytes { stream, range }` | bytes | Streams the asset (now containing the placeholder) into this crate's hashing, to compute the hard binding. |
 | `Sign { alg, data }` | raw signature bytes | Signs a COSE `Sig_structure`; mirrors `c2pa_raw_crypto::RawSigner::sign`. |

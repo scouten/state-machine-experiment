@@ -37,9 +37,13 @@ pub enum BuilderRequest {
     ///
     /// The host owns all knowledge of the container format (JPEG, PNG,
     /// BMFF, …), exactly as [`ReadRequest::ManifestStore`] does for
-    /// reading. Reply with [`BuilderHostReply::PlaceholderReserved`],
-    /// naming the exact byte range the embedded placeholder now occupies —
-    /// this becomes the hard binding's exclusion.
+    /// reading — typically by way of a `contentauth-c2pa-format` handler.
+    /// Reply with [`BuilderHostReply::PlaceholderReserved`], naming the
+    /// byte range of the container structure that now carries the
+    /// placeholder, *framing included*: for a JPEG, the whole run of
+    /// `APP11` segments, markers and headers and all. This becomes the
+    /// hard binding's exclusion, so it may be longer than the placeholder
+    /// but never shorter.
     ///
     /// [`ReadRequest::ManifestStore`]: https://docs.rs/contentauth-c2pa-reader/latest/contentauth_c2pa_reader/enum.ReadRequest.html#variant.ManifestStore
     ReservePlaceholder {
@@ -109,15 +113,15 @@ pub enum BuilderRequest {
     /// bytes.
     ///
     /// `manifest` is guaranteed byte-identical in length to the
-    /// placeholder reserved at `range` by an earlier
-    /// [`Self::ReservePlaceholder`]. Reply with
+    /// placeholder embedded by an earlier [`Self::ReservePlaceholder`], so
+    /// the container's framing around it need not change. Reply with
     /// [`BuilderHostReply::ManifestCommitted`].
     CommitManifest {
         /// The asset stream to patch.
         stream: StreamId,
 
-        /// The byte range the placeholder occupies, from
-        /// [`BuilderHostReply::PlaceholderReserved`].
+        /// The byte range of the container structure carrying the
+        /// placeholder, from [`BuilderHostReply::PlaceholderReserved`].
         range: ByteRange,
 
         /// The final manifest store bytes.
@@ -166,8 +170,9 @@ impl Request for BuilderRequest {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum BuilderHostReply {
-    /// Answers [`BuilderRequest::ReservePlaceholder`]: the byte range the
-    /// embedded placeholder now occupies within the asset.
+    /// Answers [`BuilderRequest::ReservePlaceholder`]: the byte range of
+    /// the container structure now carrying the placeholder, framing
+    /// included.
     PlaceholderReserved(ByteRange),
 
     /// Answers [`BuilderRequest::AssetLength`]: the stream's total length

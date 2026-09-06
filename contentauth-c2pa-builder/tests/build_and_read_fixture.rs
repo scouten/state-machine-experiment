@@ -466,12 +466,13 @@ fn duplicate_assertion_labels_are_rejected() {
     assert!(session.advance().is_err());
 }
 
-/// If the host reports a placeholder reservation range whose length
-/// doesn't match the placeholder it was actually asked to embed, the
-/// session must refuse to use it as the hard binding's exclusion range
-/// rather than sign and commit against the wrong span.
+/// If the host reports a placeholder reservation range shorter than the
+/// placeholder it was actually asked to embed, part of the manifest would
+/// end up inside its own hash: the session must refuse to use it as the
+/// hard binding's exclusion range rather than sign and commit against the
+/// wrong span.
 #[test]
-fn a_reservation_range_of_the_wrong_length_is_rejected() {
+fn a_reservation_range_shorter_than_the_placeholder_is_rejected() {
     let mut session = BuilderSession::new(settings(vec![], None));
     let mut asset = vec![0u8; 5000];
 
@@ -506,4 +507,87 @@ fn a_reservation_range_of_the_wrong_length_is_rejected() {
     }
 
     assert!(session.advance().is_err());
+}
+
+/// A real container wraps the placeholder in framing of its own — a
+/// JPEG's `APP11` segment headers — and that framing belongs inside the
+/// exclusion too. So a reservation range *longer* than the placeholder is
+/// the normal case, and the manifest must still read back as trusted with
+/// the whole framed span excluded.
+#[test]
+fn a_reservation_range_longer_than_the_placeholder_is_accepted() {
+    const FRAMING: &[u8] = b"<framing>";
+
+    let mut host = Host::new(5000);
+    let mut session = BuilderSession::new(settings(vec![], None));
+    let offset = 100u64;
+
+    // Answer the reservation by hand: framing before and after the
+    // placeholder, and a range spanning all three.
+    assert_eq!(session.advance().unwrap(), BuilderStep::AwaitHost);
+    let requests: Vec<_> = session.outstanding_requests().to_vec();
+    let [request] = requests.as_slice() else {
+        panic!("unexpected requests: {requests:?}");
+    };
+    let BuilderRequest::ReservePlaceholder { placeholder, .. } = &request.kind else {
+        panic!("unexpected request: {request:?}");
+    };
+
+    let mut framed = FRAMING.to_vec();
+    framed.extend_from_slice(placeholder);
+    framed.extend_from_slice(FRAMING);
+    host.asset
+        .splice(offset as usize..offset as usize, framed.iter().copied());
+    let range = (offset, framed.len() as u64);
+    host.manifest_range = Some(range);
+    session
+        .fulfill(
+            request.id,
+            BuilderHostReply::PlaceholderReserved(contentauth_c2pa_builder::ByteRange {
+                start: range.0,
+                len: range.1,
+            }),
+        )
+        .unwrap();
+
+    // The commit patches the whole framed span in the fixture host, so
+    // hand it the framed final manifest instead.
+    let (asset, report) = loop {
+        if session.advance().unwrap() == BuilderStep::Complete {
+            break (host.asset.clone(), session.finish().unwrap());
+        }
+        for request in session.outstanding_requests().to_vec() {
+            let reply = match &request.kind {
+                BuilderRequest::CommitManifest {
+                    range, manifest, ..
+                } => {
+                    assert_eq!((range.start, range.len), host.manifest_range.unwrap());
+                    let start = range.start as usize + FRAMING.len();
+                    host.asset[start..start + manifest.len()].copy_from_slice(manifest);
+                    BuilderHostReply::ManifestCommitted
+                }
+                other => host.reply_to(other),
+            };
+            session.fulfill(request.id, reply).unwrap();
+        }
+    };
+    assert_eq!(
+        (report.manifest_range.start, report.manifest_range.len),
+        range
+    );
+
+    let manifest_range = (offset + FRAMING.len() as u64, report.manifest.len() as u64);
+    let parsed = read_back_with_manifest(&asset, manifest_range);
+    assert_eq!(parsed.validation_state, Some(ValidationState::Trusted));
+    assert_eq!(
+        parsed
+            .active()
+            .unwrap()
+            .data_hash
+            .as_ref()
+            .unwrap()
+            .exclusions,
+        [report.manifest_range],
+        "the framed span is what the hard binding excludes"
+    );
 }
