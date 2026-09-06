@@ -281,7 +281,7 @@ impl<Req: Request> SessionCore<Req> {
     /// Rejects the reply with [`ProtocolError::SessionComplete`] or
     /// [`ProtocolError::SessionFailed`] once the session has reached a
     /// terminal state, before consulting the underlying
-    /// [`RequestTracker`](crate::RequestTracker).
+    /// [`RequestTracker`].
     pub fn fulfill(&mut self, id: RequestId, reply: Req::Reply) -> Result<(), ProtocolError> {
         match self.lifecycle {
             Lifecycle::Complete => return Err(ProtocolError::SessionComplete),
