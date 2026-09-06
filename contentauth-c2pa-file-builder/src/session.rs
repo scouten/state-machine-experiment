@@ -18,17 +18,24 @@
 //!
 //! Neither inner piece performs I/O itself, and neither does this session:
 //! `EmbedPlan::materialize` (the in-memory reference for turning a plan
-//! into bytes) is never called here. Instead this session walks a plan's
-//! [`Edit`]s itself, issuing a [`FileBuilderRequest::Read`] against
-//! [`FileBuilderSession::SOURCE_STREAM`] for each [`Edit::Copy`] and a
+//! into bytes) is never called here. Instead this session checks a plan
+//! against its own [`EmbedPlan::check`] before trusting it — a
+//! `FormatHandler` answers only through [`EmbedPlan::new`], not
+//! necessarily [`EmbedPlan::splice`]'s own validation — then walks its
+//! [`Edit`]s, issuing a [`FileBuilderRequest::Read`] against
+//! [`FileBuilderSession::SOURCE_STREAM`] for each [`Edit::Copy`] (in
+//! bounded chunks for a single large range) and a
 //! [`FileBuilderRequest::Write`] against
 //! [`FileBuilderSession::OUTPUT_STREAM`] for every byte it produces —
 //! never holding the source or the output it is assembling in memory.
-//! `BuilderSession`'s own `AssetLength`/`AssetBytes` (needed to hash the
-//! output for the hard binding) are forwarded the same way, as plain reads
-//! against the output stream, once it has been written. Only `Sign` and
-//! `Timestamp` — the two things nothing in this workspace can do on a
-//! host's behalf — ever reach this session's own host as themselves.
+//! `BuilderSession`'s own `AssetBytes` (needed to hash the output for the
+//! hard binding) is forwarded the same way, as a plain read against the
+//! output stream once it has been written; `AssetLength` is answered from
+//! the plan's own known output length instead, so a host's stream being
+//! longer than the new content can never leak stale bytes into the hash.
+//! Only `Sign` and `Timestamp` — the two things nothing in this workspace
+//! can do on a host's behalf — ever reach this session's own host as
+//! themselves.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -257,6 +264,20 @@ enum Sub<H: FormatHandler> {
         pending: HashMap<RequestId, RequestId>,
     },
 
+    /// Confirming the plan `plan_embed` returned actually holds together
+    /// before walking its edits: a handler answers only through
+    /// [`EmbedPlan::new`], not [`EmbedPlan::splice`]'s own validation, so
+    /// nothing has necessarily checked it yet. Awaits one
+    /// [`FileBuilderRequest::Length`] against
+    /// [`FileBuilderSession::SOURCE_STREAM`] to learn the source length
+    /// [`EmbedPlan::check`] needs.
+    Validating {
+        plan: EmbedPlan,
+        placeholder: Vec<u8>,
+        request: RequestId,
+        length_request: RequestId,
+    },
+
     /// Writing a queued sequence of output ranges to
     /// [`FileBuilderSession::OUTPUT_STREAM`], one at a time.
     Writing {
@@ -395,7 +416,7 @@ impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
 
                 Some(Phase::Building {
                     session,
-                    mut plan,
+                    plan,
                     sub:
                         Some(Sub::Planning {
                             op,
@@ -417,12 +438,64 @@ impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
                         }
 
                         PlanningStep::Done {
+                            plan,
+                            placeholder,
+                            request,
+                        } => {
+                            let length_request = self
+                                .core
+                                .issue(FileBuilderRequest::Length { stream: SOURCE });
+                            let sub = Some(Sub::Validating {
+                                plan,
+                                placeholder,
+                                request,
+                                length_request,
+                            });
+                            self.phase = Some(Phase::Building {
+                                session,
+                                plan: None,
+                                sub,
+                            });
+                            continue;
+                        }
+                    }
+                }
+
+                Some(Phase::Building {
+                    session,
+                    plan: _,
+                    sub:
+                        Some(Sub::Validating {
+                            plan,
+                            placeholder,
+                            request,
+                            length_request,
+                        }),
+                }) => {
+                    let result = step_validating::<H>(
+                        &mut self.core,
+                        plan,
+                        placeholder,
+                        request,
+                        length_request,
+                    );
+                    match self.poisoning(result)? {
+                        ValidatingStep::AwaitHost(sub) => {
+                            self.phase = Some(Phase::Building {
+                                session,
+                                plan: None,
+                                sub: Some(sub),
+                            });
+                            return Ok(Step::AwaitHost);
+                        }
+
+                        ValidatingStep::Done {
                             plan: embed_plan,
                             tasks,
                             request,
                             exclusion,
                         } => {
-                            plan = Some(embed_plan);
+                            let plan = Some(embed_plan);
                             let sub = Some(Sub::Writing {
                                 tasks,
                                 inflight: None,
@@ -641,13 +714,14 @@ enum PlanningStep<H: FormatHandler> {
     /// Still in progress; this is the sub-operation's next state.
     AwaitHost(Sub<H>),
 
-    /// `plan_embed` finished. `tasks` lays out the planned placeholder
-    /// embedding, ready for [`Sub::Writing`].
+    /// `plan_embed` finished with a plan matching the placeholder's
+    /// length. Not yet trusted for anything more than that: the next
+    /// step is [`Sub::Validating`], not [`Sub::Writing`], since nothing
+    /// has checked the plan's edits actually hold together.
     Done {
         plan: EmbedPlan,
-        tasks: VecDeque<WriteTask>,
+        placeholder: Vec<u8>,
         request: RequestId,
-        exclusion: ByteRange,
     },
 }
 
@@ -679,13 +753,10 @@ fn step_planning<H: FormatHandler>(
             ));
         }
 
-        let exclusion = embed_plan.exclusion;
-        let tasks = tasks_for_edits(&embed_plan.edits, &placeholder)?;
         return Ok(PlanningStep::Done {
             plan: embed_plan,
-            tasks,
+            placeholder,
             request,
-            exclusion,
         });
     }
 
@@ -725,6 +796,54 @@ fn step_planning<H: FormatHandler>(
         request,
         pending,
     }))
+}
+
+/// The result of one [`step_validating`] call.
+enum ValidatingStep<H: FormatHandler> {
+    /// Still in progress; this is the sub-operation's next state.
+    AwaitHost(Sub<H>),
+
+    /// The plan checks out. `tasks` lays out the planned placeholder
+    /// embedding, ready for [`Sub::Writing`].
+    Done {
+        plan: EmbedPlan,
+        tasks: VecDeque<WriteTask>,
+        request: RequestId,
+        exclusion: ByteRange,
+    },
+}
+
+/// Drives one round of [`Sub::Validating`]: once the source length this
+/// session asked for arrives, runs [`EmbedPlan::check`] against it — the
+/// validation every consumer of a plan relies on, which nothing has
+/// necessarily done yet for a plan built by hand rather than through
+/// [`EmbedPlan::splice`] — before ever indexing into it.
+fn step_validating<H: FormatHandler>(
+    core: &mut SessionCore<FileBuilderRequest>,
+    plan: EmbedPlan,
+    placeholder: Vec<u8>,
+    request: RequestId,
+    length_request: RequestId,
+) -> Result<ValidatingStep<H>, Error> {
+    let Some(source_len) = take_length(core, length_request)? else {
+        return Ok(ValidatingStep::AwaitHost(Sub::Validating {
+            plan,
+            placeholder,
+            request,
+            length_request,
+        }));
+    };
+
+    plan.check(source_len)?;
+
+    let exclusion = plan.exclusion;
+    let tasks = tasks_for_edits(&plan.edits, &placeholder)?;
+    Ok(ValidatingStep::Done {
+        plan,
+        tasks,
+        request,
+        exclusion,
+    })
 }
 
 /// The result of one [`step_writing`] call.
@@ -1018,6 +1137,28 @@ fn to_builder_host_reply(reply: FileBuilderReply) -> BuilderHostReply {
         FileBuilderReply::Length(_) | FileBuilderReply::Written => {
             BuilderHostReply::Failed(HostError::new("unexpected reply shape"))
         }
+    }
+}
+
+/// Consumes the reply to a [`FileBuilderRequest::Length`], if the host has
+/// provided one.
+fn take_length(
+    core: &mut SessionCore<FileBuilderRequest>,
+    id: RequestId,
+) -> Result<Option<u64>, Error> {
+    match core.take_reply(id) {
+        None => Ok(None),
+        Some(FileBuilderReply::Length(len)) => Ok(Some(len)),
+        Some(FileBuilderReply::Failed(source)) => Err(Error::HostFailure { id, source }),
+
+        // `RequestTracker::fulfill` rejects a reply that does not match
+        // `FileBuilderRequest::accepts` before it is ever stored, so this
+        // arm is unreachable in practice; kept as defense in depth.
+        Some(_) => Err(ProtocolError::ReplyMismatch {
+            id,
+            expected: "Length",
+        }
+        .into()),
     }
 }
 
@@ -1516,6 +1657,52 @@ mod tests {
             }) => assert_eq!(id, first_id),
             _ => panic!("expected the same write still pending, unchanged"),
         }
+    }
+
+    /// A plan `plan_embed` returned unchecked — one with a `Copy` edit
+    /// reaching past the end of the source it was supposedly built from —
+    /// must be rejected before this session ever indexes into anything
+    /// using its offsets, not silently trusted.
+    #[test]
+    fn step_validating_rejects_a_plan_that_does_not_check_out() {
+        let mut core = SessionCore::default();
+        let request = core.issue(FileBuilderRequest::Sign {
+            alg: SigningAlg::Es256,
+            data: vec![],
+        });
+        let length_request = core.issue(FileBuilderRequest::Length { stream: stream() });
+        core.fulfill(length_request, FileBuilderReply::Length(5))
+            .unwrap();
+
+        let plan = EmbedPlan::new(
+            vec![Edit::Copy(ByteRange { start: 0, len: 10 })],
+            0,
+            ByteRange { start: 0, len: 0 },
+            None,
+        );
+
+        let result =
+            step_validating::<JpegFormat>(&mut core, plan, vec![], request, length_request);
+        assert!(matches!(result, Err(Error::Format(_))));
+    }
+
+    #[test]
+    fn step_validating_awaits_a_still_pending_source_length() {
+        let mut core = SessionCore::default();
+        let request = core.issue(FileBuilderRequest::Sign {
+            alg: SigningAlg::Es256,
+            data: vec![],
+        });
+        let length_request = core.issue(FileBuilderRequest::Length { stream: stream() });
+
+        let plan = EmbedPlan::new(vec![], 0, ByteRange { start: 0, len: 0 }, None);
+
+        let step = step_validating::<JpegFormat>(&mut core, plan, vec![], request, length_request)
+            .unwrap();
+        assert!(matches!(
+            step,
+            ValidatingStep::AwaitHost(Sub::Validating { .. })
+        ));
     }
 
     /// Mirrors `contentauth_c2pa_format::request`'s own tests of its

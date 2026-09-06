@@ -56,8 +56,11 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   session that composes a `FormatHandler`'s `plan_embed`/`commit` with a
   `BuilderSession`, without ever buffering the source or output asset
   itself — it never calls `EmbedPlan::materialize` (the in-memory
-  reference implementation), instead walking a plan's edits directly. It
-  answers `ReservePlaceholder` and `CommitManifest` by issuing
+  reference implementation), instead walking a plan's edits directly,
+  after independently checking the plan itself (`EmbedPlan::check`
+  against a freshly asked source length) rather than trusting a
+  `FormatHandler` it does not control to have validated its own output.
+  It answers `ReservePlaceholder` and `CommitManifest` by issuing
   `FileBuilderRequest::Read` against `SOURCE_STREAM` and
   `FileBuilderRequest::Write` against `OUTPUT_STREAM` for each edit, in
   bounded chunks for a large `Edit::Copy` rather than one host round trip
