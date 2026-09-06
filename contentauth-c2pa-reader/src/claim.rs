@@ -18,8 +18,11 @@
 //! understands stays explicit and unknown fields are ignored rather than
 //! silently absorbed.
 //!
-//! Skeleton: this covers the C2PA v1 claim shape. Claim v2 (with its
-//! `created_assertions` / `gathered_assertions` split) is not yet handled.
+//! Both the C2PA v1 claim shape (a flat `assertions` list) and the v2 shape
+//! (`created_assertions` and `gathered_assertions`) are decoded into the
+//! same [`Claim`] type: a claim populates whichever of the three fields its
+//! version uses, and [`Claim::assertion_references`] iterates all of them
+//! together so callers do not need to know which version they read.
 
 use c2pa_cbor::Value;
 
@@ -58,14 +61,36 @@ impl GeneratorInfo {
     }
 }
 
+/// Which C2PA claim version a [`Claim`] was decoded from.
+///
+/// Determined by the claim box's own JUMBF label (`c2pa.claim` for v1,
+/// `c2pa.claim.v2` for v2) — a structural fact about which box the claim
+/// came from, not something guessed from which of
+/// [`Claim::assertions`]/[`Claim::created_assertions`] happen to be
+/// populated.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ClaimVersion {
+    /// A v1 claim: assertions in a flat [`Claim::assertions`] list.
+    V1,
+
+    /// A v2 claim: assertions split into [`Claim::created_assertions`]
+    /// and [`Claim::gathered_assertions`].
+    #[default]
+    V2,
+}
+
 /// A decoded C2PA claim.
 ///
-/// Every field is optional: a claim that omits one is structurally valid
-/// CBOR, and whether the omission is *legal* is a validation question
-/// (roadmap step 4) rather than a decoding one.
+/// Every field but [`Self::version`] is optional: a claim that omits one
+/// is structurally valid CBOR, and whether the omission is *legal* is a
+/// validation question (roadmap step 4) rather than a decoding one.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct Claim {
+    /// Which claim version this claim was decoded from.
+    pub version: ClaimVersion,
+
     /// `dc:title` — human-readable title of the asset.
     pub title: Option<String>,
 
@@ -89,7 +114,36 @@ pub struct Claim {
 
     /// `assertions` — hashed references to the assertions this claim
     /// covers.
+    ///
+    /// Populated for a v1 claim; empty for a v2 claim, which uses
+    /// [`Self::created_assertions`] and [`Self::gathered_assertions`]
+    /// instead. Use [`Self::assertion_references`] to iterate assertion
+    /// references without checking the claim's version.
     pub assertions: Vec<HashedUri>,
+
+    /// `created_assertions` — hashed references to assertions created by
+    /// this claim's generator, in a v2 claim.
+    ///
+    /// Empty for a v1 claim, which uses [`Self::assertions`] instead.
+    pub created_assertions: Vec<HashedUri>,
+
+    /// `gathered_assertions` — hashed references to assertions gathered
+    /// from a prior manifest, in a v2 claim.
+    ///
+    /// Empty for a v1 claim, which uses [`Self::assertions`] instead.
+    pub gathered_assertions: Vec<HashedUri>,
+}
+
+impl Claim {
+    /// Iterates every assertion reference this claim covers, regardless of
+    /// whether it is a v1 claim (`assertions`) or a v2 claim
+    /// (`created_assertions` and `gathered_assertions`).
+    pub fn assertion_references(&self) -> impl Iterator<Item = &HashedUri> {
+        self.assertions
+            .iter()
+            .chain(self.created_assertions.iter())
+            .chain(self.gathered_assertions.iter())
+    }
 }
 
 /// One entry of a claim's `claim_generator_info`.
@@ -118,15 +172,20 @@ pub struct HashedUri {
     pub alg: Option<String>,
 }
 
-/// Decodes a claim from the CBOR payload of a `c2pa.claim` box.
-pub(crate) fn decode(cbor: &[u8]) -> Result<Claim, ClaimError> {
+/// Decodes a claim from the CBOR payload of a claim box, tagging the
+/// result with the claim version its caller determined from the box's
+/// JUMBF label.
+pub(crate) fn decode(cbor: &[u8], version: ClaimVersion) -> Result<Claim, ClaimError> {
     // `from_slice` bounds allocation and rejects trailing bytes, which
     // suits a claim box payload: exactly one CBOR item, from an untrusted
     // source.
     let value: Value = c2pa_cbor::from_slice(cbor).map_err(|_| ClaimError::MalformedCbor)?;
     let map = value.as_map().ok_or(ClaimError::NotAMap)?;
 
-    let mut claim = Claim::default();
+    let mut claim = Claim {
+        version,
+        ..Claim::default()
+    };
 
     for (key, value) in map {
         let Some(key) = key.as_str() else {
@@ -154,12 +213,14 @@ pub(crate) fn decode(cbor: &[u8]) -> Result<Claim, ClaimError> {
                     .collect::<Result<_, _>>()?;
             }
 
-            "assertions" => {
-                let entries = value.as_array().ok_or(ClaimError::UnexpectedType {
-                    field: "assertions",
-                })?;
+            "assertions" => claim.assertions = hashed_uri_array(value, "assertions")?,
 
-                claim.assertions = entries.iter().map(hashed_uri).collect::<Result<_, _>>()?;
+            "created_assertions" => {
+                claim.created_assertions = hashed_uri_array(value, "created_assertions")?
+            }
+
+            "gathered_assertions" => {
+                claim.gathered_assertions = hashed_uri_array(value, "gathered_assertions")?
             }
 
             // Unknown fields are ignored: a newer writer may include fields
@@ -196,6 +257,20 @@ fn generator_info(value: &Value) -> Result<GeneratorInfo, ClaimError> {
     }
 
     Ok(info)
+}
+
+/// Decodes a CBOR array of hashed-URI references, naming the field if it is
+/// not itself an array.
+///
+/// Errors within an individual entry are still reported under the generic
+/// `assertions.*` names `hashed_uri` uses, regardless of which of the
+/// three top-level array fields it was decoded from: they identify the
+/// malformed hashed-URI shape, not which list it lives in.
+fn hashed_uri_array(value: &Value, field: &'static str) -> Result<Vec<HashedUri>, ClaimError> {
+    let entries = value
+        .as_array()
+        .ok_or(ClaimError::UnexpectedType { field })?;
+    entries.iter().map(hashed_uri).collect()
 }
 
 /// Decodes one hashed-URI reference.
@@ -300,8 +375,9 @@ mod tests {
             (text_value("future_field"), Value::Integer(42)),
         ]);
 
-        let decoded = decode(&encode(&claim)).unwrap();
+        let decoded = decode(&encode(&claim), ClaimVersion::V1).unwrap();
 
+        assert_eq!(decoded.version, ClaimVersion::V1);
         assert_eq!(decoded.title.as_deref(), Some("C.jpg"));
         assert_eq!(decoded.format.as_deref(), Some("image/jpeg"));
         assert_eq!(decoded.instance_id.as_deref(), Some("xmp:iid:1234"));
@@ -329,11 +405,106 @@ mod tests {
         );
         assert_eq!(decoded.assertions[0].hash, vec![0xab; 32]);
         assert_eq!(decoded.assertions[0].alg, None);
+
+        assert!(decoded.created_assertions.is_empty());
+        assert!(decoded.gathered_assertions.is_empty());
+        assert_eq!(decoded.assertion_references().count(), 1);
+    }
+
+    #[test]
+    fn decodes_a_v2_claim_with_created_and_gathered_assertions() {
+        let claim = map(vec![
+            (text_value("instanceID"), text_value("xmp:iid:1234")),
+            (
+                text_value("claim_generator_info"),
+                Value::Array(vec![map(vec![(text_value("name"), text_value("test"))])]),
+            ),
+            (
+                text_value("created_assertions"),
+                Value::Array(vec![map(vec![
+                    (
+                        text_value("url"),
+                        text_value("self#jumbf=c2pa.assertions/c2pa.actions"),
+                    ),
+                    (text_value("hash"), Value::Bytes(vec![0xab; 32])),
+                ])]),
+            ),
+            (
+                text_value("gathered_assertions"),
+                Value::Array(vec![map(vec![
+                    (
+                        text_value("url"),
+                        text_value("self#jumbf=c2pa.assertions/c2pa.hash.data"),
+                    ),
+                    (text_value("hash"), Value::Bytes(vec![0xcd; 32])),
+                ])]),
+            ),
+        ]);
+
+        let decoded = decode(&encode(&claim), ClaimVersion::V2).unwrap();
+
+        assert_eq!(decoded.version, ClaimVersion::V2);
+        assert!(decoded.assertions.is_empty());
+
+        assert_eq!(decoded.created_assertions.len(), 1);
+        assert_eq!(
+            decoded.created_assertions[0].url,
+            "self#jumbf=c2pa.assertions/c2pa.actions"
+        );
+        assert_eq!(decoded.created_assertions[0].hash, vec![0xab; 32]);
+
+        assert_eq!(decoded.gathered_assertions.len(), 1);
+        assert_eq!(
+            decoded.gathered_assertions[0].url,
+            "self#jumbf=c2pa.assertions/c2pa.hash.data"
+        );
+        assert_eq!(decoded.gathered_assertions[0].hash, vec![0xcd; 32]);
+
+        let references: Vec<_> = decoded.assertion_references().map(|r| &r.url).collect();
+        assert_eq!(
+            references,
+            vec![
+                "self#jumbf=c2pa.assertions/c2pa.actions",
+                "self#jumbf=c2pa.assertions/c2pa.hash.data",
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_wrong_field_type_for_created_assertions() {
+        assert_eq!(
+            decode(
+                &encode(&map(vec![(
+                    text_value("created_assertions"),
+                    text_value("not-an-array"),
+                )])),
+                ClaimVersion::V2
+            ),
+            Err(ClaimError::UnexpectedType {
+                field: "created_assertions"
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_wrong_field_type_for_gathered_assertions() {
+        assert_eq!(
+            decode(
+                &encode(&map(vec![(
+                    text_value("gathered_assertions"),
+                    text_value("not-an-array"),
+                )])),
+                ClaimVersion::V2
+            ),
+            Err(ClaimError::UnexpectedType {
+                field: "gathered_assertions"
+            })
+        );
     }
 
     #[test]
     fn decodes_a_minimal_claim() {
-        let decoded = decode(&encode(&map(vec![]))).unwrap();
+        let decoded = decode(&encode(&map(vec![])), ClaimVersion::V2).unwrap();
         assert_eq!(decoded, Claim::default());
     }
 
@@ -345,7 +516,10 @@ mod tests {
         ]);
 
         assert_eq!(
-            decode(&encode(&claim)).unwrap().title.as_deref(),
+            decode(&encode(&claim), ClaimVersion::V1)
+                .unwrap()
+                .title
+                .as_deref(),
             Some("kept")
         );
     }
@@ -363,7 +537,7 @@ mod tests {
             ])]),
         )]);
 
-        let decoded = decode(&encode(&claim)).unwrap();
+        let decoded = decode(&encode(&claim), ClaimVersion::V1).unwrap();
         assert_eq!(decoded.assertions[0].alg.as_deref(), Some("sha512"));
         assert_eq!(decoded.assertions[0].hash, vec![1, 2, 3]);
     }
@@ -378,7 +552,7 @@ mod tests {
             ])]),
         )]);
 
-        let decoded = decode(&encode(&claim)).unwrap();
+        let decoded = decode(&encode(&claim), ClaimVersion::V1).unwrap();
         assert_eq!(
             decoded.claim_generator_info[0].name.as_deref(),
             Some("tool")
@@ -388,13 +562,16 @@ mod tests {
 
     #[test]
     fn rejects_malformed_cbor() {
-        assert_eq!(decode(&[0xff, 0xff]), Err(ClaimError::MalformedCbor));
+        assert_eq!(
+            decode(&[0xff, 0xff], ClaimVersion::V1),
+            Err(ClaimError::MalformedCbor)
+        );
     }
 
     #[test]
     fn rejects_non_map_claim() {
         assert_eq!(
-            decode(&encode(&Value::Array(vec![]))),
+            decode(&encode(&Value::Array(vec![])), ClaimVersion::V1),
             Err(ClaimError::NotAMap)
         );
     }
@@ -431,7 +608,7 @@ mod tests {
 
         for (value, field) in cases {
             assert_eq!(
-                decode(&encode(&value)),
+                decode(&encode(&value), ClaimVersion::V1),
                 Err(ClaimError::UnexpectedType { field }),
                 "expected {field} to be rejected"
             );
@@ -449,7 +626,7 @@ mod tests {
         )]);
 
         assert_eq!(
-            decode(&encode(&claim)),
+            decode(&encode(&claim), ClaimVersion::V1),
             Err(ClaimError::UnexpectedType {
                 field: "assertions.url"
             })

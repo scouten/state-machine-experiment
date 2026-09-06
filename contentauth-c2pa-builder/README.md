@@ -54,8 +54,8 @@ changes and `replace_payload` always succeeds — see
 
 ## Status and scope
 
-Builds one manifest (no ingredients, no update manifests), a
-`c2pa.hash.data` hard binding (the only binding
+Builds one manifest (no ingredients, no update manifests) as a C2PA v2
+claim, with a `c2pa.hash.data` hard binding (the only binding
 `contentauth-c2pa-reader` validates today), caller-supplied opaque
 assertions, every C2PA-permitted signing algorithm, and an optional RFC
 3161 timestamp. Every manifest this crate builds is exercised, in
@@ -64,10 +64,21 @@ round-tripping it through `contentauth-c2pa-reader` and checking that it
 reads back as trusted — that round trip, through an independently-written
 reader, is this crate's primary correctness proof.
 
+This crate never builds a v1 claim: v1 is a read-only concern, for
+interoperating with manifests this crate did not write.
+
+Each caller-supplied assertion carries an `AssertionKind` — `Created` or
+`Gathered` — that the host sets: the host supplies the assertion's
+content, so it is the one that knows whether this claim's generator
+authored it or gathered it from elsewhere, and this crate has no way to
+infer that on its own. The claim's `created_assertions` and
+`gathered_assertions` are populated accordingly; the hard binding this
+session adds itself is always `Created`.
+
 Deliberately out of scope for now: ingredients and update manifests,
-BMFF/box-hash hard bindings, OCSP, claim v2's created/gathered-assertions
-split, and certificate decoding or validation (certificates are passed
-through opaquely into the COSE `x5chain`; the host vouches for them).
+BMFF/box-hash hard bindings, OCSP, and certificate decoding or validation
+(certificates are passed through opaquely into the COSE `x5chain`; the
+host vouches for them).
 
 ## Request vocabulary
 

@@ -209,6 +209,41 @@ pub(crate) fn claim_box_with_alg(
     superbox(type_uuid(*b"c2cl"), "c2pa.claim", &[boxed(b"cbor", &cbor)])
 }
 
+/// Builds a v2-shaped claim box: `created_assertions` and
+/// `gathered_assertions` in place of v1's flat `assertions` list.
+pub(crate) fn claim_box_v2(
+    title: &str,
+    created_assertions: Vec<Value>,
+    gathered_assertions: Vec<Value>,
+) -> Vec<u8> {
+    let mut fields = BTreeMap::from([(
+        Value::Text("dc:title".to_string()),
+        Value::Text(title.to_string()),
+    )]);
+
+    if !created_assertions.is_empty() {
+        fields.insert(
+            Value::Text("created_assertions".to_string()),
+            Value::Array(created_assertions),
+        );
+    }
+
+    if !gathered_assertions.is_empty() {
+        fields.insert(
+            Value::Text("gathered_assertions".to_string()),
+            Value::Array(gathered_assertions),
+        );
+    }
+
+    let cbor = c2pa_cbor::to_vec(&Value::Map(fields)).unwrap();
+
+    superbox(
+        type_uuid(*b"c2cl"),
+        "c2pa.claim.v2",
+        &[boxed(b"cbor", &cbor)],
+    )
+}
+
 /// Builds one hashed-URI reference to an assertion.
 ///
 /// The hash is computed here over the assertion superbox's payload — the

@@ -87,7 +87,7 @@ pub mod validation;
 pub(crate) mod test_support;
 
 pub use cert::{BasicConstraints, CertError, Certificate, KeyUsage};
-pub use claim::{Claim, ClaimError, GeneratorInfo, HashedUri};
+pub use claim::{Claim, ClaimError, ClaimVersion, GeneratorInfo, HashedUri};
 pub use contentauth_c2pa_primitives::{ByteRange, HashAlgorithm, HostError, SigningAlg, StreamId};
 pub use contentauth_state_machine::{HostRequest, ProtocolError, RequestId, Session};
 pub use data_hash::DataHash;

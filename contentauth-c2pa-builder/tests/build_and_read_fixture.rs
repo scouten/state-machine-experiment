@@ -26,7 +26,7 @@ use contentauth_c2pa_builder::{
     GeneratorInfo, HashAlgorithm, SigningAlg, TimestampSettings,
 };
 use contentauth_c2pa_reader::{
-    ReadHostReply, ReadRequest, ReadSession, ReadSettings, ReadStep, ValidationState,
+    ClaimVersion, ReadHostReply, ReadRequest, ReadSession, ReadSettings, ReadStep, ValidationState,
 };
 use contentauth_state_machine::Session;
 
@@ -223,6 +223,7 @@ fn a_signed_manifest_with_no_assertions_reads_back_as_trusted() {
 
     let active = parsed.active().unwrap();
     assert_eq!(active.label, "urn:uuid:test-manifest");
+    assert_eq!(active.claim.version, ClaimVersion::V2);
     assert_eq!(active.claim.title.as_deref(), Some("test.jpg"));
     assert_eq!(active.claim.format.as_deref(), Some("image/jpeg"));
     assert_eq!(
@@ -249,6 +250,44 @@ fn a_manifest_with_a_custom_assertion_carries_it_through() {
 
     let active = parsed.active().unwrap();
     assert_eq!(active.assertion_labels, ["c2pa.actions", "c2pa.hash.data"]);
+}
+
+#[test]
+fn created_and_gathered_assertions_land_in_the_right_claim_lists() {
+    let created = Assertion::new("c2pa.actions", vec![0xa0]);
+    let gathered = Assertion::gathered("c2pa.metadata", vec![0xa0]);
+
+    let mut host = Host::new(5000);
+    let session = BuilderSession::new(settings(vec![created, gathered], None));
+    let (asset, _report) = host.build(session);
+
+    let parsed = read_back_with_manifest(&asset, host.manifest_range.unwrap());
+    assert_eq!(parsed.validation_state, Some(ValidationState::Trusted));
+
+    let active = parsed.active().unwrap();
+    assert_eq!(
+        active.assertion_labels,
+        ["c2pa.actions", "c2pa.metadata", "c2pa.hash.data"]
+    );
+
+    // created_assertions: the caller-supplied "c2pa.actions" plus this
+    // session's own hard binding — never gathered.
+    assert_eq!(active.claim.created_assertions.len(), 2);
+    assert!(active
+        .claim
+        .created_assertions
+        .iter()
+        .any(|r| r.url.ends_with("c2pa.actions")));
+    assert!(active
+        .claim
+        .created_assertions
+        .iter()
+        .any(|r| r.url.ends_with("c2pa.hash.data")));
+
+    assert_eq!(active.claim.gathered_assertions.len(), 1);
+    assert!(active.claim.gathered_assertions[0]
+        .url
+        .ends_with("c2pa.metadata"));
 }
 
 #[test]

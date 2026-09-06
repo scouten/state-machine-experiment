@@ -54,19 +54,23 @@
 //!
 //! Experimental, and incomplete by design — mirroring
 //! `contentauth-c2pa-reader`'s own posture. What works today: a single
-//! manifest (no ingredients, no update manifests), a `c2pa.hash.data`
-//! hard binding (the only binding the reader crate validates today),
-//! caller-supplied opaque assertions, every C2PA-permitted signing
+//! manifest (no ingredients, no update manifests) built as a C2PA v2
+//! claim, a `c2pa.hash.data` hard binding (the only binding the reader
+//! crate validates today), caller-supplied opaque assertions — each
+//! marked [`AssertionKind::Created`] or [`AssertionKind::Gathered`] by
+//! the host, landing in the claim's `created_assertions` or
+//! `gathered_assertions` accordingly — every C2PA-permitted signing
 //! algorithm, and an optional RFC 3161 timestamp. Every manifest this
 //! crate builds is exercised, in its own test suite, by round-tripping it
 //! through `contentauth-c2pa-reader` and checking that it reads back as
 //! [`ValidationState::Trusted`].
 //!
+//! This crate never builds a v1 claim — v1 is a read-only concern.
+//!
 //! Deliberately out of scope for now: ingredients and update manifests,
-//! BMFF/box-hash hard bindings, OCSP, claim v2's created/gathered-
-//! assertions split, and certificate decoding or validation (certificates
-//! are passed through opaquely into the COSE `x5chain`; the host vouches
-//! for them).
+//! BMFF/box-hash hard bindings, OCSP, and certificate decoding or
+//! validation (certificates are passed through opaquely into the COSE
+//! `x5chain`; the host vouches for them).
 //!
 //! [`ValidationState::Trusted`]: https://docs.rs/contentauth-c2pa-reader/latest/contentauth_c2pa_reader/enum.ValidationState.html#variant.Trusted
 
@@ -86,8 +90,8 @@ mod jumbf;
 mod request;
 
 pub use builder::{
-    Assertion, BuilderReport, BuilderSession, BuilderSettings, BuilderStep, GeneratorInfo,
-    TimestampSettings,
+    Assertion, AssertionKind, BuilderReport, BuilderSession, BuilderSettings, BuilderStep,
+    GeneratorInfo, TimestampSettings,
 };
 pub use contentauth_c2pa_primitives::{ByteRange, HashAlgorithm, HostError, SigningAlg, StreamId};
 pub use contentauth_state_machine::{HostRequest, ProtocolError, RequestId, Session};

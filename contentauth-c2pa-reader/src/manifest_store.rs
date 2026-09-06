@@ -27,7 +27,7 @@ use jumbf::{
 
 use crate::{
     chain::PendingChain,
-    claim::{self, Claim},
+    claim::{self, Claim, ClaimVersion},
     data_hash::{self, DataHash},
     error::Error,
     validation::{self, status_code, ValidationStatus},
@@ -64,6 +64,9 @@ pub(crate) const ASSERTIONS_UUID: [u8; 16] = type_uuid(*b"c2as");
 /// Type UUID of a manifest's claim superbox.
 pub(crate) const CLAIM_UUID: [u8; 16] = type_uuid(*b"c2cl");
 
+/// JUMBF label of a v2 claim box, as opposed to a v1 claim's `c2pa.claim`.
+pub(crate) const CLAIM_V2_LABEL: &str = "c2pa.claim.v2";
+
 /// Type UUID of a manifest's claim signature superbox.
 pub(crate) const SIGNATURE_UUID: [u8; 16] = type_uuid(*b"c2cs");
 
@@ -84,9 +87,9 @@ pub struct Manifest {
     /// Labels of the assertions physically present in this manifest's
     /// assertion store, in store order.
     ///
-    /// Reconciling these against the claim's `assertions` list — and
-    /// verifying each assertion's hash — is a validation concern, not a
-    /// reading one.
+    /// Reconciling these against the claim's assertion references (see
+    /// [`Claim::assertion_references`]) — and verifying each assertion's
+    /// hash — is a validation concern, not a reading one.
     pub assertion_labels: Vec<String>,
 
     /// True if the manifest carries a claim signature box.
@@ -208,7 +211,17 @@ fn read_manifest(
         reason: "claim box has no CBOR content",
     })?;
 
-    let claim = claim::decode(claim_cbor).map_err(|source| Error::MalformedClaim {
+    // The claim box's own label is what the C2PA specification uses to
+    // distinguish a v2 claim from a v1 one; anything other than the
+    // reserved v2 label (including no label at all) reads as v1, the
+    // long-standing default.
+    let version = if claim_box.desc.label == Some(CLAIM_V2_LABEL) {
+        ClaimVersion::V2
+    } else {
+        ClaimVersion::V1
+    };
+
+    let claim = claim::decode(claim_cbor, version).map_err(|source| Error::MalformedClaim {
         manifest: label.clone(),
         source,
     })?;
@@ -291,9 +304,9 @@ mod tests {
     use super::*;
     use crate::{
         test_support::{
-            assertion_box, boxed, claim_box, claim_box_with_alg, claim_box_with_assertions,
-            hashed_uri, hashed_uri_with_hash, manifest, manifest_store, manifest_with_claim,
-            superbox,
+            assertion_box, boxed, claim_box, claim_box_v2, claim_box_with_alg,
+            claim_box_with_assertions, hashed_uri, hashed_uri_with_hash, manifest, manifest_store,
+            manifest_with_claim, superbox,
         },
         validation::status_code,
     };
@@ -316,6 +329,7 @@ mod tests {
 
         let m = &parsed.manifests[0];
         assert_eq!(m.label, "urn:uuid:one");
+        assert_eq!(m.claim.version, ClaimVersion::V1);
         assert_eq!(m.claim.title.as_deref(), Some("A.jpg"));
         assert_eq!(m.assertion_labels, ["c2pa.actions", "c2pa.hash.data"]);
         assert!(m.has_signature);
@@ -540,6 +554,42 @@ mod tests {
             status_code::ASSERTION_HASHEDURI_MISMATCH
         );
         assert!(parsed.statuses[0].is_failure());
+    }
+
+    #[test]
+    fn a_v2_claims_created_and_gathered_assertions_are_both_hash_checked() {
+        let created = assertion_box("c2pa.actions");
+        let gathered = assertion_box("c2pa.ingredient");
+
+        let claim = claim_box_v2(
+            "v2.jpg",
+            vec![hashed_uri("c2pa.actions", &created)],
+            vec![hashed_uri("c2pa.ingredient", &gathered)],
+        );
+
+        let bytes = manifest_store(&[manifest_with_claim(
+            "urn:uuid:v2",
+            &[created, gathered],
+            claim,
+        )]);
+
+        let parsed = parse(&bytes).unwrap();
+
+        assert_eq!(parsed.manifests[0].claim.version, ClaimVersion::V2);
+        assert_eq!(parsed.manifests[0].claim.created_assertions.len(), 1);
+        assert_eq!(parsed.manifests[0].claim.gathered_assertions.len(), 1);
+        assert!(parsed.manifests[0].claim.assertions.is_empty());
+
+        assert_eq!(
+            parsed
+                .statuses
+                .iter()
+                .filter(|s| s.code == status_code::ASSERTION_HASHEDURI_MATCH)
+                .count(),
+            2,
+            "both the created and gathered assertion references should be hash-checked"
+        );
+        assert!(parsed.statuses.iter().all(|s| !s.is_failure()));
     }
 
     #[test]

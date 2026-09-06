@@ -57,17 +57,19 @@ pub struct BuilderSettings {
 
     /// Describes the software that generated this manifest.
     ///
-    /// Must contain exactly one entry: a v1 simplification (c2pa-rs itself
-    /// requires exactly one for v2 claims; this crate does not yet support
-    /// more than one for any claim version).
-    pub claim_generator_info: Vec<GeneratorInfo>,
+    /// A single entry: c2pa-rs itself requires exactly one for v2 claims,
+    /// and this crate does not yet support more than one. A future version
+    /// of this crate that does would widen this to a `Vec<GeneratorInfo>`.
+    pub claim_generator_info: GeneratorInfo,
 
     /// Assertions to embed, beyond the hard binding this session adds
     /// itself.
     ///
     /// Each is opaque, pre-encoded CBOR: this crate does not yet model
     /// specific assertion schemas (actions, thumbnails, …) — see this
-    /// crate's README.
+    /// crate's README. Each also carries an [`AssertionKind`], set by the
+    /// host, saying whether this claim's generator created it or gathered
+    /// it from elsewhere.
     pub assertions: Vec<Assertion>,
 
     /// The algorithm to sign the claim with.
@@ -113,7 +115,7 @@ impl BuilderSettings {
             title: None,
             instance_id: instance_id.into(),
             manifest_label: manifest_label.into(),
-            claim_generator_info: vec![claim_generator_info],
+            claim_generator_info,
             assertions: Vec::new(),
             signing_alg,
             certificates,
@@ -166,17 +168,52 @@ pub struct Assertion {
 
     /// The assertion's CBOR-encoded content.
     pub cbor: Vec<u8>,
+
+    /// Whether this claim's generator created the assertion itself, or
+    /// gathered it from elsewhere — for example, content produced by
+    /// another tool or plugin, or otherwise not authored fresh for this
+    /// claim. The host supplies the assertion's content in the first
+    /// place, so it is the one that knows which; this crate has no way to
+    /// infer it. Determines whether the assertion is encoded in the
+    /// claim's `created_assertions` or `gathered_assertions`.
+    pub kind: AssertionKind,
 }
 
 impl Assertion {
-    /// Creates an assertion with the given label and pre-encoded CBOR
-    /// content.
+    /// Creates an assertion this claim's generator created itself, with
+    /// the given label and pre-encoded CBOR content.
     pub fn new(label: impl Into<String>, cbor: Vec<u8>) -> Self {
         Self {
             label: label.into(),
             cbor,
+            kind: AssertionKind::Created,
         }
     }
+
+    /// Creates an assertion gathered from elsewhere, rather than created
+    /// by this claim's generator, with the given label and pre-encoded
+    /// CBOR content.
+    pub fn gathered(label: impl Into<String>, cbor: Vec<u8>) -> Self {
+        Self {
+            label: label.into(),
+            cbor,
+            kind: AssertionKind::Gathered,
+        }
+    }
+}
+
+/// Whether an assertion was created by this claim's generator or
+/// gathered from elsewhere. See [`Assertion::kind`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum AssertionKind {
+    /// Created by this claim's generator; encoded in the claim's
+    /// `created_assertions`.
+    Created,
+
+    /// Gathered from elsewhere rather than created by this claim's
+    /// generator; encoded in the claim's `gathered_assertions`.
+    Gathered,
 }
 
 /// Describes the software that generated a claim.
@@ -361,11 +398,6 @@ impl BuilderSession {
         if self.settings.certificates.is_empty() {
             return Err(Error::NoCertificates);
         }
-        if self.settings.claim_generator_info.len() != 1 {
-            return Err(Error::InvalidGeneratorInfoCount(
-                self.settings.claim_generator_info.len(),
-            ));
-        }
 
         let mut assertion_labels = std::collections::HashSet::from([data_hash::LABEL]);
         for assertion in &self.settings.assertions {
@@ -376,7 +408,7 @@ impl BuilderSession {
 
         let signature_len =
             cose::signature_len(self.settings.signing_alg, self.settings.rsa_signature_len)?;
-        let generator = &self.settings.claim_generator_info[0];
+        let generator = &self.settings.claim_generator_info;
 
         let assertions: Vec<AssertionInput<'_>> = self
             .settings
@@ -385,6 +417,7 @@ impl BuilderSession {
             .map(|a| AssertionInput {
                 label: &a.label,
                 cbor: &a.cbor,
+                kind: a.kind,
             })
             .collect();
 
