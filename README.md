@@ -50,8 +50,8 @@ experiment grows.
   case of a caller with plain synchronous file access.
 * [`contentauth-c2pa-file-builder`](contentauth-c2pa-file-builder) — the
   write-side mirror: a sans-I/O session gluing a `contentauth-c2pa-format`
-  handler to the builder above, plus a `Read + Seek` and signing-function
-  host for the common case.
+  handler to the builder above, plus a `Read + Seek` / `Read + Write +
+  Seek` and signing-function host for the common case.
 
 ## Building
 

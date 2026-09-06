@@ -139,3 +139,58 @@ fn an_unwritable_output_path_is_reported_as_an_io_error() {
         contentauth_c2pa_file_builder::Error::Io { .. }
     ));
 }
+
+/// A build that fails after the temporary file has already been created —
+/// here, a signer that always refuses — must not leave that temporary
+/// file behind, nor touch `output_path` at all: the rename into place
+/// only ever happens once the whole build has succeeded.
+#[test]
+fn a_failed_build_removes_the_temporary_file_and_leaves_the_output_untouched() {
+    let output: PathBuf = [env!("CARGO_TARGET_TMPDIR"), "never-signed.jpg"]
+        .iter()
+        .collect();
+    let temp = temp_path_for(&output);
+    let _ = std::fs::remove_file(&output);
+    let _ = std::fs::remove_file(&temp);
+
+    fn never_signs(_alg: SigningAlg, _data: &[u8]) -> Result<Vec<u8>, HostError> {
+        Err(HostError::new("this test never signs anything"))
+    }
+
+    let err = build_and_sign_file(JpegFormat, C_JPG_PATH, &output, settings(), never_signs)
+        .expect_err("a build whose signer always refuses cannot succeed");
+
+    assert!(matches!(
+        err,
+        contentauth_c2pa_file_builder::Error::Build(_)
+    ));
+    assert!(!output.exists(), "the output path must be untouched");
+    assert!(!temp.exists(), "the temporary file must be cleaned up");
+}
+
+/// A failure renaming the finished temporary file into place — here,
+/// because `output_path` is an existing directory rather than a file — is
+/// reported like any other I/O error, not silently swallowed.
+#[test]
+fn a_rename_failure_is_reported_as_an_io_error() {
+    let output: PathBuf = [env!("CARGO_TARGET_TMPDIR"), "signed-as-a-directory.jpg"]
+        .iter()
+        .collect();
+    std::fs::create_dir_all(&output).unwrap();
+
+    let err = build_and_sign_file(JpegFormat, C_JPG_PATH, &output, settings(), sign)
+        .expect_err("renaming onto an existing directory cannot succeed");
+
+    assert!(matches!(
+        err,
+        contentauth_c2pa_file_builder::Error::Io { .. }
+    ));
+}
+
+/// Mirrors the crate's own private `temp_path_for`, so this test can check
+/// for the temporary file without depending on its internals directly.
+fn temp_path_for(output_path: &std::path::Path) -> PathBuf {
+    let mut temp = output_path.as_os_str().to_owned();
+    temp.push(".c2pa-tmp");
+    PathBuf::from(temp)
+}

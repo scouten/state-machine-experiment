@@ -32,33 +32,30 @@
 //! [`FileBuilderSession`] is the primary interface: it composes a
 //! handler's `plan_embed`/`commit` with a [`BuilderSession`], and speaks a
 //! small request vocabulary, [`FileBuilderRequest`], to whatever host
-//! drives it. `ReservePlaceholder`, `AssetLength`, `AssetBytes`, and
-//! `CommitManifest` are all answered internally — this session holds the
-//! source asset (and the output it is assembling) in memory once read, so
-//! none of that needs to leave the session. Only [`FileBuilderRequest::Sign`]
-//! and [`FileBuilderRequest::Timestamp`] ever reach the host: a signing key
-//! and an RFC 3161 authority round trip are not things this crate, or any
-//! format handler, can stand in for.
+//! drives it. It never buffers the source or output asset itself: an
+//! [`EmbedPlan`](contentauth_c2pa_format::EmbedPlan)'s edits are walked
+//! one at a time, each becoming a [`FileBuilderRequest::Read`] against
+//! [`FileBuilderSession::SOURCE_STREAM`] or a
+//! [`FileBuilderRequest::Write`] against
+//! [`FileBuilderSession::OUTPUT_STREAM`] — and `AssetLength`/`AssetBytes`,
+//! needed to hash the output for the hard binding, are forwarded as plain
+//! reads of the output stream once it has been written. Only
+//! [`FileBuilderRequest::Sign`] and [`FileBuilderRequest::Timestamp`] ever
+//! reach the host as themselves: a signing key and an RFC 3161 authority
+//! round trip are not things this crate, or any format handler, can stand
+//! in for.
 //!
 //! [`build_and_sign`] and [`build_and_sign_file`] are a host for exactly
 //! that session, for the common case: a caller with plain, synchronous
-//! `Read + Seek` access to the source asset and a plain signing function
-//! (no timestamping). Reach for [`FileBuilderSession`] directly once
-//! either stops being true.
+//! `Read + Seek` access to the source asset, `Read + Write + Seek` access
+//! to write the output (read-back is needed for the hashing above), and a
+//! plain signing function (no timestamping). Reach for [`FileBuilderSession`]
+//! directly once any of that stops being true.
 //!
-//! # Why the whole asset, not `Read + Seek`, on the output side
-//!
-//! Unlike `contentauth-c2pa-file-reader`, this crate cannot answer
-//! `AssetBytes`/`AssetLength` from a `Read + Seek` source alone:
-//! `EmbedPlan::materialize` — the only way this workspace's contract
-//! between a session and a format handler turns a plan into bytes — takes
-//! the whole source asset and produces the whole output asset, not a
-//! range at a time. So this session reads the whole source into memory
-//! once (one `Length` and one `Read` to its host), then holds the growing
-//! output in memory itself. A future streaming orchestrator that hashes
-//! straight from the plan, the way `contentauth-c2pa-format`'s own docs
-//! describe, would lift this limit; nothing here needs the asset to be
-//! reasonably sized in the meantime except this design choice.
+//! [`build_and_sign_file`] additionally never leaves a partial or corrupt
+//! file at the requested output path: it builds into a temporary file
+//! beside it and renames it into place only once the build succeeds,
+//! deleting the temporary file on any failure instead.
 //!
 //! # What this does not do
 //!
@@ -87,8 +84,8 @@ mod error;
 mod session;
 
 use std::{
-    io::{Read, Seek},
-    path::Path,
+    io::{Read, Seek, Write},
+    path::{Path, PathBuf},
 };
 
 pub use contentauth_c2pa_builder::{
@@ -100,38 +97,48 @@ pub use error::Error;
 pub use session::{FileBuilderReply, FileBuilderReport, FileBuilderRequest, FileBuilderSession};
 
 /// Builds and signs a C2PA manifest store for `source`, per `settings`,
-/// calling `sign` whenever the claim signature needs signing.
+/// writing the result to `output` and calling `sign` whenever the claim
+/// signature needs signing.
 ///
 /// A synchronous host for [`FileBuilderSession`]: `handler` plans and
-/// commits the embedding within `source`'s container format, `source`
-/// itself answers the one read this session needs to do its own work
-/// (everything else it computes from the copy it keeps), and `sign`
-/// answers every [`FileBuilderRequest::Sign`] the build issues — mirroring
-/// [`contentauth_c2pa_builder::BuilderRequest::Sign`]: sign the exact
-/// bytes handed to it with the given algorithm and return the raw
-/// signature.
+/// commits the embedding within `source`'s container format, `source` and
+/// `output` answer every `Read`/`Length`/`Write` this session issues
+/// (`output` must also support reading back what has been written to it,
+/// since this session hashes the asset it assembles rather than buffering
+/// it), and `sign` answers every [`FileBuilderRequest::Sign`] the build
+/// issues — mirroring [`contentauth_c2pa_builder::BuilderRequest::Sign`]:
+/// sign the exact bytes handed to it with the given algorithm and return
+/// the raw signature.
 ///
 /// Does not support [`BuilderSettings::timestamp`]: a
 /// [`FileBuilderRequest::Timestamp`] request fails outright, since
 /// answering it needs a real RFC 3161 authority round trip this function
 /// has no way to perform. Reach for [`FileBuilderSession`] directly for
-/// that, or for a source that cannot be read synchronously.
-pub fn build_and_sign<H, R>(
+/// that, or for source/output access that cannot be driven synchronously.
+pub fn build_and_sign<H, S, O>(
     handler: H,
-    source: R,
+    source: S,
+    output: O,
     settings: BuilderSettings,
     sign: impl FnMut(SigningAlg, &[u8]) -> Result<Vec<u8>, HostError>,
 ) -> Result<FileBuilderReport, Error>
 where
     H: FormatHandler + Send,
-    R: Read + Seek,
+    S: Read + Seek,
+    O: Read + Write + Seek,
 {
-    drive::build(handler, source, settings, sign)
+    drive::build(handler, source, output, settings, sign)
 }
 
 /// Opens `source_path`, builds and signs a manifest for it as
-/// [`build_and_sign`], then writes the complete output asset to
+/// [`build_and_sign`], then atomically publishes the result at
 /// `output_path`.
+///
+/// The output is assembled in a temporary file next to `output_path` —
+/// `output_path` with a `.c2pa-tmp` suffix — which is renamed into place
+/// only once the build succeeds. A failure of any kind, including one
+/// from `sign`, leaves `output_path` untouched and removes the temporary
+/// file rather than publishing a partial asset.
 pub fn build_and_sign_file<H>(
     handler: H,
     source_path: impl AsRef<Path>,
@@ -148,13 +155,43 @@ where
         source,
     })?;
 
-    let report = build_and_sign(handler, source, settings, sign)?;
-
     let output_path = output_path.as_ref();
-    std::fs::write(output_path, &report.asset).map_err(|source| Error::Io {
+    let temp_path = temp_path_for(output_path);
+
+    let temp_file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&temp_path)
+        .map_err(|source| Error::Io {
+            path: temp_path.clone(),
+            source,
+        })?;
+
+    let report = match build_and_sign(handler, source, temp_file, settings, sign) {
+        Ok(report) => report,
+        Err(err) => {
+            // Best effort: an inability to clean up the temporary file
+            // does not change the fact that the build itself failed, and
+            // `output_path` is untouched either way.
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(err);
+        }
+    };
+
+    std::fs::rename(&temp_path, output_path).map_err(|source| Error::Io {
         path: output_path.to_path_buf(),
         source,
     })?;
 
     Ok(report)
+}
+
+/// The temporary file [`build_and_sign_file`] assembles the output in,
+/// before renaming it into place at `output_path`.
+fn temp_path_for(output_path: &Path) -> PathBuf {
+    let mut temp = output_path.as_os_str().to_owned();
+    temp.push(".c2pa-tmp");
+    PathBuf::from(temp)
 }

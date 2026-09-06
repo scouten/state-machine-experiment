@@ -24,17 +24,27 @@ This crate is that glue for the write side.
 `FileBuilderSession` is the primary interface: a sans-I/O session that
 composes a handler's `plan_embed`/`commit` with a `BuilderSession` and
 speaks a small request vocabulary, `FileBuilderRequest`, to whatever host
-drives it. `ReservePlaceholder`, `AssetLength`, `AssetBytes`, and
-`CommitManifest` are all answered internally — this session holds the
-source asset, and the output it is assembling, in memory once read, so
-none of that needs to leave the session. Only `Sign` and `Timestamp` ever
-reach the host: a signing key and an RFC 3161 authority round trip are
-not things this crate, or any format handler, can stand in for.
+drives it. It never buffers the source or output asset itself — it never
+calls `EmbedPlan::materialize` (the in-memory reference implementation
+for turning a plan into bytes); instead it walks a plan's edits directly,
+issuing a `FileBuilderRequest::Read` against `SOURCE_STREAM` for each
+range it needs to copy through and a `FileBuilderRequest::Write` against
+`OUTPUT_STREAM` for every byte it produces. `AssetLength`/`AssetBytes` —
+needed to hash the output for the hard binding — are forwarded the same
+way, as plain reads of the output stream once it has been written. Only
+`Sign` and `Timestamp` ever reach the host as themselves: a signing key
+and an RFC 3161 authority round trip are not things this crate, or any
+format handler, can stand in for.
 
 `build_and_sign` and `build_and_sign_file` are a host for exactly that
 session, for the common case: a caller with plain, synchronous
-`Read + Seek` access to the source asset and a plain signing function —
-no timestamping.
+`Read + Seek` access to the source asset, `Read + Write + Seek` access to
+write the output (read-back is needed for the hashing above), and a plain
+signing function — no timestamping. `build_and_sign_file` additionally
+never leaves a partial or corrupt file at the requested output path: it
+builds into a temporary file beside it and renames that into place only
+once the build succeeds, deleting the temporary file on any failure
+instead.
 
 ```rust,no_run
 use contentauth_c2pa_builder::{BuilderSettings, GeneratorInfo, SigningAlg};
@@ -57,30 +67,17 @@ let report = build_and_sign_file(
     settings,
     |_alg, data| todo!("sign `data` with this host's private key"),
 )?;
-println!("wrote {} bytes", report.asset.len());
+println!("manifest store is {} bytes", report.manifest.len());
 # Ok::<(), contentauth_c2pa_file_builder::Error>(())
 ```
-
-## Why the whole asset, not `Read + Seek`, on the output side
-
-Unlike the reader crate, this one cannot answer `AssetBytes`/`AssetLength`
-from a `Read + Seek` source alone: `EmbedPlan::materialize` — the only way
-this workspace's contract between a session and a format handler turns a
-plan into bytes — takes the whole source asset and produces the whole
-output asset, not a range at a time. So `FileBuilderSession` reads the
-whole source into memory once (one `Length` and one `Read` to its host),
-then holds the growing output itself. A future streaming orchestrator
-that hashes straight from the plan, the way `contentauth-c2pa-format`'s
-own docs describe, would lift this; nothing here needs the asset to stay
-a reasonable size in the meantime except this design choice.
 
 ## What this does not do
 
 It builds one manifest into one asset — no ingredients, no update
 manifests, no policy for an asset that already carries a store
-(`plan_embed` always replaces it). A host that needs any of that wants
-the two-stream (source/output) model a future orchestrator crate would
-provide.
+(`plan_embed` always replaces it). A host that needs any of that wants a
+future orchestrator crate able to juggle more than the two streams
+(source, output) this one already does.
 
 ## Building
 

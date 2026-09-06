@@ -13,7 +13,12 @@ categories = ["api-bindings"]
 publish = false
 
 [dependencies]
-contentauth-state-machine = { path = "../contentauth-state-machine" }
+# `test-util` exposes `SessionCore::fulfill_unchecked` outside this crate,
+# for this crate's own tests that need to exercise a defense-in-depth
+# check against a reply payload `fulfill` itself would reject.
+contentauth-state-machine = { path = "../contentauth-state-machine", features = [
+    "test-util",
+] }
 
 # The contract every container-format handler implements: this crate is
 # generic over any `FormatHandler`, not just JPEG.
