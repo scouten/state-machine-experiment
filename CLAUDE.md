@@ -40,12 +40,17 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   c2pa-rs's conventions byte for byte. The template for further
   `contentauth-c2pa-format-*` crates.
 - **`contentauth-c2pa-file-reader`** — the missing glue between the two:
-  reads and validates a manifest store directly from a file, or any
-  `Read + Seek` source, for any `FormatHandler`, by driving that
-  handler's `locate` operation and a `ReadSession` from the same source
-  (`src/drive.rs` in
-  [`contentauth-c2pa-file-reader`](contentauth-c2pa-file-reader/src/drive.rs)).
-  Read-only; a future orchestrator crate would cover writing.
+  `FileReadSession` (`src/session.rs`) is itself a sans-I/O session that
+  composes a `FormatHandler`'s `locate` operation with a `ReadSession`,
+  performing no I/O of its own — its host answers one merged vocabulary,
+  `FileReadRequest::{Read, Length, CurrentDateTime}`, exactly as any
+  other session's host would. `read_manifest`/`read_manifest_from_file`
+  (`src/drive.rs`) are one such host, for a caller with plain
+  synchronous `Read + Seek` access and no need for anything but the wall
+  clock; a host with async, network-backed, or cached access, or its own
+  clock, drives `FileReadSession` directly instead (see
+  [`contentauth-c2pa-file-reader`](contentauth-c2pa-file-reader/examples/custom_host.rs)'s
+  example). Read-only; a future orchestrator crate would cover writing.
 
 Container-format handling is deliberately *outside* the reader and
 builder: they ask their host for "the manifest store's bytes" and to

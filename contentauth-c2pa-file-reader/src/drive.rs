@@ -11,36 +11,33 @@
 // specific language governing permissions and limitations under
 // each license.
 
-//! Drives a [`FormatHandler`] operation and a [`ReadSession`], both against
-//! the same `Read + Seek` source.
+//! A synchronous [`FileReadSession`] host for callers with a plain
+//! `Read + Seek` source and no need for their own clock.
 //!
-//! Neither the reader nor a format handler knows about the other: the
-//! reader asks its host for "the manifest store's bytes" and a handler's
-//! `locate` operation answers exactly that question, but nothing wires them
-//! together except a host. This module is that host, playing it the same
-//! way `contentauth-c2pa-format-jpeg`'s own end-to-end test does by hand,
-//! generalized to any handler and reused as library code instead of test
-//! scaffolding.
+//! This is one possible host, not the only one: [`FileReadSession`] itself
+//! performs no I/O, so a host with asynchronous or network-backed access to
+//! the asset, or that wants to supply something other than the wall clock,
+//! drives it directly instead of going through this module.
 //!
-//! Every request either side issues names an absolute byte range, and
-//! requests are not guaranteed to arrive or be answered in order (the
-//! reader hashes an asset out of sequence when its host does), so this
-//! module seeks for every read rather than assuming a forward-only stream —
-//! the reason `Seek` is part of the bound, not just `Read`.
+//! Every request [`FileReadSession`] issues names an absolute byte range,
+//! not a position relative to a previous request, so this host seeks for
+//! every read rather than assuming forward-only access — the reason `Seek`
+//! is part of the bound, not just `Read`.
 
 use std::{
     io::{self, Read, Seek, SeekFrom},
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use contentauth_c2pa_format::{FormatHandler, FormatOp, IoReply, IoRequest, Step as FormatStep};
+use contentauth_c2pa_format::FormatHandler;
 use contentauth_c2pa_primitives::{ByteRange, HostError};
-use contentauth_c2pa_reader::{
-    ReadHostReply, ReadReport, ReadRequest, ReadSession, ReadSettings, ReadStep,
-};
-use contentauth_state_machine::Session;
+use contentauth_c2pa_reader::{ReadReport, ReadSettings};
+use contentauth_state_machine::{Session, Step};
 
-use crate::error::Error;
+use crate::{
+    error::Error,
+    session::{FileReadReply, FileReadRequest, FileReadSession},
+};
 
 /// Locates and reads the manifest store embedded in `source`, validating it
 /// per `settings`.
@@ -49,86 +46,33 @@ pub(crate) fn read<H: FormatHandler, R: Read + Seek>(
     mut source: R,
     settings: ReadSettings,
 ) -> Result<ReadReport, Error> {
-    let manifest_store = locate(handler, &mut source)?;
+    let mut session = FileReadSession::new(handler, settings);
 
-    let mut session = ReadSession::new(settings);
     loop {
-        if session.advance()? == ReadStep::Complete {
-            return Ok(session.finish()?);
+        if session.advance()? == Step::Complete {
+            return session.finish();
         }
 
         for request in session.outstanding_requests().to_vec() {
-            let reply = read_reply(&mut source, &manifest_store, &request.kind);
+            let reply = answer(&mut source, &request.kind);
             session.fulfill(request.id, reply)?;
         }
     }
 }
 
-/// Runs `handler`'s `locate` operation against `source` and returns the
-/// embedded manifest store's bytes, if any.
-fn locate<H: FormatHandler, R: Read + Seek>(
-    handler: &H,
-    source: &mut R,
-) -> Result<Option<Vec<u8>>, contentauth_c2pa_format::FormatError> {
-    let location = run_format_op(source, handler.locate(ReadSession::PRIMARY_STREAM))?;
-    Ok(location.embedded.map(|manifest| manifest.jumbf))
-}
-
-/// Drives any [`FormatOp`] to completion, answering every [`IoRequest`] it
-/// issues by reading from `source`.
-fn run_format_op<Output, R: Read + Seek>(
-    source: &mut R,
-    mut op: impl FormatOp<Output>,
-) -> Result<Output, contentauth_c2pa_format::FormatError> {
-    loop {
-        if op.advance()? == FormatStep::Complete {
-            return op.finish();
-        }
-
-        for request in op.outstanding_requests().to_vec() {
-            let reply = io_reply(source, &request.kind);
-            op.fulfill(request.id, reply)?;
-        }
-    }
-}
-
-fn io_reply<R: Read + Seek>(source: &mut R, request: &IoRequest) -> IoReply {
+fn answer<R: Read + Seek>(source: &mut R, request: &FileReadRequest) -> FileReadReply {
     match request {
-        IoRequest::Read { range, .. } => match read_range(source, *range) {
-            Ok(bytes) => IoReply::Bytes(bytes),
-            Err(err) => IoReply::Failed(read_failed(*range, &err)),
+        FileReadRequest::Read { range, .. } => match read_range(source, *range) {
+            Ok(bytes) => FileReadReply::Bytes(bytes),
+            Err(err) => FileReadReply::Failed(read_failed(*range, &err)),
         },
 
-        IoRequest::Length { .. } => match stream_len(source) {
-            Ok(len) => IoReply::Length(len),
-            Err(err) => IoReply::Failed(length_failed(&err)),
+        FileReadRequest::Length { .. } => match stream_len(source) {
+            Ok(len) => FileReadReply::Length(len),
+            Err(err) => FileReadReply::Failed(length_failed(&err)),
         },
 
-        _ => IoReply::Failed(HostError::new("unsupported request")),
-    }
-}
-
-fn read_reply<R: Read + Seek>(
-    source: &mut R,
-    manifest_store: &Option<Vec<u8>>,
-    request: &ReadRequest,
-) -> ReadHostReply {
-    match request {
-        ReadRequest::ManifestStore { .. } => ReadHostReply::ManifestStore(manifest_store.clone()),
-
-        ReadRequest::AssetLength { .. } => match stream_len(source) {
-            Ok(len) => ReadHostReply::AssetLength(len),
-            Err(err) => ReadHostReply::Failed(length_failed(&err)),
-        },
-
-        ReadRequest::AssetBytes { range, .. } => match read_range(source, *range) {
-            Ok(bytes) => ReadHostReply::AssetBytes(bytes),
-            Err(err) => ReadHostReply::Failed(read_failed(*range, &err)),
-        },
-
-        ReadRequest::CurrentDateTime => ReadHostReply::CurrentDateTime(now_unix()),
-
-        _ => ReadHostReply::Failed(HostError::new("unsupported request")),
+        FileReadRequest::CurrentDateTime => FileReadReply::CurrentDateTime(now_unix()),
     }
 }
 

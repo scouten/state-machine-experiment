@@ -15,8 +15,8 @@
 
 use std::path::PathBuf;
 
-/// Errors surfaced by [`crate::read_manifest`] and
-/// [`crate::read_manifest_from_file`].
+/// Errors surfaced by [`crate::FileReadSession`], [`crate::read_manifest`],
+/// and [`crate::read_manifest_from_file`].
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
@@ -30,6 +30,11 @@ pub enum Error {
         #[source]
         source: std::io::Error,
     },
+
+    /// [`crate::FileReadSession`]'s own host used the
+    /// [`contentauth_state_machine::Session`] API incorrectly.
+    #[error(transparent)]
+    Protocol(#[from] contentauth_state_machine::ProtocolError),
 
     /// The format handler could not locate the manifest store in the
     /// asset's container.

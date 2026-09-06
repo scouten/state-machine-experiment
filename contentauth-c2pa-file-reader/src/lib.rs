@@ -11,9 +11,8 @@
 // specific language governing permissions and limitations under
 // each license.
 
-//! Reads and validates a C2PA manifest store straight from a file — or any
-//! `Read + Seek` source — for any container format with a
-//! [`contentauth_c2pa_format::FormatHandler`].
+//! Reads and validates a C2PA manifest store for any container format with
+//! a [`contentauth_c2pa_format::FormatHandler`].
 //!
 //! # The gap this fills
 //!
@@ -26,10 +25,21 @@
 //! depends on the other, and doing so was, until now, hand-written host
 //! glue duplicated in every format handler crate's own tests.
 //!
-//! This crate is that glue, generalized to any handler and reused as
-//! library code: [`read_manifest`] and [`read_manifest_from_file`] run a
-//! handler's `locate` operation over the source to find the manifest
-//! store, then drive a [`ReadSession`] over the same source.
+//! # Two ways to use this crate
+//!
+//! [`FileReadSession`] is the primary interface: it composes a handler's
+//! `locate` operation with a [`ReadSession`], and speaks a single merged
+//! request vocabulary, [`FileReadRequest`], to whatever host drives it —
+//! a host that reads a real file synchronously, one that fetches byte
+//! ranges over a network asynchronously, or one that wants to supply its
+//! own clock rather than the wall clock. It performs no I/O itself, in
+//! keeping with every other session in this workspace.
+//!
+//! [`read_manifest`] and [`read_manifest_from_file`] are a host for exactly
+//! that session, for the common case: a caller with plain, synchronous
+//! `Read + Seek` access to the asset and no need for anything but the wall
+//! clock. Reach for [`FileReadSession`] directly once either stops being
+//! true.
 //!
 //! # Why `Read + Seek` rather than bytes
 //!
@@ -62,6 +72,7 @@
 
 mod drive;
 mod error;
+mod session;
 
 use std::{
     io::{Read, Seek},
@@ -71,19 +82,22 @@ use std::{
 pub use contentauth_c2pa_format::FormatHandler;
 pub use contentauth_c2pa_reader::{ReadReport, ReadSettings};
 pub use error::Error;
+pub use session::{FileReadReply, FileReadRequest, FileReadSession};
 
 /// Locates and reads the C2PA manifest store embedded in `source`,
 /// validating it per `settings`.
 ///
-/// `handler` locates the manifest store within `source`'s container
-/// format; `source` also serves every [`ReadRequest::AssetBytes`] and
-/// [`ReadRequest::AssetLength`] the read issues for hard-binding
-/// verification, since those cover the whole asset rather than just the
-/// manifest store. Neither operation assumes forward-only access: both
-/// seek to whatever range they were asked for.
+/// A synchronous host for [`FileReadSession`]: `handler` locates the
+/// manifest store within `source`'s container format, and `source` also
+/// serves every byte-range and length request the read issues for
+/// hard-binding verification, since those cover the whole asset rather
+/// than just the manifest store. The current wall-clock time answers
+/// [`FileReadRequest::CurrentDateTime`]. Neither operation assumes
+/// forward-only access: both seek to whatever range they were asked for.
 ///
-/// [`ReadRequest::AssetBytes`]: contentauth_c2pa_reader::ReadRequest::AssetBytes
-/// [`ReadRequest::AssetLength`]: contentauth_c2pa_reader::ReadRequest::AssetLength
+/// Reach for [`FileReadSession`] directly instead if `source` cannot be
+/// read synchronously (an async or network-backed host, say), or if the
+/// wall clock is not the right answer for [`FileReadRequest::CurrentDateTime`].
 pub fn read_manifest<H: FormatHandler, R: Read + Seek>(
     handler: &H,
     source: R,

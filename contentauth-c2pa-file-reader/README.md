@@ -1,8 +1,8 @@
 # contentauth-c2pa-file-reader
 
-Reads and validates a C2PA manifest store directly from a file — or any
-`Read + Seek` source — for any container format with a
-[`contentauth-c2pa-format`](../contentauth-c2pa-format) `FormatHandler`.
+Reads and validates a C2PA manifest store for any container format with a
+[`contentauth-c2pa-format`](../contentauth-c2pa-format) `FormatHandler`,
+without performing any I/O itself.
 
 ## Why this crate exists
 
@@ -16,11 +16,31 @@ nothing in either crate connects the two, by design (see the root
 glue duplicated in each format handler crate's own end-to-end tests.
 
 This crate is that glue, generalized to any handler and published as
-reusable code instead of test scaffolding: `read_manifest` and
-`read_manifest_from_file` run a handler's `locate` operation over the
-source to find the manifest store, then drive a `ReadSession` over the
-same source — answering `ManifestStore`, `AssetBytes`, `AssetLength`, and
-`CurrentDateTime` itself.
+reusable code instead of test scaffolding.
+
+## Two ways to use it
+
+`FileReadSession` is the primary interface: a sans-I/O session, in the
+same style as every other session in this workspace, that composes a
+handler's `locate` operation with a `ReadSession` and speaks a single
+merged request vocabulary — `FileReadRequest::{Read, Length,
+CurrentDateTime}` — to whatever host drives it. `ReadRequest::ManifestStore`
+never reaches that host at all: this session answers it internally, from
+`locate`'s result. A host that fetches byte ranges over a network, that
+already has the asset cached in some other shape, or that wants to
+supply its own clock instead of the wall clock, drives `FileReadSession`
+directly — see
+[`examples/custom_host.rs`](examples/custom_host.rs) for one that answers
+from memory and reports a fixed instant instead of the wall clock:
+
+```sh
+cargo run --example custom_host -p contentauth-c2pa-file-reader
+```
+
+`read_manifest` and `read_manifest_from_file` are a host for exactly that
+session, for the common case: a caller with plain, synchronous
+`Read + Seek` access to the asset and no need for anything but the wall
+clock.
 
 ```rust,no_run
 use contentauth_c2pa_file_reader::{read_manifest_from_file, ReadSettings};
