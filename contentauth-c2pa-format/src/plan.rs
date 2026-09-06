@@ -194,12 +194,16 @@ impl EmbedPlan {
     /// Verifies the invariants every consumer of a plan relies on, and
     /// returns the output length.
     ///
-    /// * Every [`Edit::Copy`] lies within the source.
+    /// * Every [`Edit::Copy`] lies within the source, and none of its
+    ///   output lies within the exclusion range: bytes carried over from
+    ///   the asset are exactly what the hard binding exists to protect,
+    ///   so an exclusion wide enough to swallow any of them is a plan
+    ///   bug, never something a consumer should hash around.
     /// * The [`Edit::Placeholder`] slots, taken in order, cover
     ///   `[0, manifest_len)` exactly once with no gaps or overlaps.
     /// * Every placeholder slot lies within the exclusion range, which in
-    ///   turn lies within the output. (Framing may be excluded too; the
-    ///   manifest bytes must be.)
+    ///   turn lies within the output. (Handler-emitted framing may be
+    ///   excluded too; the manifest bytes must be.)
     /// * `replaced`, if set, lies within the source.
     ///
     /// A violation is [`FormatError::InvalidPlan`] — a bug in the handler
@@ -224,6 +228,14 @@ impl EmbedPlan {
                     if end > source_len {
                         return Err(FormatError::InvalidPlan(
                             "a copy reaches past the end of the source",
+                        ));
+                    }
+
+                    // Non-empty overlap of [start, output_len) with the
+                    // exclusion.
+                    if start < exclusion_end && output_len > self.exclusion.start {
+                        return Err(FormatError::InvalidPlan(
+                            "a copy of asset bytes lies inside the exclusion range",
                         ));
                     }
                 }
@@ -565,9 +577,34 @@ mod tests {
             ))
         ));
 
-        // An exclusion past the end of the output.
-        let mut long = ok.clone();
-        long.exclusion = range(10, 200);
+        // An exclusion wide enough to swallow copied asset bytes — one
+        // byte before the framing, and one byte after it.
+        for exclusion in [range(9, 12), range(10, 12)] {
+            let mut too_wide = ok.clone();
+            too_wide.exclusion = exclusion;
+            let result = too_wide.check(100);
+            assert!(
+                matches!(
+                    result,
+                    Err(FormatError::InvalidPlan(
+                        "a copy of asset bytes lies inside the exclusion range"
+                    ))
+                ),
+                "exclusion {exclusion:?}: {result:?}"
+            );
+        }
+
+        // Whereas an exclusion that stops exactly at the copies is fine,
+        // and an empty copy adjacent to it never overlaps.
+        let mut tight = ok.clone();
+        tight.edits.insert(1, Edit::Copy(range(10, 0)));
+        assert_eq!(tight.check(100).unwrap(), 111);
+
+        // An exclusion past the end of the output — on a plan with the
+        // framing at the very end, so no copied bytes fall inside it and
+        // the overrun is the only violation.
+        let mut long = EmbedPlan::splice(100, None, 100, 5, wrapped(5)).unwrap();
+        long.exclusion = range(100, 200);
         assert!(matches!(
             long.check(100),
             Err(FormatError::InvalidPlan(

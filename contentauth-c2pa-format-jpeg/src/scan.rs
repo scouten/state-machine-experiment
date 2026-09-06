@@ -121,7 +121,15 @@ impl Layout {
             .collect();
         parts.sort_by_key(|s| s.preamble.z);
 
-        let mut jumbf = Vec::with_capacity(lbox as usize);
+        // Validate every packet and total up the store's bytes *before*
+        // allocating for them: `LBox` comes straight from the file, and a
+        // tiny malformed JPEG must not be able to request gigabytes just
+        // by declaring them. The total is bounded by segment contents
+        // already in memory, so the allocation below can never exceed
+        // what was actually read.
+        let header = &first.payload[..BOX_HEADER_LEN];
+        let mut slices: Vec<&[u8]> = Vec::with_capacity(parts.len());
+        let mut total = 0usize;
         let mut range = first.range;
 
         for (index, part) in parts.iter().enumerate() {
@@ -132,33 +140,37 @@ impl Layout {
                 )));
             }
 
-            if index == 0 {
-                jumbf.extend_from_slice(&part.payload);
-                continue;
-            }
+            let slice = if index == 0 {
+                part.payload.as_slice()
+            } else {
+                let previous_end = range.start.saturating_add(range.len);
+                if part.range.start != previous_end {
+                    return Err(FormatError::Malformed(format!(
+                        "manifest store packet {expected_z} is not adjacent to the one before it"
+                    )));
+                }
+                range.len += part.range.len;
 
-            let previous_end = range.start.saturating_add(range.len);
-            if part.range.start != previous_end {
-                return Err(FormatError::Malformed(format!(
-                    "manifest store packet {expected_z} is not adjacent to the one before it"
-                )));
-            }
-            range.len += part.range.len;
+                part.payload.strip_prefix(header).ok_or_else(|| {
+                    FormatError::Malformed(format!(
+                        "manifest store packet {expected_z} does not repeat the superbox header"
+                    ))
+                })?
+            };
 
-            let header = &first.payload[..BOX_HEADER_LEN];
-            let continuation = part.payload.strip_prefix(header).ok_or_else(|| {
-                FormatError::Malformed(format!(
-                    "manifest store packet {expected_z} does not repeat the superbox header"
-                ))
-            })?;
-            jumbf.extend_from_slice(continuation);
+            total += slice.len();
+            slices.push(slice);
         }
 
-        if jumbf.len() as u64 != u64::from(lbox) {
+        if total as u64 != u64::from(lbox) {
             return Err(FormatError::Malformed(format!(
-                "manifest store is {} bytes but its box header declares {lbox}",
-                jumbf.len()
+                "manifest store is {total} bytes but its box header declares {lbox}"
             )));
+        }
+
+        let mut jumbf = Vec::with_capacity(total);
+        for slice in slices {
+            jumbf.extend_from_slice(slice);
         }
 
         Ok(Some(ManifestRun { range, jumbf }))
@@ -700,6 +712,17 @@ pub(crate) mod tests {
                 .unwrap()
                 .manifest_run(),
             Err(FormatError::Malformed(m)) if m.contains("declares 200")
+        ));
+
+        // A header claiming the largest length `LBox` can express, backed
+        // by a few dozen bytes: rejected without allocating for the claim.
+        let mut boastful = store[..64].to_vec();
+        boastful[..4].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert!(matches!(
+            scan(&jpeg(true, &app11(C2PA_EN, 1, &boastful)))
+                .unwrap()
+                .manifest_run(),
+            Err(FormatError::Malformed(m)) if m.contains("is 64 bytes but its box header declares 4294967295")
         ));
 
         // An extended-length box.
