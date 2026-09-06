@@ -470,7 +470,7 @@ pub(crate) fn check_assertion_hashes(
 ) {
     let claim_algorithm = claim.alg.as_deref();
 
-    for reference in &claim.assertions {
+    for reference in claim.assertion_references() {
         let named = reference.alg.as_deref().or(claim_algorithm);
 
         // A claim that names no algorithm gets the specification's

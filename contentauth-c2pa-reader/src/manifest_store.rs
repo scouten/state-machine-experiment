@@ -84,9 +84,9 @@ pub struct Manifest {
     /// Labels of the assertions physically present in this manifest's
     /// assertion store, in store order.
     ///
-    /// Reconciling these against the claim's `assertions` list — and
-    /// verifying each assertion's hash — is a validation concern, not a
-    /// reading one.
+    /// Reconciling these against the claim's assertion references (see
+    /// [`Claim::assertion_references`]) — and verifying each assertion's
+    /// hash — is a validation concern, not a reading one.
     pub assertion_labels: Vec<String>,
 
     /// True if the manifest carries a claim signature box.
@@ -291,9 +291,9 @@ mod tests {
     use super::*;
     use crate::{
         test_support::{
-            assertion_box, boxed, claim_box, claim_box_with_alg, claim_box_with_assertions,
-            hashed_uri, hashed_uri_with_hash, manifest, manifest_store, manifest_with_claim,
-            superbox,
+            assertion_box, boxed, claim_box, claim_box_v2, claim_box_with_alg,
+            claim_box_with_assertions, hashed_uri, hashed_uri_with_hash, manifest, manifest_store,
+            manifest_with_claim, superbox,
         },
         validation::status_code,
     };
@@ -540,6 +540,41 @@ mod tests {
             status_code::ASSERTION_HASHEDURI_MISMATCH
         );
         assert!(parsed.statuses[0].is_failure());
+    }
+
+    #[test]
+    fn a_v2_claims_created_and_gathered_assertions_are_both_hash_checked() {
+        let created = assertion_box("c2pa.actions");
+        let gathered = assertion_box("c2pa.ingredient");
+
+        let claim = claim_box_v2(
+            "v2.jpg",
+            vec![hashed_uri("c2pa.actions", &created)],
+            vec![hashed_uri("c2pa.ingredient", &gathered)],
+        );
+
+        let bytes = manifest_store(&[manifest_with_claim(
+            "urn:uuid:v2",
+            &[created, gathered],
+            claim,
+        )]);
+
+        let parsed = parse(&bytes).unwrap();
+
+        assert_eq!(parsed.manifests[0].claim.created_assertions.len(), 1);
+        assert_eq!(parsed.manifests[0].claim.gathered_assertions.len(), 1);
+        assert!(parsed.manifests[0].claim.assertions.is_empty());
+
+        assert_eq!(
+            parsed
+                .statuses
+                .iter()
+                .filter(|s| s.code == status_code::ASSERTION_HASHEDURI_MATCH)
+                .count(),
+            2,
+            "both the created and gathered assertion references should be hash-checked"
+        );
+        assert!(parsed.statuses.iter().all(|s| !s.is_failure()));
     }
 
     #[test]

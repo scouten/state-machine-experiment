@@ -18,8 +18,11 @@
 //! understands stays explicit and unknown fields are ignored rather than
 //! silently absorbed.
 //!
-//! Skeleton: this covers the C2PA v1 claim shape. Claim v2 (with its
-//! `created_assertions` / `gathered_assertions` split) is not yet handled.
+//! Both the C2PA v1 claim shape (a flat `assertions` list) and the v2 shape
+//! (`created_assertions` and `gathered_assertions`) are decoded into the
+//! same [`Claim`] type: a claim populates whichever of the three fields its
+//! version uses, and [`Claim::assertion_references`] iterates all of them
+//! together so callers do not need to know which version they read.
 
 use c2pa_cbor::Value;
 
@@ -89,7 +92,36 @@ pub struct Claim {
 
     /// `assertions` — hashed references to the assertions this claim
     /// covers.
+    ///
+    /// Populated for a v1 claim; empty for a v2 claim, which uses
+    /// [`Self::created_assertions`] and [`Self::gathered_assertions`]
+    /// instead. Use [`Self::assertion_references`] to iterate assertion
+    /// references without checking the claim's version.
     pub assertions: Vec<HashedUri>,
+
+    /// `created_assertions` — hashed references to assertions created by
+    /// this claim's generator, in a v2 claim.
+    ///
+    /// Empty for a v1 claim, which uses [`Self::assertions`] instead.
+    pub created_assertions: Vec<HashedUri>,
+
+    /// `gathered_assertions` — hashed references to assertions gathered
+    /// from a prior manifest, in a v2 claim.
+    ///
+    /// Empty for a v1 claim, which uses [`Self::assertions`] instead.
+    pub gathered_assertions: Vec<HashedUri>,
+}
+
+impl Claim {
+    /// Iterates every assertion reference this claim covers, regardless of
+    /// whether it is a v1 claim (`assertions`) or a v2 claim
+    /// (`created_assertions` and `gathered_assertions`).
+    pub fn assertion_references(&self) -> impl Iterator<Item = &HashedUri> {
+        self.assertions
+            .iter()
+            .chain(self.created_assertions.iter())
+            .chain(self.gathered_assertions.iter())
+    }
 }
 
 /// One entry of a claim's `claim_generator_info`.
@@ -154,12 +186,14 @@ pub(crate) fn decode(cbor: &[u8]) -> Result<Claim, ClaimError> {
                     .collect::<Result<_, _>>()?;
             }
 
-            "assertions" => {
-                let entries = value.as_array().ok_or(ClaimError::UnexpectedType {
-                    field: "assertions",
-                })?;
+            "assertions" => claim.assertions = hashed_uri_array(value, "assertions")?,
 
-                claim.assertions = entries.iter().map(hashed_uri).collect::<Result<_, _>>()?;
+            "created_assertions" => {
+                claim.created_assertions = hashed_uri_array(value, "created_assertions")?
+            }
+
+            "gathered_assertions" => {
+                claim.gathered_assertions = hashed_uri_array(value, "gathered_assertions")?
             }
 
             // Unknown fields are ignored: a newer writer may include fields
@@ -196,6 +230,20 @@ fn generator_info(value: &Value) -> Result<GeneratorInfo, ClaimError> {
     }
 
     Ok(info)
+}
+
+/// Decodes a CBOR array of hashed-URI references, naming the field if it is
+/// not itself an array.
+///
+/// Errors within an individual entry are still reported under the generic
+/// `assertions.*` names `hashed_uri` uses, regardless of which of the
+/// three top-level array fields it was decoded from: they identify the
+/// malformed hashed-URI shape, not which list it lives in.
+fn hashed_uri_array(value: &Value, field: &'static str) -> Result<Vec<HashedUri>, ClaimError> {
+    let entries = value
+        .as_array()
+        .ok_or(ClaimError::UnexpectedType { field })?;
+    entries.iter().map(hashed_uri).collect()
 }
 
 /// Decodes one hashed-URI reference.
@@ -329,6 +377,94 @@ mod tests {
         );
         assert_eq!(decoded.assertions[0].hash, vec![0xab; 32]);
         assert_eq!(decoded.assertions[0].alg, None);
+
+        assert!(decoded.created_assertions.is_empty());
+        assert!(decoded.gathered_assertions.is_empty());
+        assert_eq!(decoded.assertion_references().count(), 1);
+    }
+
+    #[test]
+    fn decodes_a_v2_claim_with_created_and_gathered_assertions() {
+        let claim = map(vec![
+            (text_value("instanceID"), text_value("xmp:iid:1234")),
+            (
+                text_value("claim_generator_info"),
+                Value::Array(vec![map(vec![(text_value("name"), text_value("test"))])]),
+            ),
+            (
+                text_value("created_assertions"),
+                Value::Array(vec![map(vec![
+                    (
+                        text_value("url"),
+                        text_value("self#jumbf=c2pa.assertions/c2pa.actions"),
+                    ),
+                    (text_value("hash"), Value::Bytes(vec![0xab; 32])),
+                ])]),
+            ),
+            (
+                text_value("gathered_assertions"),
+                Value::Array(vec![map(vec![
+                    (
+                        text_value("url"),
+                        text_value("self#jumbf=c2pa.assertions/c2pa.hash.data"),
+                    ),
+                    (text_value("hash"), Value::Bytes(vec![0xcd; 32])),
+                ])]),
+            ),
+        ]);
+
+        let decoded = decode(&encode(&claim)).unwrap();
+
+        assert!(decoded.assertions.is_empty());
+
+        assert_eq!(decoded.created_assertions.len(), 1);
+        assert_eq!(
+            decoded.created_assertions[0].url,
+            "self#jumbf=c2pa.assertions/c2pa.actions"
+        );
+        assert_eq!(decoded.created_assertions[0].hash, vec![0xab; 32]);
+
+        assert_eq!(decoded.gathered_assertions.len(), 1);
+        assert_eq!(
+            decoded.gathered_assertions[0].url,
+            "self#jumbf=c2pa.assertions/c2pa.hash.data"
+        );
+        assert_eq!(decoded.gathered_assertions[0].hash, vec![0xcd; 32]);
+
+        let references: Vec<_> = decoded.assertion_references().map(|r| &r.url).collect();
+        assert_eq!(
+            references,
+            vec![
+                "self#jumbf=c2pa.assertions/c2pa.actions",
+                "self#jumbf=c2pa.assertions/c2pa.hash.data",
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_wrong_field_type_for_created_assertions() {
+        assert_eq!(
+            decode(&encode(&map(vec![(
+                text_value("created_assertions"),
+                text_value("not-an-array"),
+            )]))),
+            Err(ClaimError::UnexpectedType {
+                field: "created_assertions"
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_wrong_field_type_for_gathered_assertions() {
+        assert_eq!(
+            decode(&encode(&map(vec![(
+                text_value("gathered_assertions"),
+                text_value("not-an-array"),
+            )]))),
+            Err(ClaimError::UnexpectedType {
+                field: "gathered_assertions"
+            })
+        );
     }
 
     #[test]
