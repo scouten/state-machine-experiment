@@ -15,7 +15,7 @@
 //! surface only: a manifest built and signed by `contentauth-c2pa-builder`,
 //! embedded into a JPEG by `contentauth-c2pa-format-jpeg`, written to an
 //! actual file, then read back through
-//! [`contentauth_c2pa_compat::Reader::from_file`] — the c2pa-rs-shaped
+//! [`contentauth_c2pa_rs_compat::Reader::from_file`] — the c2pa-rs-shaped
 //! entry point this crate exists to provide.
 //!
 //! The embedding side plays the same "host does it by hand" role every
@@ -32,12 +32,12 @@ use contentauth_c2pa_builder::{
     BuilderHostReply, BuilderRequest, BuilderSession, BuilderSettings, BuilderStep, GeneratorInfo,
     SigningAlg,
 };
-use contentauth_c2pa_compat::{Error, ReadSettings, Reader, ValidationState};
 use contentauth_c2pa_format::{
     test_util::{MemoryHost, STREAM},
     EmbedPlan, FormatHandler,
 };
 use contentauth_c2pa_format_jpeg::JpegFormat;
+use contentauth_c2pa_rs_compat::{Error, ReadSettings, Reader, ValidationState};
 use contentauth_state_machine::Session;
 
 const TEST_SIGNER_CERT: &[u8] =
@@ -54,7 +54,7 @@ fn build_and_embed(source: &[u8]) -> (EmbedPlan, Vec<u8>) {
         "image/jpeg",
         "xmp:iid:test-instance",
         "urn:uuid:test-manifest",
-        GeneratorInfo::new("contentauth-c2pa-compat-tests", "0.1"),
+        GeneratorInfo::new("contentauth-c2pa-rs-compat-tests", "0.1"),
         SigningAlg::Es256,
         vec![TEST_SIGNER_CERT.to_vec()],
     );

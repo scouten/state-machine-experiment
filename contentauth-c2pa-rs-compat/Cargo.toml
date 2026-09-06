@@ -1,5 +1,5 @@
 [package]
-name = "contentauth-c2pa-compat"
+name = "contentauth-c2pa-rs-compat"
 version = "0.1.0"
 description = "Experimental compatibility shim reproducing a slice of c2pa-rs's public Reader API, backed by this workspace's sans-I/O read engine"
 authors.workspace = true

@@ -38,15 +38,15 @@ use crate::{
 /// # Example
 ///
 /// ```no_run
-/// use contentauth_c2pa_compat::Reader;
+/// use contentauth_c2pa_rs_compat::Reader;
 ///
 /// let reader = Reader::from_file("photo.jpg")?;
 /// println!("{}", reader.json());
 /// assert_eq!(
 ///     reader.validation_state(),
-///     contentauth_c2pa_compat::ValidationState::Trusted
+///     contentauth_c2pa_rs_compat::ValidationState::Trusted
 /// );
-/// # Ok::<(), contentauth_c2pa_compat::Error>(())
+/// # Ok::<(), contentauth_c2pa_rs_compat::Error>(())
 /// ```
 #[derive(Debug)]
 pub struct Reader {

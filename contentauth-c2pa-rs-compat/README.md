@@ -1,4 +1,4 @@
-# contentauth-c2pa-compat
+# contentauth-c2pa-rs-compat
 
 An experimental compatibility layer: a slice of [c2pa-rs]'s public `Reader`
 API, reproduced on top of this workspace's sans-I/O read engine instead of
@@ -23,11 +23,11 @@ manifest store embedded in a local JPEG file, and report the result as
 JSON.**
 
 ```rust,no_run
-use contentauth_c2pa_compat::Reader;
+use contentauth_c2pa_rs_compat::Reader;
 
 let reader = Reader::from_file("photo.jpg")?;
 println!("{}", reader.json());
-# Ok::<(), contentauth_c2pa_compat::Error>(())
+# Ok::<(), contentauth_c2pa_rs_compat::Error>(())
 ```
 
 `Reader::from_file` locates and validates the manifest store (via
