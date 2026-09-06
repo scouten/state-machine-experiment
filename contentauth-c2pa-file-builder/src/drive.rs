@@ -244,6 +244,27 @@ mod tests {
         Err(HostError::new("should not be asked to sign in this test"))
     }
 
+    /// Every other test passes [`never_signs`] as a signer that must not be
+    /// called at all; this one proves what it actually does when it is.
+    #[test]
+    fn never_signs_reports_a_failure() {
+        let mut source = Cursor::new(Vec::<u8>::new());
+        let mut output = Cursor::new(Vec::<u8>::new());
+        let reply = answer(
+            source_stream(),
+            output_stream(),
+            &mut source,
+            &mut output,
+            &mut never_signs,
+            &FileBuilderRequest::Sign {
+                alg: SigningAlg::Es256,
+                data: vec![1, 2, 3],
+            },
+        );
+
+        assert!(matches!(reply, FileBuilderReply::Failed(_)), "{reply:?}");
+    }
+
     #[test]
     fn a_read_past_the_end_of_the_source_is_reported_as_failed() {
         let mut source = Cursor::new(vec![1u8, 2, 3]);

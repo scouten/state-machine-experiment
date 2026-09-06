@@ -767,16 +767,15 @@ fn step_writing<H: FormatHandler>(
 
         // A task's `Write` is still outstanding: await it before moving
         // on to the next task.
-        Some(Inflight::Write { id }) => {
-            if take_write_ack(core, id)?.is_none() {
-                return Ok(WritingStep::AwaitHost(Sub::Writing {
-                    tasks,
-                    inflight: Some(Inflight::Write { id }),
-                    request,
-                    then,
-                }));
-            }
+        Some(Inflight::Write { id }) if take_write_ack(core, id)?.is_none() => {
+            return Ok(WritingStep::AwaitHost(Sub::Writing {
+                tasks,
+                inflight: Some(Inflight::Write { id }),
+                request,
+                then,
+            }));
         }
+        Some(Inflight::Write { .. }) => {}
 
         // Nothing was in flight: ready to issue the first/next task.
         None => {}
