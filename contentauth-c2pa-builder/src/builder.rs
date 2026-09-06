@@ -463,10 +463,14 @@ impl BuilderSession {
             }
 
             Some(BuilderHostReply::PlaceholderReserved(exclusion)) => {
-                if exclusion.len != manifest.placeholder_bytes().len() as u64 {
+                // The container's framing around the placeholder (a
+                // JPEG's APP11 segment headers, say) belongs inside the
+                // exclusion, so the range may be longer than the
+                // placeholder — but never shorter, which would leave part
+                // of the manifest inside its own hash.
+                if exclusion.len < manifest.placeholder_bytes().len() as u64 {
                     return Err(Error::PlaceholderRangeInvalid(
-                        "the reserved range's length does not match the placeholder that was \
-                         embedded",
+                        "the reserved range is shorter than the placeholder that was embedded",
                     ));
                 }
 
@@ -820,6 +824,8 @@ pub struct BuilderReport {
     /// patched into the asset via `BuilderRequest::CommitManifest`.
     pub manifest: Vec<u8>,
 
-    /// The byte range within the asset the manifest occupies.
+    /// The byte range of the container structure carrying the manifest,
+    /// framing included — the hard binding's exclusion, as the host
+    /// reported it via `BuilderHostReply::PlaceholderReserved`.
     pub manifest_range: ByteRange,
 }

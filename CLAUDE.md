@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
-(Content Credentials) workflows. Two crates today:
+(Content Credentials) workflows. Crates today:
 
 - **`contentauth-state-machine`** — the reusable engine. Domain-agnostic:
   a request/reply vocabulary trait, request tracking, a protocol-error
@@ -22,6 +22,32 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   [README.md](contentauth-c2pa-reader/README.md) for what it validates
   (integrity, claim signature, trust chain, RFC 3161 timestamps) and the
   full request-vocabulary table.
+- **`contentauth-c2pa-builder`** — the write-side counterpart: generates
+  and signs a manifest store via a two-pass placeholder scheme
+  (`BuilderSession` in [`src/builder.rs`](contentauth-c2pa-builder/src/builder.rs);
+  see its [README.md](contentauth-c2pa-builder/README.md)).
+- **`contentauth-c2pa-primitives`** — the narrow slice of vocabulary
+  (`StreamId`, `ByteRange`, hash and signing algorithms, `HostError`) and
+  deterministic encoders the reader and builder genuinely share.
+- **`contentauth-c2pa-format`** — the contract between those sessions
+  and container formats: the `FormatHandler` trait (`locate`,
+  `plan_embed`, `commit`), the single `IoRequest` vocabulary every
+  handler operation speaks, the `EmbedPlan`/`Patch` model, and (behind
+  the `test-util` feature) an in-memory host plus a conformance suite.
+  Format-specific knowledge never lives here.
+- **`contentauth-c2pa-format-jpeg`** — the first format handler: locating
+  and embedding manifest stores in a JPEG's `APP11` segments, following
+  c2pa-rs's conventions byte for byte. The template for further
+  `contentauth-c2pa-format-*` crates.
+
+Container-format handling is deliberately *outside* the reader and
+builder: they ask their host for "the manifest store's bytes" and to
+"embed this placeholder and report the range of the container structure
+carrying it, framing included". A format handler crate answers those
+questions; a host that knows what format it is handling picks the
+handler. New format = new crate implementing `FormatHandler` and passing
+`contentauth_c2pa_format::test_util::conformance::run_all`; nothing in
+the reader, builder, or contract crate changes.
 
 ## Stability
 

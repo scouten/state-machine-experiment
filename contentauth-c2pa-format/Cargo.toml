@@ -1,0 +1,34 @@
+[package]
+name = "contentauth-c2pa-format"
+version = "0.1.0"
+description = "The contract between sans-I/O C2PA sessions and container-format handlers"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["c2pa", "content-credentials", "sans-io"]
+categories = ["api-bindings"]
+publish = false
+
+[features]
+# An in-memory host that drives any format operation over byte slices, and
+# a conformance suite every format handler is expected to pass. For format
+# handler crates' own tests; nothing here belongs in a shipped binary.
+test-util = []
+
+[dependencies]
+contentauth-state-machine = { path = "../contentauth-state-machine" }
+# `StreamId`, `ByteRange`, `HostError` — the same handles every sans-I/O
+# session in this workspace addresses its host with.
+contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
+thiserror = "2.0.20"
+
+[dev-dependencies]
+# Enables `SessionCore::fulfill_unchecked`, which this crate's own tests use
+# to exercise the reply helpers' defense-in-depth check against a reply
+# payload `fulfill` itself would reject.
+contentauth-state-machine = { path = "../contentauth-state-machine", features = [
+    "test-util",
+] }

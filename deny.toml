@@ -31,10 +31,12 @@ ignore = [
     #   read-only crate is signature *verification*, which is what the
     #   attack does not touch.
     # * `contentauth-c2pa-builder`'s *dev*-dependency on `c2pa_raw_crypto`,
-    #   which plays the "host signer" in its own integration tests. Real
-    #   signing keys never enter the shipped crate — it only ever asks a
-    #   host to sign, over its `BuilderRequest::Sign` request — so this
-    #   exposure is test-only and never reaches a published artifact.
+    #   which plays the "host signer" in its own integration tests (and
+    #   likewise `contentauth-c2pa-format-jpeg`'s, for its end-to-end
+    #   build-embed-read test). Real signing keys never enter the shipped
+    #   crates — the builder only ever asks a host to sign, over its
+    #   `BuilderRequest::Sign` request — so this exposure is test-only and
+    #   never reaches a published artifact.
     #
     # Revisit if `contentauth-c2pa-builder` ever grows an in-crate signing
     # path (contrary to its sans-I/O design), or if `rsa` ships a fix, at
