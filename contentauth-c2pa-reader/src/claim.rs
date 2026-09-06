@@ -72,11 +72,11 @@ impl GeneratorInfo {
 #[non_exhaustive]
 pub enum ClaimVersion {
     /// A v1 claim: assertions in a flat [`Claim::assertions`] list.
-    #[default]
     V1,
 
     /// A v2 claim: assertions split into [`Claim::created_assertions`]
     /// and [`Claim::gathered_assertions`].
+    #[default]
     V2,
 }
 
@@ -504,7 +504,7 @@ mod tests {
 
     #[test]
     fn decodes_a_minimal_claim() {
-        let decoded = decode(&encode(&map(vec![])), ClaimVersion::V1).unwrap();
+        let decoded = decode(&encode(&map(vec![])), ClaimVersion::V2).unwrap();
         assert_eq!(decoded, Claim::default());
     }
 
