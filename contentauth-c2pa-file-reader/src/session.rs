@@ -215,6 +215,11 @@ impl<H: FormatHandler> Session for FileReadSession<H> {
                     };
 
                     if step == Step::Complete {
+                        // A handler can still fail here even though
+                        // scanning finished cleanly — reassembly-time
+                        // checks a handler defers past its last read, for
+                        // instance — so this is handled like any other
+                        // handler failure rather than assumed impossible.
                         let location = match op.finish() {
                             Ok(location) => location,
                             Err(err) => {
@@ -242,6 +247,8 @@ impl<H: FormatHandler> Session for FileReadSession<H> {
                                 let outer_id = self.core.issue(outer_kind);
                                 self.pending.insert(outer_id, request.id);
                             }
+                            // Unreachable with today's `IoRequest`; see
+                            // `from_io_request`.
                             None => {
                                 op.fulfill(
                                     request.id,
@@ -272,6 +279,9 @@ impl<H: FormatHandler> Session for FileReadSession<H> {
                     };
 
                     if step == ReadStep::Complete {
+                        // As with the locate operation above: `finish` is
+                        // not assumed infallible just because `advance`
+                        // reported completion.
                         let report = match session.finish() {
                             Ok(report) => report,
                             Err(err) => {
@@ -306,6 +316,10 @@ impl<H: FormatHandler> Session for FileReadSession<H> {
                                 let outer_id = self.core.issue(outer_kind);
                                 self.pending.insert(outer_id, request.id);
                             }
+                            // Unreachable here: `ManifestStore` is the only
+                            // `ReadRequest` variant `from_read_request`
+                            // maps to `None`, and it was already matched
+                            // above. See `from_read_request`.
                             None => {
                                 session.fulfill(
                                     request.id,
@@ -358,6 +372,10 @@ fn from_io_request(request: &IoRequest) -> Option<FileReadRequest> {
             range: *range,
         }),
         IoRequest::Length { stream } => Some(FileReadRequest::Length { stream: *stream }),
+
+        // `IoRequest` has no third variant today, so `advance`'s own
+        // "unsupported request" fallback for this case is unreachable in
+        // practice; kept for when `#[non_exhaustive]` growth gives it one.
         _ => None,
     }
 }
@@ -395,5 +413,190 @@ fn to_read_host_reply(reply: FileReadReply) -> ReadHostReply {
         FileReadReply::Length(len) => ReadHostReply::AssetLength(len),
         FileReadReply::CurrentDateTime(time) => ReadHostReply::CurrentDateTime(time),
         FileReadReply::Failed(err) => ReadHostReply::Failed(err),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use contentauth_c2pa_format_jpeg::JpegFormat;
+
+    use super::*;
+
+    fn stream() -> StreamId {
+        StreamId::new(0)
+    }
+
+    fn range() -> ByteRange {
+        ByteRange { start: 0, len: 4 }
+    }
+
+    fn all_requests() -> Vec<FileReadRequest> {
+        vec![
+            FileReadRequest::Read {
+                stream: stream(),
+                range: range(),
+            },
+            FileReadRequest::Length { stream: stream() },
+            FileReadRequest::CurrentDateTime,
+        ]
+    }
+
+    fn all_replies() -> Vec<(FileReadReply, &'static str)> {
+        vec![
+            (FileReadReply::Bytes(vec![1]), "Bytes"),
+            (FileReadReply::Length(4), "Length"),
+            (
+                FileReadReply::CurrentDateTime(1_700_000_000),
+                "CurrentDateTime",
+            ),
+            (FileReadReply::Failed(HostError::new("nope")), ""),
+        ]
+    }
+
+    /// Every request accepts exactly the reply named by its
+    /// `expected_reply` string, plus `Failed` — the same property
+    /// `IoRequest` and `ReadRequest` test of themselves.
+    #[test]
+    fn accepts_matches_expected_reply_exactly() {
+        for request in &all_requests() {
+            for (reply, answers) in all_replies() {
+                let should_accept = matches!(reply, FileReadReply::Failed(_))
+                    || *answers == *request.expected_reply();
+                assert_eq!(
+                    request.accepts(&reply),
+                    should_accept,
+                    "request {request:?} vs reply {reply:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn io_requests_translate_to_file_read_requests() {
+        assert!(matches!(
+            from_io_request(&IoRequest::Read {
+                stream: stream(),
+                range: range()
+            }),
+            Some(FileReadRequest::Read { .. })
+        ));
+        assert!(matches!(
+            from_io_request(&IoRequest::Length { stream: stream() }),
+            Some(FileReadRequest::Length { .. })
+        ));
+    }
+
+    #[test]
+    fn read_requests_translate_to_file_read_requests_except_manifest_store() {
+        assert!(matches!(
+            from_read_request(&ReadRequest::AssetBytes {
+                stream: stream(),
+                range: range()
+            }),
+            Some(FileReadRequest::Read { .. })
+        ));
+        assert!(matches!(
+            from_read_request(&ReadRequest::AssetLength { stream: stream() }),
+            Some(FileReadRequest::Length { .. })
+        ));
+        assert!(matches!(
+            from_read_request(&ReadRequest::CurrentDateTime),
+            Some(FileReadRequest::CurrentDateTime)
+        ));
+
+        // Never actually called this way — the caller special-cases
+        // `ManifestStore` before reaching this function — but there is
+        // nothing sensible to forward it as if it were.
+        assert!(from_read_request(&ReadRequest::ManifestStore { stream: stream() }).is_none());
+    }
+
+    #[test]
+    fn replies_translate_to_io_replies() {
+        assert!(matches!(
+            to_io_reply(FileReadReply::Bytes(vec![1])),
+            IoReply::Bytes(bytes) if bytes == [1]
+        ));
+        assert!(matches!(
+            to_io_reply(FileReadReply::Length(4)),
+            IoReply::Length(4)
+        ));
+        assert!(matches!(
+            to_io_reply(FileReadReply::Failed(HostError::new("x"))),
+            IoReply::Failed(_)
+        ));
+
+        // `locate` never issues `FileReadRequest::CurrentDateTime`, and
+        // `SessionCore::fulfill` validates a reply against
+        // `FileReadRequest::accepts` before this function ever sees it, so
+        // a real host cannot produce this pairing — kept for exhaustiveness
+        // now that `FileReadReply` has a variant this function must still
+        // account for.
+        assert!(matches!(
+            to_io_reply(FileReadReply::CurrentDateTime(1)),
+            IoReply::Failed(_)
+        ));
+    }
+
+    #[test]
+    fn replies_translate_to_read_host_replies() {
+        assert!(matches!(
+            to_read_host_reply(FileReadReply::Bytes(vec![1])),
+            ReadHostReply::AssetBytes(bytes) if bytes == [1]
+        ));
+        assert!(matches!(
+            to_read_host_reply(FileReadReply::Length(4)),
+            ReadHostReply::AssetLength(4)
+        ));
+        assert!(matches!(
+            to_read_host_reply(FileReadReply::CurrentDateTime(9)),
+            ReadHostReply::CurrentDateTime(9)
+        ));
+        assert!(matches!(
+            to_read_host_reply(FileReadReply::Failed(HostError::new("x"))),
+            ReadHostReply::Failed(_)
+        ));
+    }
+
+    /// `advance` treats a `None` phase as a poisoned session rather than
+    /// panicking. Every real code path reassigns `phase` before returning
+    /// or looping, so this state is otherwise unreachable — exercised here
+    /// by constructing it directly, the same way this workspace's other
+    /// sessions test their own "kept as defense in depth" branches.
+    #[test]
+    fn advance_fails_defensively_if_phase_is_ever_none() {
+        let mut session: FileReadSession<JpegFormat> = FileReadSession {
+            core: SessionCore::default(),
+            pending: HashMap::new(),
+            phase: None,
+            settings: None,
+        };
+
+        assert!(matches!(
+            session.advance(),
+            Err(Error::Protocol(ProtocolError::SessionFailed))
+        ));
+        assert!(session.core.is_failed());
+    }
+
+    /// `finish` does not trust `SessionCore`'s lifecycle alone: it also
+    /// checks that `phase` actually holds a result. The two can only
+    /// disagree if something bypasses `advance`'s own bookkeeping, as this
+    /// test does directly.
+    #[test]
+    fn finish_fails_defensively_if_core_and_phase_disagree() {
+        let mut core = SessionCore::default();
+        core.mark_complete();
+
+        let session: FileReadSession<JpegFormat> = FileReadSession {
+            core,
+            pending: HashMap::new(),
+            phase: None,
+            settings: None,
+        };
+
+        assert!(matches!(
+            session.finish(),
+            Err(Error::Protocol(ProtocolError::SessionNotComplete))
+        ));
     }
 }

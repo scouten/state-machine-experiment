@@ -76,11 +76,16 @@ fn answer<R: Read + Seek>(source: &mut R, request: &FileReadRequest) -> FileRead
     }
 }
 
-/// The current wall-clock time as Unix seconds, falling back to the epoch
-/// on a clock reporting a time before it — a hypothetical this crate has no
-/// better answer for, and the reader treats as any other implausible time.
+/// The current wall-clock time as Unix seconds.
 fn now_unix() -> i64 {
-    match SystemTime::now().duration_since(UNIX_EPOCH) {
+    unix_seconds(SystemTime::now())
+}
+
+/// `time` as Unix seconds, falling back to the epoch for a time before it —
+/// a hypothetical this crate has no better answer for, and the reader
+/// treats as any other implausible time.
+fn unix_seconds(time: SystemTime) -> i64 {
+    match time.duration_since(UNIX_EPOCH) {
         Ok(elapsed) => i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX),
         Err(_) => 0,
     }
@@ -115,4 +120,82 @@ fn read_failed(range: ByteRange, err: &io::Error) -> HostError {
 
 fn length_failed(err: &io::Error) -> HostError {
     HostError::new(format!("could not determine stream length: {err}"))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    use std::{io::Cursor, time::Duration};
+
+    use contentauth_c2pa_primitives::StreamId;
+
+    use super::*;
+
+    /// A `Read + Seek` source whose every operation fails — standing in
+    /// for a source this host cannot actually reach (a dropped network
+    /// connection, an unreadable device), since `Cursor` cannot fail this
+    /// way itself.
+    struct AlwaysFails;
+
+    impl Read for AlwaysFails {
+        fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::other("always fails"))
+        }
+    }
+
+    impl Seek for AlwaysFails {
+        fn seek(&mut self, _pos: SeekFrom) -> io::Result<u64> {
+            Err(io::Error::other("always fails"))
+        }
+    }
+
+    fn stream() -> StreamId {
+        StreamId::new(0)
+    }
+
+    #[test]
+    fn a_read_past_the_end_of_the_source_is_reported_as_failed() {
+        let mut source = Cursor::new(vec![1u8, 2, 3]);
+        let reply = answer(
+            &mut source,
+            &FileReadRequest::Read {
+                stream: stream(),
+                range: ByteRange { start: 0, len: 10 },
+            },
+        );
+
+        assert!(matches!(reply, FileReadReply::Failed(_)), "{reply:?}");
+    }
+
+    #[test]
+    fn a_seek_failure_answering_length_is_reported_as_failed() {
+        let reply = answer(
+            &mut AlwaysFails,
+            &FileReadRequest::Length { stream: stream() },
+        );
+        assert!(matches!(reply, FileReadReply::Failed(_)), "{reply:?}");
+    }
+
+    #[test]
+    fn a_seek_failure_answering_read_is_reported_as_failed() {
+        let reply = answer(
+            &mut AlwaysFails,
+            &FileReadRequest::Read {
+                stream: stream(),
+                range: ByteRange { start: 0, len: 1 },
+            },
+        );
+
+        assert!(matches!(reply, FileReadReply::Failed(_)), "{reply:?}");
+    }
+
+    #[test]
+    fn a_clock_before_the_epoch_reports_the_epoch_itself() {
+        let before_epoch = UNIX_EPOCH
+            .checked_sub(Duration::from_secs(1))
+            .expect("this platform can represent an instant before the epoch");
+
+        assert_eq!(unix_seconds(before_epoch), 0);
+    }
 }
