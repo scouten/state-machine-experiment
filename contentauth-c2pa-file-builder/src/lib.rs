@@ -53,9 +53,11 @@
 //! directly once any of that stops being true.
 //!
 //! [`build_and_sign_file`] additionally never leaves a partial or corrupt
-//! file at the requested output path: it builds into a temporary file
-//! beside it and renames it into place only once the build succeeds,
-//! deleting the temporary file on any failure instead.
+//! file at the requested output path: it builds into a freshly, exclusively
+//! created temporary file beside it — a predictable name here would let
+//! another process redirect the write by pre-creating that path as a
+//! symlink — and renames it into place only once the build succeeds,
+//! deleting the temporary file on any failure, rename included, instead.
 //!
 //! # What this does not do
 //!
@@ -86,6 +88,7 @@ mod session;
 use std::{
     io::{Read, Seek, Write},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 pub use contentauth_c2pa_builder::{
@@ -115,6 +118,13 @@ pub use session::{FileBuilderReply, FileBuilderReport, FileBuilderRequest, FileB
 /// answering it needs a real RFC 3161 authority round trip this function
 /// has no way to perform. Reach for [`FileBuilderSession`] directly for
 /// that, or for source/output access that cannot be driven synchronously.
+///
+/// The hard binding's length is always computed from the plan itself, not
+/// measured from `output`, so reusing a stream that already contains more
+/// than the new build writes cannot corrupt the signature with stale
+/// trailing bytes — but `output` will still physically contain them
+/// afterward. Pass a stream that starts empty if that matters to you;
+/// [`build_and_sign_file`] always does.
 pub fn build_and_sign<H, S, O>(
     handler: H,
     source: S,
@@ -134,11 +144,12 @@ where
 /// [`build_and_sign`], then atomically publishes the result at
 /// `output_path`.
 ///
-/// The output is assembled in a temporary file next to `output_path` —
-/// `output_path` with a `.c2pa-tmp` suffix — which is renamed into place
-/// only once the build succeeds. A failure of any kind, including one
-/// from `sign`, leaves `output_path` untouched and removes the temporary
-/// file rather than publishing a partial asset.
+/// The output is assembled in a freshly, exclusively created temporary
+/// file next to `output_path`, which is renamed into place only once the
+/// build succeeds. A failure of any kind — from the build itself, from
+/// `sign`, or from the rename — leaves `output_path` untouched and
+/// removes the temporary file rather than publishing a partial asset or
+/// leaving one behind.
 pub fn build_and_sign_file<H>(
     handler: H,
     source_path: impl AsRef<Path>,
@@ -158,11 +169,15 @@ where
     let output_path = output_path.as_ref();
     let temp_path = temp_path_for(output_path);
 
+    // `create_new` — never `create` + `truncate` — so this can never
+    // follow a symlink (or otherwise write through) a path an attacker
+    // pre-created at the name we picked: it fails outright instead.
+    // `temp_path_for`'s unpredictable suffix means there is nothing
+    // meaningful to pre-create in the first place.
     let temp_file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .create(true)
-        .truncate(true)
+        .create_new(true)
         .open(&temp_path)
         .map_err(|source| Error::Io {
             path: temp_path.clone(),
@@ -180,18 +195,57 @@ where
         }
     };
 
-    std::fs::rename(&temp_path, output_path).map_err(|source| Error::Io {
-        path: output_path.to_path_buf(),
-        source,
-    })?;
+    if let Err(source) = std::fs::rename(&temp_path, output_path) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(Error::Io {
+            path: output_path.to_path_buf(),
+            source,
+        });
+    }
 
     Ok(report)
 }
 
-/// The temporary file [`build_and_sign_file`] assembles the output in,
-/// before renaming it into place at `output_path`.
+/// A temporary path beside `output_path` for [`build_and_sign_file`] to
+/// assemble the output in before renaming it into place: unpredictable
+/// (a process ID, the current time, and a per-process counter, none of
+/// which need to resist a determined attacker on their own — `create_new`
+/// is what actually matters — only make the name hard to guess in
+/// advance) rather than a fixed suffix, so nothing meaningful can be
+/// pre-created at this exact path ahead of time.
 fn temp_path_for(output_path: &Path) -> PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos() as u64)
+        .unwrap_or(0);
+    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+
     let mut temp = output_path.as_os_str().to_owned();
-    temp.push(".c2pa-tmp");
+    temp.push(format!(
+        ".c2pa-tmp-{:x}-{:x}-{:x}",
+        std::process::id(),
+        nanos,
+        count
+    ));
     PathBuf::from(temp)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The per-process counter alone already guarantees two calls in the
+    /// same process never collide, whatever the clock does between them —
+    /// the property `create_new` in `build_and_sign_file` relies on to
+    /// never mistake a leftover or maliciously pre-created path for one
+    /// of its own.
+    #[test]
+    fn temp_path_for_never_repeats_within_a_process() {
+        let output = Path::new("/some/output.jpg");
+        let paths: std::collections::HashSet<PathBuf> =
+            (0..100).map(|_| temp_path_for(output)).collect();
+        assert_eq!(paths.len(), 100);
+    }
 }

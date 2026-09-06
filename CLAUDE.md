@@ -59,10 +59,14 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   reference implementation), instead walking a plan's edits directly. It
   answers `ReservePlaceholder` and `CommitManifest` by issuing
   `FileBuilderRequest::Read` against `SOURCE_STREAM` and
-  `FileBuilderRequest::Write` against `OUTPUT_STREAM` for each edit, and
-  forwards `AssetLength`/`AssetBytes` as plain reads of the output stream
-  once it has been written (hashing it for the hard binding without
-  holding it in memory); only `Sign`/`Timestamp` ever reach the host as
+  `FileBuilderRequest::Write` against `OUTPUT_STREAM` for each edit, in
+  bounded chunks for a large `Edit::Copy` rather than one host round trip
+  sized to the whole range; forwards `AssetBytes` as plain reads of the
+  output stream once it has been written (hashing it for the hard binding
+  without holding it in memory), but answers `AssetLength` from the
+  plan's own known output length rather than asking the host, so a
+  reused, longer-than-needed output stream can never leak stale trailing
+  bytes into the hash; and only `Sign`/`Timestamp` ever reach the host as
   themselves, since nothing in this workspace can sign or timestamp on a
   host's behalf. `build_and_sign`/`build_and_sign_file` (`src/drive.rs`)
   are one such host, for a caller with plain synchronous `Read + Seek`
@@ -70,12 +74,16 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   for the hashing above), and a plain signing function (no timestamping);
   a host that needs timestamping, or async/network access, drives
   `FileBuilderSession` directly. `build_and_sign_file` builds into a
-  temporary file beside the requested output path and renames it into
-  place only once the build succeeds, so a failed build never corrupts or
-  partially overwrites an existing output file. Its own test suite
-  round-trips a signed asset through `contentauth-c2pa-file-reader` and
-  checks it reads back as `Trusted` — the two crates' only relationship is
-  that both implement the `contentauth-c2pa-format` contract.
+  freshly, exclusively created (`create_new`, never `create` +
+  `truncate`) temporary file with an unpredictable name beside the
+  requested output path — never a symlink-followable, guessable one — and
+  renames it into place only once the build succeeds, cleaning up the
+  temporary file on any failure, rename included, so a failed build never
+  corrupts or partially overwrites an existing output file nor leaves
+  debris behind. Its own test suite round-trips a signed asset through
+  `contentauth-c2pa-file-reader` and checks it reads back as `Trusted` —
+  the two crates' only relationship is that both implement the
+  `contentauth-c2pa-format` contract.
 
 Container-format handling is deliberately *outside* the reader and
 builder: they ask their host for "the manifest store's bytes" and to

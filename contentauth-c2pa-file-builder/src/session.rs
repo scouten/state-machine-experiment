@@ -521,11 +521,27 @@ impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
                                 break;
                             }
 
+                            // Answered from the plan itself, not the host:
+                            // an output length only this session already
+                            // knows for certain is the length the hard
+                            // binding must cover, whatever the host's
+                            // stream happens to physically be — asking the
+                            // host instead would let a stream reused (or
+                            // simply longer than needed) from an earlier
+                            // build leak trailing bytes into the hash.
                             BuilderRequest::AssetLength { .. } => {
-                                let outer = self
-                                    .core
-                                    .issue(FileBuilderRequest::Length { stream: OUTPUT });
-                                self.pending.insert(outer, request.id);
+                                let result =
+                                    plan.as_ref()
+                                        .and_then(EmbedPlan::output_len)
+                                        .ok_or(Error::Invariant(
+                                        "AssetLength asked for before ReservePlaceholder, or the \
+                                         plan's output length overflows",
+                                    ));
+                                let len = self.poisoning(result)?;
+                                let result =
+                                    session.fulfill(request.id, BuilderHostReply::AssetLength(len));
+                                self.poisoning(result)?;
+                                answered_internally = true;
                             }
 
                             BuilderRequest::AssetBytes { range, .. } => {
@@ -823,6 +839,13 @@ fn step_writing<H: FormatHandler>(
     }
 }
 
+/// The most this session ever asks a host to read from the source (or
+/// write to the output) in one [`WriteTask`] — bounding how much of a
+/// single, arbitrarily large [`Edit::Copy`] it holds in memory at once,
+/// the same way every other range this session reads is already bounded
+/// by the plan's own framing.
+const COPY_CHUNK_LEN: u64 = 1 << 20;
+
 /// Lays out `edits` — a freshly planned embedding — as a sequence of
 /// writes to the output, filling every [`Edit::Placeholder`] slot from
 /// `placeholder`. Edits producing no bytes are skipped.
@@ -835,10 +858,7 @@ fn tasks_for_edits(edits: &[Edit], placeholder: &[u8]) -> Result<VecDeque<WriteT
 
         if len > 0 {
             match edit {
-                Edit::Copy(range) => tasks.push_back(WriteTask::CopyFromSource {
-                    output_offset: offset,
-                    source_range: *range,
-                }),
+                Edit::Copy(range) => push_copy_chunks(&mut tasks, offset, *range),
 
                 Edit::Emit(bytes) => tasks.push_back(WriteTask::WriteBytes {
                     output_offset: offset,
@@ -846,9 +866,7 @@ fn tasks_for_edits(edits: &[Edit], placeholder: &[u8]) -> Result<VecDeque<WriteT
                 }),
 
                 Edit::Placeholder(range) => {
-                    let start = range.start as usize;
-                    let end = start + range.len as usize;
-                    let bytes = placeholder.get(start..end).ok_or(Error::Invariant(
+                    let bytes = slice(placeholder, *range).ok_or(Error::Invariant(
                         "a placeholder slot lies outside the placeholder bytes",
                     ))?;
                     tasks.push_back(WriteTask::WriteBytes {
@@ -869,6 +887,38 @@ fn tasks_for_edits(edits: &[Edit], placeholder: &[u8]) -> Result<VecDeque<WriteT
     }
 
     Ok(tasks)
+}
+
+/// Appends one [`WriteTask::CopyFromSource`] per [`COPY_CHUNK_LEN`]-sized
+/// piece of `source_range`, landing at consecutive offsets starting at
+/// `output_offset` — so a single large [`Edit::Copy`] still moves through
+/// this session in bounded pieces rather than one host round trip sized
+/// to the whole range.
+fn push_copy_chunks(tasks: &mut VecDeque<WriteTask>, output_offset: u64, source_range: ByteRange) {
+    let mut done = 0u64;
+
+    while done < source_range.len {
+        let chunk_len = (source_range.len - done).min(COPY_CHUNK_LEN);
+        tasks.push_back(WriteTask::CopyFromSource {
+            output_offset: output_offset + done,
+            source_range: ByteRange {
+                start: source_range.start + done,
+                len: chunk_len,
+            },
+        });
+        done += chunk_len;
+    }
+}
+
+/// Slices `bytes` at `range`, rejecting a range that overflows or reaches
+/// past the end rather than panicking — the only defense a plan or
+/// manifest this session did not itself produce gets before it is used to
+/// index into a buffer.
+fn slice(bytes: &[u8], range: ByteRange) -> Option<&[u8]> {
+    let end = range.start.checked_add(range.len)?;
+    let start = usize::try_from(range.start).ok()?;
+    let end = usize::try_from(end).ok()?;
+    bytes.get(start..end)
 }
 
 /// Lays out the writes a manifest commit needs: `handler.commit`'s
@@ -897,9 +947,7 @@ fn tasks_for_commit<H: FormatHandler>(
 
         if len > 0 {
             if let Edit::Placeholder(range) = edit {
-                let start = range.start as usize;
-                let end = start + range.len as usize;
-                let bytes = manifest.get(start..end).ok_or(Error::Invariant(
+                let bytes = slice(manifest, *range).ok_or(Error::Invariant(
                     "a placeholder slot lies outside the final manifest bytes",
                 ))?;
                 tasks.push_back(WriteTask::WriteBytes {
@@ -915,6 +963,16 @@ fn tasks_for_commit<H: FormatHandler>(
     }
 
     for patch in patches {
+        // `FormatHandler::commit`'s own contract: every patch must lie
+        // within the exclusion range, since bytes outside it are already
+        // hashed into the hard binding. A handler that violates this is
+        // buggy, not this session's problem to route around.
+        if !patch.lies_within(plan.exclusion) {
+            return Err(Error::Invariant(
+                "commit() returned a patch outside the plan's exclusion range",
+            ));
+        }
+
         tasks.push_back(WriteTask::WriteBytes {
             output_offset: patch.offset,
             bytes: patch.bytes,
@@ -944,20 +1002,20 @@ fn to_io_reply(reply: FileBuilderReply) -> IoReply {
 
 fn to_builder_host_reply(reply: FileBuilderReply) -> BuilderHostReply {
     match reply {
-        // Answers a forwarded `AssetBytes`/`AssetLength` — the output
-        // stream, read back after being written.
+        // Answers a forwarded `AssetBytes` — the output stream, read back
+        // after being written.
         FileBuilderReply::Bytes(bytes) => BuilderHostReply::AssetBytes(bytes),
-        FileBuilderReply::Length(len) => BuilderHostReply::AssetLength(len),
 
         FileBuilderReply::Signature(sig) => BuilderHostReply::Signature(sig),
         FileBuilderReply::Timestamp(ts) => BuilderHostReply::Timestamp(ts),
         FileBuilderReply::Failed(err) => BuilderHostReply::Failed(err),
 
-        // `Written` never answers a forwarded `BuilderRequest`:
-        // `ReservePlaceholder`/`CommitManifest` are answered once their
-        // own `Sub::Writing` finishes, not through this path — kept for
-        // exhaustiveness.
-        FileBuilderReply::Written => {
+        // Neither ever answers a forwarded `BuilderRequest`: `AssetLength`
+        // is answered directly from the plan rather than forwarded (see
+        // `advance`), and `ReservePlaceholder`/`CommitManifest` are
+        // answered once their own `Sub::Writing` finishes, not through
+        // this path — kept for exhaustiveness.
+        FileBuilderReply::Length(_) | FileBuilderReply::Written => {
             BuilderHostReply::Failed(HostError::new("unexpected reply shape"))
         }
     }
@@ -1090,10 +1148,6 @@ mod tests {
             BuilderHostReply::AssetBytes(bytes) if bytes == [1]
         ));
         assert!(matches!(
-            to_builder_host_reply(FileBuilderReply::Length(4)),
-            BuilderHostReply::AssetLength(4)
-        ));
-        assert!(matches!(
             to_builder_host_reply(FileBuilderReply::Signature(vec![1])),
             BuilderHostReply::Signature(bytes) if bytes == [1]
         ));
@@ -1106,11 +1160,13 @@ mod tests {
             BuilderHostReply::Failed(_)
         ));
 
-        // Neither `BuilderSession` nor `SessionCore::fulfill` (which
-        // validates against `FileBuilderRequest::accepts` first) can
-        // produce this pairing in practice — kept for exhaustiveness now
-        // that `FileBuilderReply` has variants this function must still
-        // account for.
+        // Neither `Length` (`AssetLength` is answered from the plan, not
+        // forwarded) nor `Written` ever reaches this function in
+        // practice — kept for exhaustiveness.
+        assert!(matches!(
+            to_builder_host_reply(FileBuilderReply::Length(4)),
+            BuilderHostReply::Failed(_)
+        ));
         assert!(matches!(
             to_builder_host_reply(FileBuilderReply::Written),
             BuilderHostReply::Failed(_)
@@ -1183,6 +1239,54 @@ mod tests {
             tasks_for_edits(&edits, &[1, 2]),
             Err(Error::Invariant(_))
         ));
+    }
+
+    /// A single `Edit::Copy` larger than [`COPY_CHUNK_LEN`] must still
+    /// move through this session in bounded pieces — never one `Read`
+    /// sized to the whole range, which would undo the point of streaming
+    /// for exactly the assets large enough to matter.
+    #[test]
+    fn a_large_copy_edit_is_split_into_bounded_chunks() {
+        let edits = vec![Edit::Copy(ByteRange {
+            start: 100,
+            len: COPY_CHUNK_LEN * 2 + 1,
+        })];
+
+        let tasks = tasks_for_edits(&edits, &[]).unwrap();
+        assert_eq!(tasks.len(), 3);
+
+        let mut expected_output_offset = 0;
+        let mut expected_source_start = 100;
+        for (task, expected_len) in tasks.iter().zip([COPY_CHUNK_LEN, COPY_CHUNK_LEN, 1]) {
+            assert!(matches!(
+                task,
+                WriteTask::CopyFromSource { output_offset, source_range }
+                    if *output_offset == expected_output_offset
+                        && *source_range == ByteRange { start: expected_source_start, len: expected_len }
+            ));
+            expected_output_offset += expected_len;
+            expected_source_start += expected_len;
+        }
+    }
+
+    #[test]
+    fn slice_rejects_a_range_past_the_end_or_that_overflows() {
+        let bytes = [1u8, 2, 3, 4];
+        assert_eq!(
+            slice(&bytes, ByteRange { start: 1, len: 2 }),
+            Some(&bytes[1..3])
+        );
+        assert_eq!(slice(&bytes, ByteRange { start: 3, len: 2 }), None);
+        assert_eq!(
+            slice(
+                &bytes,
+                ByteRange {
+                    start: u64::MAX,
+                    len: 1
+                }
+            ),
+            None
+        );
     }
 
     fn test_settings() -> BuilderSettings {

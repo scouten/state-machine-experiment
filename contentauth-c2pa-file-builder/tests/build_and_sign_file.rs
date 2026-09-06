@@ -149,9 +149,8 @@ fn a_failed_build_removes_the_temporary_file_and_leaves_the_output_untouched() {
     let output: PathBuf = [env!("CARGO_TARGET_TMPDIR"), "never-signed.jpg"]
         .iter()
         .collect();
-    let temp = temp_path_for(&output);
     let _ = std::fs::remove_file(&output);
-    let _ = std::fs::remove_file(&temp);
+    remove_temp_files_for(&output);
 
     fn never_signs(_alg: SigningAlg, _data: &[u8]) -> Result<Vec<u8>, HostError> {
         Err(HostError::new("this test never signs anything"))
@@ -165,18 +164,23 @@ fn a_failed_build_removes_the_temporary_file_and_leaves_the_output_untouched() {
         contentauth_c2pa_file_builder::Error::Build(_)
     ));
     assert!(!output.exists(), "the output path must be untouched");
-    assert!(!temp.exists(), "the temporary file must be cleaned up");
+    assert!(
+        !any_temp_file_exists_for(&output),
+        "the temporary file must be cleaned up"
+    );
 }
 
 /// A failure renaming the finished temporary file into place — here,
 /// because `output_path` is an existing directory rather than a file — is
-/// reported like any other I/O error, not silently swallowed.
+/// reported like any other I/O error, not silently swallowed, and does
+/// not leave the temporary file behind either.
 #[test]
-fn a_rename_failure_is_reported_as_an_io_error() {
+fn a_rename_failure_is_reported_as_an_io_error_and_cleans_up_the_temporary_file() {
     let output: PathBuf = [env!("CARGO_TARGET_TMPDIR"), "signed-as-a-directory.jpg"]
         .iter()
         .collect();
     std::fs::create_dir_all(&output).unwrap();
+    remove_temp_files_for(&output);
 
     let err = build_and_sign_file(JpegFormat, C_JPG_PATH, &output, settings(), sign)
         .expect_err("renaming onto an existing directory cannot succeed");
@@ -185,12 +189,45 @@ fn a_rename_failure_is_reported_as_an_io_error() {
         err,
         contentauth_c2pa_file_builder::Error::Io { .. }
     ));
+    assert!(
+        !any_temp_file_exists_for(&output),
+        "the temporary file must be cleaned up even when the rename itself fails"
+    );
 }
 
-/// Mirrors the crate's own private `temp_path_for`, so this test can check
-/// for the temporary file without depending on its internals directly.
-fn temp_path_for(output_path: &std::path::Path) -> PathBuf {
-    let mut temp = output_path.as_os_str().to_owned();
-    temp.push(".c2pa-tmp");
-    PathBuf::from(temp)
+/// The prefix every temporary file [`build_and_sign_file`] creates for
+/// `output_path` starts with — the crate's own naming scheme is private
+/// and unpredictable by design (see its own docs), so tests can only ever
+/// look for this much of it.
+fn temp_file_prefix(output_path: &std::path::Path) -> String {
+    format!(
+        "{}.c2pa-tmp-",
+        output_path.file_name().unwrap().to_string_lossy()
+    )
+}
+
+fn any_temp_file_exists_for(output_path: &std::path::Path) -> bool {
+    let Some(dir) = output_path.parent() else {
+        return false;
+    };
+    let prefix = temp_file_prefix(output_path);
+
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+}
+
+fn remove_temp_files_for(output_path: &std::path::Path) {
+    let Some(dir) = output_path.parent() else {
+        return;
+    };
+    let prefix = temp_file_prefix(output_path);
+
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        if entry.file_name().to_string_lossy().starts_with(&prefix) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }

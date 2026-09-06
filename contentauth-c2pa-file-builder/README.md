@@ -28,13 +28,16 @@ drives it. It never buffers the source or output asset itself — it never
 calls `EmbedPlan::materialize` (the in-memory reference implementation
 for turning a plan into bytes); instead it walks a plan's edits directly,
 issuing a `FileBuilderRequest::Read` against `SOURCE_STREAM` for each
-range it needs to copy through and a `FileBuilderRequest::Write` against
-`OUTPUT_STREAM` for every byte it produces. `AssetLength`/`AssetBytes` —
-needed to hash the output for the hard binding — are forwarded the same
-way, as plain reads of the output stream once it has been written. Only
-`Sign` and `Timestamp` ever reach the host as themselves: a signing key
-and an RFC 3161 authority round trip are not things this crate, or any
-format handler, can stand in for.
+range it needs to copy through (in bounded chunks, for a single large
+range) and a `FileBuilderRequest::Write` against `OUTPUT_STREAM` for
+every byte it produces. `AssetBytes` — needed to hash the output for the
+hard binding — is forwarded the same way, as a plain read of the output
+stream once it has been written; `AssetLength` is answered from the
+plan's own known output length instead of asking the host, so a reused
+or longer-than-needed output stream can never leak stale trailing bytes
+into the hash. Only `Sign` and `Timestamp` ever reach the host as
+themselves: a signing key and an RFC 3161 authority round trip are not
+things this crate, or any format handler, can stand in for.
 
 `build_and_sign` and `build_and_sign_file` are a host for exactly that
 session, for the common case: a caller with plain, synchronous
@@ -42,9 +45,11 @@ session, for the common case: a caller with plain, synchronous
 write the output (read-back is needed for the hashing above), and a plain
 signing function — no timestamping. `build_and_sign_file` additionally
 never leaves a partial or corrupt file at the requested output path: it
-builds into a temporary file beside it and renames that into place only
-once the build succeeds, deleting the temporary file on any failure
-instead.
+builds into a freshly, exclusively created temporary file with an
+unpredictable name beside it — never one a symlink pre-created at a
+guessable path could redirect — and renames that into place only once
+the build succeeds, cleaning up the temporary file on any failure,
+including a failed rename, instead of leaving debris behind.
 
 ```rust,no_run
 use contentauth_c2pa_builder::{BuilderSettings, GeneratorInfo, SigningAlg};
