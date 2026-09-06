@@ -51,6 +51,46 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   clock, drives `FileReadSession` directly instead (see
   [`contentauth-c2pa-file-reader`](contentauth-c2pa-file-reader/examples/custom_host.rs)'s
   example). Read-only; a future orchestrator crate would cover writing.
+- **`contentauth-c2pa-file-builder`** — the write-side mirror of the
+  crate above: `FileBuilderSession` (`src/session.rs`) is a sans-I/O
+  session that composes a `FormatHandler`'s `plan_embed`/`commit` with a
+  `BuilderSession`, without ever buffering the source or output asset
+  itself — it never calls `EmbedPlan::materialize` (the in-memory
+  reference implementation), instead walking a plan's edits directly,
+  after independently checking the plan itself (`EmbedPlan::check`
+  against a freshly asked source length) rather than trusting a
+  `FormatHandler` it does not control to have validated its own output.
+  It answers `ReservePlaceholder` and `CommitManifest` by issuing
+  `FileBuilderRequest::Read` against `SOURCE_STREAM` and
+  `FileBuilderRequest::Write` against `OUTPUT_STREAM` for each edit, in
+  bounded chunks for a large `Edit::Copy` rather than one host round trip
+  sized to the whole range; forwards `AssetBytes` as plain reads of the
+  output stream once it has been written (hashing it for the hard binding
+  without holding it in memory), but answers `AssetLength` from the
+  plan's own known output length rather than asking the host, so a
+  reused, longer-than-needed output stream can never leak stale trailing
+  bytes into the hash — though those bytes are still physically present
+  in `output` afterward for anyone who reads it back directly rather than
+  trusting only what the manifest declares; `build_and_sign`'s own doc
+  comment tells a caller who cares to pass a stream that starts empty —
+  and only `Sign`/`Timestamp` ever reach the host as themselves, since
+  nothing in this workspace can sign or timestamp on a host's behalf.
+  `build_and_sign`/`build_and_sign_file` (`src/drive.rs`) are one such
+  host, for a caller with plain synchronous `Read + Seek` source access,
+  `Read + Write + Seek` output access (read-back is needed for the
+  hashing above), and a plain signing function (no timestamping); a host
+  that needs timestamping, or async/network access, drives
+  `FileBuilderSession` directly. `build_and_sign_file` builds into a
+  freshly, exclusively created (`create_new`, never `create` +
+  `truncate`) temporary file with an unpredictable name beside the
+  requested output path — never a symlink-followable, guessable one — and
+  renames it into place only once the build succeeds, cleaning up the
+  temporary file on any failure, rename included, so a failed build never
+  corrupts or partially overwrites an existing output file nor leaves
+  debris behind. Its own test suite round-trips a signed asset through
+  `contentauth-c2pa-file-reader` and checks it reads back as `Trusted` —
+  the two crates' only relationship is that both implement the
+  `contentauth-c2pa-format` contract.
 
 Container-format handling is deliberately *outside* the reader and
 builder: they ask their host for "the manifest store's bytes" and to

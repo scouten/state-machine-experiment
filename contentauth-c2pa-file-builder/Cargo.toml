@@ -1,0 +1,50 @@
+[package]
+name = "contentauth-c2pa-file-builder"
+version = "0.1.0"
+description = "Builds and signs a C2PA manifest store directly into a file, gluing a contentauth-c2pa-format handler to contentauth-c2pa-builder"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["c2pa", "content-credentials", "sans-io"]
+categories = ["api-bindings"]
+publish = false
+
+[dependencies]
+# `test-util` exposes `SessionCore::fulfill_unchecked` outside this crate,
+# for this crate's own tests that need to exercise a defense-in-depth
+# check against a reply payload `fulfill` itself would reject.
+contentauth-state-machine = { path = "../contentauth-state-machine", features = [
+    "test-util",
+] }
+
+# The contract every container-format handler implements: this crate is
+# generic over any `FormatHandler`, not just JPEG.
+contentauth-c2pa-format = { path = "../contentauth-c2pa-format" }
+
+# The build/sign engine this crate feeds from the same source bytes it
+# hands the format handler, and whose output it materializes itself.
+contentauth-c2pa-builder = { path = "../contentauth-c2pa-builder" }
+
+# `ByteRange`, `HostError`, `StreamId` — the handles both sessions above
+# address their host with.
+contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
+
+thiserror = "2.0.20"
+
+[dev-dependencies]
+# The JPEG handler this crate's own tests exercise.
+contentauth-c2pa-format-jpeg = { path = "../contentauth-c2pa-format-jpeg" }
+# Reads a built asset back to prove it is actually valid, exactly as
+# `contentauth-c2pa-builder`'s own tests round-trip through
+# `contentauth-c2pa-reader` directly.
+contentauth-c2pa-file-reader = { path = "../contentauth-c2pa-file-reader" }
+contentauth-c2pa-reader = { path = "../contentauth-c2pa-reader" }
+# Test-only signer, exactly as `contentauth-c2pa-builder`'s own tests use
+# it. See deny.toml for why its `rsa` advisory is accepted for test-only
+# use.
+c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
+    "rust_native_crypto",
+] }
