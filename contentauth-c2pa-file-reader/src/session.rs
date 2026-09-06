@@ -186,6 +186,34 @@ impl<H: FormatHandler> FileReadSession<H> {
     fn already_pending(&self, inner_id: RequestId) -> bool {
         self.pending.values().any(|&id| id == inner_id)
     }
+
+    /// Forwards `reply` to `target`, marking this session failed if `target`
+    /// rejects it.
+    ///
+    /// Every fallible call inside `advance` after `self.phase.take()` needs
+    /// this: `self.phase` is `None` until an arm reassigns it, so a bare
+    /// `?` on an inner `fulfill` would leave `self.core` reporting
+    /// `Running` — `finish` would then say `SessionNotComplete` — for a
+    /// session `advance` has actually abandoned. Routing every such call
+    /// through here keeps the two in agreement.
+    fn checked_fulfill<S>(
+        &mut self,
+        target: &mut S,
+        id: RequestId,
+        reply: <S::Request as Request>::Reply,
+    ) -> Result<(), Error>
+    where
+        S: Session,
+        Error: From<S::Error>,
+    {
+        match target.fulfill(id, reply) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                self.core.mark_failed();
+                Err(err.into())
+            }
+        }
+    }
 }
 
 impl<H: FormatHandler> Session for FileReadSession<H> {
@@ -203,7 +231,7 @@ impl<H: FormatHandler> Session for FileReadSession<H> {
 
                 Some(Phase::Locating(mut op)) => {
                     for (id, reply) in self.ready_replies() {
-                        op.fulfill(id, to_io_reply(reply))?;
+                        self.checked_fulfill(&mut op, id, to_io_reply(reply))?;
                     }
 
                     let step = match op.advance() {
@@ -237,6 +265,8 @@ impl<H: FormatHandler> Session for FileReadSession<H> {
                         continue;
                     }
 
+                    let mut answered_internally = false;
+
                     for request in op.outstanding_requests().to_vec() {
                         if self.already_pending(request.id) {
                             continue;
@@ -248,17 +278,29 @@ impl<H: FormatHandler> Session for FileReadSession<H> {
                                 self.pending.insert(outer_id, request.id);
                             }
                             // Unreachable with today's `IoRequest`; see
-                            // `from_io_request`.
+                            // `from_io_request`. If a future variant ever
+                            // does land here, answering it internally
+                            // rather than surfacing it keeps the fallback
+                            // itself from being the thing that breaks —
+                            // hence `continue`ing below rather than
+                            // returning `AwaitHost` with nothing for the
+                            // host to actually do.
                             None => {
-                                op.fulfill(
+                                self.checked_fulfill(
+                                    &mut op,
                                     request.id,
                                     IoReply::Failed(HostError::new("unsupported request")),
                                 )?;
+                                answered_internally = true;
                             }
                         }
                     }
 
                     self.phase = Some(Phase::Locating(op));
+
+                    if answered_internally {
+                        continue;
+                    }
                     return Ok(Step::AwaitHost);
                 }
 
@@ -267,7 +309,7 @@ impl<H: FormatHandler> Session for FileReadSession<H> {
                     mut session,
                 }) => {
                     for (id, reply) in self.ready_replies() {
-                        session.fulfill(id, to_read_host_reply(reply))?;
+                        self.checked_fulfill(&mut *session, id, to_read_host_reply(reply))?;
                     }
 
                     let step = match session.advance() {
@@ -303,7 +345,8 @@ impl<H: FormatHandler> Session for FileReadSession<H> {
                         }
 
                         if let ReadRequest::ManifestStore { .. } = request.kind {
-                            session.fulfill(
+                            self.checked_fulfill(
+                                &mut *session,
                                 request.id,
                                 ReadHostReply::ManifestStore(manifest_store.clone()),
                             )?;
@@ -319,12 +362,17 @@ impl<H: FormatHandler> Session for FileReadSession<H> {
                             // Unreachable here: `ManifestStore` is the only
                             // `ReadRequest` variant `from_read_request`
                             // maps to `None`, and it was already matched
-                            // above. See `from_read_request`.
+                            // above. See `from_read_request`. `continue`s
+                            // below for the same reason the locate-phase
+                            // fallback does: never report `AwaitHost` with
+                            // nothing outstanding for the host to answer.
                             None => {
-                                session.fulfill(
+                                self.checked_fulfill(
+                                    &mut *session,
                                     request.id,
                                     ReadHostReply::Failed(HostError::new("unsupported request")),
                                 )?;
+                                answered_internally = true;
                             }
                         }
                     }
@@ -555,6 +603,26 @@ mod tests {
             to_read_host_reply(FileReadReply::Failed(HostError::new("x"))),
             ReadHostReply::Failed(_)
         ));
+    }
+
+    /// A reply `checked_fulfill` cannot deliver — the inner session
+    /// rejects it — must leave `self.core` agreeing that the session is
+    /// dead, not merely abandon the workflow while `core` still reports
+    /// `Running`. An ID the target `op` never issued triggers the same
+    /// rejection a corrupted `pending` map would.
+    #[test]
+    fn checked_fulfill_marks_the_session_failed_if_the_inner_op_rejects_the_reply() {
+        let mut session = FileReadSession::new(&JpegFormat, ReadSettings::default());
+
+        let mut foreign = JpegFormat.locate(StreamId::new(0));
+        assert!(matches!(foreign.advance(), Ok(Step::AwaitHost)));
+        let foreign_id = foreign.outstanding_requests()[0].id;
+
+        let mut op = JpegFormat.locate(StreamId::new(0));
+        let result = session.checked_fulfill(&mut op, foreign_id, IoReply::Length(0));
+
+        assert!(matches!(result, Err(Error::Format(_))), "{result:?}");
+        assert!(session.core.is_failed());
     }
 
     /// `advance` treats a `None` phase as a poisoned session rather than

@@ -87,6 +87,10 @@ fn a_hand_rolled_host_can_supply_its_own_clock() {
             break;
         }
 
+        // A session reporting `AwaitHost` with nothing outstanding would
+        // leave a host that trusts the contract waiting forever.
+        assert!(!session.outstanding_requests().is_empty());
+
         for request in session.outstanding_requests().to_vec() {
             session.fulfill(request.id, answer(&request.kind)).unwrap();
         }
