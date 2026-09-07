@@ -61,11 +61,11 @@ pub trait ReadForComparison: Sized {
 
 impl ReadForComparison for c2pa::Reader {
     fn read(path: &Path) -> Result<Self, String> {
-        // The non-deprecated equivalent of `Reader::from_file` per that
-        // method's own doc comment (`from_file` delegates to this same call
-        // internally, but is deprecated in favor of naming the `Context`
-        // step explicitly).
-        c2pa::Reader::default()
+        // The `Context`-based path c2pa-rs's own docs recommend over its
+        // deprecated standalone `Reader::from_file` — see
+        // `contentauth_c2pa_rs_compat::Reader::read` below, which drives
+        // the compat crate's mirror of the same interface.
+        c2pa::Reader::from_context(c2pa::Context::new())
             .with_file(path)
             .map_err(|err| err.to_string())
     }
@@ -89,7 +89,12 @@ impl ReadForComparison for c2pa::Reader {
 
 impl ReadForComparison for contentauth_c2pa_rs_compat::Reader {
     fn read(path: &Path) -> Result<Self, String> {
-        contentauth_c2pa_rs_compat::Reader::from_file(path).map_err(|err| err.to_string())
+        // The compat crate's own mirror of the `Context`-based path above
+        // — see its `src/context.rs` for what it does and doesn't carry
+        // over from c2pa-rs's own, much larger `Context`.
+        contentauth_c2pa_rs_compat::Reader::from_context(contentauth_c2pa_rs_compat::Context::new())
+            .with_file(path)
+            .map_err(|err| err.to_string())
     }
 
     fn summarize(&self) -> Summary {

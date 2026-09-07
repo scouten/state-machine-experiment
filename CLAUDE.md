@@ -97,13 +97,16 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   Rust's ownership rules allow it, same `Error::JumbfNotFound`/JSON
   contracts — on top of `contentauth-c2pa-file-reader` and
   `contentauth-c2pa-format-jpeg`, instead of this workspace's own
-  `Session` interaction contract. One use case only:
-  `Reader::from_file` on a local JPEG, through to `.json()`,
-  `.validation_state()`, and the borrowed `Manifest` accessors it
-  reports (see [`src/lib.rs`](contentauth-c2pa-rs-compat/src/lib.rs) for how
-  a `Builder` counterpart or additional format handlers would extend
-  this). Its own work is entirely that compatibility surface; the read
-  and validation logic underneath already existed.
+  `Session` interaction contract. One use case only: `Context` (trust
+  anchors) and `Reader::from_context(context).with_file(path)` on a local
+  JPEG — the preferred shape, mirroring what c2pa-rs's own docs now
+  recommend over its deprecated standalone `Reader::from_file` (kept here
+  too, for the same reason) — through to `.json()`, `.validation_state()`,
+  and the borrowed `Manifest` accessors it reports (see
+  [`src/lib.rs`](contentauth-c2pa-rs-compat/src/lib.rs) for how a
+  `Builder` counterpart or additional format handlers would extend this).
+  Its own work is entirely that compatibility surface; the read and
+  validation logic underneath already existed.
 - **`c2pa-rs-compat-conformance`** — a differential test harness for the
   crate above, proving the same client code gets the same answer reading
   a file through the real `c2pa` crate as through

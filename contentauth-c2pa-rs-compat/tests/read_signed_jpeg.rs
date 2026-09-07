@@ -15,8 +15,8 @@
 //! surface only: a manifest built and signed by `contentauth-c2pa-builder`,
 //! embedded into a JPEG by `contentauth-c2pa-format-jpeg`, written to an
 //! actual file, then read back through
-//! [`contentauth_c2pa_rs_compat::Reader::from_file`] — the c2pa-rs-shaped
-//! entry point this crate exists to provide.
+//! `contentauth_c2pa_rs_compat::Reader::from_context(context).with_file(path)`
+//! — the c2pa-rs-shaped entry point this crate exists to provide.
 //!
 //! The embedding side plays the same "host does it by hand" role every
 //! sibling crate's own end-to-end test does, using
@@ -37,7 +37,7 @@ use contentauth_c2pa_format::{
     EmbedPlan, FormatHandler,
 };
 use contentauth_c2pa_format_jpeg::JpegFormat;
-use contentauth_c2pa_rs_compat::{Error, ReadSettings, Reader, ValidationState};
+use contentauth_c2pa_rs_compat::{Context, Error, ReadSettings, Reader, ValidationState};
 use contentauth_state_machine::Session;
 use jumbf::{
     builder::{DataBoxBuilder, SuperBoxBuilder},
@@ -244,14 +244,13 @@ fn a_manifest_written_by_the_builder_reads_back_as_trusted_through_the_compat_re
     let (_plan, asset) = build_and_embed(C_JPG);
     let path = write_temp("signed.jpg", &asset);
 
-    let reader = Reader::from_file_with_settings(
-        &path,
-        ReadSettings {
-            trust_anchors: vec![TEST_SIGNER_CERT.to_vec()],
-            ..ReadSettings::default()
-        },
-    )
-    .expect("the file just written should read back cleanly");
+    let context = Context::new().with_settings(ReadSettings {
+        trust_anchors: vec![TEST_SIGNER_CERT.to_vec()],
+        ..ReadSettings::default()
+    });
+    let reader = Reader::from_context(context)
+        .with_file(&path)
+        .expect("the file just written should read back cleanly");
 
     assert_eq!(reader.validation_state(), ValidationState::Trusted);
     assert_eq!(reader.active_label(), Some("urn:uuid:test-manifest"));
@@ -322,7 +321,9 @@ fn without_a_trust_anchor_the_same_manifest_reads_back_only_as_valid() {
     let (_plan, asset) = build_and_embed(C_JPG);
     let path = write_temp("signed_untrusted.jpg", &asset);
 
-    let reader = Reader::from_file(&path).expect("should still read and validate cleanly");
+    let reader = Reader::from_context(Context::new())
+        .with_file(&path)
+        .expect("should still read and validate cleanly");
 
     assert_eq!(reader.validation_state(), ValidationState::Valid);
 
@@ -340,7 +341,9 @@ fn supported_extensions_lists_jpeg_and_jpg() {
 fn a_real_c2pa_rs_signed_fixture_reports_its_claim_generator() {
     let path = write_temp("c_from_c2pa_rs.jpg", C_JPG);
 
-    let reader = Reader::from_file(&path).expect("C.jpg carries a real c2pa-rs-signed manifest");
+    let reader = Reader::from_context(Context::new())
+        .with_file(&path)
+        .expect("C.jpg carries a real c2pa-rs-signed manifest");
 
     let active = reader
         .active_manifest()
@@ -365,8 +368,9 @@ fn a_tampered_asset_reads_back_as_invalid() {
     asset[offset] ^= 0xff;
 
     let path = write_temp("tampered.jpg", &asset);
-    let reader =
-        Reader::from_file(&path).expect("a tampered asset still reads, it just fails validation");
+    let reader = Reader::from_context(Context::new())
+        .with_file(&path)
+        .expect("a tampered asset still reads, it just fails validation");
 
     assert_eq!(reader.validation_state(), ValidationState::Invalid);
     assert!(reader
@@ -389,7 +393,9 @@ fn an_empty_manifest_store_has_no_validation_status_and_reads_as_invalid() {
     );
     let path = write_temp("empty_store.jpg", &asset);
 
-    let reader = Reader::from_file(&path).expect("an empty-but-present manifest store still reads");
+    let reader = Reader::from_context(Context::new())
+        .with_file(&path)
+        .expect("an empty-but-present manifest store still reads");
 
     assert!(reader.active_manifest().is_none());
     assert!(reader.active_label().is_none());
@@ -415,7 +421,9 @@ fn active_manifest_picks_the_last_of_duplicate_labels() {
     );
     let path = write_temp("duplicate_label.jpg", &asset);
 
-    let reader = Reader::from_file(&path).expect("a store with duplicate labels still reads");
+    let reader = Reader::from_context(Context::new())
+        .with_file(&path)
+        .expect("a store with duplicate labels still reads");
 
     assert_eq!(reader.active_label(), Some("urn:uuid:duplicate"));
     assert_eq!(reader.iter_manifests().count(), 2);
@@ -433,7 +441,9 @@ fn active_manifest_picks_the_last_of_duplicate_labels() {
 fn a_jpeg_with_no_manifest_store_is_reported_as_jumbf_not_found() {
     let path = write_temp("no_manifest.jpg", &unsigned_jpeg());
 
-    let err = Reader::from_file(&path).expect_err("an unsigned JPEG carries no manifest store");
+    let err = Reader::from_context(Context::new())
+        .with_file(&path)
+        .expect_err("an unsigned JPEG carries no manifest store");
     assert!(matches!(err, Error::JumbfNotFound { .. }), "{err:?}");
 }
 
@@ -441,8 +451,9 @@ fn a_jpeg_with_no_manifest_store_is_reported_as_jumbf_not_found() {
 fn a_jpg_extension_with_unparseable_content_surfaces_as_a_read_error() {
     let path = write_temp("garbage.jpg", b"this is not a JPEG at all");
 
-    let err =
-        Reader::from_file(&path).expect_err("no SOI marker, so the handler can't locate anything");
+    let err = Reader::from_context(Context::new())
+        .with_file(&path)
+        .expect_err("no SOI marker, so the handler can't locate anything");
     assert!(matches!(err, Error::Read(_)), "{err:?}");
 }
 
@@ -450,6 +461,67 @@ fn a_jpg_extension_with_unparseable_content_surfaces_as_a_read_error() {
 fn an_unrecognized_extension_is_reported_as_unsupported() {
     let path = write_temp("asset.png", C_JPG);
 
-    let err = Reader::from_file(&path).expect_err("no handler recognizes .png yet");
+    let err = Reader::from_context(Context::new())
+        .with_file(&path)
+        .expect_err("no handler recognizes .png yet");
     assert!(matches!(err, Error::UnsupportedType { .. }), "{err:?}");
+}
+
+#[test]
+fn a_bare_reader_default_reports_as_though_nothing_was_ever_read() {
+    // `Reader::default()` — equivalently, `Reader::from_context(Context::default())`
+    // — before `with_file` is ever called, the same way c2pa-rs's own
+    // `Reader::default()` exists in a real, queryable state before any
+    // asset has been loaded into it.
+    let reader = Reader::default();
+
+    assert_eq!(reader.validation_state(), ValidationState::Invalid);
+    assert!(reader.validation_status().is_none());
+    assert!(reader.active_manifest().is_none());
+    assert!(reader.active_label().is_none());
+    assert!(reader.get_manifest("anything").is_none());
+    assert_eq!(reader.iter_manifests().count(), 0);
+    assert_eq!(reader.json(), "{}");
+}
+
+#[test]
+fn a_shared_context_configured_by_mutation_drives_multiple_readers() {
+    // The other side of `Context`'s builder-style `with_settings`: mutate
+    // one in place, share it (as c2pa-rs's own `Context::into_shared` /
+    // `Reader::from_shared_context` do), and use it to build more than one
+    // `Reader`.
+    let mut context = Context::new();
+    context.set_settings(ReadSettings::default());
+    context
+        .settings_mut()
+        .trust_anchors
+        .push(TEST_SIGNER_CERT.to_vec());
+    assert_eq!(context.settings().trust_anchors.len(), 1);
+
+    let shared = context.into_shared();
+
+    let (_plan, asset) = build_and_embed(C_JPG);
+    let path = write_temp("shared_context.jpg", &asset);
+
+    let reader_a = Reader::from_shared_context(&shared)
+        .with_file(&path)
+        .expect("first shared reader should read cleanly");
+    let reader_b = Reader::from_shared_context(&shared)
+        .with_file(&path)
+        .expect("second shared reader should read cleanly");
+
+    assert_eq!(reader_a.validation_state(), ValidationState::Trusted);
+    assert_eq!(reader_b.validation_state(), ValidationState::Trusted);
+}
+
+#[test]
+#[allow(deprecated)]
+fn the_deprecated_from_file_convenience_still_works() {
+    // c2pa-rs keeps its own `Reader::from_file` around, deprecated in favor
+    // of `Reader::from_context(context).with_file(path)`; this crate mirrors
+    // that posture rather than removing the shorter form outright.
+    let path = write_temp("via_deprecated_from_file.jpg", C_JPG);
+
+    let reader = Reader::from_file(&path).expect("C.jpg carries a real c2pa-rs-signed manifest");
+    assert_eq!(reader.validation_state(), ValidationState::Valid);
 }
