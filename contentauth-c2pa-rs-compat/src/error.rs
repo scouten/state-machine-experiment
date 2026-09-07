@@ -57,6 +57,13 @@ pub enum Error {
     Read(#[from] contentauth_c2pa_file_reader::Error),
 
     /// [`crate::Reader::json_checked`] could not serialize the report.
+    ///
+    /// Kept for parity with c2pa-rs's own fallible `json_checked`/`json`
+    /// contract rather than because this crate's own JSON shape (plain
+    /// strings and `Vec`s — see `src/json.rs`) can actually produce one:
+    /// nothing in it can fail to serialize, so this variant is expected to
+    /// stay unreachable in practice, the same way it does for c2pa-rs's own,
+    /// richer report.
     #[error(transparent)]
     Json(#[from] serde_json::Error),
 }

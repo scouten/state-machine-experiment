@@ -99,3 +99,35 @@ impl From<contentauth_c2pa_reader::ValidationStatus> for ValidationStatus {
         Self(status)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use contentauth_c2pa_reader::ValidationState as Inner;
+
+    use super::ValidationState;
+
+    #[test]
+    fn trusted_and_valid_map_straight_across() {
+        assert_eq!(
+            ValidationState::from(Some(Inner::Trusted)),
+            ValidationState::Trusted
+        );
+        assert_eq!(
+            ValidationState::from(Some(Inner::Valid)),
+            ValidationState::Valid
+        );
+    }
+
+    #[test]
+    fn invalid_incomplete_and_no_outcome_at_all_fold_into_invalid() {
+        assert_eq!(
+            ValidationState::from(Some(Inner::Invalid)),
+            ValidationState::Invalid
+        );
+        assert_eq!(
+            ValidationState::from(Some(Inner::Incomplete)),
+            ValidationState::Invalid
+        );
+        assert_eq!(ValidationState::from(None), ValidationState::Invalid);
+    }
+}

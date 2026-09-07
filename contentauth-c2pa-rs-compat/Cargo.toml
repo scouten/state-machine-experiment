@@ -51,3 +51,7 @@ contentauth-c2pa-format = { path = "../contentauth-c2pa-format", features = [
 c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
     "rust_native_crypto",
 ] }
+# Test-only: builds a minimal, real (but manifest-free) JUMBF superbox for
+# the empty-manifest-store coverage case, rather than hand-assembling box
+# bytes.
+jumbf = "0.7.0"
