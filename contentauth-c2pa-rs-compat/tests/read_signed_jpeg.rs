@@ -39,7 +39,10 @@ use contentauth_c2pa_format::{
 use contentauth_c2pa_format_jpeg::JpegFormat;
 use contentauth_c2pa_rs_compat::{Error, ReadSettings, Reader, ValidationState};
 use contentauth_state_machine::Session;
-use jumbf::builder::SuperBoxBuilder;
+use jumbf::{
+    builder::{DataBoxBuilder, SuperBoxBuilder},
+    BoxType,
+};
 
 const TEST_SIGNER_CERT: &[u8] =
     include_bytes!("../../contentauth-c2pa-builder/tests/fixtures/test-signer.der");
@@ -152,13 +155,72 @@ fn unsigned_jpeg() -> Vec<u8> {
     bytes
 }
 
-/// JUMBF type UUID of a C2PA manifest store superbox — `"c2pa"` followed by
-/// the fixed suffix every C2PA box type UUID shares. Reproduced here rather
-/// than shared, since `contentauth-c2pa-reader`'s copy is private to that
-/// crate.
-const MANIFEST_STORE_UUID: [u8; 16] = [
-    0x63, 0x32, 0x70, 0x61, 0x00, 0x11, 0x00, 0x10, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71,
-];
+/// Builds a JUMBF type UUID from its four-character code, the same way
+/// `contentauth-c2pa-reader`'s own (private) copy of this helper does: the
+/// fourcc followed by the fixed suffix every C2PA box type UUID shares.
+const fn type_uuid(fourcc: [u8; 4]) -> [u8; 16] {
+    [
+        fourcc[0], fourcc[1], fourcc[2], fourcc[3], 0x00, 0x11, 0x00, 0x10, 0x80, 0x00, 0x00, 0xaa,
+        0x00, 0x38, 0x9b, 0x71,
+    ]
+}
+
+/// Type UUID of the manifest store superbox.
+const MANIFEST_STORE_UUID: [u8; 16] = type_uuid(*b"c2pa");
+
+/// Type UUID of a manifest superbox.
+///
+/// Not actually consulted by the reader (it finds manifests by walking
+/// every child superbox of the store, whatever their UUID, and goes by
+/// label instead — see `contentauth-c2pa-reader`'s own `child_superboxes`);
+/// used here only so the fixture looks like a real manifest store.
+const MANIFEST_UUID: [u8; 16] = type_uuid(*b"c2ma");
+
+/// Type UUID of a manifest's claim superbox — this one *is* load-bearing:
+/// it's how the reader finds a manifest's claim among its other children.
+const CLAIM_UUID: [u8; 16] = type_uuid(*b"c2cl");
+
+/// Serializes a manifest store superbox containing `manifests`, in order.
+fn manifest_store_bytes(manifests: Vec<SuperBoxBuilder<'static>>) -> Vec<u8> {
+    let mut store = SuperBoxBuilder::new(&MANIFEST_STORE_UUID);
+    for manifest in manifests {
+        store = store.add_child_box(manifest);
+    }
+
+    let mut out = Cursor::new(Vec::new());
+    store
+        .write_jumbf(&mut out)
+        .expect("a well-formed store always serializes");
+    out.into_inner()
+}
+
+/// The smallest CBOR claim `contentauth-c2pa-reader` can decode: a
+/// one-entry map holding just `dc:title`. Hand-encoded rather than built
+/// with a CBOR library — two short text strings fit comfortably in CBOR's
+/// single-byte "short form" length encoding, so there is no ambiguity to
+/// get wrong.
+fn claim_cbor_with_title(title: &str) -> Vec<u8> {
+    let title = title.as_bytes();
+    assert!(title.len() < 24, "helper only handles short titles");
+
+    let mut bytes = vec![0xa1, 0x68]; // map(1), then text(8) for the key
+    bytes.extend_from_slice(b"dc:title");
+    bytes.push(0x60 | title.len() as u8); // text(len) for the value
+    bytes.extend_from_slice(title);
+    bytes
+}
+
+/// A minimal manifest superbox: `label`, and a claim child carrying just a
+/// `dc:title` — nothing else `contentauth-c2pa-reader` requires in order to
+/// parse it (no assertion store, no signature).
+fn minimal_manifest(label: &str, title: &str) -> SuperBoxBuilder<'static> {
+    let claim_cbor = DataBoxBuilder::from_owned(BoxType(*b"cbor"), claim_cbor_with_title(title));
+    let claim_box = SuperBoxBuilder::new(&CLAIM_UUID).add_child_box(claim_cbor);
+
+    SuperBoxBuilder::new(&MANIFEST_UUID)
+        .set_label(label)
+        .add_child_box(claim_box)
+}
 
 /// A real, well-formed, but entirely empty C2PA manifest store: a `c2pa`
 /// superbox with no manifest children at all. Built with the `jumbf` crate's
@@ -167,11 +229,7 @@ const MANIFEST_STORE_UUID: [u8; 16] = [
 /// whose format handler locates *something* shaped like a manifest store,
 /// but that store turns out to hold no manifest.
 fn empty_manifest_store_bytes() -> Vec<u8> {
-    let sbox = SuperBoxBuilder::new(&MANIFEST_STORE_UUID);
-    let mut out = Cursor::new(Vec::new());
-    sbox.write_jumbf(&mut out)
-        .expect("an empty superbox always serializes");
-    out.into_inner()
+    manifest_store_bytes(vec![])
 }
 
 /// Writes `bytes` under `CARGO_TARGET_TMPDIR` and returns the path.
@@ -213,9 +271,38 @@ fn a_manifest_written_by_the_builder_reads_back_as_trusted_through_the_compat_re
     assert!(reader.get_manifest("urn:uuid:nonexistent").is_none());
     assert_eq!(reader.iter_manifests().count(), 1);
 
-    let json = reader.json();
-    assert!(json.contains("urn:uuid:test-manifest"));
-    assert!(json.contains("\"validation_state\": \"Trusted\""));
+    // Parsed and checked field by field, rather than matched as a
+    // substring of the raw string: a substring check would still pass if
+    // `manifests` lost its `instance_id`/`assertions` fields, moved
+    // `active_manifest` under the wrong key, or serialized
+    // `validation_status` as something other than a list of `{code, ...}`
+    // objects.
+    let json: serde_json::Value =
+        serde_json::from_str(&reader.json()).expect("Reader::json produces valid JSON");
+    assert_eq!(json["active_manifest"], "urn:uuid:test-manifest");
+    assert_eq!(json["validation_state"], "Trusted");
+
+    let manifest_json = &json["manifests"]["urn:uuid:test-manifest"];
+    assert_eq!(manifest_json["label"], "urn:uuid:test-manifest");
+    assert_eq!(manifest_json["title"], "test.jpg");
+    assert_eq!(manifest_json["format"], "image/jpeg");
+    assert_eq!(manifest_json["instance_id"], "xmp:iid:test-instance");
+    assert_eq!(
+        manifest_json["assertions"],
+        serde_json::json!(["c2pa.hash.data"])
+    );
+
+    let status_codes: Vec<&str> = json["validation_status"]
+        .as_array()
+        .expect("validation_status is a JSON array")
+        .iter()
+        .map(|status| {
+            status["code"]
+                .as_str()
+                .expect("each validation status has a string code")
+        })
+        .collect();
+    assert!(status_codes.contains(&"claimSignature.validated"));
 
     let statuses = reader.validation_status().expect("checks were recorded");
     assert!(!statuses.is_empty());
@@ -238,7 +325,10 @@ fn without_a_trust_anchor_the_same_manifest_reads_back_only_as_valid() {
     let reader = Reader::from_file(&path).expect("should still read and validate cleanly");
 
     assert_eq!(reader.validation_state(), ValidationState::Valid);
-    assert!(reader.json().contains("\"validation_state\": \"Valid\""));
+
+    let json: serde_json::Value =
+        serde_json::from_str(&reader.json()).expect("Reader::json produces valid JSON");
+    assert_eq!(json["validation_state"], "Valid");
 }
 
 #[test]
@@ -284,7 +374,10 @@ fn a_tampered_asset_reads_back_as_invalid() {
         .expect("checks were recorded")
         .iter()
         .any(|status| status.code() == "assertion.dataHash.mismatch"));
-    assert!(reader.json().contains("\"validation_state\": \"Invalid\""));
+
+    let json: serde_json::Value =
+        serde_json::from_str(&reader.json()).expect("Reader::json produces valid JSON");
+    assert_eq!(json["validation_state"], "Invalid");
 }
 
 #[test]
@@ -302,6 +395,38 @@ fn an_empty_manifest_store_has_no_validation_status_and_reads_as_invalid() {
     assert!(reader.active_label().is_none());
     assert!(reader.validation_status().is_none());
     assert_eq!(reader.validation_state(), ValidationState::Invalid);
+}
+
+#[test]
+fn active_manifest_picks_the_last_of_duplicate_labels() {
+    // Nothing about the manifest store parser enforces unique labels; two
+    // manifests sharing one is valid input, and `active_manifest` is
+    // documented (both here and in `contentauth-c2pa-reader`) as meaning
+    // the *last* manifest in the store, not merely "the one with the active
+    // label" — those coincide only when labels happen to be unique.
+    let store = manifest_store_bytes(vec![
+        minimal_manifest("urn:uuid:duplicate", "first"),
+        minimal_manifest("urn:uuid:duplicate", "second"),
+    ]);
+    let (_plan, asset) = contentauth_c2pa_format::test_util::conformance::embed(
+        &JpegFormat,
+        &unsigned_jpeg(),
+        &store,
+    );
+    let path = write_temp("duplicate_label.jpg", &asset);
+
+    let reader = Reader::from_file(&path).expect("a store with duplicate labels still reads");
+
+    assert_eq!(reader.active_label(), Some("urn:uuid:duplicate"));
+    assert_eq!(reader.iter_manifests().count(), 2);
+    assert_eq!(
+        reader
+            .active_manifest()
+            .expect("the store has an active manifest")
+            .title(),
+        Some("second"),
+        "the last manifest in the store is active, not merely the first one sharing its label"
+    );
 }
 
 #[test]

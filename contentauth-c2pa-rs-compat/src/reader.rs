@@ -129,8 +129,18 @@ impl Reader {
     }
 
     /// Returns the active manifest — the last one in the store — if any.
+    ///
+    /// Reads position directly (`manifests.last()`) rather than going
+    /// through [`ReadReport::active`], which resolves
+    /// [`ReadReport::active_manifest`]'s label via a first-match search: the
+    /// parser does not enforce unique labels, so a store with a duplicate
+    /// would make that search return an earlier manifest instead of the
+    /// last (active) one it is documented to mean.
+    ///
+    /// [`ReadReport::active`]: contentauth_c2pa_reader::ReadReport::active
+    /// [`ReadReport::active_manifest`]: contentauth_c2pa_reader::ReadReport::active_manifest
     pub fn active_manifest(&self) -> Option<Manifest<'_>> {
-        self.report.active().map(Manifest)
+        self.report.manifests.last().map(Manifest)
     }
 
     /// Returns the active manifest's label, if any.
