@@ -91,6 +91,19 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   `contentauth-c2pa-file-reader` and checks it reads back as `Trusted` —
   the two crates' only relationship is that both implement the
   `contentauth-c2pa-format` contract.
+- **`contentauth-c2pa-rs-compat`** — an experimental compatibility layer
+  reproducing a slice of [c2pa-rs](https://github.com/contentauth/c2pa-rs)'s
+  own public `Reader` API — same method names and signatures where
+  Rust's ownership rules allow it, same `Error::JumbfNotFound`/JSON
+  contracts — on top of `contentauth-c2pa-file-reader` and
+  `contentauth-c2pa-format-jpeg`, instead of this workspace's own
+  `Session` interaction contract. One use case only:
+  `Reader::from_file` on a local JPEG, through to `.json()`,
+  `.validation_state()`, and the borrowed `Manifest` accessors it
+  reports (see [`src/lib.rs`](contentauth-c2pa-rs-compat/src/lib.rs) for how
+  a `Builder` counterpart or additional format handlers would extend
+  this). Its own work is entirely that compatibility surface; the read
+  and validation logic underneath already existed.
 
 Container-format handling is deliberately *outside* the reader and
 builder: they ask their host for "the manifest store's bytes" and to

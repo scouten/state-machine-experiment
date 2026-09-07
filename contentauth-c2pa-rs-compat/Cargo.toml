@@ -1,0 +1,57 @@
+[package]
+name = "contentauth-c2pa-rs-compat"
+version = "0.1.0"
+description = "Experimental compatibility shim reproducing a slice of c2pa-rs's public Reader API, backed by this workspace's sans-I/O read engine"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["c2pa", "content-credentials", "compatibility"]
+categories = ["api-bindings"]
+publish = false
+
+[dependencies]
+# The sans-I/O read engine and its file-based host: what this crate's
+# `Reader::from_file` actually runs.
+contentauth-c2pa-file-reader = { path = "../contentauth-c2pa-file-reader" }
+
+# `Manifest`, `ValidationState`, `ValidationStatus` — the read-side result
+# types this crate's compat surface wraps rather than duplicates.
+contentauth-c2pa-reader = { path = "../contentauth-c2pa-reader" }
+
+# The only `FormatHandler` wired up today. See `src/format.rs` for why this
+# is the seam a second format would extend rather than a design choice
+# baked into `Reader` itself.
+contentauth-c2pa-format-jpeg = { path = "../contentauth-c2pa-format-jpeg" }
+
+thiserror = "2.0.20"
+
+# `Reader::json`/`json_checked` reproduce c2pa-rs's JSON-string contract,
+# which is the shape most integrations actually depend on rather than the
+# Rust `Manifest` type itself.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+# Drives the builder session by hand in the round-trip test fixture, the
+# same `advance`/`fulfill`/`finish` cycle every sibling crate's own tests
+# use.
+contentauth-state-machine = { path = "../contentauth-state-machine" }
+# Builds and signs a manifest to embed in this crate's own round-trip test
+# fixture, exactly as the sibling crates' own tests do.
+contentauth-c2pa-builder = { path = "../contentauth-c2pa-builder" }
+# Test-only: plays the "host does it by hand" role to embed a manifest into
+# a JPEG fixture before handing it to this crate's own file-reading API.
+contentauth-c2pa-format = { path = "../contentauth-c2pa-format", features = [
+    "test-util",
+] }
+# Test-only: plays the "host signer" in the round-trip test.
+c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
+    "rust_native_crypto",
+] }
+# Test-only: builds a minimal, real (but manifest-free) JUMBF superbox for
+# the empty-manifest-store coverage case, rather than hand-assembling box
+# bytes.
+jumbf = "0.7.0"
