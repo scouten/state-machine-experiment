@@ -104,6 +104,16 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   a `Builder` counterpart or additional format handlers would extend
   this). Its own work is entirely that compatibility surface; the read
   and validation logic underneath already existed.
+- **`c2pa-rs-compat-conformance`** — a differential test harness for the
+  crate above, proving the same client code gets the same answer reading
+  a file through the real `c2pa` crate as through
+  `contentauth-c2pa-rs-compat`'s `Reader`, and generalizing that to a
+  whole directory of assets (`examples/compare_corpus.rs`) as the seam for
+  running the comparison at the scale of a real corpus. Deliberately
+  **not** a member of this workspace (it has its own `[workspace]` in its
+  `Cargo.toml`) — see its own README: the real `c2pa` crate is heavy and
+  under no obligation to satisfy this workspace's Wasm/MSRV/`cargo-deny`
+  checks, which all run unscoped over every listed member.
 
 Container-format handling is deliberately *outside* the reader and
 builder: they ask their host for "the manifest store's bytes" and to
