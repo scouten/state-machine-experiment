@@ -44,18 +44,27 @@
 //! way keeps this module free of policy: it is the only place that knows
 //! about ASN.1, and nothing here decides anything.
 //!
-//! Deliberately absent: revocation state, policy constraints and name
-//! constraints (nothing consumes them yet), and the parts of the profile
-//! that need detail this struct does not carry — the signature-algorithm
-//! and named-curve allowlists, and the RSA minimum modulus size. Adding
-//! those means widening [`Certificate`], which is a change to this seam and
-//! so belongs in a slice of its own.
+//! Deliberately absent: policy constraints and name constraints (nothing
+//! consumes them yet), and the parts of the profile that need detail this
+//! struct does not carry — the signature-algorithm and named-curve
+//! allowlists, and the RSA minimum modulus size. Adding those means
+//! widening [`Certificate`], which is a change to this seam and so belongs
+//! in a slice of its own.
+//!
+//! Revocation *state* is checked (see the crate's `chain` and `ocsp`
+//! modules), but only OCSP: this module surfaces the one thing an OCSP
+//! check needs that a re-derivation from [`Certificate`]'s other
+//! fields cannot give byte-for-byte — [`Certificate::subject_der`],
+//! [`Certificate::public_key_bitstring`] and [`Certificate::serial_number`]
+//! — plus [`Certificate::ocsp_responder_url`], read straight off the
+//! certificate rather than decided by policy here.
 
 use der::{oid::ObjectIdentifier, Decode, Encode};
 use pkcs1::RsaPssParams;
 use x509_cert::{
     ext::pkix::{
-        BasicConstraints as X509BasicConstraints, ExtendedKeyUsage, KeyUsage as X509KeyUsage,
+        name::GeneralName, AuthorityInfoAccessSyntax, BasicConstraints as X509BasicConstraints,
+        ExtendedKeyUsage, KeyUsage as X509KeyUsage,
     },
     spki::AlgorithmIdentifierOwned,
     time::Time,
@@ -161,6 +170,40 @@ pub struct Certificate {
     /// the hash lives in the parameters. Algorithms that name the hash in
     /// the OID itself — `ecdsa-with-SHA256`, say — leave this `None`.
     pub signature_hash: Option<Vec<u8>>,
+
+    /// The DER encoding of [`Self::subject`]'s underlying ASN.1 `Name`.
+    ///
+    /// [`Self::subject`] is a human-readable RFC 4514 rendering, lossy in
+    /// the direction that matters here: OCSP's `CertID.issuerNameHash`
+    /// (RFC 6960 §4.1.1) hashes this exact encoding, not anything
+    /// re-derived from the string. Read only when this certificate acts as
+    /// someone else's issuer.
+    pub subject_der: Vec<u8>,
+
+    /// The raw bits of [`Self::public_key`]'s `subjectPublicKey` field,
+    /// excluding the `BIT STRING`'s tag, length and unused-bits count.
+    ///
+    /// This is the slice `CertID.issuerKeyHash` (RFC 6960 §4.1.1) hashes
+    /// when this certificate acts as someone else's issuer — not the same
+    /// bytes as hashing the whole SPKI in [`Self::public_key`] would
+    /// produce.
+    pub public_key_bitstring: Vec<u8>,
+
+    /// This certificate's own serial number, as the DER `INTEGER`'s
+    /// content octets.
+    ///
+    /// Paired with [`Self::issuer`]'s identity to name this certificate in
+    /// an OCSP `CertID` when asking about its own revocation status.
+    pub serial_number: Vec<u8>,
+
+    /// The OCSP responder URL from this certificate's Authority
+    /// Information Access extension (`id-ad-ocsp`), if it carries one.
+    ///
+    /// `None` covers both "no such extension" and "the extension names no
+    /// OCSP responder" — this crate has nowhere to send a revocation query
+    /// for this certificate either way, and the C2PA profile does not
+    /// require the extension, so absence is not itself a finding.
+    pub ocsp_responder_url: Option<String>,
 }
 
 /// The parts of the basic constraints extension the C2PA profile uses.
@@ -246,6 +289,13 @@ pub fn decode(der: &[u8]) -> Result<Certificate, CertError> {
         .ok_or(CertError::MalformedSignature)?
         .to_vec();
 
+    let ocsp_responder_url = tbs
+        .get::<AuthorityInfoAccessSyntax>()
+        .map_err(|_| CertError::MalformedExtension {
+            extension: "authority information access",
+        })?
+        .and_then(|(_critical, aia)| ocsp_responder_url(&aia));
+
     Ok(Certificate {
         subject: tbs.subject.to_string(),
         issuer: tbs.issuer.to_string(),
@@ -259,6 +309,38 @@ pub fn decode(der: &[u8]) -> Result<Certificate, CertError> {
         signature,
         signature_algorithm: cert.signature_algorithm.oid.as_bytes().to_vec(),
         signature_hash: signature_hash(&cert.signature_algorithm)?,
+        subject_der: tbs.subject.to_der().map_err(|_| CertError::Malformed)?,
+        public_key_bitstring: tbs
+            .subject_public_key_info
+            .subject_public_key
+            .raw_bytes()
+            .to_vec(),
+        serial_number: tbs.serial_number.as_bytes().to_vec(),
+        ocsp_responder_url,
+    })
+}
+
+/// `id-ad-ocsp` (RFC 5280 §4.2.2.1): the Authority Information Access
+/// `accessMethod` naming an OCSP responder.
+const ID_AD_OCSP: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.48.1");
+
+/// Picks the first OCSP responder URI out of an Authority Information
+/// Access extension, if it names one.
+///
+/// An access description naming `id-ad-ocsp` with anything other than a
+/// URI is not a shape this core has a use for, so it is skipped rather
+/// than reported: the extension is optional to begin with, and a
+/// malformed *use* of it is not a malformed extension.
+fn ocsp_responder_url(aia: &AuthorityInfoAccessSyntax) -> Option<String> {
+    aia.0.iter().find_map(|access| {
+        if access.access_method != ID_AD_OCSP {
+            return None;
+        }
+
+        match &access.access_location {
+            GeneralName::UniformResourceIdentifier(uri) => Some(uri.to_string()),
+            _ => None,
+        }
     })
 }
 
@@ -267,7 +349,13 @@ pub fn decode(der: &[u8]) -> Result<Certificate, CertError> {
 /// Only RSASSA-PSS does this, and its parameters are context-tagged
 /// optionals with defaults — fiddly enough that they are decoded properly
 /// rather than walked by hand.
-fn signature_hash(algorithm: &AlgorithmIdentifierOwned) -> Result<Option<Vec<u8>>, CertError> {
+///
+/// `pub(crate)` rather than private: `crate::ocsp` needs the same
+/// extraction for the signature algorithm on an OCSP response, which is
+/// the same `AlgorithmIdentifierOwned` shape as a certificate's.
+pub(crate) fn signature_hash(
+    algorithm: &AlgorithmIdentifierOwned,
+) -> Result<Option<Vec<u8>>, CertError> {
     if algorithm.oid != RSA_PSS_OID {
         return Ok(None);
     }
@@ -365,6 +453,43 @@ mod tests {
             cert.extended_key_usage.as_deref(),
             Some(["1.3.6.1.5.5.7.3.4".to_string()].as_slice())
         );
+    }
+
+    #[test]
+    fn a_certificate_with_no_authority_information_access_has_no_responder_url() {
+        assert_eq!(leaf().ocsp_responder_url, None);
+    }
+
+    #[test]
+    fn a_certificate_with_an_ocsp_aia_entry_reports_its_responder_url() {
+        // A real-world certificate this repository already carries for
+        // `timestamp.rs`'s own tests — decoded here purely for its
+        // Authority Information Access extension, which none of this
+        // crate's other fixtures happen to carry.
+        const ROOT: &[u8] = include_bytes!("../tests/fixtures/digicert-trusted-root-g4.der");
+
+        let cert = decode(ROOT).unwrap();
+        assert_eq!(
+            cert.ocsp_responder_url.as_deref(),
+            Some("http://ocsp.digicert.com")
+        );
+    }
+
+    #[test]
+    fn subject_der_public_key_bitstring_and_serial_number_are_populated() {
+        let cert = leaf();
+
+        // Every field a `CertID` needs is present and non-empty; the exact
+        // bytes are pinned by `ocsp.rs`'s own tests, which use them to
+        // build a request and check it round-trips.
+        assert!(!cert.subject_der.is_empty());
+        assert!(!cert.public_key_bitstring.is_empty());
+        assert!(!cert.serial_number.is_empty());
+
+        // `subject_der` is the DER of the subject `Name`, not the SPKI —
+        // distinct bytes from `public_key`, and shorter than it.
+        assert_ne!(cert.subject_der, cert.public_key);
+        assert!(cert.subject_der.len() < cert.public_key.len());
     }
 
     #[test]

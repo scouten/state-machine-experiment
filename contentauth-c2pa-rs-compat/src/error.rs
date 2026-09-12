@@ -56,6 +56,22 @@ pub enum Error {
     #[error(transparent)]
     Read(#[from] contentauth_c2pa_file_reader::Error),
 
+    /// The asset file could not be opened.
+    ///
+    /// A crate-local variant rather than
+    /// [`contentauth_c2pa_file_reader::Error::Io`]: `src/host.rs` opens the
+    /// file itself (so it can also answer OCSP requests over the network),
+    /// and that variant's fields are private to its own crate.
+    #[error("could not open {path}: {source}")]
+    Io {
+        /// The path that could not be opened.
+        path: PathBuf,
+
+        /// The underlying I/O error.
+        #[source]
+        source: std::io::Error,
+    },
+
     /// [`crate::Reader::json_checked`] could not serialize the report.
     ///
     /// Kept for parity with c2pa-rs's own fallible `json_checked`/`json`

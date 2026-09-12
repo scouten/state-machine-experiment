@@ -38,9 +38,17 @@ decoding, report population) and verifies:
   since-expired certificate: a manifest signed years ago with a
   since-expired certificate still reads as valid when a *trusted*
   authority stamped it at the time.
+* **Revocation** — OCSP only (the C2PA specification does not permit
+  CRLs), and only for the claim signer's own chain. Checking is on by
+  default (`ReadSettings::check_ocsp`) and fail-open: an unreachable
+  responder, a stale or unparseable response, or one this crate cannot tie
+  back to the certificate's own issuer leaves whatever trust path
+  validation already established untouched — only a validly signed
+  response that says a certificate was revoked outright can downgrade a
+  verdict. See [`src/ocsp.rs`](src/ocsp.rs).
 
 A report can reach `Trusted` or `Valid`. Not yet checked, and able to
-change a verdict: revocation (OCSP and CRL).
+change a verdict: ingredient manifests and remote manifest retrieval.
 
 See [`src/read.rs`](src/read.rs) for `ReadSession` itself, and
 [`src/validation.rs`](src/validation.rs) for the validation status
@@ -57,6 +65,7 @@ with `ReadHostReply::Failed`.
 | `AssetBytes { stream, range }` | bytes | Streams asset bytes into this crate's internal hashing, for hard-binding verification. |
 | `AssetLength { stream }` | total length in bytes | Needed to work out which asset ranges the hard binding covers, since it names only what to *exclude*. |
 | `CurrentDateTime` | Unix timestamp | Certificate validity windows; this crate reads no clock. |
+| `Ocsp { url, request_der }` | OCSP response bytes | A DER-encoded `OCSPRequest` this crate built; the host's job is only the HTTP POST (`Content-Type: application/ocsp-request`) to `url`, reporting back whatever bytes came back. `ReadHostReply::Failed` is fail-open, not fatal — see `ReadSettings::check_ocsp`. |
 
 `ReadSettings::fetch_remote_manifests` documents a future
 `HttpFetch`-style request for remote manifest retrieval that `ReadSession`

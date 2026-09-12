@@ -28,8 +28,12 @@ use crate::{
 /// Reads and validates a C2PA manifest store from a file on disk.
 ///
 /// The read-only, single-asset counterpart of `Reader` in c2pa-rs, backed
-/// by [`contentauth_c2pa_file_reader::read_manifest_from_file`] rather than
-/// c2pa-rs's own `Store`. Every method here is named and shaped after its
+/// by a [`contentauth_c2pa_file_reader::FileReadSession`] — driven by
+/// `src/host.rs`'s own `reqwest`-backed host, rather than
+/// [`contentauth_c2pa_file_reader::read_manifest_from_file`], so that
+/// [`ReadSettings::check_ocsp`](contentauth_c2pa_file_reader::ReadSettings::check_ocsp)
+/// can make a real HTTP request — rather than c2pa-rs's own `Store`. Every
+/// method here is named and shaped after its
 /// c2pa-rs counterpart; see each method's doc comment for where the
 /// behavior necessarily differs, given this workspace's engine reads (and
 /// validates) strictly more narrowly than c2pa-rs today — see
@@ -117,8 +121,7 @@ impl Reader {
         let handler = format::for_path(path)?;
         let settings = self.context.settings().clone();
 
-        let report =
-            contentauth_c2pa_file_reader::read_manifest_from_file(&handler, path, settings)?;
+        let report = crate::host::read_and_validate(&handler, path, settings)?;
 
         if !report.manifest_store_found {
             return Err(Error::JumbfNotFound {

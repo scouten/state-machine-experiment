@@ -129,6 +129,18 @@ pub mod status_code {
     /// Deliberately not a failure; see [`super::ValidationStatus::is_failure`].
     pub const SIGNING_CREDENTIAL_UNTRUSTED: &str = "signingCredential.untrusted";
 
+    /// A validly signed OCSP response said a certificate in the signer's
+    /// path had been revoked.
+    ///
+    /// Reached only when a check actually ran and came back with an
+    /// authenticated `revoked` answer — an unreachable responder, a stale
+    /// or unparseable response, or one this crate could not tie back to
+    /// the certificate's own issuer, is fail-open and leaves whatever
+    /// [`SIGNING_CREDENTIAL_TRUSTED`] or [`SIGNING_CREDENTIAL_UNTRUSTED`]
+    /// finding path validation already recorded in place instead. See
+    /// [`crate::read::ReadSettings::check_ocsp`].
+    pub const SIGNING_CREDENTIAL_REVOKED: &str = "signingCredential.revoked";
+
     /// The timestamp token is well-formed, its message imprint covers the
     /// right bytes, and the authority's certificates were inside their
     /// validity windows.
@@ -241,6 +253,7 @@ impl ValidationStatus {
                 | status_code::CLAIM_SIGNATURE_OUTSIDE_VALIDITY
                 | status_code::SIGNING_CREDENTIAL_INVALID
                 | status_code::SIGNING_CREDENTIAL_EXPIRED
+                | status_code::SIGNING_CREDENTIAL_REVOKED
         )
     }
 

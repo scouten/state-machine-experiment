@@ -60,6 +60,18 @@ der = "0.7.10"
 # the algorithm OID. Same `der` 0.7 line; already in the tree via `rsa`.
 pkcs1 = "0.7.5"
 x509-cert = { version = "0.2.5", default-features = false }
+# OCSP (RFC 6960) ASN.1 types, confined to `ocsp.rs` the same way `cert.rs`
+# is the only place naming an `x509_cert` type. Same RustCrypto `der` 0.7
+# generation as the rest of this crate's X.509 handling, so it adds no
+# second `der`/`const-oid` copy to the tree.
+#
+# Default features off: `builder`, `digest`, `rand`/`rand_core` and
+# `signature` are for *producing* OCSP requests and responses with a
+# particular RustCrypto digest/signer, which is not this crate's job —
+# `ocsp.rs` builds and verifies the plain ASN.1 structures itself, using
+# `contentauth-c2pa-primitives::HashAlgorithm` and `c2pa_raw_crypto` like
+# every other signature check in this crate.
+x509-ocsp = { version = "0.2.1", default-features = false }
 
 [dev-dependencies]
 # Enables `SessionCore::fulfill_unchecked`, which this crate's own tests use

@@ -59,7 +59,20 @@ own, much larger `Context` (HTTP resolvers, a signer, progress callbacks,
 cancellation — none of which apply to this crate's read-only scope).
 
 This crate's own work is entirely that compatibility surface; the read and
-validation logic underneath it already existed in this workspace.
+validation logic underneath it already existed in this workspace — except
+for one piece of genuinely new plumbing: `with_file` drives a
+`FileReadSession` itself (`src/host.rs`) rather than going through
+`contentauth-c2pa-file-reader`'s own convenience function, so it can
+answer a live OCSP check with a real HTTP request via [`reqwest`]. OCSP
+checking is on by default (`ReadSettings::check_ocsp`) and fail-open — a
+network error, an unreachable responder, or a non-success HTTP status
+leaves whatever trust path validation already established untouched; only
+a validly signed response saying a certificate was revoked outright can
+change the outcome. This is deliberately the only crate in the workspace
+with a real network dependency; see `src/host.rs`'s own doc comment for
+why.
+
+[`reqwest`]: https://docs.rs/reqwest
 
 ## What isn't covered yet, and how it would be
 

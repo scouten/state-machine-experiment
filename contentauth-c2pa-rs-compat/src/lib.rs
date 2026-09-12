@@ -40,13 +40,17 @@
 //! [`Reader::json`], [`Reader::validation_state`], or the borrowed
 //! [`Manifest`] accessors. That case was chosen because it is the one most
 //! c2pa-rs integrations reach for first, and because every piece it needs
-//! — [`contentauth_c2pa_file_reader::read_manifest_from_file`], a
+//! — a [`contentauth_c2pa_file_reader::FileReadSession`], a
 //! [`contentauth_c2pa_format_jpeg::JpegFormat`] handler, and
 //! [`contentauth_c2pa_reader`]'s validation — already exists in this
 //! workspace; this crate's own work is entirely the compatibility surface
 //! ([`Context`], `Reader`, [`Manifest`], [`ValidationState`],
 //! [`ValidationStatus`], [`Error`], and the JSON shape in `src/json.rs`),
-//! not new read or validation logic.
+//! plus one piece of genuinely new plumbing: `src/host.rs`, a
+//! [`reqwest`]-backed host answering live OCSP checks, since nothing
+//! sans-I/O in this workspace can make an HTTP request on its own. See
+//! that module's own docs for why this is the one crate here that owns a
+//! network dependency.
 //!
 //! The `Context`/`Reader::from_context`/`with_file` shape is deliberately
 //! the preferred one here, not merely one of several equally-supported
@@ -81,9 +85,11 @@
 //!   assertion labels and hashes for integrity, not their content). Once it
 //!   does, [`Manifest`] grows accessors for them the same way it already
 //!   exposes `title`/`format`/`instance_id`.
-//! * **Ingredients, remote manifests, revocation** — not yet modeled by
+//! * **Ingredients, remote manifests** — not yet modeled by
 //!   [`contentauth_c2pa_reader`] itself (see its own README's "not yet
 //!   checked" list), so there's nothing here yet to make compatible.
+//!   Revocation, by contrast, *is* covered: `src/host.rs` is the default
+//!   OCSP host [`Reader::with_file`] drives — see [`ReadSettings::check_ocsp`].
 //!
 //! None of that is a design decision baked into this crate's shape — it's
 //! simply the boundary of "one use case, worked through," per the brief.
@@ -97,6 +103,7 @@
 mod context;
 mod error;
 mod format;
+mod host;
 mod json;
 mod manifest;
 mod reader;
