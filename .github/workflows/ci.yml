@@ -204,3 +204,30 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2.0.20
         with:
           command: check advisories bans licenses sources
+
+  compat-conformance:
+    name: c2pa-rs-compat-conformance tests
+    runs-on: ubuntu-latest
+
+    # c2pa-rs-compat-conformance is deliberately its own Cargo workspace,
+    # not a member of the root one (see its own README): it depends on the
+    # real c2pa crate, which none of the jobs above ever touch. Run here
+    # instead, scoped to its own manifest, so it's still exercised on every
+    # PR without pulling that dependency into the root workspace's Wasm,
+    # MSRV, or license/advisory checks.
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master@2026-06-30
+        with:
+          toolchain: stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: c2pa-rs-compat-conformance -> target
+
+      - name: Run tests
+        run: cargo test --manifest-path c2pa-rs-compat-conformance/Cargo.toml
