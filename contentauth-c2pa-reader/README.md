@@ -38,14 +38,15 @@ decoding, report population) and verifies:
   since-expired certificate: a manifest signed years ago with a
   since-expired certificate still reads as valid when a *trusted*
   authority stamped it at the time.
-* **Revocation** — OCSP only (the C2PA specification does not permit
-  CRLs), and only for the claim signer's own chain. Checking is on by
-  default (`ReadSettings::check_ocsp`) and fail-open: an unreachable
-  responder, a stale or unparseable response, or one this crate cannot tie
-  back to the certificate's own issuer leaves whatever trust path
-  validation already established untouched — only a validly signed
-  response that says a certificate was revoked outright can downgrade a
-  verdict. See [`src/ocsp.rs`](src/ocsp.rs).
+* **Revocation** — per the C2PA specification's own §15.9 process: OCSP
+  only (CRLs are outside its vocabulary), checking a stapled response in
+  the manifest first, then an online query (on by default —
+  `ReadSettings::check_ocsp`) when nothing there settled it. A responder
+  that cannot be reached at all is fail-open and never held against the
+  manifest, but a response that *is* received and authenticated, yet does
+  not affirmatively vouch for the certificate, reads as revoked rather
+  than merely inconclusive — see [`src/ocsp.rs`](src/ocsp.rs)'s own module
+  docs.
 
 A report can reach `Trusted` or `Valid`. Not yet checked, and able to
 change a verdict: ingredient manifests and remote manifest retrieval.

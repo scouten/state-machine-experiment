@@ -59,12 +59,15 @@
 //!   matched against the signature it countersigns, and its own chain
 //!   validated — so a manifest signed with a since-expired certificate
 //!   still reads as valid when a *trusted* authority stamped it.
-//!   Revocation is checked for the claim signer's own chain, but only
-//!   OCSP — CRLs are outside the C2PA specification's own vocabulary — and
-//!   only fail-open: an unreachable or inconclusive check leaves the
-//!   already-established verdict untouched, and only a validly signed
-//!   response saying outright that a certificate was revoked can change
-//!   it. See [`ReadSettings::check_ocsp`] and [`ReadRequest::Ocsp`].
+//!   Revocation is checked per the C2PA specification's own §15.9 process
+//!   — OCSP only, CRLs being outside its vocabulary — for a stapled
+//!   response in the manifest, then an online query when nothing there
+//!   settled it. A responder that cannot be reached at all is fail-open
+//!   and never held against the manifest, but the specification is
+//!   explicit that an online response that *was* received and
+//!   authenticated, yet does not affirmatively vouch for the certificate,
+//!   reads as revoked rather than merely inconclusive. See
+//!   [`ReadSettings::check_ocsp`] and [`ReadRequest::Ocsp`].
 //!
 //! [c2pa-rs]: https://github.com/contentauth/c2pa-rs
 

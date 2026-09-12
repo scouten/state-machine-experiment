@@ -21,8 +21,9 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   [`src/request.rs`](contentauth-c2pa-reader/src/request.rs). See its
   [README.md](contentauth-c2pa-reader/README.md) for what it validates
   (integrity, claim signature, trust chain, RFC 3161 timestamps, and OCSP
-  revocation for the claim signer's own chain — fail-open, on by default)
-  and the full request-vocabulary table.
+  revocation per the spec's §15.9 process — stapled response first, then
+  an online query on by default; fail-open only when a responder cannot
+  be reached at all) and the full request-vocabulary table.
 - **`contentauth-c2pa-builder`** — the write-side counterpart: generates
   and signs a manifest store via a two-pass placeholder scheme
   (`BuilderSession` in [`src/builder.rs`](contentauth-c2pa-builder/src/builder.rs);

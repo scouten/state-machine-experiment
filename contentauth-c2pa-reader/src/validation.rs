@@ -124,22 +124,65 @@ pub mod status_code {
     pub const SIGNING_CREDENTIAL_TRUSTED: &str = "signingCredential.trusted";
 
     /// The signer's certificate does not chain to a configured trust
-    /// anchor — including because none are configured.
+    /// anchor — including because none are configured. Also the code the
+    /// C2PA specification names for a *different* finding this crate
+    /// reports the same way: a CA certificate above the signer, found
+    /// revoked by OCSP, per §15.9's own text ("the claim signature shall
+    /// be rejected with a failure status of `signingCredential.untrusted`").
     ///
-    /// Deliberately not a failure; see [`super::ValidationStatus::is_failure`].
+    /// Deliberately not a failure in this crate's own model either way;
+    /// see [`super::ValidationStatus::is_failure`].
     pub const SIGNING_CREDENTIAL_UNTRUSTED: &str = "signingCredential.untrusted";
 
-    /// A validly signed OCSP response said a certificate in the signer's
-    /// path had been revoked.
+    /// A validly signed, timely OCSP response established that the
+    /// *signer's own* certificate was not revoked at the time of signing
+    /// (C2PA spec §15.9.1/§15.9.2).
     ///
-    /// Reached only when a check actually ran and came back with an
-    /// authenticated `revoked` answer — an unreachable responder, a stale
-    /// or unparseable response, or one this crate could not tie back to
-    /// the certificate's own issuer, is fail-open and leaves whatever
-    /// [`SIGNING_CREDENTIAL_TRUSTED`] or [`SIGNING_CREDENTIAL_UNTRUSTED`]
-    /// finding path validation already recorded in place instead. See
-    /// [`crate::read::ReadSettings::check_ocsp`].
-    pub const SIGNING_CREDENTIAL_REVOKED: &str = "signingCredential.revoked";
+    /// A finding, not merely a non-failure: reached only when a stapled or
+    /// freshly fetched response actually satisfied the spec's acceptance
+    /// conditions (`CertID` match, an authorized responder's signature,
+    /// the right time window). See [`SIGNING_CREDENTIAL_OCSP_SKIPPED`],
+    /// [`SIGNING_CREDENTIAL_OCSP_INACCESSIBLE`] and
+    /// [`SIGNING_CREDENTIAL_OCSP_UNKNOWN`] for the ways nothing was
+    /// established either way.
+    pub const SIGNING_CREDENTIAL_OCSP_NOT_REVOKED: &str = "signingCredential.ocsp.notRevoked";
+
+    /// A validly signed OCSP response established that the *signer's own*
+    /// certificate had been revoked at the time of signing (C2PA spec
+    /// §15.9.1/§15.9.2).
+    ///
+    /// Unlike [`SIGNING_CREDENTIAL_UNTRUSTED`] (used instead for a revoked
+    /// certificate further up the path), this is a failure: the spec calls
+    /// for the claim itself to be rejected when its own signer's
+    /// credential is revoked.
+    pub const SIGNING_CREDENTIAL_OCSP_REVOKED: &str = "signingCredential.ocsp.revoked";
+
+    /// The validator chose not to query an OCSP responder online for the
+    /// signer's certificate — no stapled or in-store response resolved
+    /// its status, and [`crate::read::ReadSettings::check_ocsp`] is
+    /// `false`.
+    ///
+    /// Informational, not a failure: the C2PA specification makes the
+    /// online query optional specifically because it can reveal the
+    /// asset's identity to an observer (§15.9.2's own note).
+    pub const SIGNING_CREDENTIAL_OCSP_SKIPPED: &str = "signingCredential.ocsp.skipped";
+
+    /// The validator attempted to query an OCSP responder for the
+    /// signer's certificate but could not obtain a usable response —
+    /// unreachable, malformed, unauthenticated, or naming the wrong
+    /// certificate.
+    ///
+    /// Informational, not a failure: this is exactly the fail-open case
+    /// the C2PA specification's own offline-verification design goal
+    /// requires. See [`crate::read::ReadSettings::check_ocsp`].
+    pub const SIGNING_CREDENTIAL_OCSP_INACCESSIBLE: &str = "signingCredential.ocsp.inaccessible";
+
+    /// An authenticated OCSP response for the signer's certificate
+    /// reported `certStatus` as `unknown`.
+    ///
+    /// Informational, not a failure — the responder was reached and
+    /// answered honestly; it simply does not know this certificate.
+    pub const SIGNING_CREDENTIAL_OCSP_UNKNOWN: &str = "signingCredential.ocsp.unknown";
 
     /// The timestamp token is well-formed, its message imprint covers the
     /// right bytes, and the authority's certificates were inside their
@@ -253,7 +296,7 @@ impl ValidationStatus {
                 | status_code::CLAIM_SIGNATURE_OUTSIDE_VALIDITY
                 | status_code::SIGNING_CREDENTIAL_INVALID
                 | status_code::SIGNING_CREDENTIAL_EXPIRED
-                | status_code::SIGNING_CREDENTIAL_REVOKED
+                | status_code::SIGNING_CREDENTIAL_OCSP_REVOKED
         )
     }
 
@@ -454,6 +497,9 @@ pub(crate) fn check_claim_signature(
                 url,
                 certificates,
                 timestamp,
+                // `cose::parse` does not read the `rVals` header yet — see
+                // `PendingChain::rvals`'s own doc comment.
+                rvals: vec![],
             })
         }
 

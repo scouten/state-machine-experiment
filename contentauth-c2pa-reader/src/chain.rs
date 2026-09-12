@@ -93,6 +93,17 @@ pub(crate) struct PendingChain {
     /// Checked before the chain, because a trusted one supplies the
     /// instant the chain is then judged against.
     pub(crate) timestamp: Option<PendingTimestamp>,
+
+    /// DER-encoded `OCSPResponse` values "stapled" into the signature's
+    /// `rVals` COSE header (C2PA spec §15.9.1), if it carried any.
+    ///
+    /// Always empty today: [`crate::cose`] does not read this header yet
+    /// (its CBOR shape is not yet confirmed against the specification), so
+    /// every chain reads as though it carried no staples — [`crate::ocsp::evaluate_stapled`]
+    /// is exercised directly by this crate's own tests in the meantime,
+    /// and [`crate::read::ReadSession`] already tries whatever is here
+    /// before ever asking a host to query a responder online.
+    pub(crate) rvals: Vec<Vec<u8>>,
 }
 
 /// The status codes one chain evaluation reports its findings under.
@@ -284,6 +295,23 @@ pub(crate) fn validate(
     }
 }
 
+/// One certificate's OCSP check, alongside whether it is asking about the
+/// claim *signer's own* certificate or a CA further up the path.
+///
+/// The distinction matters to [`crate::read::ReadSession`] because C2PA
+/// spec §15.9 reports the two under entirely different status
+/// vocabularies, and only the signer's own revocation invalidates the
+/// claim outright — see [`crate::validation::status_code::SIGNING_CREDENTIAL_OCSP_REVOKED`]
+/// and [`crate::validation::status_code::SIGNING_CREDENTIAL_UNTRUSTED`].
+#[derive(Debug)]
+pub(crate) struct OcspCheckPlan {
+    pub(crate) check: crate::ocsp::PendingOcspCheck,
+
+    /// True for the certificate at position 0 of the path (the claim
+    /// signer itself); false for any CA certificate above it.
+    pub(crate) is_signer: bool,
+}
+
 /// Builds the OCSP checks available for one claim signer's chain.
 ///
 /// Rebuilds exactly the path [`validate`] itself would build — cheap, and
@@ -294,10 +322,7 @@ pub(crate) fn validate(
 /// rejected is still included; whether to bother asking is
 /// [`crate::read::ReadSession`]'s call; this only reports what could be
 /// asked.
-pub(crate) fn ocsp_checks(
-    chain: &[Certificate],
-    anchors: &[Certificate],
-) -> Vec<crate::ocsp::PendingOcspCheck> {
+pub(crate) fn ocsp_checks(chain: &[Certificate], anchors: &[Certificate]) -> Vec<OcspCheckPlan> {
     let Some((leaf, rest)) = chain.split_first() else {
         return vec![];
     };
@@ -305,7 +330,13 @@ pub(crate) fn ocsp_checks(
     let (path, _anchored) = build_path(leaf, rest, anchors);
 
     path.windows(2)
-        .filter_map(|pair| crate::ocsp::build_check(pair[0], pair[1]))
+        .enumerate()
+        .filter_map(|(position, pair)| {
+            crate::ocsp::build_check(pair[0], pair[1]).map(|check| OcspCheckPlan {
+                check,
+                is_signer: position == 0,
+            })
+        })
         .collect()
 }
 
@@ -1046,6 +1077,10 @@ mod tests {
         // ask about *its* revocation status.
         let checks = ocsp_checks(&[leaf, decode(INTERMEDIATE)], &[]);
         assert_eq!(checks.len(), 1);
+        assert!(
+            checks[0].is_signer,
+            "position 0 of the path is the claim signer"
+        );
     }
 
     #[test]
@@ -1062,6 +1097,11 @@ mod tests {
 
         // leaf/intermediate and intermediate/root: two links, both named.
         assert_eq!(checks.len(), 2);
+        assert!(checks[0].is_signer);
+        assert!(
+            !checks[1].is_signer,
+            "the intermediate is a CA, not the signer"
+        );
     }
 
     #[test]
