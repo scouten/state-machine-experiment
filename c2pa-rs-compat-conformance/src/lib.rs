@@ -1,0 +1,257 @@
+//! Differential testing: does [`contentauth_c2pa_rs_compat::Reader`] report
+//! the same thing as the real [`c2pa::Reader`] for the same file?
+//!
+//! [`ReadForComparison`] is implemented for both readers, over the slice of
+//! fields [`contentauth_c2pa_rs_compat`] currently reproduces (see its own
+//! crate docs for what that is and isn't). [`read_and_summarize`] is the
+//! "same client code" for either one — it never names which backend it is
+//! talking to, only the trait — so `tests/compare_with_c2pa_rs.rs` can call
+//! it once per backend on the same path and assert the two [`Summary`]
+//! values are equal.
+//!
+//! [`compare_file`] and [`compare_corpus`] generalize that one-file check
+//! to a whole directory tree, for running this at the scale of a real
+//! corpus (hundreds or thousands of assets) rather than one fixture — see
+//! `examples/compare_corpus.rs` and this crate's README for how to point
+//! that at one.
+
+use std::path::{Path, PathBuf};
+
+/// The fields this experiment claims parity on, extracted from either
+/// reader into a common, backend-agnostic shape.
+///
+/// Deliberately not the full `Manifest`/`Reader` surface: just what
+/// [`contentauth_c2pa_rs_compat::Reader`] itself reproduces today. Growing
+/// that crate's own surface (see its README) is what would grow this
+/// struct, not the other way around.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Summary {
+    /// `Reader::validation_state()`, by name (`"Trusted"`/`"Valid"`/
+    /// `"Invalid"`) rather than either crate's own enum type, since the two
+    /// types are unrelated and this is the only thing that needs comparing.
+    pub validation_state: &'static str,
+
+    /// `Reader::active_label()`.
+    pub active_label: Option<String>,
+
+    /// The active manifest's `title()`, if any.
+    pub title: Option<String>,
+
+    /// The active manifest's `format()`, if any.
+    pub format: Option<String>,
+
+    /// The active manifest's `instance_id()`.
+    pub instance_id: Option<String>,
+
+    /// The active manifest's `claim_generator()`, if any.
+    pub claim_generator: Option<String>,
+}
+
+/// Implemented for both the real `c2pa::Reader` and
+/// [`contentauth_c2pa_rs_compat::Reader`], so [`read_and_summarize`] can
+/// drive either one through identical code.
+pub trait ReadForComparison: Sized {
+    /// Reads and validates `path`, as a caller using this backend directly
+    /// would.
+    fn read(path: &Path) -> Result<Self, String>;
+
+    /// Extracts the comparable [`Summary`] of what was read.
+    fn summarize(&self) -> Summary;
+}
+
+impl ReadForComparison for c2pa::Reader {
+    fn read(path: &Path) -> Result<Self, String> {
+        // The `Context`-based path c2pa-rs's own docs recommend over its
+        // deprecated standalone `Reader::from_file` — see
+        // `contentauth_c2pa_rs_compat::Reader::read` below, which drives
+        // the compat crate's mirror of the same interface.
+        c2pa::Reader::from_context(c2pa::Context::new())
+            .with_file(path)
+            .map_err(|err| err.to_string())
+    }
+
+    fn summarize(&self) -> Summary {
+        let active = self.active_manifest();
+        Summary {
+            validation_state: match self.validation_state() {
+                c2pa::ValidationState::Trusted => "Trusted",
+                c2pa::ValidationState::Valid => "Valid",
+                c2pa::ValidationState::Invalid => "Invalid",
+            },
+            active_label: self.active_label().map(str::to_string),
+            title: active.and_then(|m| m.title()).map(str::to_string),
+            format: active.and_then(|m| m.format()).map(str::to_string),
+            instance_id: active.map(|m| m.instance_id().to_string()),
+            claim_generator: active.and_then(|m| m.claim_generator()).map(str::to_string),
+        }
+    }
+}
+
+impl ReadForComparison for contentauth_c2pa_rs_compat::Reader {
+    fn read(path: &Path) -> Result<Self, String> {
+        // The compat crate's own mirror of the `Context`-based path above
+        // — see its `src/context.rs` for what it does and doesn't carry
+        // over from c2pa-rs's own, much larger `Context`.
+        contentauth_c2pa_rs_compat::Reader::from_context(contentauth_c2pa_rs_compat::Context::new())
+            .with_file(path)
+            .map_err(|err| err.to_string())
+    }
+
+    fn summarize(&self) -> Summary {
+        let active = self.active_manifest();
+        Summary {
+            validation_state: match self.validation_state() {
+                contentauth_c2pa_rs_compat::ValidationState::Trusted => "Trusted",
+                contentauth_c2pa_rs_compat::ValidationState::Valid => "Valid",
+                contentauth_c2pa_rs_compat::ValidationState::Invalid => "Invalid",
+                // `#[non_exhaustive]`; no other variant exists today.
+                _ => "Invalid",
+            },
+            active_label: self.active_label().map(str::to_string),
+            title: active.and_then(|m| m.title()).map(str::to_string),
+            format: active.and_then(|m| m.format()).map(str::to_string),
+            instance_id: active.map(|m| m.instance_id().to_string()),
+            claim_generator: active.and_then(|m| m.claim_generator()).map(str::to_string),
+        }
+    }
+}
+
+/// Reads and summarizes `path` through backend `R` — the "same client
+/// code" for whichever backend the caller names at the type-parameter
+/// level, per this crate's whole point.
+pub fn read_and_summarize<R: ReadForComparison>(path: &Path) -> Result<Summary, String> {
+    Ok(R::read(path)?.summarize())
+}
+
+/// The outcome of comparing one file's [`Summary`] through both backends,
+/// kept only when they disagree.
+#[derive(Debug)]
+pub struct Mismatch {
+    /// The file that produced differing results.
+    pub path: PathBuf,
+
+    /// What reading it through real c2pa-rs produced.
+    pub c2pa_rs: Result<Summary, String>,
+
+    /// What reading it through the compat reader produced.
+    pub compat: Result<Summary, String>,
+}
+
+/// Compares one file through both backends, returning `Some` only if they
+/// disagree — including one succeeding while the other fails.
+pub fn compare_file(path: &Path) -> Option<Mismatch> {
+    let c2pa_rs = read_and_summarize::<c2pa::Reader>(path);
+    let compat = read_and_summarize::<contentauth_c2pa_rs_compat::Reader>(path);
+
+    if c2pa_rs == compat {
+        None
+    } else {
+        Some(Mismatch {
+            path: path.to_path_buf(),
+            c2pa_rs,
+            compat,
+        })
+    }
+}
+
+/// The outcome of walking a whole corpus directory with [`compare_corpus`].
+///
+/// [`Self::unreadable`] is kept separate from [`Self::mismatches`] on
+/// purpose: a path the walk could not even read was never actually
+/// compared, and folding it silently into "no mismatch" would misreport
+/// how much of the corpus was checked — a corpus with permission errors
+/// or a broken entry partway through should not come back looking clean.
+#[derive(Debug, Default)]
+pub struct CorpusReport {
+    /// Number of files successfully compared through both backends.
+    pub compared: usize,
+
+    /// Every file where the two backends disagreed.
+    pub mismatches: Vec<Mismatch>,
+
+    /// Every path the walk could not read — a directory listing that
+    /// failed, an entry within one that failed, or an entry whose file
+    /// type could not be determined — paired with why. A directory's own
+    /// listing failure is recorded against the directory itself; a failure
+    /// partway through iterating its entries is too, since the specific
+    /// entry that failed isn't nameable from the error `std::fs::read_dir`
+    /// reports.
+    pub unreadable: Vec<(PathBuf, String)>,
+}
+
+impl CorpusReport {
+    /// True only if every file compared cleanly *and* nothing was skipped
+    /// as unreadable — the one condition under which this run actually
+    /// demonstrates full agreement across the corpus.
+    pub fn is_clean(&self) -> bool {
+        self.mismatches.is_empty() && self.unreadable.is_empty()
+    }
+}
+
+/// Walks `dir` recursively, comparing every regular file it finds through
+/// both backends.
+///
+/// This is the seam for running this comparison at the scale of a real
+/// corpus rather than one fixture: point `dir` at any directory of C2PA
+/// test assets (a checkout of a public conformance corpus, or a directory
+/// of production files) and every one of them is compared the same way, in
+/// one pass. Nothing about it assumes anything C2PA-specific about a given
+/// file — a non-asset or a file with no manifest just becomes a `compare_file`
+/// call whose two `Err`s (most likely) still agree, which is not a
+/// mismatch: c2pa-rs and this crate returning the same *kind* of "not a
+/// C2PA asset" answer is itself part of what's being demonstrated.
+///
+/// Symlinks are never followed, whether to a file or to a directory: a
+/// directory symlink pointing back at one of its own ancestors would
+/// otherwise send this walk in circles forever, and telling that case
+/// apart from a harmless symlink isn't worth the bother for a comparison
+/// tool. Point `dir` at wherever a corpus's symlinked assets actually
+/// resolve, rather than relying on this walk to follow them.
+pub fn compare_corpus(dir: &Path) -> CorpusReport {
+    let mut report = CorpusReport::default();
+    let mut pending = vec![dir.to_path_buf()];
+
+    while let Some(dir) = pending.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(err) => {
+                report.unreadable.push((dir, err.to_string()));
+                continue;
+            }
+        };
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(err) => {
+                    report.unreadable.push((dir.clone(), err.to_string()));
+                    continue;
+                }
+            };
+
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(err) => {
+                    report.unreadable.push((entry.path(), err.to_string()));
+                    continue;
+                }
+            };
+
+            if file_type.is_symlink() {
+                continue;
+            }
+
+            let path = entry.path();
+            if file_type.is_dir() {
+                pending.push(path);
+            } else if file_type.is_file() {
+                report.compared += 1;
+                if let Some(mismatch) = compare_file(&path) {
+                    report.mismatches.push(mismatch);
+                }
+            }
+        }
+    }
+
+    report
+}

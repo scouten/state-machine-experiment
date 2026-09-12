@@ -42,7 +42,7 @@ use crate::{
 /// configuration (additional allowed EKUs, revocation policy), remote-
 /// manifest policy, verification options, and so on — roughly the
 /// read-relevant subset of the c2pa-rs settings system.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ReadSettings {
     /// If true, the session may issue an HTTP-fetch-style request to
     /// retrieve a remote manifest store referenced by the asset.

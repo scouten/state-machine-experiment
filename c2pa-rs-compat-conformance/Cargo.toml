@@ -1,0 +1,31 @@
+[workspace]
+# Deliberately its own workspace, not a member of the root
+# state-machine-experiment workspace: this crate's whole purpose is to
+# depend on the real `c2pa` crate for comparison, and that crate is heavy
+# (native/rust crypto backends, its own trust list, an HTTP stack) and not
+# expected to satisfy the root workspace's Wasm, MSRV, or license/advisory
+# checks, which currently run unscoped (no `-p`) and so sweep in every
+# workspace member. Sitting outside the workspace means none of that
+# applies here; see this crate's README for how to run it on its own.
+
+[package]
+name = "c2pa-rs-compat-conformance"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Differential test harness: does contentauth-c2pa-rs-compat report the same thing as real c2pa-rs for the same file?"
+
+[dependencies]
+# The crate under test.
+contentauth-c2pa-rs-compat = { path = "../contentauth-c2pa-rs-compat" }
+
+# The real thing it's being compared against. `file_io` is what turns on
+# `Reader::with_file`/`from_file` (off by default); `rust_native_crypto`
+# avoids linking against a system OpenSSL, matching how the rest of this
+# workspace's own dev-dependency on `c2pa_raw_crypto` is configured, and
+# `default_http`/`openssl` (c2pa-rs's actual defaults) are dropped since
+# this crate never reads anything remote.
+c2pa = { version = "0.90", default-features = false, features = [
+    "file_io",
+    "rust_native_crypto",
+] }

@@ -26,31 +26,39 @@
 //! reproduced *faithfully* — same method names, same signatures where
 //! std's ownership rules allow it, same error/JSON contracts — while
 //! everything underneath it is this workspace's engine. A caller that
-//! only needs [`Reader::from_file`]/[`Reader::json`] should not be able to
-//! tell the difference; one that reaches for a part of c2pa-rs's surface
-//! this crate has not built yet has a clear seam to extend rather than a
-//! rewrite to do.
+//! only needs [`Reader::from_context`]/[`Reader::json`] should not be able
+//! to tell the difference; one that reaches for a part of c2pa-rs's
+//! surface this crate has not built yet has a clear seam to extend rather
+//! than a rewrite to do.
 //!
 //! # What this covers
 //!
 //! One use case, worked through end to end: **read and validate a C2PA
 //! manifest store embedded in a local JPEG file, and report the result as
-//! JSON** — [`Reader::from_file`] followed by [`Reader::json`],
-//! [`Reader::validation_state`], or the borrowed [`Manifest`] accessors.
-//! That case was chosen because it is the one most c2pa-rs integrations
-//! reach for first, and because every piece it needs —
-//! [`contentauth_c2pa_file_reader::read_manifest_from_file`], a
+//! JSON** — [`Context::new`] configuring trust anchors,
+//! [`Reader::from_context`] and [`Reader::with_file`], then
+//! [`Reader::json`], [`Reader::validation_state`], or the borrowed
+//! [`Manifest`] accessors. That case was chosen because it is the one most
+//! c2pa-rs integrations reach for first, and because every piece it needs
+//! — [`contentauth_c2pa_file_reader::read_manifest_from_file`], a
 //! [`contentauth_c2pa_format_jpeg::JpegFormat`] handler, and
 //! [`contentauth_c2pa_reader`]'s validation — already exists in this
 //! workspace; this crate's own work is entirely the compatibility surface
-//! (`Reader`, [`Manifest`], [`ValidationState`], [`ValidationStatus`],
-//! [`Error`], and the JSON shape in `src/json.rs`), not new read or
-//! validation logic.
+//! ([`Context`], `Reader`, [`Manifest`], [`ValidationState`],
+//! [`ValidationStatus`], [`Error`], and the JSON shape in `src/json.rs`),
+//! not new read or validation logic.
+//!
+//! The `Context`/`Reader::from_context`/`with_file` shape is deliberately
+//! the preferred one here, not merely one of several equally-supported
+//! paths: it's what c2pa-rs's own docs now recommend over the (deprecated,
+//! but still present, on both sides) standalone `Reader::from_file`. See
+//! [`Context`]'s own docs for what it configures and what it deliberately
+//! leaves out of c2pa-rs's own, much larger `Context`.
 //!
 //! # What is not covered, and how it would be
 //!
 //! * **`Reader::from_stream`** and the other constructors — trivial to add
-//!   alongside [`Reader::from_file`]: swap
+//!   alongside [`Reader::with_file`]: swap
 //!   [`contentauth_c2pa_file_reader::read_manifest_from_file`] for
 //!   [`contentauth_c2pa_file_reader::read_manifest`], which already takes
 //!   any `Read + Seek`, and drop the file-extension-based format lookup in
@@ -86,6 +94,7 @@
 #![deny(missing_docs)]
 #![deny(unsafe_code)]
 
+mod context;
 mod error;
 mod format;
 mod json;
@@ -96,6 +105,7 @@ mod validation;
 // Re-exported so a caller configuring trust anchors does not also need a
 // direct dependency on `contentauth-c2pa-file-reader` just for this type.
 pub use contentauth_c2pa_file_reader::ReadSettings;
+pub use context::Context;
 pub use error::Error;
 pub use manifest::Manifest;
 pub use reader::Reader;

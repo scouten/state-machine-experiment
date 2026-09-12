@@ -58,6 +58,14 @@ experiment grows.
   of the crates above, for a caller that wants c2pa-rs's existing surface
   rather than this workspace's `Session` contract.
 
+Outside the workspace (see its own README for why):
+
+* [`c2pa-rs-compat-conformance`](c2pa-rs-compat-conformance) — a
+  differential test harness proving `contentauth-c2pa-rs-compat` reports
+  the same thing as the real c2pa-rs `Reader` for the same file, and a
+  seam (`examples/compare_corpus.rs`) for running that comparison across a
+  whole directory of assets rather than one fixture.
+
 ## Building
 
 This repo is a Cargo workspace; the usual commands run across all members

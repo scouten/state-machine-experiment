@@ -13,12 +13,12 @@
 
 //! [`Reader`]: the compatibility surface itself.
 
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
-use contentauth_c2pa_file_reader::ReadSettings;
 use contentauth_c2pa_reader::ReadReport;
 
 use crate::{
+    context::Context,
     error::Error,
     format,
     manifest::Manifest,
@@ -35,22 +35,37 @@ use crate::{
 /// validates) strictly more narrowly than c2pa-rs today — see
 /// [`contentauth_c2pa_reader`]'s own README for the list.
 ///
+/// Built from a [`Context`], exactly as c2pa-rs's own `Reader` now prefers
+/// ([`Self::from_file`] is a deprecated convenience over the same path, as
+/// it is in c2pa-rs): create a `Context`, configure it once (trust
+/// anchors, today), and hand it to [`Self::from_context`] rather than
+/// passing configuration as a loose argument to each read.
+///
 /// # Example
 ///
 /// ```no_run
-/// use contentauth_c2pa_rs_compat::Reader;
+/// use contentauth_c2pa_rs_compat::{Context, Reader, ValidationState};
 ///
-/// let reader = Reader::from_file("photo.jpg")?;
+/// let reader = Reader::from_context(Context::new()).with_file("photo.jpg")?;
 /// println!("{}", reader.json());
-/// assert_eq!(
-///     reader.validation_state(),
-///     contentauth_c2pa_rs_compat::ValidationState::Trusted
-/// );
+/// assert_eq!(reader.validation_state(), ValidationState::Trusted);
 /// # Ok::<(), contentauth_c2pa_rs_compat::Error>(())
 /// ```
 #[derive(Debug)]
 pub struct Reader {
-    report: ReadReport,
+    context: Arc<Context>,
+
+    /// `None` until [`Self::with_file`] succeeds — mirrors c2pa-rs's own
+    /// `Reader`, which likewise exists (via [`Self::default`]) before any
+    /// asset has been loaded into it. Every accessor below answers as
+    /// though nothing was found, rather than panicking, in that state.
+    report: Option<ReadReport>,
+}
+
+impl Default for Reader {
+    fn default() -> Self {
+        Self::from_context(Context::default())
+    }
 }
 
 impl Reader {
@@ -64,35 +79,43 @@ impl Reader {
         format::EXTENSIONS
     }
 
+    /// Creates a `Reader` from the given [`Context`], with no asset loaded
+    /// yet — call [`Self::with_file`] next.
+    pub fn from_context(context: Context) -> Self {
+        Self {
+            context: Arc::new(context),
+            report: None,
+        }
+    }
+
+    /// As [`Self::from_context`], sharing a [`Context`] already held by an
+    /// [`Arc`] — e.g. one also used to build other readers — rather than
+    /// taking ownership of a new one.
+    pub fn from_shared_context(context: &Arc<Context>) -> Self {
+        Self {
+            context: Arc::clone(context),
+            report: None,
+        }
+    }
+
     /// Opens `path`, locates its embedded C2PA manifest store, and
-    /// validates it with default settings (no configured trust anchors, so
-    /// no manifest can reach [`ValidationState::Trusted`]).
+    /// validates it per this reader's [`Context`].
     ///
     /// Fails with [`Error::JumbfNotFound`] if the asset carries no manifest
-    /// store — matching c2pa-rs's own `Reader::from_file`, which does the
+    /// store — matching c2pa-rs's own `Reader::with_file`, which does the
     /// same absent a sidecar `.c2pa` file (this crate does not look for
     /// one). Fails with [`Error::UnsupportedType`] if `path`'s extension
     /// names a format no handler in this build recognizes; see
     /// [`Self::supported_extensions`].
-    pub fn from_file(path: impl AsRef<Path>) -> Result<Self, Error> {
-        Self::from_file_with_settings(path, ReadSettings::default())
-    }
-
-    /// As [`Self::from_file`], with caller-supplied [`ReadSettings`] —
-    /// concretely, trust anchors a manifest's signer must chain to in order
-    /// to reach [`ValidationState::Trusted`] rather than merely
-    /// [`ValidationState::Valid`].
     ///
-    /// c2pa-rs configures trust process-globally (`Settings`/`TrustHandler`
-    /// APIs); this crate takes it per read instead, in keeping with every
-    /// other session in this workspace taking its configuration as an
-    /// explicit argument rather than through global state.
-    pub fn from_file_with_settings(
-        path: impl AsRef<Path>,
-        settings: ReadSettings,
-    ) -> Result<Self, Error> {
+    /// Reading more than one file into the same `Reader` — c2pa-rs supports
+    /// this, to merge manifests from more than one source — is not: a
+    /// second call replaces whatever an earlier one loaded rather than
+    /// merging with it, since this crate's use case is a single asset.
+    pub fn with_file(mut self, path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = path.as_ref();
         let handler = format::for_path(path)?;
+        let settings = self.context.settings().clone();
 
         let report =
             contentauth_c2pa_file_reader::read_manifest_from_file(&handler, path, settings)?;
@@ -103,22 +126,44 @@ impl Reader {
             });
         }
 
-        Ok(Self { report })
+        self.report = Some(report);
+        Ok(self)
     }
 
-    /// Returns the overall validation outcome.
+    /// Opens `path` and reads it with default settings (no configured
+    /// trust anchors, so no manifest can reach [`ValidationState::Trusted`]).
+    ///
+    /// Equivalent to `Reader::default().with_file(path)`, exactly as
+    /// c2pa-rs's own (deprecated) `Reader::from_file` is equivalent to
+    /// `Reader::default().with_file(path)` there. Prefer
+    /// [`Self::from_context`] to configure trust anchors first.
+    #[deprecated(
+        note = "use `Reader::default().with_file(path)`, or `Reader::from_context(context)` to configure trust anchors first"
+    )]
+    pub fn from_file(path: impl AsRef<Path>) -> Result<Self, Error> {
+        Self::default().with_file(path)
+    }
+
+    /// Returns the overall validation outcome, or [`ValidationState::Invalid`]
+    /// if no asset has been loaded yet.
     pub fn validation_state(&self) -> ValidationState {
-        self.report.validation_state.into()
+        match &self.report {
+            Some(report) => report.validation_state.into(),
+            None => ValidationState::Invalid,
+        }
     }
 
     /// Returns the individual validation status codes recorded while
-    /// reading, or `None` if none were recorded.
+    /// reading, or `None` if none were recorded (including if no asset has
+    /// been loaded yet).
     pub fn validation_status(&self) -> Option<Vec<ValidationStatus>> {
-        if self.report.statuses.is_empty() {
+        let report = self.report.as_ref()?;
+
+        if report.statuses.is_empty() {
             None
         } else {
             Some(
-                self.report
+                report
                     .statuses
                     .iter()
                     .cloned()
@@ -140,18 +185,19 @@ impl Reader {
     /// [`ReadReport::active`]: contentauth_c2pa_reader::ReadReport::active
     /// [`ReadReport::active_manifest`]: contentauth_c2pa_reader::ReadReport::active_manifest
     pub fn active_manifest(&self) -> Option<Manifest<'_>> {
-        self.report.manifests.last().map(Manifest)
+        self.report.as_ref()?.manifests.last().map(Manifest)
     }
 
     /// Returns the active manifest's label, if any.
     pub fn active_label(&self) -> Option<&str> {
-        self.report.active_manifest.as_deref()
+        self.report.as_ref()?.active_manifest.as_deref()
     }
 
     /// Returns the manifest with the given label, if the store contains
     /// one.
     pub fn get_manifest(&self, label: &str) -> Option<Manifest<'_>> {
         self.report
+            .as_ref()?
             .manifests
             .iter()
             .find(|manifest| manifest.label == label)
@@ -160,7 +206,9 @@ impl Reader {
 
     /// Iterates over every manifest in the store, in store order.
     pub fn iter_manifests(&self) -> impl Iterator<Item = Manifest<'_>> {
-        self.report.manifests.iter().map(Manifest)
+        self.report
+            .iter()
+            .flat_map(|report| report.manifests.iter().map(Manifest))
     }
 
     /// Returns the manifest store as a pretty-printed JSON string.
@@ -175,8 +223,15 @@ impl Reader {
 
     /// As [`Self::json`], propagating a serialization failure instead of
     /// papering over it.
+    ///
+    /// Answers `"{}"` directly, without touching the `json` module, if no
+    /// asset has been loaded yet — there is nothing yet to serialize.
     pub fn json_checked(&self) -> Result<String, Error> {
-        let value = crate::json::value(&self.report)?;
+        let Some(report) = &self.report else {
+            return Ok("{}".to_string());
+        };
+
+        let value = crate::json::value(report)?;
         Ok(serde_json::to_string_pretty(&value)?)
     }
 }
