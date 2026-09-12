@@ -154,9 +154,42 @@ pub fn compare_file(path: &Path) -> Option<Mismatch> {
     }
 }
 
+/// The outcome of walking a whole corpus directory with [`compare_corpus`].
+///
+/// [`Self::unreadable`] is kept separate from [`Self::mismatches`] on
+/// purpose: a path the walk could not even read was never actually
+/// compared, and folding it silently into "no mismatch" would misreport
+/// how much of the corpus was checked — a corpus with permission errors
+/// or a broken entry partway through should not come back looking clean.
+#[derive(Debug, Default)]
+pub struct CorpusReport {
+    /// Number of files successfully compared through both backends.
+    pub compared: usize,
+
+    /// Every file where the two backends disagreed.
+    pub mismatches: Vec<Mismatch>,
+
+    /// Every path the walk could not read — a directory listing that
+    /// failed, an entry within one that failed, or an entry whose file
+    /// type could not be determined — paired with why. A directory's own
+    /// listing failure is recorded against the directory itself; a failure
+    /// partway through iterating its entries is too, since the specific
+    /// entry that failed isn't nameable from the error `std::fs::read_dir`
+    /// reports.
+    pub unreadable: Vec<(PathBuf, String)>,
+}
+
+impl CorpusReport {
+    /// True only if every file compared cleanly *and* nothing was skipped
+    /// as unreadable — the one condition under which this run actually
+    /// demonstrates full agreement across the corpus.
+    pub fn is_clean(&self) -> bool {
+        self.mismatches.is_empty() && self.unreadable.is_empty()
+    }
+}
+
 /// Walks `dir` recursively, comparing every regular file it finds through
-/// both backends. Returns the number of files compared and every
-/// disagreement found.
+/// both backends.
 ///
 /// This is the seam for running this comparison at the scale of a real
 /// corpus rather than one fixture: point `dir` at any directory of C2PA
@@ -167,28 +200,58 @@ pub fn compare_file(path: &Path) -> Option<Mismatch> {
 /// call whose two `Err`s (most likely) still agree, which is not a
 /// mismatch: c2pa-rs and this crate returning the same *kind* of "not a
 /// C2PA asset" answer is itself part of what's being demonstrated.
-pub fn compare_corpus(dir: &Path) -> (usize, Vec<Mismatch>) {
-    let mut total = 0;
-    let mut mismatches = Vec::new();
+///
+/// Symlinks are never followed, whether to a file or to a directory: a
+/// directory symlink pointing back at one of its own ancestors would
+/// otherwise send this walk in circles forever, and telling that case
+/// apart from a harmless symlink isn't worth the bother for a comparison
+/// tool. Point `dir` at wherever a corpus's symlinked assets actually
+/// resolve, rather than relying on this walk to follow them.
+pub fn compare_corpus(dir: &Path) -> CorpusReport {
+    let mut report = CorpusReport::default();
     let mut pending = vec![dir.to_path_buf()];
 
     while let Some(dir) = pending.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(err) => {
+                report.unreadable.push((dir, err.to_string()));
+                continue;
+            }
         };
 
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(err) => {
+                    report.unreadable.push((dir.clone(), err.to_string()));
+                    continue;
+                }
+            };
+
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(err) => {
+                    report.unreadable.push((entry.path(), err.to_string()));
+                    continue;
+                }
+            };
+
+            if file_type.is_symlink() {
+                continue;
+            }
+
             let path = entry.path();
-            if path.is_dir() {
+            if file_type.is_dir() {
                 pending.push(path);
-            } else if path.is_file() {
-                total += 1;
+            } else if file_type.is_file() {
+                report.compared += 1;
                 if let Some(mismatch) = compare_file(&path) {
-                    mismatches.push(mismatch);
+                    report.mismatches.push(mismatch);
                 }
             }
         }
     }
 
-    (total, mismatches)
+    report
 }

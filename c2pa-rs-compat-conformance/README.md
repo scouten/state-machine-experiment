@@ -40,12 +40,20 @@ the sibling crate it depends on via a plain path dependency.
 
   Point it at a directory of C2PA-signed assets and it reports how many
   files were compared and lists every disagreement (including one backend
-  succeeding while the other fails), exiting non-zero if any were found.
-  This is the seam for running the comparison at the scale of a real
-  corpus — hundreds or thousands of files — rather than one fixture: for
-  instance, a checkout of c2pa-org's `public-testfiles` repository, or any
-  other collection of C2PA-signed assets. Nothing about `compare_corpus`
-  is specific to the one fixture the test above uses.
+  succeeding while the other fails), exiting non-zero if any were found
+  *or* if any path could not even be read — an unreadable path was never
+  actually compared, so treating that as a pass would misreport how much
+  of the corpus this run checked. This is the seam for running the
+  comparison at the scale of a real corpus — hundreds or thousands of
+  files — rather than one fixture: for instance, a checkout of c2pa-org's
+  `public-testfiles` repository, or any other collection of C2PA-signed
+  assets. Nothing about `compare_corpus` is specific to the one fixture the
+  test above uses.
+
+  The walk never follows symlinks, to a file or to a directory — a
+  directory symlink pointing back at one of its own ancestors would
+  otherwise send it in circles. Point it at wherever a corpus's symlinked
+  assets actually resolve rather than relying on the walk to follow them.
 
   Two things it deliberately does *not* paper over, so don't be alarmed
   running it against a directory that isn't itself a curated corpus of

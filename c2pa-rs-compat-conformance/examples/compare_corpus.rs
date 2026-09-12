@@ -11,9 +11,12 @@
 //! repository), or any local collection — and it reports how many files
 //! were compared and lists every one where real c2pa-rs and
 //! [`contentauth_c2pa_rs_compat`] disagreed, including one succeeding
-//! while the other failed. Exits non-zero if any mismatch was found, so it
-//! can be dropped straight into a CI job once there is a corpus worth
-//! running it against continuously.
+//! while the other failed. Exits non-zero if any mismatch was found *or*
+//! if any path could not even be read — an unreadable path was never
+//! compared, so silently treating that as a pass would misreport how much
+//! of the corpus this run actually checked. So it can be dropped straight
+//! into a CI job once there is a corpus worth running it against
+//! continuously.
 
 use std::{path::Path, process::ExitCode};
 
@@ -25,21 +28,27 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    let (total, mismatches) = compare_corpus(Path::new(&dir));
+    let report = compare_corpus(Path::new(&dir));
 
     println!(
-        "{total} file(s) compared, {} matched, {} mismatched",
-        total - mismatches.len(),
-        mismatches.len()
+        "{} file(s) compared, {} matched, {} mismatched, {} unreadable",
+        report.compared,
+        report.compared - report.mismatches.len(),
+        report.mismatches.len(),
+        report.unreadable.len(),
     );
 
-    for mismatch in &mismatches {
+    for mismatch in &report.mismatches {
         println!("\nMISMATCH: {}", mismatch.path.display());
         println!("  c2pa-rs: {:?}", mismatch.c2pa_rs);
         println!("  compat:  {:?}", mismatch.compat);
     }
 
-    if mismatches.is_empty() {
+    for (path, reason) in &report.unreadable {
+        println!("\nUNREADABLE: {} ({reason})", path.display());
+    }
+
+    if report.is_clean() {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
