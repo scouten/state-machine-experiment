@@ -20,8 +20,10 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   implements `Session`; its own request vocabulary is in
   [`src/request.rs`](contentauth-c2pa-reader/src/request.rs). See its
   [README.md](contentauth-c2pa-reader/README.md) for what it validates
-  (integrity, claim signature, trust chain, RFC 3161 timestamps) and the
-  full request-vocabulary table.
+  (integrity, claim signature, trust chain, RFC 3161 timestamps, and OCSP
+  revocation per the spec's §15.9 process — stapled response first, then
+  an online query on by default; fail-open only when a responder cannot
+  be reached at all) and the full request-vocabulary table.
 - **`contentauth-c2pa-builder`** — the write-side counterpart: generates
   and signs a manifest store via a two-pass placeholder scheme
   (`BuilderSession` in [`src/builder.rs`](contentauth-c2pa-builder/src/builder.rs);
@@ -105,8 +107,13 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   and the borrowed `Manifest` accessors it reports (see
   [`src/lib.rs`](contentauth-c2pa-rs-compat/src/lib.rs) for how a
   `Builder` counterpart or additional format handlers would extend this).
-  Its own work is entirely that compatibility surface; the read and
-  validation logic underneath already existed.
+  Its own work is entirely that compatibility surface, plus one piece of
+  genuinely new plumbing: `src/host.rs`, a [`reqwest`](https://docs.rs/reqwest)-backed
+  host that `with_file` drives `FileReadSession` through directly (rather
+  than `contentauth-c2pa-file-reader`'s own convenience function) so it
+  can answer a live OCSP check with a real HTTP request — deliberately the
+  only crate in this workspace with a network dependency; every other
+  read/validation behavior underneath it already existed.
 - **`c2pa-rs-compat-conformance`** — a differential test harness for the
   crate above, proving the same client code gets the same answer reading
   a file through the real `c2pa` crate as through
@@ -222,11 +229,14 @@ cargo deny check advisories bans licenses sources
 ```
 
 Wasm target checks — the engine and reader are meant to build for Wasm
-unmodified, enforced in CI:
+unmodified, enforced in CI over the whole workspace except
+`contentauth-c2pa-rs-compat`, which is exempt: it deliberately owns this
+workspace's one real network dependency (its default `reqwest`-backed OCSP
+host), which is neither sans-I/O nor Wasm-portable:
 
 ```sh
-cargo check --all-features --target wasm32-unknown-unknown
-cargo check --all-features --target wasm32-wasip2
+cargo check --all-features --target wasm32-unknown-unknown --workspace --exclude contentauth-c2pa-rs-compat
+cargo check --all-features --target wasm32-wasip2 --workspace --exclude contentauth-c2pa-rs-compat
 ```
 
 MSRV is 1.88.0 (kept in sync between `Cargo.toml`'s `rust-version` and the

@@ -23,6 +23,17 @@
 //! not a position relative to a previous request, so this host seeks for
 //! every read rather than assuming forward-only access — the reason `Seek`
 //! is part of the bound, not just `Read`.
+//!
+//! This host has no network access, so it answers
+//! [`FileReadRequest::Ocsp`] with [`FileReadReply::Failed`] — the same
+//! outcome a caller sees from any other request this host cannot service.
+//! That is a safe default rather than a limitation to work around: OCSP
+//! checking is fail-open (see
+//! [`ReadSettings::check_ocsp`](contentauth_c2pa_reader::ReadSettings::check_ocsp)),
+//! so a manifest reads exactly as it would if checking were disabled. A
+//! host that wants live OCSP checks drives [`FileReadSession`] directly and
+//! answers that request itself — see, for instance,
+//! `contentauth-c2pa-rs-compat`'s `reqwest`-backed host.
 
 use std::{
     io::{self, Read, Seek, SeekFrom},
@@ -73,6 +84,14 @@ fn answer<R: Read + Seek>(source: &mut R, request: &FileReadRequest) -> FileRead
         },
 
         FileReadRequest::CurrentDateTime => FileReadReply::CurrentDateTime(now_unix()),
+
+        // This host has no network access of its own — see the module
+        // docs. Failing the request is safe: revocation checking is
+        // fail-open (`ReadSettings::check_ocsp`'s own docs), so this reads
+        // exactly as "could not be checked" rather than as a rejection.
+        FileReadRequest::Ocsp { .. } => {
+            FileReadReply::Failed(HostError::new("this host has no network access for OCSP"))
+        }
     }
 }
 
@@ -184,6 +203,19 @@ mod tests {
             &FileReadRequest::Read {
                 stream: stream(),
                 range: ByteRange { start: 0, len: 1 },
+            },
+        );
+
+        assert!(matches!(reply, FileReadReply::Failed(_)), "{reply:?}");
+    }
+
+    #[test]
+    fn an_ocsp_request_is_reported_as_failed_since_this_host_has_no_network_access() {
+        let reply = answer(
+            &mut Cursor::new(vec![]),
+            &FileReadRequest::Ocsp {
+                url: "http://ocsp.example/".to_string(),
+                request_der: vec![1, 2, 3],
             },
         );
 

@@ -31,6 +31,7 @@ use crate::{
     error::Error,
     hash_stream::{self, HashStream},
     manifest_store::{self, Manifest},
+    ocsp,
     request::{ReadHostReply, ReadRequest},
     timestamp,
     validation::{status_code, ValidationState, ValidationStatus},
@@ -42,7 +43,7 @@ use crate::{
 /// configuration (additional allowed EKUs, revocation policy), remote-
 /// manifest policy, verification options, and so on — roughly the
 /// read-relevant subset of the c2pa-rs settings system.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct ReadSettings {
     /// If true, the session may issue an HTTP-fetch-style request to
     /// retrieve a remote manifest store referenced by the asset.
@@ -86,6 +87,50 @@ pub struct ReadSettings {
     /// stricter reading: a manifest signed with a since-expired credential
     /// reads as outside its validity window, however good its timestamp.
     pub timestamp_trust_anchors: Vec<Vec<u8>>,
+
+    /// Whether the session *desires to verify* a certificate's revocation
+    /// status by querying an OCSP responder online (C2PA spec §15.9.2),
+    /// when nothing already in the C2PA Manifest Store settled the
+    /// question. `true` by default.
+    ///
+    /// This governs only the *online* query — evaluating a response
+    /// already stapled into the claim signature's `rVals` header (§15.9.1)
+    /// always happens regardless of this setting, since it costs no
+    /// network round trip. The specification makes the online query itself
+    /// opt-out on purpose: querying a responder can reveal the asset's
+    /// identity to an observer (§15.9.2's own note), which is a cost only
+    /// the caller can decide is worth paying. Setting this to `false`
+    /// records [`status_code::SIGNING_CREDENTIAL_OCSP_SKIPPED`] for the
+    /// signer's own certificate rather than issuing [`ReadRequest::Ocsp`].
+    ///
+    /// A host with no network access, or that cannot reach the responder,
+    /// answers [`ReadRequest::Ocsp`] with [`ReadHostReply::Failed`],
+    /// recorded as [`status_code::SIGNING_CREDENTIAL_OCSP_INACCESSIBLE`]
+    /// rather than held against the manifest — offline verification stays
+    /// possible. A response the host *does* return, though, is judged by
+    /// the C2PA specification's own, less forgiving rule: an authenticated
+    /// response that does not affirmatively vouch for the certificate
+    /// reads as [`status_code::SIGNING_CREDENTIAL_OCSP_REVOKED`] rather
+    /// than merely inconclusive. A revoked *CA* certificate above the
+    /// signer is reported differently — see
+    /// [`status_code::SIGNING_CREDENTIAL_UNTRUSTED`].
+    ///
+    /// The timestamping authority's own chain is never OCSP-checked: a
+    /// stale timestamp authority credential is a much smaller concern than
+    /// a stale signing credential, and RFC 3161 authorities rotate their
+    /// certificates on their own schedule this crate has no stake in.
+    pub check_ocsp: bool,
+}
+
+impl Default for ReadSettings {
+    fn default() -> Self {
+        Self {
+            fetch_remote_manifests: false,
+            trust_anchors: vec![],
+            timestamp_trust_anchors: vec![],
+            check_ocsp: true,
+        }
+    }
 }
 
 /// Reads and validates a C2PA manifest store from a digital asset.
@@ -170,6 +215,10 @@ enum State {
     AwaitingSigningTime {
         request: RequestId,
         chains: Vec<PendingChain>,
+        binding: Option<PendingBinding>,
+    },
+    AwaitingOcspResponses {
+        pending: Vec<PendingChainOcsp>,
         binding: Option<PendingBinding>,
     },
     AwaitingAssetLength {
@@ -266,6 +315,43 @@ struct PendingBinding {
     url: String,
 }
 
+/// One claim signer chain's outstanding OCSP checks, and enough about the
+/// chain's own outcome and timing to act on whatever they establish.
+///
+/// A chain only reaches this state once [`chain::validate`] has already
+/// run and recorded its own findings; nothing here repeats or overrides
+/// them except [`Self::is_active`]'s chain being downgraded on a validly
+/// signed `revoked` answer for its own signer.
+#[derive(Debug)]
+struct PendingChainOcsp {
+    /// The chain's claim signature URL, so a finding is attributed the
+    /// same way every other finding about this chain is.
+    url: String,
+
+    /// Whether this is the *active* manifest's own chain — the one whose
+    /// [`Trust`] feeds [`ReadReport::validation_state`]. An ingredient's
+    /// chain is still checked (a revoked ingredient signer is still worth
+    /// reporting), but revoking it does not, by itself, invalidate the
+    /// asset being read.
+    is_active: bool,
+
+    /// The host's current time, if it supplied one — C2PA spec §15.9.2's
+    /// fallback instant for an online check when there is no trusted
+    /// timestamp, and the freshness gate §15.9.1 applies to a stapled
+    /// response regardless of a timestamp.
+    now: Option<i64>,
+
+    /// The claim signature's attested signing instant, from a trusted RFC
+    /// 3161 timestamp — the *only* instant §15.9.1 will judge a stapled
+    /// response against, and §15.9.2's preferred one for an online check.
+    attested: Option<i64>,
+
+    /// Checks not yet answered by an online query, each paired with the
+    /// host request it was issued under. Always for the claim signer's
+    /// own certificate — see [`ReadSession::handle_awaiting_ocsp_responses`].
+    checks: Vec<(RequestId, crate::ocsp::PendingOcspCheck)>,
+}
+
 impl ReadSession {
     /// The primary asset stream being read.
     pub const PRIMARY_STREAM: StreamId = StreamId::new(0);
@@ -327,6 +413,10 @@ impl ReadSession {
                     chains,
                     binding,
                 } => self.handle_awaiting_signing_time(request, chains, binding),
+
+                State::AwaitingOcspResponses { pending, binding } => {
+                    self.handle_awaiting_ocsp_responses(pending, binding)
+                }
 
                 State::AwaitingAssetLength { request, binding } => {
                     self.handle_awaiting_asset_length(request, binding)
@@ -459,8 +549,8 @@ impl ReadSession {
             }
 
             Some(ReadHostReply::CurrentDateTime(now)) => {
-                self.evaluate_trust(&chains, Some(now));
-                self.begin_binding(binding);
+                let pending_ocsp = self.evaluate_trust(&chains, Some(now));
+                self.proceed_after_trust(pending_ocsp, binding);
             }
 
             // A host that cannot tell the time is not
@@ -468,8 +558,8 @@ impl ReadSession {
             // timestamp brings its own instant, and only the
             // ones that do not are left unevaluated.
             Some(ReadHostReply::Failed(_)) => {
-                self.evaluate_trust(&chains, None);
-                self.begin_binding(binding);
+                let pending_ocsp = self.evaluate_trust(&chains, None);
+                self.proceed_after_trust(pending_ocsp, binding);
             }
 
             Some(_) => {
@@ -563,15 +653,33 @@ impl ReadSession {
     }
 
     /// Validates each verified claim signature's certificate chain against
-    /// the configured anchors.
+    /// the configured anchors, and works through C2PA spec §15.9's
+    /// revocation process for every certificate in it that names an OCSP
+    /// responder.
     ///
-    /// `now` is the fallback instant — the host's current time, in seconds
-    /// since the Unix epoch (see [`ReadHostReply::CurrentDateTime`]). A signature
+    /// `now` is the host's current time, in seconds since the Unix epoch
+    /// (see [`ReadHostReply::CurrentDateTime`]) — the fallback instant for
+    /// validity-window checks, and (per §15.9.2) for an online OCSP check
+    /// when the claim signature carries no trusted timestamp. A signature
     /// carrying a timestamp from an authority that chains to a configured
-    /// timestamp anchor is judged against *that* instant instead, which is
-    /// the whole point of carrying one: it is what lets a manifest signed
-    /// years ago with a since-expired certificate still read as valid.
-    fn evaluate_trust(&mut self, chains: &[PendingChain], now: Option<i64>) {
+    /// timestamp anchor is judged against *that* attested instant instead
+    /// wherever one is available, which is the whole point of carrying
+    /// one: it is what lets a manifest signed years ago with a
+    /// since-expired certificate still read as valid.
+    ///
+    /// Every certificate's stapled `rVals` responses (see
+    /// [`PendingChain::rvals`]) are tried first, synchronously, since they
+    /// cost no host round trip; only a signer's certificate whose staples
+    /// left nothing established, and only when
+    /// [`ReadSettings::check_ocsp`] says to, goes on to an online query.
+    /// Returns the chains that still have such a query outstanding.
+    fn evaluate_trust(
+        &mut self,
+        chains: &[PendingChain],
+        now: Option<i64>,
+    ) -> Vec<PendingChainOcsp> {
+        let mut pending_ocsp = Vec::new();
+
         for pending in chains {
             let mut statuses = Vec::new();
 
@@ -587,11 +695,15 @@ impl ReadSession {
             // Only a trusted authority's word on the time is taken. An
             // untrusted or broken token leaves the fallback in place: the
             // finding is recorded either way, so a report says which
-            // instant its verdict rests on.
-            let instant = match stamped {
+            // instant its verdict rests on. `attested` is kept apart from
+            // the merged `instant` below because C2PA spec §15.9.1/§15.9.2
+            // care about the two separately — the current time on its own
+            // never stands in for a signing time no timestamp attested to.
+            let attested = match stamped {
                 Some(timestamp::Timestamped::Trusted(gen_time)) => Some(gen_time),
-                _ => now,
+                _ => None,
             };
+            let instant = attested.or(now);
 
             let Some(instant) = instant else {
                 // No timestamp worth using and no clock either, so nothing
@@ -623,9 +735,276 @@ impl ReadSession {
             // a broken one is a failure wherever it sits — but an
             // ingredient signed by an untrusted party does not make the
             // active manifest's own signer any less trusted.
-            if self.report.active_manifest.as_deref() == Some(pending.manifest_label.as_str()) {
+            let is_active =
+                self.report.active_manifest.as_deref() == Some(pending.manifest_label.as_str());
+            if is_active {
                 self.trust = Some(trust);
             }
+
+            // A chain the checks above already rejected is not worth
+            // asking about: nothing an OCSP response could say would make
+            // a structurally broken path any less broken.
+            if trust == Trust::Rejected {
+                continue;
+            }
+
+            let mut online_checks = Vec::new();
+
+            for chain::OcspCheckPlan { check, is_signer } in
+                chain::ocsp_checks(&pending.certificates, &self.anchors)
+            {
+                let staple_outcome = pending.rvals.iter().find_map(|response_der| {
+                    match ocsp::evaluate_stapled(&check, response_der, now, attested) {
+                        ocsp::StapledOutcome::Inconclusive => None,
+                        resolved => Some(resolved),
+                    }
+                });
+
+                match staple_outcome {
+                    Some(ocsp::StapledOutcome::NotRevoked) => {
+                        // §15.9 defines no status for a *CA* certificate
+                        // confirmed not revoked — only the signer's own.
+                        if is_signer {
+                            self.record(ValidationStatus::for_url(
+                                status_code::SIGNING_CREDENTIAL_OCSP_NOT_REVOKED,
+                                &pending.url,
+                                "a stapled OCSP response says this credential was not revoked at the time of signing",
+                            ));
+                        }
+                    }
+
+                    Some(ocsp::StapledOutcome::Revoked) => self.apply_revocation(
+                        is_signer,
+                        is_active,
+                        &pending.url,
+                        "a stapled OCSP response says a certificate in this credential's chain was revoked",
+                    ),
+
+                    // Inconclusive, or no rVals to try in the first
+                    // place: nothing was established in the store, so
+                    // §15.9 falls through to an online check — but only
+                    // for the signer's own certificate. (`find_map` above
+                    // never actually produces `Some(Inconclusive)` — it
+                    // maps that case to `None` itself — but the type
+                    // system does not know that, so both are handled the
+                    // same way here rather than declared unreachable.)
+                    None | Some(ocsp::StapledOutcome::Inconclusive) if is_signer => {
+                        match (&check.responder_url, self.settings.check_ocsp) {
+                            (Some(responder_url), true) => {
+                                let request = self.core.issue(ReadRequest::Ocsp {
+                                    url: responder_url.clone(),
+                                    request_der: check.request_der.clone(),
+                                });
+                                online_checks.push((request, check));
+                            }
+
+                            (Some(_), false) => {
+                                self.record(ValidationStatus::for_url(
+                                    status_code::SIGNING_CREDENTIAL_OCSP_SKIPPED,
+                                    &pending.url,
+                                    "no revocation information for this credential was found in the manifest, and online OCSP checking is disabled",
+                                ));
+                            }
+
+                            (None, _) => {
+                                self.record(ValidationStatus::for_url(
+                                    status_code::SIGNING_CREDENTIAL_OCSP_SKIPPED,
+                                    &pending.url,
+                                    "no revocation information for this credential was found in the manifest, and its certificate names no OCSP responder to query online",
+                                ));
+                            }
+                        }
+                    }
+
+                    // A CA certificate whose staples resolved nothing:
+                    // §15.9 has nothing further to say about it.
+                    None | Some(ocsp::StapledOutcome::Inconclusive) => {}
+                }
+            }
+
+            if !online_checks.is_empty() {
+                pending_ocsp.push(PendingChainOcsp {
+                    url: pending.url.clone(),
+                    is_active,
+                    now,
+                    attested,
+                    checks: online_checks,
+                });
+            }
+        }
+
+        pending_ocsp
+    }
+
+    /// Moves on from trust evaluation: straight to the hard binding if no
+    /// OCSP checks are outstanding, or [`State::AwaitingOcspResponses`]
+    /// otherwise.
+    fn proceed_after_trust(
+        &mut self,
+        pending: Vec<PendingChainOcsp>,
+        binding: Option<PendingBinding>,
+    ) {
+        if pending.is_empty() {
+            self.begin_binding(binding);
+        } else {
+            self.state = State::AwaitingOcspResponses { pending, binding };
+        }
+    }
+
+    /// Handles [`State::AwaitingOcspResponses`]: consumes whatever OCSP
+    /// replies have arrived, records the C2PA spec §15.9.2 status they
+    /// establish, and moves on once every chain's checks are accounted
+    /// for — answered or not.
+    ///
+    /// Every check queued here is for a claim signer's own certificate —
+    /// [`Self::evaluate_trust`] never queues one for a CA certificate, since
+    /// §15.9 only defines an online step for the signer.
+    fn handle_awaiting_ocsp_responses(
+        &mut self,
+        mut pending: Vec<PendingChainOcsp>,
+        binding: Option<PendingBinding>,
+    ) -> Result<Option<Step>, Error> {
+        for chain_pending in &mut pending {
+            let mut still_outstanding = Vec::with_capacity(chain_pending.checks.len());
+
+            for (request, check) in chain_pending.checks.drain(..) {
+                match self.core.take_reply(request) {
+                    None => still_outstanding.push((request, check)),
+
+                    Some(ReadHostReply::Ocsp(response_der)) => {
+                        let outcome = ocsp::evaluate_online(
+                            &check,
+                            &response_der,
+                            chain_pending.now,
+                            chain_pending.attested,
+                        );
+                        self.apply_online_outcome(
+                            outcome,
+                            &chain_pending.url,
+                            chain_pending.is_active,
+                        );
+                    }
+
+                    // "Unable to receive a response" (C2PA spec §15.9.2).
+                    Some(ReadHostReply::Failed(_)) => {
+                        self.record(ValidationStatus::for_url(
+                            status_code::SIGNING_CREDENTIAL_OCSP_INACCESSIBLE,
+                            &chain_pending.url,
+                            "the OCSP responder could not be reached",
+                        ));
+                    }
+
+                    Some(_) => {
+                        return Err(ProtocolError::ReplyMismatch {
+                            id: request,
+                            expected: "Ocsp",
+                        }
+                        .into());
+                    }
+                }
+            }
+
+            chain_pending.checks = still_outstanding;
+        }
+
+        if pending.iter().any(|chain| !chain.checks.is_empty()) {
+            self.state = State::AwaitingOcspResponses { pending, binding };
+            return Ok(Some(Step::AwaitHost));
+        }
+
+        self.begin_binding(binding);
+        Ok(None)
+    }
+
+    /// Records what an online OCSP check (C2PA spec §15.9.2) established
+    /// about the signer's own certificate.
+    fn apply_online_outcome(&mut self, outcome: ocsp::OnlineOutcome, url: &str, is_active: bool) {
+        match outcome {
+            ocsp::OnlineOutcome::NotRevoked => self.record(ValidationStatus::for_url(
+                status_code::SIGNING_CREDENTIAL_OCSP_NOT_REVOKED,
+                url,
+                "an OCSP response says this credential was not revoked at the time of signing",
+            )),
+
+            ocsp::OnlineOutcome::Revoked => {
+                self.apply_revocation(
+                    true,
+                    is_active,
+                    url,
+                    "an OCSP response says this credential was revoked",
+                );
+            }
+
+            ocsp::OnlineOutcome::Unknown => self.record(ValidationStatus::for_url(
+                status_code::SIGNING_CREDENTIAL_OCSP_UNKNOWN,
+                url,
+                "an OCSP response reported this credential's status as unknown",
+            )),
+
+            // The response could not be authenticated for this
+            // certificate at all — operationally no different, to this
+            // validator, from never having received one.
+            ocsp::OnlineOutcome::Inconclusive => self.record(ValidationStatus::for_url(
+                status_code::SIGNING_CREDENTIAL_OCSP_INACCESSIBLE,
+                url,
+                "the OCSP response could not be authenticated for this credential",
+            )),
+        }
+    }
+
+    /// Records a confirmed revocation (C2PA spec §15.9), for either the
+    /// claim signer's own certificate or a CA certificate above it — the
+    /// two are reported under different vocabulary, and both, on the
+    /// *active* chain, are failures: the spec calls for the claim
+    /// signature itself to be rejected either way
+    /// ([`status_code::SIGNING_CREDENTIAL_OCSP_REVOKED`] for the signer; a
+    /// CA certificate is reported under
+    /// [`status_code::SIGNING_CREDENTIAL_UNTRUSTED`] — the same code an
+    /// ordinary untrusted chain also carries — but built with
+    /// [`ValidationStatus::for_url_forcing_failure`] rather than the
+    /// ordinary constructor, since §15.9's own text is explicit that this
+    /// circumstance is "a failure status", unlike the ordinary one).
+    ///
+    /// On an *inactive* (ingredient) chain, neither is: a revoked
+    /// ingredient signer still gets
+    /// [`status_code::SIGNING_CREDENTIAL_OCSP_REVOKED`] — worth reporting
+    /// — but built with [`ValidationStatus::for_url_suppressing_failure`],
+    /// since that code is otherwise always a failure and an ingredient's
+    /// own revocation does not, by itself, invalidate the asset being
+    /// read (see [`PendingChainOcsp::is_active`]'s own doc comment); a
+    /// revoked ingredient CA needs no such override, since
+    /// `signingCredential.untrusted` already defaults to non-failing.
+    /// [`Trust::Rejected`] here is really just keeping [`Self::trust`] in
+    /// step with a verdict the status already recorded for the active
+    /// chain.
+    fn apply_revocation(&mut self, is_signer: bool, is_active: bool, url: &str, explanation: &str) {
+        let status = match (is_signer, is_active) {
+            (true, true) => ValidationStatus::for_url(
+                status_code::SIGNING_CREDENTIAL_OCSP_REVOKED,
+                url,
+                explanation,
+            ),
+            (true, false) => ValidationStatus::for_url_suppressing_failure(
+                status_code::SIGNING_CREDENTIAL_OCSP_REVOKED,
+                url,
+                explanation,
+            ),
+            (false, true) => ValidationStatus::for_url_forcing_failure(
+                status_code::SIGNING_CREDENTIAL_UNTRUSTED,
+                url,
+                explanation,
+            ),
+            (false, false) => ValidationStatus::for_url(
+                status_code::SIGNING_CREDENTIAL_UNTRUSTED,
+                url,
+                explanation,
+            ),
+        };
+
+        self.record(status);
+
+        if is_active {
+            self.trust = Some(Trust::Rejected);
         }
     }
 
@@ -1168,6 +1547,15 @@ mod tests {
                         let bytes = asset[start..start + range.len as usize].to_vec();
                         session.fulfill(request.id, ReadHostReply::AssetBytes(bytes))?
                     }
+
+                    // None of this module's synthetic certificates carry an
+                    // Authority Information Access extension, so this is
+                    // never actually issued — kept so the match stays
+                    // exhaustive as `ReadRequest` grows.
+                    ReadRequest::Ocsp { .. } => session.fulfill(
+                        request.id,
+                        ReadHostReply::Failed(HostError::new("no OCSP responder configured")),
+                    )?,
                 }
             }
         }
@@ -1584,5 +1972,433 @@ mod tests {
             session.finish(),
             Err(Error::Protocol(ProtocolError::SessionNotComplete))
         ));
+    }
+
+    /// A real, structurally valid two-certificate chain (proven so by
+    /// `chain.rs`'s own `the_real_c2pa_rs_fixture_chain_validates`), with an
+    /// OCSP responder URL grafted onto the leaf — none of this repository's
+    /// fixtures carry that extension natively.
+    fn chain_with_responder(url: &str) -> Vec<Certificate> {
+        let mut leaf = cert::decode(test_support::FIXTURE_LEAF_CERT).unwrap();
+        leaf.ocsp_responder_url = Some(url.to_string());
+        vec![
+            leaf,
+            cert::decode(test_support::FIXTURE_ISSUER_CERT).unwrap(),
+        ]
+    }
+
+    /// `trust-leaf`/`trust-intermediate`/`trust-root` — the same synthetic,
+    /// structurally valid three-tier fixture chain `chain.rs`'s own
+    /// `ocsp_checks_still_rebuilds_the_path_through_a_configured_anchor`
+    /// uses, here so a test can drive `evaluate_trust` far enough to reach
+    /// a *second* certificate-path link (a CA above the signer) — the two-
+    /// certificate [`chain_with_responder`] never has one.
+    const TRUST_LEAF: &[u8] = include_bytes!("../tests/fixtures/trust-leaf.der");
+    const TRUST_INTERMEDIATE: &[u8] = include_bytes!("../tests/fixtures/trust-intermediate.der");
+    const TRUST_ROOT: &[u8] = include_bytes!("../tests/fixtures/trust-root.der");
+
+    /// The chain (leaf, intermediate) and the anchor (root) that extends it
+    /// to a second link, per [`TRUST_LEAF`]/[`TRUST_INTERMEDIATE`]/
+    /// [`TRUST_ROOT`].
+    fn three_tier_chain() -> (Vec<Certificate>, Vec<Certificate>) {
+        (
+            vec![
+                cert::decode(TRUST_LEAF).unwrap(),
+                cert::decode(TRUST_INTERMEDIATE).unwrap(),
+            ],
+            vec![cert::decode(TRUST_ROOT).unwrap()],
+        )
+    }
+
+    /// A [`PendingChain`] over `certificates`, carrying no timestamp and no
+    /// stapled `rVals` by default, so most tests below exercise the online
+    /// path; a test that wants a staple sets `rvals` on the result.
+    fn pending_chain(label: &str, url: &str, certificates: Vec<Certificate>) -> PendingChain {
+        PendingChain {
+            manifest_label: label.to_string(),
+            url: url.to_string(),
+            certificates,
+            timestamp: None,
+            rvals: vec![],
+        }
+    }
+
+    #[test]
+    fn evaluate_trust_skips_the_signer_when_ocsp_checking_is_disabled() {
+        let mut session = ReadSession::new(ReadSettings {
+            check_ocsp: false,
+            ..ReadSettings::default()
+        });
+
+        let chains = vec![pending_chain(
+            "urn:uuid:one",
+            "self#jumbf=x",
+            chain_with_responder("http://ocsp.example/"),
+        )];
+
+        let pending = session.evaluate_trust(&chains, Some(NOW));
+
+        assert!(pending.is_empty());
+        assert!(session.outstanding_requests().is_empty());
+        assert_eq!(
+            session.report.statuses.last().map(|s| s.code.as_str()),
+            Some(status_code::SIGNING_CREDENTIAL_OCSP_SKIPPED)
+        );
+    }
+
+    #[test]
+    fn evaluate_trust_issues_one_ocsp_request_per_named_responder() {
+        let mut session = ReadSession::new(ReadSettings::default());
+
+        let chains = vec![pending_chain(
+            "urn:uuid:one",
+            "self#jumbf=x",
+            chain_with_responder("http://ocsp.example/"),
+        )];
+
+        let pending = session.evaluate_trust(&chains, Some(NOW));
+
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].checks.len(), 1);
+
+        // No active manifest was recorded on this report, so nothing
+        // matches it — see the next test for a chain that does.
+        assert!(!pending[0].is_active);
+
+        let requests = session.outstanding_requests();
+        assert_eq!(requests.len(), 1);
+        assert!(matches!(requests[0].kind, ReadRequest::Ocsp { .. }));
+
+        // Nothing about revocation was established yet — that only
+        // happens once the host answers — though `chain::validate`'s own
+        // (non-OCSP) findings are already recorded.
+        assert!(!session
+            .report
+            .statuses
+            .iter()
+            .any(|s| s.code.starts_with("signingCredential.ocsp")));
+    }
+
+    #[test]
+    fn only_the_active_manifests_chain_is_marked_active() {
+        let mut session = ReadSession::new(ReadSettings::default());
+        session.report.active_manifest = Some("urn:uuid:active".to_string());
+
+        let chains = vec![
+            pending_chain(
+                "urn:uuid:ingredient",
+                "self#jumbf=ingredient",
+                chain_with_responder("http://ocsp.example/ingredient"),
+            ),
+            pending_chain(
+                "urn:uuid:active",
+                "self#jumbf=active",
+                chain_with_responder("http://ocsp.example/active"),
+            ),
+        ];
+
+        let pending = session.evaluate_trust(&chains, Some(NOW));
+
+        assert_eq!(pending.len(), 2);
+        assert!(!pending[0].is_active);
+        assert!(pending[1].is_active);
+    }
+
+    #[test]
+    fn a_chain_the_structural_checks_already_rejected_is_never_asked_about() {
+        let mut session = ReadSession::new(ReadSettings::default());
+
+        // Flip a bit of the leaf's signature: the chain fails
+        // `chain::validate` outright, before OCSP is ever considered.
+        let mut broken = chain_with_responder("http://ocsp.example/");
+        let last = broken[0].signature.len() - 1;
+        broken[0].signature[last] ^= 0x01;
+
+        let chains = vec![pending_chain("urn:uuid:one", "self#jumbf=x", broken)];
+
+        let pending = session.evaluate_trust(&chains, Some(NOW));
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn a_garbage_stapled_response_does_not_prevent_falling_through_to_online() {
+        // A staple that cannot even be decoded is exactly as useful as no
+        // staple at all: `evaluate_trust` still asks online.
+        let mut session = ReadSession::new(ReadSettings::default());
+
+        let mut chain = pending_chain(
+            "urn:uuid:one",
+            "self#jumbf=x",
+            chain_with_responder("http://ocsp.example/"),
+        );
+        chain.rvals = vec![vec![0xff, 0xff]];
+
+        let pending = session.evaluate_trust(&[chain], Some(NOW));
+
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].checks.len(), 1);
+    }
+
+    #[test]
+    fn a_ca_certificates_unresolved_staples_are_silently_skipped() {
+        // The CA link (intermediate/root) never gets an online query —
+        // only the signer's own certificate does — so with nothing in the
+        // manifest store to resolve it either, §15.9 has nothing further
+        // to say about it: no status of its own, and it never keeps this
+        // chain's evaluation outstanding.
+        let mut session = ReadSession::new(ReadSettings::default());
+        let (certificates, anchors) = three_tier_chain();
+        session.anchors = anchors;
+
+        let chains = vec![pending_chain("urn:uuid:one", "self#jumbf=x", certificates)];
+
+        let pending = session.evaluate_trust(&chains, Some(NOW));
+
+        // The signer's own certificate names no responder either, so its
+        // check is recorded as skipped rather than queried online —
+        // nothing is left outstanding for either link of the path.
+        assert!(pending.is_empty(), "{pending:?}");
+
+        let ocsp_statuses: Vec<_> = session
+            .report
+            .statuses
+            .iter()
+            .filter(|s| s.code.starts_with("signingCredential.ocsp"))
+            .collect();
+        assert_eq!(
+            ocsp_statuses
+                .iter()
+                .map(|s| s.code.as_str())
+                .collect::<Vec<_>>(),
+            [status_code::SIGNING_CREDENTIAL_OCSP_SKIPPED],
+            "the CA link should not record a status of its own: {ocsp_statuses:?}"
+        );
+    }
+
+    #[test]
+    fn a_mismatched_ocsp_reply_is_defensively_rejected() {
+        let mut session = ReadSession::new(ReadSettings::default());
+
+        let chains = vec![pending_chain(
+            "urn:uuid:one",
+            "self#jumbf=x",
+            chain_with_responder("http://ocsp.example/"),
+        )];
+
+        let pending = session.evaluate_trust(&chains, Some(NOW));
+        session.proceed_after_trust(pending, None);
+
+        assert_eq!(session.advance().unwrap(), ReadStep::AwaitHost);
+        let id = session.outstanding_requests()[0].id;
+
+        // Bypass `fulfill`'s payload validation to exercise the state
+        // machine's own defense-in-depth check.
+        session
+            .core
+            .fulfill_unchecked(id, ReadHostReply::AssetLength(0));
+
+        assert!(matches!(
+            session.advance(),
+            Err(Error::Protocol(ProtocolError::ReplyMismatch {
+                expected: "Ocsp",
+                ..
+            }))
+        ));
+    }
+
+    /// Drives a session already parked in `State::AwaitingOcspResponses`
+    /// (as `evaluate_trust` would leave it) to completion, fulfilling its
+    /// one outstanding request with `reply`. Leaves `session` in place so
+    /// callers can inspect `trust`/`report` directly afterward.
+    fn resolve_ocsp(session: &mut ReadSession, reply: ReadHostReply) {
+        assert_eq!(session.advance().unwrap(), ReadStep::AwaitHost);
+        let requests = session.outstanding_requests().to_vec();
+        assert_eq!(requests.len(), 1, "{requests:?}");
+
+        session.fulfill(requests[0].id, reply).unwrap();
+        assert_eq!(session.advance().unwrap(), ReadStep::Complete);
+    }
+
+    #[test]
+    fn a_host_that_cannot_answer_ocsp_records_inaccessible_and_leaves_trust_untouched() {
+        let mut session = ReadSession::new(ReadSettings::default());
+        session.report.active_manifest = Some("urn:uuid:one".to_string());
+
+        let chains = vec![pending_chain(
+            "urn:uuid:one",
+            "self#jumbf=x",
+            chain_with_responder("http://ocsp.example/"),
+        )];
+
+        let pending = session.evaluate_trust(&chains, Some(NOW));
+        assert_eq!(session.trust, Some(Trust::Unanchored));
+        session.proceed_after_trust(pending, None);
+
+        resolve_ocsp(
+            &mut session,
+            ReadHostReply::Failed(HostError::new("no network")),
+        );
+
+        assert_eq!(session.trust, Some(Trust::Unanchored));
+        assert_eq!(
+            session.report.statuses.last().map(|s| s.code.as_str()),
+            Some(status_code::SIGNING_CREDENTIAL_OCSP_INACCESSIBLE)
+        );
+    }
+
+    #[test]
+    fn an_uninterpretable_online_response_records_inaccessible_and_is_fail_open() {
+        let mut session = ReadSession::new(ReadSettings::default());
+        session.report.active_manifest = Some("urn:uuid:one".to_string());
+
+        let chains = vec![pending_chain(
+            "urn:uuid:one",
+            "self#jumbf=x",
+            chain_with_responder("http://ocsp.example/"),
+        )];
+
+        let pending = session.evaluate_trust(&chains, Some(NOW));
+        session.proceed_after_trust(pending, None);
+
+        resolve_ocsp(&mut session, ReadHostReply::Ocsp(vec![0xff, 0xff]));
+
+        assert_eq!(session.trust, Some(Trust::Unanchored));
+        assert_eq!(
+            session.report.statuses.last().map(|s| s.code.as_str()),
+            Some(status_code::SIGNING_CREDENTIAL_OCSP_INACCESSIBLE)
+        );
+    }
+
+    #[test]
+    fn apply_online_outcome_not_revoked_records_a_success_code() {
+        let mut session = ReadSession::new(ReadSettings::default());
+        session.trust = Some(Trust::Unanchored);
+
+        session.apply_online_outcome(ocsp::OnlineOutcome::NotRevoked, "self#jumbf=x", true);
+
+        assert_eq!(session.trust, Some(Trust::Unanchored));
+        assert_eq!(
+            session.report.statuses.last().map(|s| s.code.as_str()),
+            Some(status_code::SIGNING_CREDENTIAL_OCSP_NOT_REVOKED)
+        );
+    }
+
+    #[test]
+    fn apply_online_outcome_revoked_fails_the_active_chain() {
+        let mut session = ReadSession::new(ReadSettings::default());
+        session.trust = Some(Trust::Anchored);
+
+        session.apply_online_outcome(ocsp::OnlineOutcome::Revoked, "self#jumbf=x", true);
+
+        assert_eq!(session.trust, Some(Trust::Rejected));
+        let status = session.report.statuses.last().unwrap();
+        assert_eq!(status.code, status_code::SIGNING_CREDENTIAL_OCSP_REVOKED);
+        assert!(status.is_failure());
+    }
+
+    #[test]
+    fn apply_online_outcome_revoked_for_an_inactive_chain_spares_trust() {
+        let mut session = ReadSession::new(ReadSettings::default());
+        session.trust = Some(Trust::Anchored);
+
+        session.apply_online_outcome(ocsp::OnlineOutcome::Revoked, "self#jumbf=ingredient", false);
+
+        assert_eq!(session.trust, Some(Trust::Anchored));
+        let status = session.report.statuses.last().unwrap();
+        assert_eq!(status.code, status_code::SIGNING_CREDENTIAL_OCSP_REVOKED);
+
+        // Worth reporting, but an ingredient's own revocation must not,
+        // by itself, invalidate the whole asset being read.
+        assert!(!status.is_failure());
+    }
+
+    #[test]
+    fn apply_online_outcome_unknown_records_an_informational_code() {
+        let mut session = ReadSession::new(ReadSettings::default());
+        session.trust = Some(Trust::Anchored);
+
+        session.apply_online_outcome(ocsp::OnlineOutcome::Unknown, "self#jumbf=x", true);
+
+        assert_eq!(session.trust, Some(Trust::Anchored));
+        let status = session.report.statuses.last().unwrap();
+        assert_eq!(status.code, status_code::SIGNING_CREDENTIAL_OCSP_UNKNOWN);
+        assert!(!status.is_failure());
+    }
+
+    #[test]
+    fn a_revoked_ca_certificate_is_reported_as_untrusted_but_still_fails_the_claim() {
+        let mut session = ReadSession::new(ReadSettings::default());
+        session.trust = Some(Trust::Anchored);
+
+        session.apply_revocation(false, true, "self#jumbf=x", "a CA certificate was revoked");
+
+        // Reported under the same code an ordinary untrusted chain
+        // carries, but §15.9's own text calls this circumstance out as a
+        // failure, unlike the ordinary one — see
+        // `ValidationStatus::for_url_forcing_failure`.
+        assert_eq!(session.trust, Some(Trust::Rejected));
+        let status = session.report.statuses.last().unwrap();
+        assert_eq!(status.code, status_code::SIGNING_CREDENTIAL_UNTRUSTED);
+        assert!(status.is_failure());
+    }
+
+    #[test]
+    fn a_revoked_ca_certificate_for_an_inactive_chain_spares_trust() {
+        // An ingredient's chain is still checked and still reported, but
+        // neither `Self::trust` nor the overall verdict is swayed by it —
+        // only the *active* manifest's own chain determines either.
+        let mut session = ReadSession::new(ReadSettings::default());
+        session.trust = Some(Trust::Anchored);
+
+        session.apply_revocation(
+            false,
+            false,
+            "self#jumbf=ingredient",
+            "a CA certificate was revoked",
+        );
+
+        assert_eq!(session.trust, Some(Trust::Anchored));
+        let status = session.report.statuses.last().unwrap();
+        assert_eq!(status.code, status_code::SIGNING_CREDENTIAL_UNTRUSTED);
+        assert!(!status.is_failure());
+    }
+
+    #[test]
+    fn a_revoked_signer_certificate_for_an_inactive_chain_spares_the_verdict() {
+        // An ingredient's own revoked signer is still worth reporting
+        // (hence the ordinary `SIGNING_CREDENTIAL_OCSP_REVOKED` code), but
+        // must not flip the overall report to `Invalid` on its own.
+        let mut session = ReadSession::new(ReadSettings::default());
+        session.trust = Some(Trust::Anchored);
+
+        session.apply_revocation(
+            true,
+            false,
+            "self#jumbf=ingredient",
+            "the signer's certificate was revoked",
+        );
+
+        assert_eq!(session.trust, Some(Trust::Anchored));
+        let status = session.report.statuses.last().unwrap();
+        assert_eq!(status.code, status_code::SIGNING_CREDENTIAL_OCSP_REVOKED);
+        assert!(!status.is_failure());
+    }
+
+    #[test]
+    fn a_revoked_signer_certificate_fails_the_claim_outright() {
+        let mut session = ReadSession::new(ReadSettings::default());
+        session.trust = Some(Trust::Anchored);
+
+        session.apply_revocation(
+            true,
+            true,
+            "self#jumbf=x",
+            "the signer's certificate was revoked",
+        );
+
+        assert_eq!(session.trust, Some(Trust::Rejected));
+        let status = session.report.statuses.last().unwrap();
+        assert_eq!(status.code, status_code::SIGNING_CREDENTIAL_OCSP_REVOKED);
+        assert!(status.is_failure());
     }
 }

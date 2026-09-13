@@ -44,18 +44,27 @@
 //! way keeps this module free of policy: it is the only place that knows
 //! about ASN.1, and nothing here decides anything.
 //!
-//! Deliberately absent: revocation state, policy constraints and name
-//! constraints (nothing consumes them yet), and the parts of the profile
-//! that need detail this struct does not carry — the signature-algorithm
-//! and named-curve allowlists, and the RSA minimum modulus size. Adding
-//! those means widening [`Certificate`], which is a change to this seam and
-//! so belongs in a slice of its own.
+//! Deliberately absent: policy constraints and name constraints (nothing
+//! consumes them yet), and the parts of the profile that need detail this
+//! struct does not carry — the signature-algorithm and named-curve
+//! allowlists, and the RSA minimum modulus size. Adding those means
+//! widening [`Certificate`], which is a change to this seam and so belongs
+//! in a slice of its own.
+//!
+//! Revocation *state* is checked (see the crate's `chain` and `ocsp`
+//! modules), but only OCSP: this module surfaces the one thing an OCSP
+//! check needs that a re-derivation from [`Certificate`]'s other
+//! fields cannot give byte-for-byte — [`Certificate::subject_der`],
+//! [`Certificate::public_key_bitstring`] and [`Certificate::serial_number`]
+//! — plus [`Certificate::ocsp_responder_url`], read straight off the
+//! certificate rather than decided by policy here.
 
 use der::{oid::ObjectIdentifier, Decode, Encode};
 use pkcs1::RsaPssParams;
 use x509_cert::{
     ext::pkix::{
-        BasicConstraints as X509BasicConstraints, ExtendedKeyUsage, KeyUsage as X509KeyUsage,
+        name::GeneralName, AuthorityInfoAccessSyntax, BasicConstraints as X509BasicConstraints,
+        ExtendedKeyUsage, KeyUsage as X509KeyUsage,
     },
     spki::AlgorithmIdentifierOwned,
     time::Time,
@@ -161,6 +170,40 @@ pub struct Certificate {
     /// the hash lives in the parameters. Algorithms that name the hash in
     /// the OID itself — `ecdsa-with-SHA256`, say — leave this `None`.
     pub signature_hash: Option<Vec<u8>>,
+
+    /// The DER encoding of [`Self::subject`]'s underlying ASN.1 `Name`.
+    ///
+    /// [`Self::subject`] is a human-readable RFC 4514 rendering, lossy in
+    /// the direction that matters here: OCSP's `CertID.issuerNameHash`
+    /// (RFC 6960 §4.1.1) hashes this exact encoding, not anything
+    /// re-derived from the string. Read only when this certificate acts as
+    /// someone else's issuer.
+    pub subject_der: Vec<u8>,
+
+    /// The raw bits of [`Self::public_key`]'s `subjectPublicKey` field,
+    /// excluding the `BIT STRING`'s tag, length and unused-bits count.
+    ///
+    /// This is the slice `CertID.issuerKeyHash` (RFC 6960 §4.1.1) hashes
+    /// when this certificate acts as someone else's issuer — not the same
+    /// bytes as hashing the whole SPKI in [`Self::public_key`] would
+    /// produce.
+    pub public_key_bitstring: Vec<u8>,
+
+    /// This certificate's own serial number, as the DER `INTEGER`'s
+    /// content octets.
+    ///
+    /// Paired with [`Self::issuer`]'s identity to name this certificate in
+    /// an OCSP `CertID` when asking about its own revocation status.
+    pub serial_number: Vec<u8>,
+
+    /// The OCSP responder URL from this certificate's Authority
+    /// Information Access extension (`id-ad-ocsp`), if it carries one.
+    ///
+    /// `None` covers both "no such extension" and "the extension names no
+    /// OCSP responder" — this crate has nowhere to send a revocation query
+    /// for this certificate either way, and the C2PA profile does not
+    /// require the extension, so absence is not itself a finding.
+    pub ocsp_responder_url: Option<String>,
 }
 
 /// The parts of the basic constraints extension the C2PA profile uses.
@@ -246,6 +289,13 @@ pub fn decode(der: &[u8]) -> Result<Certificate, CertError> {
         .ok_or(CertError::MalformedSignature)?
         .to_vec();
 
+    let ocsp_responder_url = tbs
+        .get::<AuthorityInfoAccessSyntax>()
+        .map_err(|_| CertError::MalformedExtension {
+            extension: "authority information access",
+        })?
+        .and_then(|(_critical, aia)| ocsp_responder_url(&aia));
+
     Ok(Certificate {
         subject: tbs.subject.to_string(),
         issuer: tbs.issuer.to_string(),
@@ -259,6 +309,38 @@ pub fn decode(der: &[u8]) -> Result<Certificate, CertError> {
         signature,
         signature_algorithm: cert.signature_algorithm.oid.as_bytes().to_vec(),
         signature_hash: signature_hash(&cert.signature_algorithm)?,
+        subject_der: tbs.subject.to_der().map_err(|_| CertError::Malformed)?,
+        public_key_bitstring: tbs
+            .subject_public_key_info
+            .subject_public_key
+            .raw_bytes()
+            .to_vec(),
+        serial_number: tbs.serial_number.as_bytes().to_vec(),
+        ocsp_responder_url,
+    })
+}
+
+/// `id-ad-ocsp` (RFC 5280 §4.2.2.1): the Authority Information Access
+/// `accessMethod` naming an OCSP responder.
+const ID_AD_OCSP: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.48.1");
+
+/// Picks the first OCSP responder URI out of an Authority Information
+/// Access extension, if it names one.
+///
+/// An access description naming `id-ad-ocsp` with anything other than a
+/// URI is not a shape this core has a use for, so it is skipped rather
+/// than reported: the extension is optional to begin with, and a
+/// malformed *use* of it is not a malformed extension.
+fn ocsp_responder_url(aia: &AuthorityInfoAccessSyntax) -> Option<String> {
+    aia.0.iter().find_map(|access| {
+        if access.access_method != ID_AD_OCSP {
+            return None;
+        }
+
+        match &access.access_location {
+            GeneralName::UniformResourceIdentifier(uri) => Some(uri.to_string()),
+            _ => None,
+        }
     })
 }
 
@@ -267,7 +349,13 @@ pub fn decode(der: &[u8]) -> Result<Certificate, CertError> {
 /// Only RSASSA-PSS does this, and its parameters are context-tagged
 /// optionals with defaults — fiddly enough that they are decoded properly
 /// rather than walked by hand.
-fn signature_hash(algorithm: &AlgorithmIdentifierOwned) -> Result<Option<Vec<u8>>, CertError> {
+///
+/// `pub(crate)` rather than private: `crate::ocsp` needs the same
+/// extraction for the signature algorithm on an OCSP response, which is
+/// the same `AlgorithmIdentifierOwned` shape as a certificate's.
+pub(crate) fn signature_hash(
+    algorithm: &AlgorithmIdentifierOwned,
+) -> Result<Option<Vec<u8>>, CertError> {
     if algorithm.oid != RSA_PSS_OID {
         return Ok(None);
     }
@@ -291,6 +379,57 @@ fn signature_hash(algorithm: &AlgorithmIdentifierOwned) -> Result<Option<Vec<u8>
     })?;
 
     Ok(Some(params.hash.oid.as_bytes().to_vec()))
+}
+
+/// `2.16.840.1.101.3.4.2.1` — SHA-256.
+const SHA256_OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.2.1");
+
+/// The `AlgorithmIdentifier` naming SHA-256, with the explicit `NULL`
+/// parameters RFC 3279 §2.3 (and, by extension, RFC 6960's use of the same
+/// shape) expects for hash algorithm identifiers.
+///
+/// SHA-256 rather than SHA-1: RFC 6960 lets a requester pick any hash
+/// algorithm the responder recognizes, and SHA-1 remains the most widely
+/// supported choice among deployed responders, but this crate's own
+/// profile already forbids SHA-1 for content hashing (see
+/// [`contentauth_c2pa_primitives::HashAlgorithm`]), and a prototype
+/// exploring this plumbing is a reasonable place to prefer the modern
+/// algorithm over maximum interoperability with legacy responders.
+///
+/// `pub(crate)` for the same reason [`signature_hash`] is: `crate::ocsp`
+/// needs this exact shape for an OCSP `CertID`'s `hashAlgorithm` field
+/// (RFC 6960 §4.1.1), and building it here rather than there means that
+/// module never needs to name an `x509_cert` type of its own — see its
+/// own doc comment.
+pub(crate) fn sha256_algorithm_identifier() -> AlgorithmIdentifierOwned {
+    AlgorithmIdentifierOwned {
+        oid: SHA256_OID,
+        parameters: Some(der::asn1::Null.into()),
+    }
+}
+
+/// Encodes `bytes` as the ASN.1 `INTEGER` an OCSP `CertID`'s
+/// `serialNumber` field (RFC 6960 §4.1.1) needs — the same bytes
+/// [`Certificate::serial_number`] already carries, just wrapped in the
+/// type that field requires. `pub(crate)` for the same reason
+/// [`sha256_algorithm_identifier`] is.
+pub(crate) fn encode_serial_number(
+    bytes: &[u8],
+) -> Result<x509_cert::serial_number::SerialNumber, &'static str> {
+    x509_cert::serial_number::SerialNumber::new(bytes)
+        .map_err(|_| "serial number could not be encoded")
+}
+
+/// True if `reason` is the `removeFromCRL` reason code (RFC 5280's
+/// `CRLReason`, which OCSP's `RevokedInfo.revocationReason` reuses),
+/// which the C2PA specification's own OCSP disambiguation (§15.9.1/
+/// §15.9.2) requires reading as *not* revoked rather than as an actual
+/// revocation. `pub(crate)` for the same reason
+/// [`sha256_algorithm_identifier`] is: `crate::ocsp` decides what to do
+/// with this fact, but never needs to name the `x509_cert` type it comes
+/// from.
+pub(crate) fn is_remove_from_crl(reason: Option<x509_cert::ext::pkix::CrlReason>) -> bool {
+    reason == Some(x509_cert::ext::pkix::CrlReason::RemoveFromCRL)
 }
 
 /// `1.2.840.113549.1.1.10` — RSASSA-PSS.
@@ -365,6 +504,108 @@ mod tests {
             cert.extended_key_usage.as_deref(),
             Some(["1.3.6.1.5.5.7.3.4".to_string()].as_slice())
         );
+    }
+
+    #[test]
+    fn a_certificate_with_no_authority_information_access_has_no_responder_url() {
+        assert_eq!(leaf().ocsp_responder_url, None);
+    }
+
+    #[test]
+    fn a_certificate_with_an_ocsp_aia_entry_reports_its_responder_url() {
+        // A real-world certificate this repository already carries for
+        // `timestamp.rs`'s own tests — decoded here purely for its
+        // Authority Information Access extension, which none of this
+        // crate's other fixtures happen to carry.
+        const ROOT: &[u8] = include_bytes!("../tests/fixtures/digicert-trusted-root-g4.der");
+
+        let cert = decode(ROOT).unwrap();
+        assert_eq!(
+            cert.ocsp_responder_url.as_deref(),
+            Some("http://ocsp.digicert.com")
+        );
+    }
+
+    #[test]
+    fn subject_der_public_key_bitstring_and_serial_number_are_populated() {
+        let cert = leaf();
+
+        // Every field a `CertID` needs is present and non-empty; the exact
+        // bytes are pinned by `ocsp.rs`'s own tests, which use them to
+        // build a request and check it round-trips.
+        assert!(!cert.subject_der.is_empty());
+        assert!(!cert.public_key_bitstring.is_empty());
+        assert!(!cert.serial_number.is_empty());
+
+        // `subject_der` is the DER of the subject `Name`, not the SPKI —
+        // distinct bytes from `public_key`, and shorter than it.
+        assert_ne!(cert.subject_der, cert.public_key);
+        assert!(cert.subject_der.len() < cert.public_key.len());
+    }
+
+    #[test]
+    fn ocsp_responder_url_skips_an_access_description_that_is_not_ocsp() {
+        use x509_cert::ext::pkix::AccessDescription;
+
+        // `id-ad-caIssuers` (RFC 5280 §4.2.2.1) — a real AIA access method,
+        // just not the one this crate looks for.
+        let ca_issuers = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.48.2");
+
+        let aia = AuthorityInfoAccessSyntax(vec![AccessDescription {
+            access_method: ca_issuers,
+            access_location: GeneralName::UniformResourceIdentifier(
+                der::asn1::Ia5String::new("http://ca.example/").unwrap(),
+            ),
+        }]);
+
+        assert_eq!(ocsp_responder_url(&aia), None);
+    }
+
+    #[test]
+    fn ocsp_responder_url_ignores_an_ocsp_entry_that_is_not_a_uri() {
+        use x509_cert::ext::pkix::AccessDescription;
+
+        let aia = AuthorityInfoAccessSyntax(vec![AccessDescription {
+            access_method: ID_AD_OCSP,
+            access_location: GeneralName::DnsName(
+                der::asn1::Ia5String::new("ocsp.example").unwrap(),
+            ),
+        }]);
+
+        assert_eq!(ocsp_responder_url(&aia), None);
+    }
+
+    #[test]
+    fn sha256_algorithm_identifier_names_sha256_with_null_parameters() {
+        let algorithm = sha256_algorithm_identifier();
+        assert_eq!(algorithm.oid, SHA256_OID);
+        assert_eq!(algorithm.parameters, Some(der::asn1::Null.into()));
+    }
+
+    #[test]
+    fn encode_serial_number_round_trips_the_given_bytes() {
+        let serial = encode_serial_number(&[1, 2, 3]).unwrap();
+        assert_eq!(serial.as_bytes(), [1, 2, 3]);
+    }
+
+    #[test]
+    fn encode_serial_number_rejects_bytes_over_the_20_byte_limit() {
+        // RFC 5280 §4.1.2.2 caps a certificate serial number at 20 octets;
+        // all-zero bytes would not trigger this (leading zeros are
+        // stripped when computing the encoded length), so this uses
+        // non-zero bytes to actually exceed it.
+        assert!(encode_serial_number(&[0xffu8; 21]).is_err());
+    }
+
+    #[test]
+    fn is_remove_from_crl_recognizes_only_that_reason() {
+        assert!(is_remove_from_crl(Some(
+            x509_cert::ext::pkix::CrlReason::RemoveFromCRL
+        )));
+        assert!(!is_remove_from_crl(Some(
+            x509_cert::ext::pkix::CrlReason::KeyCompromise
+        )));
+        assert!(!is_remove_from_crl(None));
     }
 
     #[test]

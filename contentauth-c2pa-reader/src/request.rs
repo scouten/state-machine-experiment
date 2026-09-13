@@ -81,6 +81,26 @@ pub enum ReadRequest {
     /// and similar checks use time supplied by the host. Reply with
     /// [`ReadHostReply::CurrentDateTime`].
     CurrentDateTime,
+
+    /// Send a DER-encoded OCSP request and return whatever response bytes
+    /// come back.
+    ///
+    /// This crate speaks OCSP's ASN.1 entirely on its own; the host's part
+    /// is transport only — an HTTP POST of `request_der` to `url` with
+    /// `Content-Type: application/ocsp-request`, reporting back the
+    /// response body verbatim via [`ReadHostReply::Ocsp`]. A host with no
+    /// network access, or one that would rather not make this particular
+    /// request, answers with [`ReadHostReply::Failed`]: this crate treats
+    /// that exactly like an OCSP response that could not be interpreted —
+    /// see [`crate::read::ReadSettings::check_ocsp`] for why that is safe.
+    Ocsp {
+        /// The OCSP responder URL, taken from the certificate's Authority
+        /// Information Access extension.
+        url: String,
+
+        /// The DER-encoded `OCSPRequest` to send, exactly as built.
+        request_der: Vec<u8>,
+    },
 }
 
 impl Request for ReadRequest {
@@ -93,6 +113,7 @@ impl Request for ReadRequest {
             Self::AssetBytes { .. } => "AssetBytes",
             Self::AssetLength { .. } => "AssetLength",
             Self::CurrentDateTime => "CurrentDateTime",
+            Self::Ocsp { .. } => "Ocsp",
         }
     }
 
@@ -105,6 +126,7 @@ impl Request for ReadRequest {
                 | (Self::AssetBytes { .. }, ReadHostReply::AssetBytes(_))
                 | (Self::AssetLength { .. }, ReadHostReply::AssetLength(_))
                 | (Self::CurrentDateTime, ReadHostReply::CurrentDateTime(_))
+                | (Self::Ocsp { .. }, ReadHostReply::Ocsp(_))
         )
     }
 }
@@ -128,6 +150,10 @@ pub enum ReadHostReply {
     /// epoch (UTC).
     CurrentDateTime(i64),
 
+    /// Answers [`ReadRequest::Ocsp`]: the DER-encoded `OCSPResponse` bytes,
+    /// exactly as the responder returned them.
+    Ocsp(Vec<u8>),
+
     /// Reports that the host could not perform the requested operation.
     /// Valid for any request.
     Failed(HostError),
@@ -149,6 +175,10 @@ mod tests {
             ReadRequest::AssetBytes { stream, range },
             ReadRequest::AssetLength { stream },
             ReadRequest::CurrentDateTime,
+            ReadRequest::Ocsp {
+                url: "http://ocsp.example/".to_string(),
+                request_der: vec![1, 2, 3],
+            },
         ]
     }
 
@@ -164,6 +194,7 @@ mod tests {
                 ReadHostReply::CurrentDateTime(1_756_400_000),
                 "CurrentDateTime",
             ),
+            (ReadHostReply::Ocsp(vec![4, 5, 6]), "Ocsp"),
             (ReadHostReply::Failed(HostError::new("nope")), ""),
         ]
     }

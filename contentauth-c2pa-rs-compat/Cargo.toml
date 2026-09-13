@@ -13,8 +13,10 @@ categories = ["api-bindings"]
 publish = false
 
 [dependencies]
-# The sans-I/O read engine and its file-based host: what this crate's
-# `Reader::from_file` actually runs.
+# The sans-I/O read engine and its file-based host type (`FileReadSession`,
+# `FileReadRequest`/`FileReadReply`) — `src/host.rs` drives the session
+# itself rather than going through `read_manifest_from_file`, so it can
+# answer `FileReadRequest::Ocsp` with a real network request.
 contentauth-c2pa-file-reader = { path = "../contentauth-c2pa-file-reader" }
 
 # `Manifest`, `ValidationState`, `ValidationStatus` — the read-side result
@@ -26,6 +28,16 @@ contentauth-c2pa-reader = { path = "../contentauth-c2pa-reader" }
 # baked into `Reader` itself.
 contentauth-c2pa-format-jpeg = { path = "../contentauth-c2pa-format-jpeg" }
 
+# `HostError`, for `src/host.rs`'s own request handling — the same type
+# every other sans-I/O host in this workspace reports a failed request
+# with.
+contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
+
+# The `Session`/`Step` interaction contract `src/host.rs` drives
+# `FileReadSession` through directly, in place of
+# `contentauth-c2pa-file-reader`'s own `read_manifest_from_file`.
+contentauth-state-machine = { path = "../contentauth-state-machine" }
+
 thiserror = "2.0.20"
 
 # `Reader::json`/`json_checked` reproduce c2pa-rs's JSON-string contract,
@@ -34,11 +46,24 @@ thiserror = "2.0.20"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# The default OCSP transport (`src/host.rs`): a blocking HTTP POST of the
+# request bytes `contentauth-c2pa-reader` builds, to the responder URL it
+# names. This is deliberately the only crate in the workspace with a real
+# network dependency — see the root `CLAUDE.md` and this crate's own
+# module docs. `blocking` matches `Reader::with_file`'s own synchronous,
+# blocking shape; every other default feature (TLS, HTTP/2, system proxy
+# support, charset sniffing) is a reasonable default for a networked
+# convenience host rather than something this crate has an opinion about.
+reqwest = { version = "0.13.5", features = ["blocking"] }
+# Only for `url::Host`, to tell a literal IP address host apart from a
+# domain name when checking an OCSP responder URL against
+# `src/host.rs`'s own SSRF safeguards — a literal IP bypasses the DNS
+# resolution hook those rely on otherwise. Already in the tree via
+# `reqwest` (which re-exports `Url` itself but not `Host`), so this adds
+# no second copy.
+url = "2.5"
+
 [dev-dependencies]
-# Drives the builder session by hand in the round-trip test fixture, the
-# same `advance`/`fulfill`/`finish` cycle every sibling crate's own tests
-# use.
-contentauth-state-machine = { path = "../contentauth-state-machine" }
 # Builds and signs a manifest to embed in this crate's own round-trip test
 # fixture, exactly as the sibling crates' own tests do.
 contentauth-c2pa-builder = { path = "../contentauth-c2pa-builder" }

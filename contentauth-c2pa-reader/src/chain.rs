@@ -44,13 +44,20 @@
 //! constraints on issuing certificates, the C2PA end-entity profile (key
 //! usage and extended key usage), and termination at a configured anchor.
 //!
-//! Not checked, and each is a real gap rather than an oversight: revocation
-//! (OCSP and CRL), name constraints, policy constraints and policy mappings,
-//! unhandled critical extensions, the certificate version and unique-ID
-//! rules, the signature-algorithm and named-curve allowlists, and the RSA
-//! minimum modulus size. The last three want detail that
-//! [`crate::cert::Certificate`] does not surface today; the rest want
-//! machinery this crate does not have yet.
+//! Revocation is checked, but only OCSP (the C2PA specification does not
+//! permit CRLs) and only for a claim signer's own chain — see
+//! [`ocsp_checks`] and [`crate::ocsp`], and [`crate::read::ReadSession`]
+//! for how a pending check becomes a host round trip. It is deliberately
+//! separate from [`validate`] itself: [`validate`] is synchronous, and an
+//! OCSP check is not.
+//!
+//! Not checked, and each is a real gap rather than an oversight: name
+//! constraints, policy constraints and policy mappings, unhandled critical
+//! extensions, the certificate version and unique-ID rules, the
+//! signature-algorithm and named-curve allowlists, and the RSA minimum
+//! modulus size. The last three want detail that [`crate::cert::Certificate`]
+//! does not surface today; the rest want machinery this crate does not have
+//! yet.
 
 use core::iter::once;
 
@@ -86,6 +93,12 @@ pub(crate) struct PendingChain {
     /// Checked before the chain, because a trusted one supplies the
     /// instant the chain is then judged against.
     pub(crate) timestamp: Option<PendingTimestamp>,
+
+    /// DER-encoded `OCSPResponse` values "stapled" into the signature's
+    /// `rVals` COSE header (C2PA spec §14.5.2), if it carried any. Empty if
+    /// the header was absent or malformed — see [`crate::cose`]'s own
+    /// parsing of it for why a malformed staple is not itself a finding.
+    pub(crate) rvals: Vec<Vec<u8>>,
 }
 
 /// The status codes one chain evaluation reports its findings under.
@@ -275,6 +288,55 @@ pub(crate) fn validate(
         ));
         Trust::Unanchored
     }
+}
+
+/// One certificate's OCSP check, alongside whether it is asking about the
+/// claim *signer's own* certificate or a CA further up the path.
+///
+/// The distinction matters to [`crate::read::ReadSession`] because C2PA
+/// spec §15.9 reports the two under entirely different status
+/// vocabularies, and only the signer's own revocation invalidates the
+/// claim outright — see [`crate::validation::status_code::SIGNING_CREDENTIAL_OCSP_REVOKED`]
+/// and [`crate::validation::status_code::SIGNING_CREDENTIAL_UNTRUSTED`].
+#[derive(Debug)]
+pub(crate) struct OcspCheckPlan {
+    pub(crate) check: crate::ocsp::PendingOcspCheck,
+
+    /// True for the certificate at position 0 of the path (the claim
+    /// signer itself); false for any CA certificate above it.
+    pub(crate) is_signer: bool,
+}
+
+/// Builds the OCSP checks available for one claim signer's chain.
+///
+/// Rebuilds exactly the path [`validate`] itself would build — cheap, and
+/// it keeps [`validate`] itself unchanged rather than threading a second,
+/// asynchronous concern through a function that already has plenty to do.
+/// One check per link that has an issuer above it in the path, regardless
+/// of whether the subject names an online responder: matching a stapled
+/// response already in the manifest store needs only a `CertID`, not
+/// anywhere to send a request, so a certificate with no Authority
+/// Information Access extension still gets a check — see
+/// [`crate::ocsp::build_check`]. A link the profile checks have already
+/// rejected is still included; whether to bother asking online is
+/// [`crate::read::ReadSession`]'s call; this only reports what could be
+/// asked.
+pub(crate) fn ocsp_checks(chain: &[Certificate], anchors: &[Certificate]) -> Vec<OcspCheckPlan> {
+    let Some((leaf, rest)) = chain.split_first() else {
+        return vec![];
+    };
+
+    let (path, _anchored) = build_path(leaf, rest, anchors);
+
+    path.windows(2)
+        .enumerate()
+        .filter_map(|(position, pair)| {
+            crate::ocsp::build_check(pair[0], pair[1]).map(|check| OcspCheckPlan {
+                check,
+                is_signer: position == 0,
+            })
+        })
+        .collect()
 }
 
 /// Builds the path to validate, and reports whether it reaches an anchor.
@@ -493,7 +555,11 @@ const EMAIL_PROTECTION: &str = "1.3.6.1.5.5.7.3.4";
 const TIME_STAMPING: &str = "1.3.6.1.5.5.7.3.8";
 
 /// `id-kp-OCSPSigning`.
-const OCSP_SIGNING: &str = "1.3.6.1.5.5.7.3.9";
+///
+/// `pub(crate)` rather than private: `crate::ocsp` reuses this to hold a
+/// delegated OCSP responder certificate to the same purpose this module
+/// already requires of one appearing in a claim signer's own path.
+pub(crate) const OCSP_SIGNING: &str = "1.3.6.1.5.5.7.3.9";
 
 /// `id-kp-documentSigning`, the purpose the C2PA specification names for
 /// claim signing.
@@ -985,6 +1051,65 @@ mod tests {
     fn an_empty_chain_is_rejected_rather_than_panicking() {
         let explanation = rejection(&[], &[], NOW);
         assert!(explanation.contains("no certificates"));
+    }
+
+    #[test]
+    fn ocsp_checks_is_empty_for_an_empty_chain() {
+        assert!(ocsp_checks(&[], &[]).is_empty());
+    }
+
+    #[test]
+    fn ocsp_checks_still_builds_a_check_when_no_certificate_names_a_responder() {
+        // None of this crate's own trust fixtures carry an Authority
+        // Information Access extension — but a check is still built for
+        // each link, with no responder URL to query online, so that a
+        // stapled response for one of these certificates is not silently
+        // dropped just because there is nowhere to send a live request.
+        let checks = ocsp_checks(&chain(), &[]);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].check.responder_url, None);
+    }
+
+    #[test]
+    fn ocsp_checks_builds_one_check_per_link_regardless_of_responder_url() {
+        let mut leaf = decode(LEAF);
+        leaf.ocsp_responder_url = Some("http://ocsp.example/".to_string());
+
+        // The intermediate has no responder URL of its own, but still gets
+        // a check — there is no third certificate above the intermediate
+        // in this two-element chain to ask about *its* revocation status,
+        // so there is still only one link (and so one check) either way.
+        let checks = ocsp_checks(&[leaf, decode(INTERMEDIATE)], &[]);
+        assert_eq!(checks.len(), 1);
+        assert!(
+            checks[0].is_signer,
+            "position 0 of the path is the claim signer"
+        );
+        assert_eq!(
+            checks[0].check.responder_url.as_deref(),
+            Some("http://ocsp.example/")
+        );
+    }
+
+    #[test]
+    fn ocsp_checks_still_rebuilds_the_path_through_a_configured_anchor() {
+        // Same as above, but with the root configured as an anchor: the
+        // path `ocsp_checks` rebuilds must be the same one `validate`
+        // would, anchor included.
+        let mut leaf = decode(LEAF);
+        leaf.ocsp_responder_url = Some("http://ocsp.example/".to_string());
+        let mut intermediate = decode(INTERMEDIATE);
+        intermediate.ocsp_responder_url = Some("http://ocsp.example/intermediate".to_string());
+
+        let checks = ocsp_checks(&[leaf, intermediate], &[decode(ROOT)]);
+
+        // leaf/intermediate and intermediate/root: two links, both named.
+        assert_eq!(checks.len(), 2);
+        assert!(checks[0].is_signer);
+        assert!(
+            !checks[1].is_signer,
+            "the intermediate is a CA, not the signer"
+        );
     }
 
     #[test]

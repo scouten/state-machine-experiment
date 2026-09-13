@@ -153,6 +153,11 @@ jobs:
     # This is meant to become a portable core with no I/O, threads, network,
     # or clock dependencies, so it should build for Wasm targets unmodified.
     # Enforced from day one.
+    #
+    # `contentauth-c2pa-rs-compat` is excluded: it is deliberately the one
+    # crate in this workspace that owns a concrete network dependency (its
+    # default OCSP host, built on `reqwest`), so it is not held to the
+    # portable-core constraint the rest of the workspace is.
     steps:
       - name: Checkout repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -167,10 +172,10 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: "`cargo check` for wasm32-unknown-unknown"
-        run: cargo check --all-features --target wasm32-unknown-unknown
+        run: cargo check --all-features --target wasm32-unknown-unknown --workspace --exclude contentauth-c2pa-rs-compat
 
       - name: "`cargo check` for wasm32-wasip2"
-        run: cargo check --all-features --target wasm32-wasip2
+        run: cargo check --all-features --target wasm32-wasip2 --workspace --exclude contentauth-c2pa-rs-compat
 
   msrv:
     name: MSRV build check
