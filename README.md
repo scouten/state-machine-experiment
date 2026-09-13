@@ -68,10 +68,10 @@ Outside the workspace (see its own README for why):
 
 ## Specification reference
 
-[`reference/c2pa-specs-core`](reference/c2pa-specs-core) contains a pinned
-snapshot of the C2PA Technical Specification's `.adoc` source (tag `2.4`),
+[`reference/c2pa-spec`](reference/c2pa-spec) contains a pinned
+snapshot of the C2PA Technical Specification's `.adoc` source (version `2.4`),
 kept for reference alongside the reader and builder crates that implement
-it. See its [README](reference/c2pa-specs-core/README.md) for provenance,
+it. See its [README](reference/c2pa-spec/README.md) for provenance,
 scope, and license — those files are CC-BY-4.0, separate from the MIT OR
 Apache-2.0 terms covering the rest of this repository.
 
