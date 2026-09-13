@@ -28,11 +28,9 @@ member with access to do so, following the steps below.
 ## What is included
 
 Only the `.adoc` source files that make up the specification text itself are
-snapshotted here, at [`docs/modules/specs`](docs/modules/specs) — both the
-`pages/C2PA_Specification.adoc` entry point (the general release) and
-`pages/ContentCredentials.adoc` (the ISO-fast-track render of the same
-content via the `partials/ISO/` includes), along with every `partials/` file
-either one includes.
+snapshotted here, at [`docs/modules/specs`](docs/modules/specs) — the
+`pages/C2PA_Specification.adoc` entry point (the general release) along with
+every `partials/` file it includes.
 
 Not included, at least for now:
 
