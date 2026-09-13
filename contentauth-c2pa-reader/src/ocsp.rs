@@ -85,13 +85,6 @@
 //!
 //! # What is deliberately not supported
 //!
-//! * **`ResponderID` by key hash.** RFC 6960 fixes that comparison at a
-//!   SHA-1 hash of the responder's raw public key, regardless of the hash
-//!   algorithm anything else in the exchange uses. Adding a SHA-1
-//!   dependency for the sake of one `ResponderID` shape — when `byName`,
-//!   the far more common choice, already reaches the same authorities —
-//!   is not worth it yet; a response identifying its responder by key is
-//!   treated as unauthenticated rather than guessed at.
 //! * **An independently trusted OCSP responder list.** RFC 6960 §4.2.2.2
 //!   also authorizes a responder the *client* explicitly trusts, on its
 //!   own account, regardless of who issued its certificate. This crate has
@@ -493,33 +486,65 @@ const ONE_DAY: i64 = 24 * 60 * 60;
 /// Finds the certificate whose key actually signed `basic`, among those
 /// this module is willing to trust to answer for [`PendingOcspCheck::issuer`].
 ///
-/// Two shapes are accepted (RFC 6960 §4.2.2.2): the issuer answered
-/// directly (`responderID` names the issuer itself), or a delegated
-/// responder certificate the issuer issued for exactly this purpose did —
-/// the same `id-kp-OCSPSigning` profile [`crate::chain::validate`] already
-/// holds an end-entity certificate to, checked at `produced_at` (the
-/// instant the response itself claims to have been signed) exactly the
-/// way any other signing certificate's validity window is checked at its
-/// own signing instant elsewhere in this crate — an expired or
-/// not-yet-valid delegate is not entitled to answer for anyone. See the
-/// module docs for the `responderID`-by-key-hash shape this does not
-/// resolve, and for the independently-client-trusted-responder shape RFC
-/// 6960 also allows.
+/// `responderID` (RFC 6960 §4.2.1) names who signed by one of two shapes,
+/// resolved identically apart from how a candidate is matched: `byName`
+/// against a certificate's subject, `byKey` against the SHA-1 hash RFC
+/// 6960 fixes that shape to, regardless of the hash algorithm anything
+/// else in the exchange uses. Either way (RFC 6960 §4.2.2.2), the match
+/// can be the issuer itself, or a delegated responder certificate the
+/// issuer issued for exactly this purpose — the same `id-kp-OCSPSigning`
+/// profile [`crate::chain::validate`] already holds an end-entity
+/// certificate to, checked at `produced_at` (the instant the response
+/// itself claims to have been signed) exactly the way any other signing
+/// certificate's validity window is checked at its own signing instant
+/// elsewhere in this crate — an expired or not-yet-valid delegate is not
+/// entitled to answer for anyone. See the module docs for the
+/// independently-client-trusted-responder shape RFC 6960 also allows,
+/// which this does not resolve.
 fn responder_certificate(
     check: &PendingOcspCheck,
     basic: &BasicOcspResponse,
     produced_at: i64,
 ) -> Option<Certificate> {
-    let ResponderId::ByName(name) = &basic.tbs_response_data.responder_id else {
-        return None;
-    };
+    match &basic.tbs_response_data.responder_id {
+        ResponderId::ByName(name) => {
+            let name_der = name.to_der().ok()?;
 
-    let name_der = name.to_der().ok()?;
+            if name_der == check.issuer.subject_der {
+                return Some(check.issuer.clone());
+            }
 
-    if name_der == check.issuer.subject_der {
-        return Some(check.issuer.clone());
+            find_delegate(check, basic, produced_at, |candidate| {
+                candidate.subject_der == name_der
+            })
+        }
+
+        ResponderId::ByKey(key_hash) => {
+            let key_hash = key_hash.as_bytes();
+
+            if sha1_digest(&check.issuer.public_key_bitstring).as_slice() == key_hash {
+                return Some(check.issuer.clone());
+            }
+
+            find_delegate(check, basic, produced_at, |candidate| {
+                sha1_digest(&candidate.public_key_bitstring).as_slice() == key_hash
+            })
+        }
     }
+}
 
+/// Finds a delegated OCSP responder certificate among `basic.certs` that:
+/// `matches_id` picks out (by whichever `ResponderID` shape
+/// [`responder_certificate`] is resolving), is certified by
+/// [`PendingOcspCheck::issuer`] for exactly the `id-kp-OCSPSigning`
+/// purpose, was valid at `produced_at`, and whose own issuer signature
+/// verifies.
+fn find_delegate(
+    check: &PendingOcspCheck,
+    basic: &BasicOcspResponse,
+    produced_at: i64,
+    matches_id: impl Fn(&Certificate) -> bool,
+) -> Option<Certificate> {
     for candidate in basic.certs.as_ref()?.iter() {
         let Ok(der) = candidate.to_der() else {
             continue;
@@ -528,7 +553,7 @@ fn responder_certificate(
             continue;
         };
 
-        if candidate.subject_der != name_der {
+        if !matches_id(&candidate) {
             continue;
         }
 
@@ -547,6 +572,18 @@ fn responder_certificate(
     }
 
     None
+}
+
+/// SHA-1 digest of `bytes`, for `ResponderID`'s `byKey` shape (RFC 6960
+/// §4.2.1) — the one place this crate computes a SHA-1 hash, since RFC
+/// 6960 fixes that comparison to it regardless of any other algorithm's
+/// availability or preference.
+fn sha1_digest(bytes: &[u8]) -> [u8; 20] {
+    use sha1::{Digest, Sha1};
+
+    let mut hasher = Sha1::new();
+    hasher.update(bytes);
+    hasher.finalize().into()
 }
 
 /// Verifies a `BasicOcspResponse`'s signature over its own `tbsResponseData`.
@@ -833,6 +870,104 @@ mod tests {
             .expect("encodes")
             .to_der()
             .expect("encodes")
+    }
+
+    /// As [`signed_response`], but names the responder by `ResponderID`'s
+    /// `byKey` shape (a SHA-1 hash of `key_hash_of`'s public key) instead
+    /// of `byName`, with `certs` embedded in the response verbatim —
+    /// exercising the `ResponderId::ByKey` arm of `responder_certificate`.
+    fn signed_response_by_key(
+        check: &PendingOcspCheck,
+        status: CertStatus,
+        this_update: i64,
+        next_update: Option<i64>,
+        produced_at: i64,
+        key_hash: &[u8],
+        certs: Option<Vec<x509_cert::Certificate>>,
+    ) -> Vec<u8> {
+        let single = SingleResponse {
+            cert_id: check.cert_id.clone(),
+            cert_status: status,
+            this_update: generalized_time(this_update),
+            next_update: next_update.map(generalized_time),
+            single_extensions: None,
+        };
+
+        let tbs = ResponseData {
+            version: Version::V1,
+            responder_id: ResponderId::ByKey(OctetString::new(key_hash.to_vec()).expect("encodes")),
+            produced_at: generalized_time(produced_at),
+            responses: vec![single],
+            response_extensions: None,
+        };
+
+        let signer = c2pa_raw_crypto::signer_from_private_key(
+            TEST_SIGNER_KEY,
+            c2pa_raw_crypto::SigningAlg::Es256,
+        )
+        .expect("the test key is valid");
+        let signature = signer.sign(&tbs.to_der().expect("encodes")).expect("signs");
+
+        let basic = BasicOcspResponse {
+            tbs_response_data: tbs,
+            signature_algorithm: x509_cert::spki::AlgorithmIdentifierOwned {
+                oid: ECDSA_WITH_SHA256_OID,
+                parameters: None,
+            },
+            signature: BitString::from_bytes(&signature).expect("encodes"),
+            certs,
+        };
+
+        OcspResponse::successful(basic)
+            .expect("encodes")
+            .to_der()
+            .expect("encodes")
+    }
+
+    #[test]
+    fn online_accepts_a_response_from_the_issuer_identified_by_key_hash() {
+        let check = check();
+        let key_hash = sha1_digest(&issuer().public_key_bitstring);
+        let response = signed_response_by_key(
+            &check,
+            CertStatus::good(),
+            1_000,
+            Some(2_000),
+            1_000,
+            &key_hash,
+            None,
+        );
+
+        assert_eq!(
+            evaluate_online(&check, &response, None, Some(1_500)),
+            OnlineOutcome::NotRevoked
+        );
+    }
+
+    #[test]
+    fn online_a_response_naming_a_wrong_key_hash_is_inconclusive() {
+        // A delegate certificate is included too, so this also proves a
+        // non-matching key hash is rejected rather than accepted by
+        // accident when candidates are actually present to check.
+        let check = check();
+        let delegate = delegated_responder_cert(0, 1_000_000_000);
+        let wrong_hash = [0u8; 20];
+        let response = signed_response_by_key(
+            &check,
+            CertStatus::good(),
+            1_000,
+            Some(2_000),
+            1_000,
+            &wrong_hash,
+            Some(vec![
+                x509_cert::Certificate::from_der(&delegate).expect("decodes")
+            ]),
+        );
+
+        assert_eq!(
+            evaluate_online(&check, &response, None, Some(1_500)),
+            OnlineOutcome::Inconclusive
+        );
     }
 
     #[test]

@@ -72,6 +72,16 @@ x509-cert = { version = "0.2.5", default-features = false }
 # `contentauth-c2pa-primitives::HashAlgorithm` and `c2pa_raw_crypto` like
 # every other signature check in this crate.
 x509-ocsp = { version = "0.2.1", default-features = false }
+# RFC 6960 §4.2.1 fixes an OCSP `ResponderID`'s `byKey` shape to a SHA-1
+# hash of the responder's public key, regardless of the hash algorithm
+# anything else in the exchange uses — this crate has no say in that, so
+# resolving it means depending on SHA-1 specifically, confined to
+# `ocsp.rs` alongside the rest of this crate's OCSP handling. Not used for
+# content hashing, where `contentauth-c2pa-primitives::HashAlgorithm`
+# still has no SHA-1 option. `digest` 0.10 is already in the tree via
+# `ecdsa`/`curve25519-dalek` (through `c2pa_raw_crypto`), so this adds no
+# second copy.
+sha1 = { version = "0.10", default-features = false }
 
 [dev-dependencies]
 # Enables `SessionCore::fulfill_unchecked`, which this crate's own tests use
