@@ -57,6 +57,14 @@ experiment grows.
   (reading a manifest store from a file and reporting it as JSON) on top
   of the crates above, for a caller that wants c2pa-rs's existing surface
   rather than this workspace's `Session` contract.
+* [`contentauth-c2pa-js-compat`](contentauth-c2pa-js-compat) — the same
+  experiment for the Rust side of the C2PA web SDK, [c2pa-js]'s
+  `c2pa-wasm` package: a `Reader` mirroring `WasmReader`'s
+  `fromBlob`/`activeLabel`/`manifestStore`/`activeManifest`/`json`,
+  whose asynchrony (`Promise`-shaped, asset bytes included) lives
+  entirely in this interface-specific layer — an async host awaiting a
+  `Blob` and a `Platform` at every request the sans-I/O engine makes —
+  and, under a browser-only `web` feature, the `wasm-bindgen` end of it.
 
 Outside the workspace (see its own README for why):
 
@@ -99,3 +107,4 @@ Licensed under either the [Apache License, Version 2.0](LICENSE-APACHE) or
 the [MIT license](LICENSE-MIT), at your option.
 
 [c2pa-rs]: https://github.com/contentauth/c2pa-rs
+[c2pa-js]: https://github.com/contentauth/c2pa-js
