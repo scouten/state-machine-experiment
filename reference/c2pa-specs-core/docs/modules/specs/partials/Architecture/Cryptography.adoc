@@ -1,0 +1,137 @@
+:revdate: {docdate}
+:version-label!: 
+:sectnums:
+:sectnumlevels: 5 
+:chapter-label:
+:source-highlighter: rouge
+
+## Cryptography
+
+### Hashing
+
+All cryptographic hashes that are applied as per the technical requirements of this specification shall be generated using one of the hash algorithms as described in this section. This section defines both:
+
+* A list of hash algorithms that are allowed for generating hashes of new content as well as required for validating hashes of existing content (the allowed list);
+* A list of hash algorithms that are required to be supported for validating hashes of existing content but are not allowed for generating hashes of new content (the deprecated list).
+
+NOTE: This section does not govern algorithms used for soft bindings as described in <<soft_binding_assertion>>.
+
+NOTE: This section does not govern algorithms used by custom assertions that are defined outside of this specification.
+
+An algorithm shall appear in no more than one list. An algorithm that is instantiated over multiple output lengths (such as the various lengths of SHA2) will each be considered different algorithms, and each instantiation shall be listed separately. If an algorithm does not appear in either list, it is forbidden and shall not be used or supported. Algorithms can be removed from the lists in order to implement forbidding an algorithm. For this reason, implementations shall not support additional algorithms on an optional basis.
+
+Implementers should consult this section in the current version of the specification when releasing software updates and ensure their supported algorithms conform to it.
+
+These lists establish the allowed algorithms for creating hashes and a string algorithm identifier to be used as the algorithm identifier (usually called `alg`) in the corresponding field of C2PA data structures. The outputs of hash functions shall be stored as their binary values encoded into CBOR as byte strings (major type 2) with a declared length. Wherever a field contains the output of a hash function, an algorithm identifier string field shall be present within the same structure, or within an enclosing structure, or in the `claim-map` or `claim-map-v2` structure to declare which algorithm was used. A hash algorithm identifier field should be present in exactly one of these places, but if more than one is present within the structure and its enclosing structures, the nearest identifier shall be used. Nearest is defined first as an identifier that is a sibling field of the hash value, and then the immediately enclosing structure, up to the root structure. If no identifier is present in any of these places, then the `alg` field from the `claim-map` or `claim-map-v2` structure shall be used.
+
+The allowed list is:
+
+* SHA2-256 ("sha256");
+* SHA2-384 ("sha384");
+* SHA2-512 ("sha512").
+
+[NOTE]
+====
+The SHA-3 family of hash algorithms are not on the allowed list for consistency with the digital signature algorithm allowed list, because COSE has not yet established digital signature algorithms that use a SHA-3 algorithm as the hash algorithm. 
+// A future version of this specification will incorporate SHA-3 for hashing as well as COSE digital signature algorithms that use SHA-3 when they are available.
+====
+
+The deprecated list is empty.
+
+### Digital Signatures
+
+All digital signatures applied as per the technical requirements of this specification shall be generated using one of the digital signature algorithms and key types listed as described in this section. This section defines both:
+
+* A list of digital signature algorithms and key types that are allowed for generating signatures for new claim signatures as well as required for validating existing claim signatures (the allowed list);
+
+* A list of digital signature algorithms and key types that are required to be supported for validating existing claim signatures but are not allowed for generating new claim signatures (the deprecated list).
+
+NOTE: This section does not govern digital signatures used by custom assertions that are defined outside of this specification.
+
+These lists establish the allowed algorithms and key types by referencing an algorithm identifier from the relevant standards that define algorithms for COSE and their mappings to CBOR identifiers, including but not limited to {8152} and {8230}. These standards also specify the hash algorithm used in the signature scheme. Nothing in <<_hashing>> shall apply to this use of hash algorithms; if a digital signature algorithm is present in the digital signature algorithm and key type xref:_signature_algorithms[below], the use of its specified hash algorithm in the signature scheme shall be allowed and followed.
+
+NOTE: Parenthetical notes in the lists below are explainers provided only as an aid to the reader.
+
+#### Signature Algorithms
+
+The allowed list is:
+
+* ES256 (ECDSA with SHA-256);
+* ES384 (ECDSA with SHA-384);
+* ES512 (ECDSA with SHA-512);
+* PS256 (RSASSA-PSS using SHA-256 and MGF1 with SHA-256);
+* PS384 (RSASSA-PSS using SHA-384 and MGF1 with SHA-384);
+* PS512 (RSASSA-PSS using SHA-512 and MGF1 with SHA-512);
+* EdDSA (Edwards-Curve DSA).
+** Ed25519 instance only. No other EdDSA instances are allowed.
+
+The deprecated list is empty.
+
+Implementations are required to check that keys provided for signing or verification operations are correct for the chosen algorithm, as required by {8152}, section 8.1 for ECDSA, {8152}, section 8.2 for EdDSA, and https://www.rfc-editor.org/rfc/rfc8230.html#section-2[RFC 8230 section 2] and https://www.rfc-editor.org/rfc/rfc8230.html#section-4[section 4] for RSASSA-PSS. 
+
+These requirements are summarized here for convenience:
+
+* ECDSA requires elliptic curve keys on the P-256, P-384, or P-521 elliptic curves.
+** Although it is recommended to use P-256 keys with `ES256`, P-384 keys with `ES384`, and P-521 keys with `ES512`, it is not required. Implementations shall accept keys on any of these curves for all ECDSA algorithm choices.
+* Ed25519 requires elliptic curve keys on the edwards25519 elliptic curve.
+* RSASSA-PSS requires RSA keys with a modulus length of at least 2048 bits.
+
+Implementations shall refuse to generate or verify signatures with keys that are not correct for the algorithm choice. Implementations may refuse RSA keys with modulus length greater than 16384 bits.
+
+For video streaming implementations, which are addressed in <<live-video>>, deterministic signature algorithms should be used so that media segment caching is not negatively impacted.
+For example, workflows that implement https://www.iso.org/standard/85639.html[ISO/IEC 23009-9 REaP] or similar mechanisms would be negatively impacted if non-deterministic signatures were used as duplicate media content would be packaged in unique segments, reducing the effectiveness of segment caching.
+
+#### Use of COSE
+
+The signature for the CBOR-encoded claim is produced by CBOR Object Signing and Encryption (COSE) as described in {8152}, sections 4.2 and 4.4.
+
+[NOTE]
+====
+Payloads can either be present inside a COSE signature, or transported separately ("detached content" as described in {8152}, section 4.1). In "detached content" mode, the signed data is stored externally to the `COSE_Sign1_Tagged` structure, and the `payload` field of the `COSE_Sign1_Tagged` structure is always `nil`. 
+====
+
+Regardless of whether the payload will be present in or detached from the `COSE_Sign1_Tagged` signature; the contents of the `payload` field of `Sig_structure` in memory, when constructed to compute or verify a digital signature, shall be populated with that external data as described by the particular use of digital signature in this specification. The `payload` field of `Sig_structure` shall never be `nil`.
+
+When computing or verifying the signature of a standard or update manifest, the `payload` field of the `Sig_structure` will contain the contents of the claim JUMBF box, as described in <<_signing_a_claim>> and <<_use_of_jumbf>>.
+
+#### Computing the Signature
+
+The signature is computed or verified as described in {8152}, section 4.4. The following additional requirements apply to the construction of `Sig_structure`:
+
+* The value for the `context` element shall be `Signature1` except where a particular use of digital signatures in this specification specifies using `CounterSignature` instead. `Signature` shall not be used.
+* The value for the `payload` element will be specified by each use of digital signatures in this specification.
+* The `external_aad` element shall be a `bstr` of length zero. External authenticated data shall not be used.
+* The `alg` header specifying the signature algorithm shall be present in the `body_protected` element as defined in {8152}, section 3.1.
++
+[NOTE]
+====
+The `alg` header is a standard COSE header, and therefore is always included in the protected header map with the integer `1` as its label, as established in the https://www.iana.org/assignments/cose/cose.xhtml#header-parameters[IANA COSE Header Parameters Registry]. The literal string `alg` is never used as the label. The `sign_protected` element is always omitted when using `COSE_Sign1`.
+====
+
+All digital signatures in C2PA structures shall be a `COSE_Sign1_Tagged` structure as defined in {8152}, section 4.2. `COSE_Sign1_Tagged` contains a `COSE_Sign1` structure. The following additional requirements apply to the construction of `COSE_Sign1_Tagged`:
+
+* The same `alg` header in the `Sig_structure` above shall be present in the `protected` header bucket.
+* The value for the `payload` field and whether the payload is present in the signature or detached will be specified by each use of digital signatures in this specification. When the `payload` is specified as detached, its value here shall be `nil`. Conversely, when the payload is present in the signature, the binary contents of the payload are stored in this field as a `bstr`.
+
+[NOTE]
+====
+COSE defines `nil` to be major type 7, value 22 in {8152}, section 1.3, and uses this value exclusively for detached content. A byte array (major type 2) of length zero cannot be used to indicate detached content.
+====
+
+#### Adding a claimed time of signing
+A claim generator may also wish to establish a "claimed time of signing" by adding an `iat` protected header, whose value is a `NumericDate`. If present, it shall represent the time at which the signature was generated.
+
+NOTE: A `NumericDate` is a CBOR numeric date (as described in {8949}, section 3.4.2) but with the leading tag 1 (epoch-based date/time) omitted. It is not used anywhere else in this specification.
+
+NOTE: This recommendation is based on in-process updates to {jades} for providing a non-trusted time-stamp that is not used for certificate validity checking, but could be used in a user experience. It could be useful in scenarios where the claim generator is not able to access a trusted time source, but still wants to provide a time of signing.
+
+#### Signature Validation
+
+When producing a signature, if the claim generator can also act as a validator, the claim generator should validate that the signing credential is acceptable according to <<_trust_model>> and produce a warning if it is not. The claim generator may still allow signing with that credential if so desired. This may be desirable if it is known that the local claim generator's validator has a different configuration than validators used by the expected audience of the asset.
+
+#### Cryptographic validation
+When verifying a signature, an in-memory `Sig_structure` is generated. Its `body_protected` field is populated with the contents of the `protected` header bucket from the `COSE_Sign1_Tagged` structure ({8152}, section 4.4). For the `payload` field, if the payload was specified as present in the signature, it is populated from the `payload` field of the `COSE_Sign1_Tagged` structure. If the payload was specified as detached, the `payload` field of the `COSE_Sign1_Tagged` structure will be `nil`. In this case, the contents of the `payload` field of `Sig_structure` shall be populated from the same external source that was used in the generation of the signature. These are defined in the places where the digital signature is used in this specification.
+
+#### Inclusion of signer icons
+
+A C2PA Manifest Consumer may wish to display an icon or logo for the signer. To locate such a graphic, it shall look inside the embedded certificate for a logotype as defined in {9399}. If no logotype is present, the Manifest Consumer may use icons or logos from other sources in an implementation-dependent manner.

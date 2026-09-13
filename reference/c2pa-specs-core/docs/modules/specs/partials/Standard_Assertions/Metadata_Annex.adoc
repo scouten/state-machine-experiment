@@ -1,0 +1,357 @@
+[appendix]
+[[metadata_annex]]
+== Implementation Details for `c2pa.metadata`
+
+The `c2pa.metadata` assertion shall only contain the subset of schemas and their fields as described below. However xref:_common_requirements[custom metadata assertions] may contain any values from these or other schemas.
+
+NOTE: A machine readable list of all the valid schemas and their fields can be found on the https://spec.c2pa.org/specifications/specifications/2.3/specs/_attachments/C2PA_Schemas.zip[C2PA Specification Website].
+
+The values present in a `c2pa.metadata` assertion may be unique to the metadata assertion or they may be taken from the standard "metadata blocks" of the asset format. In either case, they shall be serialized according to the rules of {xmp-json} as described xref:_common_requirements[here].
+
+=== Completely Supported Schemas
+
+The following schemas/namespaces, in <<fully-supported-schemas>>, are supported in full by any signer:
+
+[[fully-supported-schemas]]
+.Completely supported schemas
+[cols="35%,60%"]
+|===
+|Name | Namespace
+| https://developer.adobe.com/xmp/docs/XMPNamespaces/xmp/[XMP Basic] | \http://ns.adobe.com/xap/1.0/
+| https://developer.adobe.com/xmp/docs/XMPNamespaces/xmpMM/[XMP Media Management] | \http://ns.adobe.com/xap/1.0/mm/
+| https://developer.adobe.com/xmp/docs/XMPNamespaces/xmpTPg/[XMP Paged-Text] | \http://ns.adobe.com/xap/1.0/t/pg/
+| https://developer.adobe.com/xmp/docs/XMPNamespaces/crs/[Camera Raw] | \http://ns.adobe.com/camera-raw-settings/1.0/
+| https://developer.adobe.com/xmp/docs/XMPNamespaces/pdf/[PDF] | \http://ns.adobe.com/pdf/1.3/
+
+
+|===
+
+
+=== Partially Supported Schemas
+
+The following schemas/namespaces, in <<partially-supported-schemas>>, are only supported in part.  
+
+[[partially-supported-schemas]]
+.Partially supported schemas
+[cols="35%,60%"]
+|===
+|Name | Namespace
+
+| https://developer.adobe.com/xmp/docs/XMPNamespaces/dc/[Dublin Core (DC)] | \http://purl.org/dc/elements/1.1/
+| http://iptc.org/std/photometadata/specification/IPTC-PhotoMetadata-2023.1.html#iptc-core-schema-1-4-specifications[IPTC Core] | \http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/
+| https://www.iptc.org/std/photometadata/specification/IPTC-PhotoMetadata#iptc-extension-schema-1-8-specifications[IPTC Extension] | \http://iptc.org/std/Iptc4xmpExt/2008-02-29/
+| https://developer.adobe.com/xmp/docs/XMPNamespaces/exif/[Exif] | \http://ns.adobe.com/exif/1.0/
+| https://exiv2.org/tags-xmp-exifEX.html[ExifEx] | \http://cipa.jp/exif/1.0/
+| https://developer.adobe.com/xmp/docs/XMPNamespaces/photoshop/[Photoshop] | \http://ns.adobe.com/photoshop/1.0/
+| https://developer.adobe.com/xmp/docs/XMPNamespaces/tiff/[TIFF] | \http://ns.adobe.com/tiff/1.0/
+| https://developer.adobe.com/xmp/docs/XMPNamespaces/xmpDM/[XMP Dynamic Media] | \http://ns.adobe.com/xmp/1.0/DynamicMedia/
+| http://ns.useplus.org/LDF/ldf-XMPSpecification[PLUS] | \http://ns.useplus.org/ldf/xmp/1.0/
+
+|===
+
+==== Dublin Core (DC)
+
+Only the following Dublin Core (`dc`) properties are supported:
+
+	- `dc:coverage`
+	- `dc:created`
+	- `dc:date`
+	- `dc:format`
+	- `dc:identifier`
+	- `dc:language`
+	- `dc:modified`
+	- `dc:relation`
+	- `dc:title`
+	- `dc:type`
+
+==== IPTC Core
+
+Only the following IPTC Core (`Iptc4xmpCore`) properties are supported:
+
+	- `Iptc4xmpCore:Scene`
+
+NOTE: Some IPTC Core properties have been superseded by newer versions in the IPTC Extension schema. 
+
+==== IPTC Extension
+
+Only the following IPTC Extension (`Iptc4xmpExt`) properties are supported:
+
+	- `Iptc4xmpExt:DigImageGUID`
+	- `Iptc4xmpExt:DigitalSourceType`
+	- `Iptc4xmpExt:EventId`
+	- `Iptc4xmpExt:Genre`
+	- `Iptc4xmpExt:ImageRating`
+	- `Iptc4xmpExt:ImageRegion`
+	- `Iptc4xmpExt:RegistryId`
+	- `Iptc4xmpExt:LocationCreated`
+	- `Iptc4xmpExt:LocationShown`
+	- `Iptc4xmpExt:MaxAvailHeight`
+	- `Iptc4xmpExt:MaxAvailWidth`
+
+For more information about these, refer to https://www.iptc.org/std/photometadata/specification/IPTC-PhotoMetadata#xmp-namespaces-and-identifiers-2[].
+
+==== Exif
+
+Only the following Exif properties, in <<exif-properties>>, are supported:
+
+[[exif-properties]]
+.Supported Exif Properties
+[cols="1,1,1", frame=none]
+|===
+a|
+	- `exif:ApertureValue`
+	- `exif:BrightnessValue`
+	- `exif:CFAPattern`
+	- `exif:ColorSpace`
+	- `exif:CompressedBitsPerPixel`
+	- `exif:Contrast`
+	- `exif:CustomRendered`
+	- `exif:DateTimeDigitized`
+	- `exif:DateTimeOriginal`
+	- `exif:DeviceSettingDescription`
+	- `exif:DigitalZoomRatio`
+	- `exif:ExifVersion`
+	- `exif:ExposureBiasValue`
+	- `exif:ExposureIndex`
+	- `exif:ExposureMode`
+	- `exif:ExposureProgram`
+	- `exif:ExposureTime`
+	- `exif:FileSource`
+	- `exif:Flash`
+	- `exif:FlashEnergy`
+	- `exif:FlashpixVersion`
+	- `exif:FNumber`
+	- `exif:FocalLength`
+	- `exif:FocalLengthIn35mmFilm`
+	- `exif:FocalPlaneResolutionUnit`
+	- `exif:FocalPlaneXResolution`
+	- `exif:FocalPlaneYResolution`
+
+a|
+	- `exif:GainControl`
+	- `exif:ImageUniqueID`
+	- `exif:ISOSpeedRatings`
+	- `exif:LightSource`
+	- `exif:MaxApertureValue`
+	- `exif:MeteringMode`
+	- `exif:OECF`
+	- `exif:OffsetTimeOriginal`
+	- `exif:PixelXDimension`
+	- `exif:PixelYDimension`
+	- `exif:RelatedSoundFile`
+	- `exif:Saturation`
+	- `exif:SceneCaptureType`
+	- `exif:SceneType`
+	- `exif:SensingMethod`
+	- `exif:Sharpness`
+	- `exif:ShutterSpeedValue`
+	- `exif:SpatialFrequencyResponse`
+	- `exif:SpectralSensitivity`
+	- `exif:SubjectArea`
+	- `exif:SubjectDistance`
+	- `exif:SubjectDistanceRange`
+	- `exif:SubjectLocation`
+	- `exif:WhiteBalance`
+
+a|	
+	- `exif:GPSAltitude`
+	- `exif:GPSAltitudeRef`
+	- `exif:GPSDateStamp`
+	- `exif:GPSDestBearing`
+	- `exif:GPSDestBearingRef`
+	- `exif:GPSDestDistance`
+	- `exif:GPSDestDistanceRef`
+	- `exif:GPSDestLatitude`
+	- `exif:GPSDestLongitude`
+	- `exif:GPSDifferential`
+	- `exif:GPSDOP`
+	- `exif:GPSHPositioningError`
+	- `exif:GPSImgDirection`
+	- `exif:GPSImgDirectionRef`
+	- `exif:GPSLatitude`
+	- `exif:GPSLongitude`
+	- `exif:GPSMapDatum`
+	- `exif:GPSMeasureMode`
+	- `exif:GPSProcessingMethod`
+	- `exif:GPSSatellites`
+	- `exif:GPSSpeed`
+	- `exif:GPSSpeedRef`
+	- `exif:GPSStatus`
+	- `exif:GPSTimeStamp`
+	- `exif:GPSTrack`
+	- `exif:GPSTrackRef`
+	- `exif:GPSVersionID`
+|===
+
+==== ExifEx
+
+Only the following ExifEx properties are supported:
+
+	- `exifEX:Acceleration`
+	- `exifEX:BodySerialNumber`
+	- `exifEX:CameraElevationAngle`
+	- `exifEX:CameraFirmware`
+	- `exifEX:CompositeImage`
+	- `exifEX:Gamma`
+	- `exifEX:Humidity`
+	- `exifEX:ImageEditingSoftware`
+	- `exifEX:ImageUniqueID`
+	- `exifEX:InteroperabilityIndex`
+	- `exifEX:ISOSpeed`
+	- `exifEX:ISOSpeedLatitudeyyy`
+	- `exifEX:ISOSpeedLatitudezzz`
+	- `exifEX:LensMake`
+	- `exifEX:LensModel`
+	- `exifEX:LensSerialNumber`
+	- `exifEX:LensSpecification`
+	- `exifEX:MetadataEditingSoftware`
+	- `exifEX:PhotographicSensitivity`
+	- `exifEX:Pressure`
+	- `exifEX:RAWDevelopingSoftware`
+	- `exifEX:RecommendedExposureIndex`
+	- `exifEX:SensitivityType`
+	- `exifEX:SourceImageNumberOfCompositeImage`
+	- `exifEX:SourceExposureTimesOfCompositeImage`
+	- `exifEX:StandardOutput-Sensitivity`
+	- `exifEX:Temperature`
+	- `exifEX:WaterDepth`
+
+For more information about these, refer to https://www.cipa.jp/std/documents/download_e.html?CIPA_DC-010-2024_E[].
+
+==== Photoshop
+
+Only the following Photoshop properties are supported:
+
+	- `photoshop:Category`
+	- `photoshop:City`
+	- `photoshop:ColorMode`
+	- `photoshop:Country`
+	- `photoshop:DateCreated`
+	- `photoshop:DocumentAncestors`
+	- `photoshop:History`
+	- `photoshop:ICCProfile`
+	- `photoshop:State`
+	- `photoshop:SupplementalCategories`
+	- `photoshop:TextLayers`
+	- `photoshop:TransmissionReference`
+	- `photoshop:Urgency`
+
+==== TIFF
+
+Only the following TIFF properties are supported:
+
+	- `tiff:BitsPerSample`
+	- `tiff:Compression`
+	- `tiff:ImageLength`
+	- `tiff:ImageWidth`
+	- `tiff:Make`
+	- `tiff:Model`
+	- `tiff:Orientation`
+	- `tiff:PhotometricInterpretation`
+	- `tiff:PlanarConfiguration`
+	- `tiff:PrimaryChromaticities`
+	- `tiff:ReferenceBlackWhite`
+	- `tiff:ResolutionUnit`
+	- `tiff:SamplesPerPixel`
+	- `tiff:TransferFunction`
+	- `tiff:WhitePoint`
+	- `tiff:XResolution`
+	- `tiff:YResolution`
+	- `tiff:YCbCrCoefficients`
+	- `tiff:YCbCrPositioning`
+	- `tiff:YCbCrSubSampling`
+
+==== XMP Dynamic Media
+
+Only the following XMP Dynamic Media (`xmpDM`) properties, in <<xmpDM-properties>>, are supported:
+
+[[xmpDM-properties]]
+.XMP Dynamic Media properties
+[cols="1,1,1", frame=none]
+|===
+
+a|
+	- `xmpDM:absPeakAudioFilePath`
+	- `xmpDM:album`
+	- `xmpDM:altTapeName`
+	- `xmpDM:altTimecode`
+	- `xmpDM:audioChannelType`
+	- `xmpDM:audioCompressor`
+	- `xmpDM:audioSampleRate`
+	- `xmpDM:audioSampleType`
+	- `xmpDM:beatSpliceParams`
+	- `xmpDM:cameraAngle`
+	- `xmpDM:cameraLabel`
+	- `xmpDM:cameraModel`
+	- `xmpDM:cameraMove`
+	- `xmpDM:comment`
+	- `xmpDM:contributedMedia`
+	- `xmpDM:duration`
+	- `xmpDM:fileDataRate`
+	- `xmpDM:genre`
+	- `xmpDM:good`
+	- `xmpDM:instrument`
+	- `xmpDM:introTime`
+	- `xmpDM:key`
+	- `xmpDM:logComment`
+	- `xmpDM:loop`
+
+a|
+	- `xmpDM:numberOfBeats`
+	- `xmpDM:markers`
+	- `xmpDM:outCue`
+	- `xmpDM:projectName`
+	- `xmpDM:projectRef`
+	- `xmpDM:pullDown`
+	- `xmpDM:relativePeakAudioFilePath`
+	- `xmpDM:relativeTimestamp`
+	- `xmpDM:releaseDate`
+	- `xmpDM:resampleParams`
+	- `xmpDM:scaleType`
+	- `xmpDM:scene`
+	- `xmpDM:shotDate`
+	- `xmpDM:shotDay`
+	- `xmpDM:shotLocation`
+	- `xmpDM:shotName`
+	- `xmpDM:shotNumber`
+	- `xmpDM:shotSize`
+	- `xmpDM:speakerPlacement`
+	- `xmpDM:startTimecode`
+	- `xmpDM:stretchMode`
+
+a|
+	- `xmpDM:takeNumber`
+	- `xmpDM:tapeName`
+	- `xmpDM:tempo`
+	- `xmpDM:timeScaleParams`
+	- `xmpDM:timeSignature`
+	- `xmpDM:trackNumber`
+	- `xmpDM:Tracks`
+	- `xmpDM:videoAlphaMode`
+	- `xmpDM:videoAlphaPremultipleColor`
+	- `xmpDM:videoAlphaUnityIsTransparent`
+	- `xmpDM:videoColorSpace`
+	- `xmpDM:videoCompressor`
+	- `xmpDM:videoFieldOrder`
+	- `xmpDM:videoFrameRate`
+	- `xmpDM:videoFrameSize`
+	- `xmpDM:videoPixelAspectRatio`
+	- `xmpDM:videoPixelDepth`
+	- `xmpDM:partOfCompilation`
+	- `xmpDM:lyrics`
+	- `xmpDM:discNumber`
+|===
+
+==== PLUS
+
+Only the following PLUS properties are supported:
+
+	- `plus:FileNameAsDelivered`
+	- `plus:FirstPublicationDate`
+	- `plus:ImageFileFormatAsDelivered`
+	- `plus:ImageFileSizeAsDelivered`
+	- `plus:ImageType`
+	- `plus:Version`
+
+For more information about these, refer to http://ns.useplus.org/LDF/ldf-XMPSpecification[].
+

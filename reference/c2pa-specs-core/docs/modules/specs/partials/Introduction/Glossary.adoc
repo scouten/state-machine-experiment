@@ -1,0 +1,154 @@
+:revdate: {docdate}
+:version-label!: 
+:sectnums:
+:sectnumlevels: 5 
+:chapter-label:
+:source-highlighter: rouge
+
+### Introductory terms
+
+#### Actor
+A human or non-human (hardware or software) that is participating in the C2PA ecosystem. For example: a camera (capture device), image editing software, cloud service or the person using such tools.
+
+NOTE: An organization or group of xref:_actor[actors] may also be considered an xref:_actor[actor] in the C2PA ecosystem.
+
+[[claim-generator-definition]]
+#### Claim generator
+The non-human (hardware or software) xref:_actor[actor] that generates the xref:_claim[claim] about an xref:_asset[asset] as well as the xref:claim-signature-definition[claim signature], thus leading to the xref:_asset[asset]'s associated xref:_c2pa_manifest[C2PA Manifest]. 
+
+[[signer-definition]]
+#### Signer
+The credential holder of a private key that is used to sign the xref:_claim[claim].  The xref:signer-definition[signer] is identified by the subject of the credential.
+
+#### Manifest consumer
+An xref:_actor[actor] who consumes an xref:_asset[asset] with an associated xref:_c2pa_manifest[C2PA Manifest] for the purpose of obtaining the xref:_provenance_data[provenance data] from the xref:_c2pa_manifest[C2PA Manifest].
+
+#### Validator
+A xref:_manifest_consumer[Manifest Consumer] whose role is to perform the actions described in xref:validation-clause[validation].
+
+#### Action
+An operation performed by an xref:_actor[actor] on an xref:_asset[asset]. For example, "create", "embed", or "apply filter".
+
+### Assets and Content
+#### Digital content
+The portion of an xref:_asset[asset] that represents the actual content, such as the pixels of an image, along with any additional technical metadata required to understand the content (e.g., a colour profile or encoding parameters).
+
+#### Asset metadata
+Non-technical information about the xref:_asset[asset] and its xref:_digital_content[digital content].
+
+#### Asset
+A file or stream of data containing xref:_digital_content[digital content], xref:_asset_metadata[asset metadata] and optionally, a xref:_c2pa_manifest[C2PA Manifest]. 
+
+NOTE: For the purposes of this definition, we will extend the typical definition of "file" to include cloud-native and dynamically generated data.
+
+#### Derived asset
+A xref:_derived_asset[derived asset] is an xref:_asset[asset] that is created by starting from an existing xref:_asset[asset] and performing xref:_action[actions] to it that modify its xref:_digital_content[digital content]. 
+
+[example] 
+**EXAMPLE:** An audio stream that has been shortened or a document where pages have been added.
+
+#### Asset rendition
+A representation of an xref:_asset[asset] (either as a part of an xref:_asset[asset] or a completely new xref:_asset[asset]) where the xref:_digital_content[digital content] has had a xref:editorial-transformation-definition['non-editorial transformation'] xref:_action[action] (e.g., re-encoding or scaling) applied.
+
+[example] 
+**EXAMPLE:** A video file that is re-encoded for reduced screen resolution or network bandwidth.
+
+#### Composed asset
+A composed asset is an xref:_asset[asset] that is created by building up a collection of multiple parts or fragments of xref:_digital_content[digital content] (referred to as xref:ingredient_assertion[ingredients]) from one or more other xref:_asset[assets]. When starting from an existing xref:_asset[asset], it is a special case of a xref:_derived_asset[derived asset] - however a xref:_derived_asset[composed asset] can also be one that starts from a "blank slate".
+
+[example] 
+====
+**EXAMPLES:** 
+
+- A video created by importing existing video clips and audio segments into a "blank slate". 
+- An image where another image is imported and super-imposed on top of the starting image.
+==== 
+
+[[editorial-transformation-definition]]
+#### Editorial transformation
+
+A type of transformation that alters either the intent or meaning or both of the xref:_digital_content[digital content].
+
+### Core Aspects of C2PA
+
+#### Assertion
+A data structure which represents a statement either made (or "created") by the xref:signer-definition[signer] or simply gathered at claim generation-time, concerning the xref:_asset[asset]. This data is a part of the xref:_c2pa_manifest[C2PA Manifest].
+
+#### Claim
+A digitally signed and tamper-evident data structure that references a set of xref:_assertion[assertions], concerning an xref:_asset[asset], and the information necessary to represent the xref:_content_binding[content binding]. If any xref:_assertion[assertions] were redacted, then a declaration to that effect is included. This data is a part of the xref:_c2pa_manifest[C2PA Manifest].
+
+[[claim-signature-definition]]
+#### Claim signature
+The digital signature on the xref:_claim[claim] created using the private key owned by a xref:signer-definition[signer]. The xref:claim-signature-definition[claim signature] is a part of the xref:_c2pa_manifest[C2PA Manifest].
+
+#### C2PA Manifest
+The set of information about the _provenance_ of an xref:_asset[asset] based on the combination of one or more xref:_assertion[assertions] (including xref:_binding_to_content[content bindings]), a single xref:_claim[claim], and a xref:claim-signature-definition[claim signature]. A xref:_c2pa_manifest[C2PA Manifest] is part of a xref:_c2pa_manifest_store[C2PA Manifest Store].
+
+NOTE: A xref:_c2pa_manifest[C2PA Manifest] can reference other xref:_c2pa_manifest[C2PA Manifests].
+
+#### C2PA Manifest Store
+A collection of xref:_c2pa_manifest[C2PA Manifests] that can either be embedded into an xref:_asset[asset] or be external to its xref:_asset[asset].
+
+#### Content Credential
+This is the preferred non-technical term for a xref:_c2pa_manifest[C2PA Manifest].  The xref:_c2pa_manifest_store[C2PA Manifest Store] therefore represents the Content Credentials of an asset.
+
+Content Credentials also refers to the overall C2PA technology, and is therefore essentially treated as a plural noun. If a xref:_c2pa_manifest[C2PA Manifest] is a Content Credential, then multiple xref:_c2pa_manifest[C2PA Manifest] or the broader, universal concept is Content Credentials. 
+
+#### Active Manifest
+The last manifest in the list of xref:_c2pa_manifest[C2PA Manifests] inside of a xref:_c2pa_manifest_store[C2PA Manifest Store] which is the one with the set of xref:_content_binding[content bindings] that are able to be validated.
+
+#### Provenance
+The logical concept of understanding the history of an xref:_asset[asset] and its interaction with xref:_actor[actors] and other xref:_asset[assets], as represented by the xref:_provenance_data[provenance data].
+
+#### Provenance data
+The set of xref:_c2pa_manifest[C2PA Manifests] for an xref:_asset[asset] and, in the case of a xref:_composed_asset[composed asset], its xref:ingredient_assertion[ingredients].
+
+NOTE: A xref:_c2pa_manifest[C2PA Manifest] can reference other xref:_c2pa_manifest[C2PA Manifests].
+
+#### Authenticity
+A property of xref:_digital_content[digital content] comprising a set of facts (such as the xref:_provenance_data[provenance data] and xref:_hard_bindings[hard bindings]) that can be cryptographically verified as not having been tampered with.
+
+#### Content binding
+Information that associates xref:_digital_content[digital content] to a specific xref:_c2pa_manifest[C2PA Manifest] associated with a specific xref:_asset[asset], either as a xref:_hard_binding[hard binding] or a xref:soft_binding_assertion[soft binding].
+
+#### Hard binding
+One or more cryptographic hashes that uniquely identifies either the entire xref:_asset[asset] or a portion thereof.
+
+#### Soft binding
+A content identifier that is either (a) not statistically unique, such as a xref:_fingerprint[fingerprint], or (b) embedded as an xref:_invisible_watermark[invisible watermark] in the identified xref:_digital_content[digital content].
+
+#### Trust signals
+The collection of information that can inform a xref:_manifest_consumer[Manifest Consumer's] judgment of the trustworthiness of an xref:_asset[asset]. These are in addition to the xref:signer-definition[signer] upon which the fundamental trust model relies.
+
+#### C2PA Trust List
+A C2PA-managed list of X.509 certificate trust anchors that issue certificates to hardware & software xref:signer-definition[signers] that use them to sign xref:_claim[claims].
+
+#### C2PA TSA Trust List
+A C2PA-managed list of X.509 certificate trust anchors that issue certificates to Time Stamping Authorities (TSAs).
+
+### Additional Terms
+
+#### Durable Content Credential
+A Durable Content Credential is a Content Credential for which there exists one or more soft bindings that enable its discovery in a manifest repository.
+
+#### Fingerprint
+A set of inherent properties computable from xref:_digital_content[digital content] that identifies the content or near duplicates of it. 
+
+[example] 
+**EXAMPLE:** An xref:_asset[asset] can become separated from its xref:_c2pa_manifest[C2PA Manifest] due to removal or corruption of xref:_asset[asset] metadata. A xref:_fingerprint[fingerprint] of the xref:_digital_content[digital content] of the xref:_asset[asset] could be used to search a database to recover the xref:_asset[asset] with an intact xref:_c2pa_manifest[C2PA Manifest].
+
+#### Invisible Watermark
+Information incorporated in a substantially human imperceptible way into the xref:_digital_content[digital content] of an xref:_asset[asset] which can be used, for example, to uniquely identify the xref:_asset[asset] or to store a reference to a xref:_c2pa_manifest[C2PA Manifest].
+
+#### Visible Watermark
+A perceptible component of the xref:_digital_content[digital content] carrying some human consumable information about the provenance of the xref:_asset[asset].
+
+#### Manifest Repository
+A repository into which xref:_c2pa_manifest[C2PA Manifests] and xref:_c2pa_manifest_store[C2PA Manifest Stores] can be placed, and which can be searched using a xref:_content_binding[content binding].
+
+### Overview
+
+This image shows how all these various elements come together to represent the C2PA architecture.
+
+.Elements of C2PA
+image::Overview_Diagram.{image-ext}[A diagram of how all the parts of C2PA go together,width=697,height=454,align="center"]

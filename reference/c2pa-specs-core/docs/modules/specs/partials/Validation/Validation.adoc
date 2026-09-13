@@ -1,0 +1,1028 @@
+:revdate: {docdate}
+:version-label!: 
+:sectnums:
+:sectnumlevels: 5 
+:chapter-label: Validation
+:source-highlighter: rouge
+
+[[validation-clause]]
+## Validation
+
+### Validation Process
+
+#### Description
+Validation of a C2PA Manifest is a multi-step process that involves validating the assertions, claim & associated claim signature contained within it along with (for active manifests, only) validation of any associated hard bindings. This validation process is performed by a validator, which is a hardware or software actor that implements the validation algorithms described in this clause. 
+
+#### Phases of Validation
+These phases, which are listed in no particular order, are described in the following clauses:
+
+- <<_validate_the_assertions>>: Validation of the assertions.
+- <<_validate_the_ingredients>>: Validation of the ingredients, if any.
+- <<_validate_the_time_stamp>>: Validation of the time-stamp.
+- <<_validate_the_credential_revocation_information>>: Validation of the credential revocation information.
+- <<_validate_the_signature>>: Validation of the claim signature.
+- <<_validate_the_assets_content>>: Validation of the content of the asset.
+
+As described in <<_validation_states>>, a C2PA Manifest may be considered as xref:_well_formed_manifest[Well-Formed], xref:_valid_manifest[Valid] or xref:_trusted_manifest[Trusted] based on the results of these steps.
+
+#### Visual Representation
+
+<<Claim_Validation>> is a visual representation of the process of validating a C2PA Manifest.
+
+[[Claim_Validation]]
+.Validating a Claim
+image::Claim_Validation.{image-ext}[Validating a Claim,width=720,height=432,align="center"]
+
+NOTE: If there are any discrepancies between the visual representation and the text, the text is considered authoritative.
+
+// NOTE from lrosenthol: leaving this here but it really belongs in informative text!
+// #### Things not validated
+
+// There are a few aspects of a C2PA Manifest that cannot be validated by a validator:
+
+// * The assertions of the manifest consist of statements created or gathered by the claim generator and the data contained inside them is not verified.
+// * The assets referred to by ingredient assertions are not (necessarily) available at validation of the manifest, and therefore their hashes cannot be validated.
+// * The content of ingredient assertions, like all other assertions, are not independently validated.
+
+### Returning Validation Results
+
+#### General
+The validation algorithm shall return a consolidated set of validation results for the all manifests in the asset's C2PA Manifest Store, including the active manifest as well all other manifests in the C2PA Manifest Store that are referenced via ingredient assertions. 
+
+Validation results are expressed via a standard set of success, informational, and failure codes, as defined below in <<_standard_status_codes>>.  Custom status codes are also permitted, when a claim generator has a need to record some process-specific status information.  Custom codes shall conform to the same syntax as xref:_namespacing[entity-specific namespaces], e.g. `com.litware`. 
+
+When a claim generator adds an ingredient asset via an ingredient assertion, it shall act as a validator, and perform the full validation algorithm described in this section on the ingredient. The claim generator shall record the validation results of the ingredient, per the following {CDDL} schema, as the value of the `validationResults` field in the xref:ingredient_assertion[ingredient assertion].
+
+The validation results may also contain a SemVer formatted `specVersion` field which represents the version of this specification that was used as the basis for the validation procedure. It may also contain a `trustListURI` field, which is a URI that identifies the trust list that was used to xref:_validate_the_signature[validate the claim signature].
+
+
+[source,cddl]
+.CDDL for Validation Results
+----
+include::../schemas/cddl/validation-results.cddl[]
+----
+
+#### Standard Status Codes
+
+##### Success codes
+
+[[validation_success_codes]]
+.Validation success codes
+[width="100%",cols="7,8,4",options="header"]
+|=======================
+| Value        |   Meaning  | `url` Usage
+|`assertion.accessible`   |   A non-embedded (remote) assertion was accessible at the time of validation.   | C2PA Assertion
+|`assertion.bmffHash.match`   |   Hash of a box-based asset matches the hash declared in the BMFF hash assertion.   | C2PA Assertion
+|`assertion.boxesHash.match`  |   Hash of a box-based asset matches the hash declared in the general box hash assertion.   | C2PA Assertion
+|`assertion.collectionHash.match`  |   Hashes of all the assets contained in a collection matches the hashes declared in the collection data hash assertion.   | C2PA Assertion
+|`assertion.dataHash.match`   |   Hash of a byte range of the asset matches the hash declared in the data hash assertion.   | C2PA Assertion
+|`assertion.hashedURI.match`   |   The hash of the referenced assertion matches the corresponding hash in the assertion's hashed URI in the claim.  | C2PA Assertion
+|`assertion.multiAssetHash.match`   |   The hash of one part of a multi-asset hash assertion matches the corresponding hash in the assertion's multi-asset-hash-map.  | C2PA Assertion
+|`assertion.alternativeContentRepresentation.match`    | The original preservation image assertion and its associated content validated successfully. | C2PA Assertion
+|`claimSignature.insideValidity`   |  The claim signature referenced in the claim was created within the validity period of the signing credential | C2PA Claim Signature Box
+|`claimSignature.validated`   |  The claim signature referenced in the claim validated. | C2PA Claim Signature Box
+|`ingredient.claimSignature.validated` | The hash of the ingredient's C2PA Claim Signature box was successfully validated. | C2PA Assertion
+|`ingredient.manifest.validated` | The hash of the ingredient's C2PA Manifest box was successfully validated. | C2PA Assertion
+|`signingCredential.ocsp.notRevoked` | The signing credential was not revoked at the time of signing. | C2PA Claim Signature Box
+|`signingCredential.trusted` |   The signing credential is trusted  | C2PA Claim Signature Box
+|`timeStamp.trusted` |   The time-stamp credential is listed on the validator's xref:time-stamp-authorities[list of trust anchors for time stamping authorities].  | C2PA Claim Signature Box
+|`timeStamp.validated` |   The time-stamp is well-formed, has a message imprint that matches the Claim Signature, and was created within the validity period of the time-stamp credential.  | C2PA Claim Signature Box
+|=======================
+
+##### Informational codes
+
+[[validation_informational_codes]]
+.Validation informational codes
+[width="100%",cols="7,8,4",options="header"]
+|=======================
+| Value        |   Meaning  | `url` Usage
+|`algorithm.deprecated` | The algorithm has been deprecated. | C2PA Claim Box or C2PA Assertion
+|`assertion.bmffHash.additionalExclusionsPresent`  |  A BMFF hash specified exclusion ranges other than the C2PA Manifest Store. | C2PA Assertion
+|`assertion.boxesHash.additionalExclusionsPresent`  |  A box hash specified exclusion ranges other than the C2PA Manifest Store. | C2PA Assertion
+|`assertion.dataHash.additionalExclusionsPresent`  |  A data hash specified exclusion ranges other than the C2PA Manifest Store. | C2PA Assertion
+|`ingredient.unknownProvenance` | The ingredient does not have a C2PA Manifest. | C2PA Assertion
+|`signingCredential.ocsp.inaccessible`   |   The validator attempted to perform an online OCSP check, but did not receive a response.  | C2PA Claim Signature Box
+|`signingCredential.ocsp.skipped` | The validator chose not to perform an online OCSP check. | C2PA Claim Signature Box
+|`signingCredential.ocsp.unknown` |   The OCSP response contains an `unknown` status for the signing credential  | C2PA Claim Signature Box
+|`timeOfSigning.insideValidity`   |   The claimed time of signing (in the `iat` header of the signature) is within the validity period of the signer's certificate chain and before the time in any corresponding trusted time-stamp.  | C2PA Claim Signature Box
+|`timeOfSigning.outsideValidity`   |   The claimed time of signing (in the `iat` header of the signature) is outside the validity period of the signer's certificate chain or later than the time in a corresponding trusted time-stamp.  | C2PA Claim Signature Box
+|`timeStamp.credentialInvalid` |   The time-stamp credential is invalid.  | C2PA Claim Signature Box
+|`timeStamp.malformed` |   The time-stamp response included in the claim signature header is not properly formed, as per RFC 3161  | C2PA Claim Signature Box
+|`timeStamp.mismatch`  |   The time-stamp does not correspond to the contents of the claim. | C2PA Claim Signature Box
+|`timeStamp.outsideValidity`   |   The signed time-stamp attribute in the signature was created outside the validity period of the TSA's certificate.  | C2PA Claim Signature Box
+|`timeStamp.untrusted` |   The time-stamp credential is not listed on the validator's TSA xref:time-stamp-authorities[trust lists].  | C2PA Claim Signature Box
+|=======================
+
+
+##### Failure codes
+
+[[validation_failure_codes]]
+.Validation failure codes
+[width="100%",cols="7,8,4",options="header"]
+|=======================
+| Value        |   Meaning  | `url` Usage
+|`algorithm.unsupported` | The algorithm is unspecified or unsupported. | C2PA Claim Box or C2PA Assertion
+|`assertion.action.ingredientMismatch` | An action that requires an associated ingredient either does not have one or the one specified cannot be located | C2PA Assertion
+|`assertion.action.malformed`   |   An actions assertion is malformed.   | C2PA Assertion
+|`assertion.action.redacted`   |   An actions assertion was redacted when the claim was created.   | C2PA Assertion
+|`assertion.action.redactionMismatch` | An action that requires an associated redaction either does not have one or the one specified cannot be located | C2PA Assertion
+|`assertion.action.softBindingMissing` | An action that requires an associated soft binding does not have one | C2PA Assertion
+|`assertion.bmffHash.malformed`  |   A BMFF hash assertion is malformed.   | C2PA Assertion
+|`assertion.bmffHash.mismatch`   |   The hash of a box-based asset does not match the hash declared in a BMFF hash assertion.   | C2PA Assertion
+|`assertion.boxesHash.malformed`   |   The general box hash assertion is malformed.   | C2PA Assertion
+|`assertion.boxesHash.mismatch`   |   The hash of a general box-like asset format does not match the hash declared in a general box hash assertion.   | C2PA Assertion
+|`assertion.boxesHash.unknownBox` | A box other than those expected was found | C2PA Assertion
+|`assertion.cbor.invalid` | The cbor of an assertion is not valid | C2PA Assertion
+|`assertion.cloud-data.actions` | An update manifest contains a cloud data assertion referencing an actions assertion. | C2PA Assertion
+|`assertion.cloud-data.hardBinding` | A hard binding assertion is in a cloud data assertion. | C2PA Assertion
+|`assertion.cloud-data.malformed` | The cloud-data assertion was incomplete | C2PA Assertion
+|`assertion.cloud-data.labelMismatch` | The label of the JUMBF box retrieved from the cloud data assertion does not match the expected label. | C2PA Assertion
+|`assertion.cbor.invalid` | The cbor of an assertion is not valid | C2PA Assertion
+|`assertion.collectionHash.incorrectFileCount`   |   An asset that was listed in the collection data hash assertion is missing from the collection.   | C2PA Assertion
+|`assertion.collectionHash.invalidURI`   |   A URI of an asset in the collection data hash assertion contains the file part '..' or '.'.   | C2PA Assertion
+|`assertion.collectionHash.malformed`   |   The collection hash assertion was incomplete   | C2PA Assertion
+|`assertion.collectionHash.mismatch`   |   A hash of an asset in the collection does not match hash declared in the collection data hash assertion.   | C2PA Assertion
+|`assertion.dataHash.malformed`  |   A data hash assertion is malformed.   | C2PA Assertion
+|`assertion.dataHash.mismatch`   |   The hash of a byte range of the asset does not match the hash declared in the data hash assertion.   | C2PA Assertion
+|`assertion.dataHash.redacted`   |   (DEPRECATED) A hard binding assertion was redacted.   | C2PA Assertion
+|`assertion.external-reference.created` | The external reference assertion was present in the list of created assertions | C2PA Assertion
+|`assertion.external-reference.hashMismatch` | The hash of retrieved data does not match the hash declared in the `location` field of a hashed external reference | C2PA Assertion
+|`assertion.external-reference.labelMismatch` | The label of the JUMBF box retrieved from the external reference assertion does not match the expected label. | C2PA Assertion
+|`assertion.external-reference.malformed` | The external reference assertion was incomplete | C2PA Assertion
+|`assertion.hardBinding.redacted`   |   A hard binding assertion was redacted.   | C2PA Assertion
+|`assertion.hashedURI.mismatch`   |   The hash of the the referenced assertion in the manifest does not match the corresponding hash in the assertion's hashed URI in the claim.  | C2PA Assertion
+|`assertion.inaccessible`   |   A non-embedded (remote) assertion was inaccessible at the time of validation.   | C2PA Assertion
+|`assertion.ingredient.malformed` | The ingredient assertion was incomplete | C2PA Assertion
+|`assertion.json.invalid` | The JSON(-LD) of an assertion is not valid | C2PA Assertion
+|`assertion.missing`   |   An assertion listed in the manifest's claim is missing from the asset's manifest. | C2PA Claim Box
+|`assertion.multiAssetHash.malformed`  |   A multi-asset hash assertion is malformed.   | C2PA Assertion
+|`assertion.multiAssetHash.missingPart`   |   A required part of the multi-part asset cannot be located.   | C2PA Assertion
+|`assertion.multiAssetHash.mismatch`   |   The hash of a part of a multi-part asset does not match the hash declared in the mutli-asset hash assertion.   | C2PA Assertion
+|`assertion.alternativeContentRepresentation.malformed`    | The original preservation image assertion is malformed or contains invalid fields (e.g., both boxes and url fields are present, or invalid target usage). | C2PA Assertion
+| `assertion.alternativeContentRepresentation.hashMismatch`    | The hash of the original preservation image content does not match the hash declared in the assertion. | C2PA Assertion
+| `assertion.alternativeContentRepresentation.missing` | The original preservation image assertion, or its required content, could not be found or resolved. | C2PA Assertion
+|`assertion.multipleHardBindings`      | The manifest has more than one hard binding assertion. | C2PA Assertion Store Box
+|`assertion.notRedacted`   |   An assertion was declared as redacted in the claim but is still present in the manifest.  | C2PA Assertion
+|`assertion.outsideManifest`   |   An assertion listed in the claim is not in the same C2PA Manifest as the claim | C2PA Claim Box
+|`assertion.selfRedacted`  |   An assertion was declared as redacted by its own claim. | C2PA Claim Box
+|`assertion.timestamp.malformed` | The time-stamp assertion is malformed. | C2PA Assertion
+|`assertion.undeclared`   |   An assertion was found in the manifest that was not explicitly declared in the claim. | C2PA Assertion
+|`claim.cbor.invalid` | The cbor of the claim is not valid. | C2PA Claim Box
+|`claim.hardBindings.missing` | No hard bindings are present. | C2PA Claim Box
+|`claim.malformed`   |   The data/fields of the referenced claim in the manifest are not correct. | C2PA Claim Box
+|`claim.missing`   |   The referenced claim in the manifest cannot be found. | C2PA Claim Box
+|`claim.multiple`  |   More than one claim box is present in the manifest. | C2PA Claim Box
+|`claimSignature.missing`   |   The claim signature referenced in the claim cannot be found in its manifest. | C2PA Claim Signature Box
+|`claimSignature.mismatch`   |   The claim signature referenced in the claim failed to validate.  | C2PA Claim Signature Box
+|`claimSignature.outsideValidity`   |   The claim signature referenced in the claim was created outside the validity period of the signing credential.  | C2PA Claim Signature Box
+|`general.error` | A value to be used when there was an error not specifically listed here. | (multiple)
+|`hashedURI.missing` | The data pointed to by a `hashed_uri` cannot be located | C2PA Assertion
+|`hashedURI.mismatch`   |   The hash of a given `hashed_uri` does not match the corresponding hash of the destination URI's data  | C2PA Assertion
+|`ingredient.claimSignature.missing`   |   The referenced ingredient C2PA Claim Signature was not found.   | C2PA Assertion
+|`ingredient.claimSignature.mismatch` | The hash of an embedded C2PA Manifest's C2PA Claim Signature does not match the hash declared in the `hashed_uri` value of the `claimSignature` field in the ingredient assertion. | C2PA Assertion
+|`ingredient.manifest.missing`   |   The referenced ingredient C2PA Manifest was not found.   | C2PA Assertion
+|`ingredient.manifest.mismatch` | The hash of an embedded C2PA Manifest does not match the hash declared in the `hashed_uri` value of the `activeManifest` field in the ingredient assertion. | C2PA Assertion
+|`livevideo.assertion.invalid` | The assertion is not valid due to `sequenceNumber`, `streamId` mismatch. | C2PA Assertion
+|`livevideo.continuityMethod.invalid` | The `continuityMethod` is invalid or not recognized. | C2PA Assertion
+|`livevideo.init.invalid` | The init segment is not valid, improperly contains a `mdat` box. | (not applicable)
+|`livevideo.manifest.invalid` | The manifest failed validation. | (not applicable)
+|`livevideo.segment.invalid` | The segment is not valid, (1) it contains neither a valid `emsg` box nor C2PA Manifest Box, (2) no valid session keys, (3) the `emsg` signature fails signature validation, or (4) the `previousManifestId` didn't match the previous manifest. | (not applicable)
+|`livevideo.sessionkey.invalid` | The session key is not valid, (1) does not meet requirements for session keys, (2)  `signerBinding` doesn't validate, or (3) the Claim Generator's certificate used to protect delivery of the session key has expired. | C2PA Assertion
+|`manifest.compressed.invalid` | The compressed manifest was not valid.  | C2PA Claim Box
+|`manifest.html.multipleManifests` | More than one C2PA manifest element was found in the HTML document. | C2PA Claim Box
+|`manifest.inaccessible` | A non-embedded (remote) manifest was inaccessible at the time of validation. | C2PA Claim Box
+|`manifest.multipleParents`      | The manifest has more than one ingredient whose `relationship` is `parentOf`. | C2PA Claim Box
+|`manifest.structuredText.emptyReference` | A structured text manifest block was found but the manifest reference between the delimiters is empty or contains only whitespace. | Text Content
+|`manifest.structuredText.malformedReference` | A structured text manifest block was found but the manifest reference is not a valid URL or `data:` URI. | Text Content
+|`manifest.structuredText.multipleReferences` | More than one C2PA manifest block was found in the structured text file. | Text Content
+|`manifest.structuredText.noManifest` | The structured text file does not contain a valid manifest block (no delimiters found, or only one delimiter found). | Text Content
+|`manifest.structuredText.noResolutionPath` | A structured text manifest block was found but no manifest resolution path could be determined. | Text Content
+|`manifest.timestamp.invalid`     | The manifest is a time-stamp manifest, but it contains a disallowed (non-ingredient) assertion. | C2PA Claim Box
+|`manifest.timestamp.wrongParents` | The manifest is an time-stamp manifest, but it contains either zero or multiple `parentOf` ingredients. | C2PA Claim Box
+|`manifest.text.corruptedWrapper` | A `C2PATextManifestWrapper` magic number was detected, but the wrapper itself was malformed or incomplete. | Text Content
+|`manifest.text.multipleWrappers` | More than one valid `C2PATextManifestWrapper` was found in the text. | Text Content
+|`manifest.update.invalid`     | The manifest is an update manifest, but it contains a disallowed assertion, such as a hard binding or actions assertions. | C2PA Claim Box
+|`manifest.update.wrongParents` | The manifest is an update manifest, but it contains either zero or multiple `parentOf` ingredients. | C2PA Claim Box
+|`signingCredential.invalid`   |   The signing credential is not valid for signing. | C2PA Claim Signature Box
+|`signingCredential.ocsp.revoked`   |   The OCSP response indicates that the signing credential has been revoked by the issuer.  | C2PA Claim Signature Box
+|`signingCredential.untrusted` |   The signing credential is not listed on any of the validator's applicable xref:_c2pa_signers[trust lists].  | C2PA Claim Signature Box
+|=======================
+
+### Displaying Manifest Information
+Manifest Consumers should not display data from manifests which are not xref:_valid_manifest[Valid] nor from assets which are not xref:_asset_states[Valid]. If the Manifest Consumer chooses to display such data, it shall include as part of the display:
+
+* a warning about the lack of validity, 
+* a warning that the data shall not be attributed to the manifest's signer, and in the case of an ingredient manifest, additional not to the asset's manifest's signer. 
+
+NOTE: In authoring scenarios, it is desirable to more prominently raise warnings so that a creator can make an informed decision about how to proceed with an asset that is not Valid or that has a flawed provenance history .
+
+### Determining the hashing algorithm
+
+#### For hard binding assertions
+Each hard binding assertion has an `alg` field that specifies the hashing algorithm used to compute the hash of the asset. If the `alg` field is present, it shall be used as the hashing algorithm for the hard binding assertion. If no `alg` field is present in the hard binding assertion, the value of the `alg` field in the Claim shall be used as the hash algorithm. If no `alg` field is present in the Claim, the Claim shall be rejected with a failure code of `algorithm.unsupported`.
+
+#### For Hashed URIs
+Various parts of the C2PA Manifest utilize a `hashed_uri` structure for encapsulating a URI, its hash and (optionally) the algorithm used to compute the hash. If there is an `alg` field in the `hashed_uri` structure, it shall be used as the hashing algorithm. If the `alg` field is not present in the `hashed_uri` structure, the hash algorithm shall be determined by evaluating the nearest enclosing structure that contains an `alg` field. If no `alg` field is found in any of these locations, the value of the `alg` field in the claim shall be used as the hash algorithm. If no `alg` field is present in any of these locations, the claim shall be rejected with a failure code of `algorithm.unsupported`.
+
+#### For Hashed Ext URIs
+Some parts of a C2PA Manifest utilize a `hashed_ext_uri` structure for encapsulating an external URI, its hash and the algorithm used to compute the hash. If there is an `alg` field in the `hashed_ext_uri` structure, it shall be used as the hashing algorithm. If the `alg` field is not present in the `hashed_ext_uri` structure, the failure code of `algorithm.unsupported` shall be used.
+
+NOTE: The `alg` field is mandatory in `hashed_ext_uri`, so no recursive procedure to determine the hash algorithm is necessary.
+
+#### Algorithm validation
+Once the hashing algorithm is determined, it shall be compared to the values in the allowed list or the deprecated list in <<_hashing>>. If it is not present in either list, the claim shall be rejected with a failure code of `algorithm.unsupported`. If the algorithm is present in the deprecated list, the claim shall be issued an informational code of `algorithm.deprecated`.
+
+### Locating the Active Manifest
+
+#### General
+The last C2PA Manifest superbox in the C2PA Manifest Store superbox shall be considered the active manifest, but locating the C2PA Manifest Store may involve looking in a number of possible locations.
+
+#### Embedded
+
+##### General
+The C2PA Manifest Store shall be located by the validator embedded inside the asset at the xref:_embedding_manifests_into_various_file_formats[standard locations for embedding manifests].  If no embedded C2PA Manifest Store is found, and if an asset was retrieved via an HTTP connection, a validator may look for a `Link` header, as described in the xref:_by_link_header[Link Header] clause below, to determine if a C2PA Manifest Store is present.
+
+NOTE: Checking the `Link` header, if present, allows a validator to determine if a C2PA Manifest Store is present without having to download the entire asset.  This is useful for assets that are large or that are streamed.
+
+If there are multiple C2PA Manifest Stores embedded in an asset, they shall all be considered as invalid and the validation should treat this as if no manifests were located. In the case where this asset is being added as an ingredient, none of these embedded C2PA Manifests shall be included in the ingredient assertion.
+
+If an asset has both an embedded C2PA Manifest Store and a `Link` header indicating the presence of a remote C2PA Manifest Store, the embedded C2PA Manifest Store shall be considered the active manifest and the remote C2PA Manifest Store shall be ignored.
+
+##### Special Considerations for PDF
+
+PDF files support a technology called "incremental update", where information is appended to the end of the document instead of modifying the original. This requires that PDF files support multiple C2PA Manifest Stores - though there shall only be one per update section.  
+
+If there are multiple C2PA Manifest Stores present in a single update section, they shall all be considered as invalid and the validation should treat this as if no manifests were located. However, any C2PA Manifest Stores present in early updates of the PDF or of the original PDF, shall still be considered valid and processed accordingly.
+
+##### Special Considerations for HTML
+For HTML-based assets, the C2PA Manifest Store shall be located by following the procedure defined in <<embedding_manifests_into_html>>.
+
+##### Special Considerations for Structured Text
+For assets consisting of structured text, the C2PA Manifest Store shall be located by following the procedure defined in <<embedding_manifests_into_structured_text>>.
+
+##### Special Considerations for Unstructured Text
+For assets consisting of unstructured text, the C2PA Manifest Store shall be located by following the procedure defined in <<embedding_manifests_into_unstructured_text>>.
+
+[[manifests-by-reference]]
+#### By Reference or URI
+
+##### By Reference
+
+If there is no embedded C2PA Manifest Store, the following attempts should be made to locate one at a remote location. Once a C2PA Manifest Store is located, the validation process should proceed with that manifest as the active manifest (and therefore not continue looking for additional manifests). The following attempts should be made in order:
+
+- If the asset was retrieved via an HTTP connection, the xref:_by_link_header[Link Header] clause below describes how to find a manifest via the `Link` header.
+
+- If the asset has any XMP in the standard asset locations (i.e., outside the C2PA Manifest) and that XMP contains a `dcterms:provenance` key, the provided URI should be used to locate the active manifest.
+
+- If the asset is a font with a `C2PA` table and its `activeManifestUriLength` is non-zero, then the indicated URI should be used to locate the active manifest.
+
+- If no C2PA Manifest Store has been located, the validator should look for files at the same path or URI, but with a filename extension of `.c2pa`. If the C2PA Manifest Store is not found, a validator may look in whatever additional places it deems most appropriate to locate it.  For example, a child folder of a file system.
+
+[NOTE]
+====
+A validator is not restricted to only the above locations, it can choose to look in additional locations as well.
+====
+
+If a manifest was documented to exist in a remote location, but is not present there, or the location is not currently available (such as in an offline scenario), the `manifest.inaccessible` error code shall be used to report the situation.
+
+Information about the IANA media type for a C2PA Manifest Store can be found in the xref:_external_manifests[external manifests section].
+
+##### By `Link` header
+
+If the asset was retrieved via an HTTP connection, the validator should look in the header of the HTTP response for a `Link` header, as defined in {8288}, containing a parameter of `rel=c2pa-manifest`. If present, a C2PA Manifest Store can be retrieved from that URI reference. The URI will be a standard `http` or `https` URI, such as \https://c2pa.org/image.c2pa. 
+
+It is also possible to use the link relation to refer to the C2PA Manifest Store that is embedded inside an asset through the use of a xref:_uri_references[JUMBF URI] fragment.  The URI would include a xref:_uri_references[JUMBF URI] fragment, to the C2PA Manifest Store superbox \https://c2pa.org/image.jpg#jumbf=c2pa. References to specific C2PA Manifests within the C2PA Manifest Store are not permitted and the validator shall ignore any `childlabel` portion of the xref:_uri_references[JUMBF URI] fragment.
+
+[NOTE]
+====
+HTTP refers to the _Hypertext Transfer Protocol_ defined in {7230}, not the specific URL scheme `http://`.
+====
+
+#### Decompression
+
+As described xref:_compressed_manifests[previously], both standard and update manifests can be compressed. When a compressed manifest is encountered, a validator shall decompress it before proceeding with the standard validation process. If the data contained in the `brob` box of a compressed manifest is not either a standard or update manifest or if the decompression fails, the validator shall reject the manifest with a failure code of `manifest.compressed.invalid`.
+
+#### Validating a Match
+
+A validator may wish to validate that the located C2PA Manifest Store is indeed the one associated with asset. 
+
+If the C2PA Manifest Store was located then the hard binding assertion present in its active manifest shall be used to validate that it is the matching manifest and whether the asset has been modified without manifest updates. If the hard binding does not match, it is unknown if that is because of (a) modification of the asset or (b) the wrong C2PA Manifest Store was located. Accordingly, the validator shall treat this as a non-matching hard binding and reject the manifest with a failure code of `assertion.dataHash.mismatch` if a data hash assertion is used, `assertion.boxesHash.mismatch` if a general box hash assertion is used, `assertion.collectionHash.mismatch` if a collection data hash assertion is used, or `assertion.bmffHash.mismatch` if a BMFF hash assertion is used.
+
+[[validating_the_claim]]
+### Locating and Validating the Claim
+
+#### Locating
+Once the manifest to be validated has been located (hereafter referred to as the "current manifest"), the claim is found by locating, within the current manifest, the JUMBF Superbox with a label of `c2pa.claim.v2` (or `c2pa.claim` for files with older claim structures) and a JUMBF type UUID of `6332636C-0011-0010-8000-00AA00389B71` (`c2cl`). Note that the JUMBF type UUID is the same for both the new (with `c2pa.claim.v2` label) and old (with `c2pa.claim` label) claim formats. There shall only be one such box in the current manifest. If more than one is located, the C2PA Manifest shall be rejected with a failure code of `claim.multiple`.
+
+#### Validating
+If the content of the claim is not well-formed CBOR, the claim shall be rejected with a failure code of `claim.cbor.invalid`. 
+
+NOTE: Well-formed CBOR is defined in {8949}, Appendix C.
+
+For a "c2pa.claim.v2", the following fields are expected to be present in the CBOR object.  If any are absent, then the claim shall be rejected with a failure code of `claim.malformed`.
+
+* `instanceID` 
+* `signature`
+* `created_assertions`
+* `claim_generator_info`
+
+If the `claim_generator_info` field does not contain a `name` field, the claim shall be rejected with a failure code of `claim.malformed`.
+
+If there is an `icon` field in the `generator-info-map` referenced by the `claim_generator_info` field of the `claim-map` or `claim-map-v2`, then its value shall be validated as described in <<_validation_of_references>>.
+
+### Validate the Signature
+
+The validator shall retrieve the URI reference for the signature from the value of the claim's `signature` field and resolve the URI reference to obtain the COSE signature. If the `signature` field is not present, or the URI cannot be resolved, or the URI does not resolve to a location within the same C2PA Manifest box (as the claim), then the claim shall be rejected with a failure code of `claimSignature.missing`.
+
+For all types of C2PA Manifests, the validation of the credential used in the signature shall be performed according to <<_trust_model>>. 
+
+If the credential is not acceptable per xref:x509_certificates[the requirements of the credential's type], then the claim shall be rejected with a failure code of `signingCredential.invalid`. If the signature algorithm is not on the allowed or deprecated list in <<_digital_signatures>>, then the claim shall be rejected with a failure code of `algorithm.unsupported`. 
+
+Before a chain of trust to a trust anchor is established, the validator shall first determine if a xref:_validate_the_time_stamp[valid time-stamp] is present. Then, a chain of trust should be verified from the credential to a trust anchor configuration in one of the applicable trust anchor lists. If a "notBefore" date/time is present in a trust anchor configuration, that configuration shall not validate claim signatures whose timestamp (or current time, if no timestamp is present) is before that date/time. If a "notAfter" date/time is present, that configuration shall not validate claim signatures whose timestamp (or current time, if no timestamp is present) is after that date/time. 
+
+If a chain of trust cannot be verified, the claim shall be rejected with a failure code of `signingCredential.untrusted`; otherwise, the claim signature shall be assigned a success code of `signingCredential.trusted`.
+
+If the claim has not yet been rejected, validation shall proceed according to the specified procedure in <<_digital_signatures>>. If validation of the signature fails, then the claim shall be rejected with a failure code of `claimSignature.mismatch`. Otherwise, the claim signature shall be assigned a success code of `claimSignature.validated`.
+
+// lrosenth: I have to fix this for ISO, as we don't use "chapter"
+For the remainder of this chapter, headers refer to the union of the set of protected and unprotected header parameters in the COSE signature. Unless otherwise specified in <<_digital_signatures>> or <<x509_certificates>>, a header may appear in either bucket. COSE headers are described in {8152}, section 3.
+
+### Validate the Time-Stamp
+
+#### Obtaining the TimeStampToken
+
+##### Embedded in the Claim Signature
+
+If either the `sigTst` or `sigTst2` header is present, then the `tstTokens` array is expected to contain a single `tstToken`. If the header contains more than one `tstToken`, the validator shall issue a `timestamp.malformed` informational code and ignore the time-stamps.
+
+A validator that supports `sigTst` shall perform the following procedures to validate the time-stamp response:
+
+* Retrieve the `val` property from the `tstToken`, which shall be an RFC3161-compliant `TimeStampResp` (time-stamp response).
+* Check the value of the `status` field `PKIStatusInfo`, which is the value of the `status` field of `TimeStampResp`. 
+** If it contains any value other than `0` (`granted`) or `1` (`grantedWithMods`), the validator shall issue a `timeStamp.malformed` informational code and ignore that time-stamp.
+** If it is either `0` (`granted`) or `1` (`grantedWithMods`), continue with the rest of the time-stamp validation process as described below.
+* Retrieve the value of the `timeStampToken` field of the `TimeStampResp` for use in the remainder of the validation process.
+
+A validator for `sigTst2` shall retrieve the `val` property from the `tstToken`, which shall be an RFC3161-compliant `timeStampToken` (TimeStampToken, TST).
+
+##### Referenced by a time-stamp assertion
+
+If a validator has already located a TimeStampToken in a `sigTst` or `sigTst2` header, that passes validation (as per <<_validating_the_timestamptoken>>), then it shall skip this step. When no such header exists or the TimeStampToken located there did not pass validation, this step shall be followed.
+
+If a validator had previously located any xref:timestamp_assertion[time-stamp assertions], which were then maintained in a mapping of C2PA Manifest identifiers to TimeStampTokens, then the validator shall check if the current C2PA Manifest's identifier is present in the mapping. If it is, the validator shall use the TimeStampToken associated with the identifier in the mapping for the TimeStampToken in the validation process described in <<_validating_the_timestamptoken>>. If more than one TimeStampToken for that identifier is found in the mapping, the validator shall try each one until one successfully passes validation (and then should ignore the others). If the identifier does not appear in the mapping, no error is raised, as it simply means that there is no TimeStampToken associated with this C2PA Manifest in the current context.
+
+
+#### Validating the TimeStampToken
+All validators shall continue the process as follows:
+
+* If the signature algorithm in the `timeStampToken` is not on the allowed or deprecated list in <<_digital_signatures>>, then the validator shall issue a `timestamp.untrusted` informational code and ignore the time-stamp.
+* Validate the signature in the `timeStampToken`, as described in {2630}, Section 5.6. If the signature is not valid, then the validator shall issue a `timestamp.mismatch` informational code and ignore the time-stamp.
+* If the `timeStampToken` does not contain a `messageImprint` field, the validator shall issue a `timestamp.malformed` informational code and ignore the time-stamp.
+* If the message imprint hash algorithm is not on the allowed or deprecated list in <<_hashing>>, then the validator shall issue a `timestamp.untrusted` informational code and ignore the time-stamp.
+* Validate that the value of the `messageImprint` field (in the `timeStampToken`), matches either the claim (v1, `sigTst`) or `COSE_Sign1_Tagged` structure's `signature` field (v2, `sigTst2`) of the C2PA Manifest being validated, as described in <<_choosing_the_payload>>. If the values do not match, the validator shall issue a `timestamp.mismatch` informational code and ignore the time-stamp.
+* Validate that the `certificates` field of the `timeStampToken` is present, the TSA's certificate can be found in the provided set of certificates in this field, and it is possible to build a trust chain from the TSA's certificate to an entry in C2PA TSA Trust List (or other list of trust anchors present in the validator for this purpose). If the certificate cannot be located or a trust chain cannot be constructed, the validator shall issue a `timestamp.untrusted` informational code and ignore the time-stamp.  If the validator determines that a certificate is invalid it may additionally return the informational code `timeStamp.credentialInvalid`.
+* Validate that the attested time, as found in the `genTime` field (in the `timeStampToken`), falls within the validity period of the TSA's signing certificate and all CA certificates up to the trust anchor. If it does not, the validator shall issue a `timestamp.outsideValidity` informational code and ignore the time-stamp.
+* If the time-stamp validation does not stop or fail due to any of the above conditions, then the validator shall issue the success codes of `timeStamp.trusted` and `timeStamp.validated`.
+* If the validator issued both `timeStamp.trusted` and `timeStamp.validated` success codes, then the validator shall validate that the time attested by the Time Stamping Authority (TSA), as found in the `genTime` field (in the `timeStampToken`), falls within the validity period of the claim signing certificate and all CA certificates up to the trust anchor. If it does not, the validator shall reject the claim with a `claimSignature.outsideValidity` failure code.
+
+
+[NOTE]
+====
+Time-stamps remain valid even after the signing credential of the time-stamp authority expires, so long as the attested time falls within the time-stamp authority's certificate's validity period. This is a special type of trust extended only to time-stamp authorities. 
+====
+
+At time of validation, when a time-stamp is present, trusted, and validated, validators shall use the attested time, and not the current time, when determining the time validity of the signing certificate and the time-stamp authority's certificate.
+
+NOTE: This document does not require that the revocation status of a Time Stamping Authority's certificate be captured at signing time nor validated at validation time.
+
+If neither the `sigTst` nor the `sigTst2` headers are present, or if at least one of them is present but their time-stamp token does not satisfy the above requirements, then the C2PA Manifest is valid if the current time at validation is within the validity period of the signer's certificate and all CA certificates up to the trust anchor. If it is, the validator shall return a success code of `claimSignature.insideValidity`. If it is not, the C2PA Manifest shall be rejected with a failure code of `claimSignature.outsideValidity`.
+
+#### Validating the "claimed time of signing"
+
+A validator may choose to validate the "claimed time of signing" as attested by the value present in the `iat` protected header. If the `iat` header is present, the validator may validate that the attested time falls within the validity period of the signer's certificate and all CA certificates up to the trust anchor, and not later than the time attested by any associated trusted time-stamp. If the validator does the validation of this value, and it falls inside the validity period, the validator shall return the `timeOfSigning.insideValidity` informational code, but if it falls outside the validity period, then the validator shall return the `timeOfSigning.outsideValidity` informational code.
+
+### Validate the Credential Revocation Information
+
+Discovery of the revocation status of the signer's certificate and all CA certificates that are part of the trust chain is important to determining whether a given certificate is considered valid and trusted.
+
+For CA certificates, the validator should determine revocation status as indicated in the Authority Information Access (AIA) extension as described in {5280}, section 4.2.2.1. The validator should make use of relevant OCSP responses included in the C2PA Manifest if the AIA extension indicates that OCSP is available.
+
+If the validator determines that a CA certificate was revoked at the time indicated in a trusted time-stamp, or at the current time if no trusted time-stamp is present, then the claim signature shall be rejected with a failure status of `signingCredential.untrusted`.
+
+For the signer's certificate, the validator shall use the following process.
+
+- If a certificate does not support revocation status, or the certificate issuer did not provide a method to query its revocation status, the validator shall treat the credential as not revoked.	
+- If the claim generator "stapled" OCSP responses in the `rVals` header of the `COSE_Sign1` structure, the validator shall decode and validate the stapled OCSP responses as described in <<ocsp_stapled>>.
+- If subsequent claim generators added xref:certificate_status_assertion[certificate status assertions] in other C2PA Manifests in the C2PA Manifest Store, the validator shall use those OCSP response(s) in the validation process described in <<ocsp_stapled>>. If more than one OCSP response for the certificate is found, the validator shall try each one until one successfully passes validation (and then should ignore the others). 
+
+If no revocation information was found in the C2PA Manifest Store, and the validator is online, then the validator should attempt to determine the revocation status of the certificate by querying the OCSP responder as described in <<ocsp_online>>.
+
+[[ocsp_stapled]]
+#### Determining revocation through OCSP responses in the C2PA Manifest Store 
+
+A validator shall decode OCSP responses per the requirements of {6960}, in particular requirements 1 through 4 of section 3.2. If an OCSP response is accepted, and if all of the following requirements are met, then this establishes that the relevant certificate was not revoked at the time of signing.
+
+* The claim signature has an attested time provided by a valid signed time-stamp. 
+* There exists a `SingleResponse` in the `responses` array of the `tbsResponseData` field of the OCSP response such that all of the following conditions hold:
+** The current time is no earlier than `thisUpdate`.
+** The attested time from the time-stamp:
+*** is earlier than `thisUpdate`, or
+*** falls within the `(thisUpdate,nextUpdate)` interval, if `nextUpdate` is present, or
+*** falls within the `(thisUpdate,producedAt + 24 hours)` interval where `producedAt` is the field in the containing `ResponseData`, if `nextUpdate` is not present.
+** The `certStatus` field of the `SingleResponse` is `good`.
+* The OCSP signer of the response is an "authorized responder" as defined by {6960}, section 4.2.2.2.
+
+Validators shall check the `revocationReason` of any `revoked` response to disambiguate the `removedFromCRL` case from an actual revocation.
+
+If the above conditions are met for any OCSP response in the C2PA Manifest Store, then the validator shall either issue a `signingCredential.ocsp.notRevoked` success code, indicating that the certificate is considered not revoked at the time of signing, or (for additional assurance) perform an online OCSP check as described in <<ocsp_online>>.
+
+Otherwise, if an OCSP response in the C2PA Manifest Store meets all of the above conditions except that the `certStatus` field is `revoked`, the certificate shall be considered revoked and the claim shall be rejected with a `signingCredential.ocsp.revoked` failure code.
+
+[[ocsp_online]]
+#### Determining revocation from online OCSP response
+
+If, for a given certificate, no OCSP response in the C2PA Manifest Store satisfies the conditions in <<ocsp_stapled>>, or if the claim signature does not have a time-stamp, the validator may choose to query the OCSP responder, per {6960}, with the responder `accessLocation` found via {6960}, section 3.1.
+
+[NOTE]
+====
+Querying the credential status method can reveal to an observer the identity of the asset being validated, and so this query is optional.
+====
+
+If the validator chooses not to perform an online OCSP check, it shall issue a `signingCredential.ocsp.skipped` informational code. 
+
+If the validator attempts to query the OCSP responder but is unable to receive a response, the validator shall issue a `signingCredential.ocsp.inaccessible` informational code. 
+
+If a response is received and accepted per the requirements 1 - 4 of {6960}, section 3.2, it shall establish the signer's certificate was not revoked at the time of signing if either of the following requirements is fulfilled:
+
+* The claim signature has a valid time-stamp, and the attested time falls within the `(thisUpdate,nextUpdate)` interval of the response, or
+* The claim signature does not have a valid time-stamp but the current real-world time falls within the `(thisUpdate,nextUpdate)` interval of the response,
+
+And both of the following requirements are fulfilled:
+
+* The `certStatus` field of the response is `good`, or `revoked` but with a `revocationReason` of `removeFromCRL`, and
+* The OCSP signer of the response is an "authorized responder" as defined by {6960}, section 4.2.2.2.
+
+If the `certStatus` field of the response is `revoked` but with a `revocationReason` that is not `removeFromCRL`, it shall establish the signer's certificate was not revoked at the time of signing if both of the following requirements are met:
+
+* The manifest has a valid time-stamp, and the attested time falls within the `(thisUpdate,nextUpdate)` interval of the response, and
+* The `revocationTime` in the response is after the attested time-stamp.
+
+If the above conditions are met, the certificate shall be considered not revoked at the time of signing, and the validator shall issue a `signingCredential.ocsp.notRevoked` success code.
+
+Otherwise: 
+
+* If the `certStatus` field of the response is `unknown`, a `signingCredential.ocsp.unknown` informational code shall be recorded.
+* Else, the certificate shall be considered revoked and the claim shall be rejected with a `signingCredential.ocsp.revoked` failure code.
+
+### Validate the Assertions
+
+#### Validate the correct assertions for the type of manifest
+
+##### General
+Depending on the xref:_types_of_manifests[type of manifest], there are assertions that are either required or forbidden. A validator shall check for required and not-permitted assertions.
+
+##### Standard Manifest Assertions
+If it is a xref:_standard_manifests[standard manifest]:
+
+. Validate that there is exactly one xref:_binding_to_content[hard binding to content] assertion - either a `c2pa.hash.data`, a `c2pa.hash.boxes`, a `c2pa.hash.collection.data`, `c2pa.hash.bmff.v2` (deprecated), or a `c2pa.hash.bmff.v3`.  If no such assertion is present, the manifest shall be rejected with a failure code of `claim.hardBindings.missing`.  If there is more than one such assertion, the manifest shall be rejected with a failure code of `assertion.multipleHardBindings`.
+. Validate that there are zero or one `c2pa.ingredient` assertions whose `relationship` is `parentOf`.  If there is more than one, the manifest shall be rejected with a failure code of `manifest.multipleParents`.
+. Validate that either a `c2pa.created` or `c2pa.opened` action is contained in exactly one actions assertion.
+
+##### Update Manifest Assertions
+If it is an xref:_update_manifests[update manifest]:
+
+. Validate that exactly one ingredient assertion is present and that its `relationship` is `parentOf`.  If there is not (i.e., either it is missing, there are more than one, or the value of `relationship` is not `parentOf`), the manifest shall be rejected with a failure code of `manifest.update.wrongParents`.
+. Validate that there are no `c2pa.hash.data`, `c2pa.hash.boxes`, `c2pa.hash.collection.data`, `c2pa.hash.bmff.v2` (deprecated), `c2pa.hash.bmff.v3`, or xref:thumbnail_assertion[thumbnail] assertions.  If there are, the manifest shall be rejected with a failure code of `manifest.update.invalid`.
+. Validate that there are no `c2pa.hash.multi-asset` assertions. If there are, the manifest shall be rejected with a failure code of `manifest.update.invalid`.
+. If there is one or more `c2pa.actions` or `c2pa.actions.v2` assertions, validate that the `action` field of each action found in the `actions` array of any such assertion is one of the supported values specified in xref:_update_manifests[Update Manifests]. If it is not, the manifest shall be rejected with a failure code of `manifest.update.invalid`.
+
+#### Preparing the list of redacted assertions
+
+A validator, when processing a claim, shall gather the set of redacted assertions for each ingredient's manifest (if present) based on each JUMBF URI listed in its `redacted_assertions` field. A claim's `redacted_assertions` field shall never include a JUMBF URI to any of its own assertions.  
+
+NOTE: Assertions can be redacted from ingredient assets at any point in the final asset's provenance history, and not necessarily by the claim generator that first uses an ingredient asset as an ingredient. 
+
+For more details, refer to the <<_performing_explicit_validation>> section. 
+
+#### Assertion Validation
+
+##### General
+
+Each assertion in the `created_assertions` and `gathered_assertions` fields of the claim (and in the `assertions` field of a v1 claim) is a `hashed_uri` structure. For each assertion, the validator shall first determine if the URI reference in the `url` field is in the xref:_preparing_the_list_of_redacted_assertions[list of redacted assertions]. 
+
+NOTE: Even though the assertions listed in the `gathered_assertions` field were not created by the claim generator, they are still part of the Claim and are therefore also validated according to this validation algorithm.
+
+If it is in the list of redacted assertions, then if the assertion's label is `c2pa.actions` or `c2pa.actions.v2`, the claim shall be rejected with a failure code of `assertion.action.redacted`. Otherwise, the redacted assertion is considered valid, and validation continues xref:_specific_assertion_validation[based on the type of assertion].
+
+For all other assertions (not found in the list of redacted assertions), resolve the URI reference in the `url` field to obtain its data. If the URI does not refer to a location within the same C2PA Manifest (a `self#jumbf` location), the claim shall be rejected with a failure code of `assertion.outsideManifest`. If the URI cannot be resolved and the data retrieved, the claim shall be rejected with a failure code of `assertion.missing`. 
+
+Follow the procedure in <<_determining_the_hashing_algorithm>> to determine the hash algorithm and any possible failure codes. Compute the hash of the assertion using that algorithm and the procedure described in <<_hashing_jumbf_boxes>>, and compare the computed hash value with the value in the `hash` field. If they do not match, the claim shall be rejected with a failure code of `assertion.hashedURI.mismatch`. Otherwise, a success code of `assertion.hashedURI.match` shall be recorded.
+
+If the content of a standard assertion is not well-formed CBOR or is non-conforming JSON, the claim shall be rejected with a failure code of `assertion.cbor.invalid` or `assertion.json.invalid`.
+
+NOTE: Well-formed CBOR is defined in {8949}, Appendix C. 
+
+NOTE: {8259}, Clause 2, defines the grammar that JSON data conforms to.
+
+If an assertion that is present in the assertion store is not referenced by an element of either the `created_assertions` or `gathered_assertions` arrays in the claim (or the `assertions` array in the v1 claim), the claim shall be rejected with a failure code of `assertion.undeclared`.
+
+For each URI in the claim's `redacted_assertions` array, if the URI points into the claim's own manifest, the claim shall be rejected with a failure code of `assertion.selfRedacted`. A claim is not permitted to redact its own assertions.
+
+For those assertions that support xref:_metadata_about_assertions[assertion metadata] (via a `metadata` field), if the `metadata` field is present, the validator shall not perform any validation on the contents of that structure.
+
+##### Specific Assertion Validation
+
+For each assertion, the validator shall check the assertion's label and if it is listed below, the validator shall perform the specific validation steps for that assertion type. If the assertion's label is not listed below, then that type of assertion does not require any additional validation steps beyond those already described.
+
+- `c2pa.cloud-data`, <<_c2pa_cloud_data_validation>>
+- `c2pa.external-reference`, <<_c2pa_external_reference_validation>>
+- `c2pa.actions` or `c2pa.actions.v2`, <<_c2pa_actions_validation>>
+- `c2pa.metadata`, <<_c2pa_metadata_validation>>
+- `c2pa.session-keys`, <<_c2pa_session_keys_validation>>
+- `c2pa.time-stamp`, <<_c2pa_time_stamp_validation>>
+- `c2pa.alternative-content-representation`, <<alternative_content_representation_validation>>
+
+NOTE: Ingredient assertions (`c2pa.ingredient` or `c2pa.ingredient.v2` or `c2pa.ingredient.v3`) are subject to additional validation at a different point in the validation process (see <<_validate_the_ingredients>>).
+
+If the value of any field of a standard assertion is a `hashed_uri` or `hashed_ext_uri`, the validator shall perform the steps described in <<_validation_of_references>>, except for the `activeManifest` field in `c2pa.ingredient.v3`, for which special validation behavior is specified in <<_ingredient_assertion_validation>>.
+
+###### `c2pa.cloud-data` validation
+If the assertion's label is `c2pa.cloud-data`:
+
+. Check that the assertion contains the following fields: `label`, `size`, and `location`. If any of those fields are missing, the claim shall be rejected with a failure code of `assertion.cloud-data.malformed`.
+. If the `label` field of the external assertion is any of the following values, the claim shall be rejected with a failure code of `assertion.cloud-data.hardBinding`.
+.. `c2pa.cloud-data`
+.. `c2pa.action` (deprecated)
+.. `c2pa.actions.v2`
+.. `c2pa.hash.data`
+.. `c2pa.hash.boxes`
+.. `c2pa.hash.collection.data`
+.. `c2pa.hash.bmff.v2` (deprecated)
+.. `c2pa.hash.bmff.v3`
+.. `c2pa.hash.multi-asset`
+. If the manifest is an update manifest and the `label` field of the external assertion is `c2pa.actions` or `c2pa.actions.v2`, the claim shall be rejected with a failure code of `assertion.cloud-data.actions`.
+. If the `label` field of the external assertion is any of the following values, the claim shall be rejected with a failure code of `assertion.cloud-data.malformed`.
+.. `c2pa.actions` (deprecated)
+.. `c2pa.actions.v2`
+.. `c2pa.cloud-data`
+.. `c2pa.hash.bmff.v2` (deprecated)
+.. `c2pa.hash.bmff.v3`
+.. `c2pa.hash.boxes`
+.. `c2pa.hash.collection.data`
+.. `c2pa.hash.data`
+.. `c2pa.hash.multi-asset`
+.. `c2pa.ingredient` (deprecated)
+.. `c2pa.ingredient.v2` (deprecated)
+.. `c2pa.ingredient.v3`
+. The `location` field shall be validated according to <<_validation_of_external_references>>.
+. If the data for the external assertion is retrieved (from the specified `location`), the label of the JUMBF box retrieved from that location shall match the value of the `label` field in the `c2pa.cloud-data` assertion. If it does not, the claim shall be rejected with a failure code of `assertion.cloud-data.labelMismatch`.
+
+###### `c2pa.external-reference` validation
+If the assertion's label is `c2pa.external-reference`:
+
+. Check that the assertion contains a `location` field with a `url` field. If it is missing, the claim shall be rejected with a failure code of `assertion.external-reference.malformed`.
+. If the `location` field contains one of `alg` or `hash` but not both, the claim shall be rejected with a failure code of `assertion.external-reference.malformed`.
+. If the `location` field contains both `alg` and `hash` (hashed variant) and the data is retrieved from the URI in the `location` field, the validator shall compute the hash of the retrieved data and compare it against the hash in the `location` field. If they do not match, the validator shall report a failure code of `assertion.external-reference.hashMismatch`.
+. If the `label` field is present and its value is any of the following, the claim shall be rejected with a failure code of `assertion.external-reference.malformed`:
+.. `c2pa.actions` (deprecated)
+.. `c2pa.actions.v2`
+.. `c2pa.external-reference`
+.. `c2pa.hash.bmff.v2` (deprecated)
+.. `c2pa.hash.bmff.v3`
+.. `c2pa.hash.boxes`
+.. `c2pa.hash.collection.data`
+.. `c2pa.hash.data`
+.. `c2pa.hash.multi-asset`
+.. `c2pa.ingredient` (deprecated)
+.. `c2pa.ingredient.v2` (deprecated)
+.. `c2pa.ingredient.v3`
+. If the `label` field is present and the data is retrieved from the URI in the `location` field, the label of the retrieved JUMBF box shall match the value of the `label` field. If it does not, the validator shall report a failure code of `assertion.external-reference.labelMismatch`.
+
+###### `c2pa.actions` validation
+If the assertion's label is `c2pa.actions` or `c2pa.actions.v2`:
+
+. Ensure that it has an `actions` field. If not, the claim shall be rejected with a failure code of `assertion.action.malformed`.
+. For each action in the `actions` list:
+.. If the `action` field is either `c2pa.created` or `c2pa.opened`, then the claim shall be rejected with a failure code of `assertion.action.malformed` unless all of the following are true:
+... the assertion is the first actions assertion in the `created_assertions` or `gathered_assertions` array (of a v2 claim), or the first actions assertion in the `assertions` array of a v1 claim, and
+... the action is the first element in the `actions` array in this assertion.
+.. If the `action` field is `c2pa.opened`, `c2pa.placed`, or `c2pa.removed`:
+... If the action has no `parameters` field, or that field's value is empty, the claim shall be rejected with a failure code of `assertion.action.ingredientMismatch`.
+... If the action's `parameters` field contains no `ingredients` field (or `ingredient` field for `c2pa.actions`), the claim shall be rejected with a failure code of `assertion.action.ingredientMismatch`.
+... If the value of the `ingredients` field is not an array with at least one element, the claim shall be rejected with a failure code of `assertion.action.ingredientMismatch`.
+... Check references to ingredient assertions:
+.... For `c2pa.opened`: Check that the `ingredients` field (or `ingredient` field for `c2pa.actions`) contains exactly one valid hashed URI that can be resolved to an ingredient assertion in the current manifest whose `relationship` field is `parentOf`. If not, then the claim shall be rejected with a failure code of `assertion.action.ingredientMismatch`.
+.... For `c2pa.placed`: Check that the `ingredients` field (or `ingredient` field for `c2pa.actions`) contains one or more valid hashed URIs, each of which can be resolved to an ingredient assertion in the current manifest whose `relationship` field is `componentOf`. If not, then the claim shall be rejected with a failure code of `assertion.action.ingredientMismatch`.
+.... For `c2pa.removed`: Check that the `ingredients` field (or `ingredient` field for `c2pa.actions`) contains one or more valid hashed URIs, each of which can be resolved to an ingredient assertion in another manifest whose `relationship` field is `componentOf`. If not, then the claim shall be rejected with a failure code of `assertion.action.ingredientMismatch`.
+.. If the `action` field is `c2pa.transcoded` or `c2pa.repackaged`:
+... If the `ingredients` field (or `ingredient` field for `c2pa.actions`) is present, check that each element of that field is a valid hashed URI that can be resolved to an ingredient assertion in the current manifest with relationship `parentOf`. If not, then the claim shall be rejected with a failure code of `assertion.action.ingredientMismatch`.
+.. If the `action` field is `c2pa.redacted`:
+... Check the `redacted` field that is a member of the `parameters` object for the presence of a JUMBF URI. If the JUMBF URI is not present, or cannot be resolved to an assertion, the claim shall be rejected with a failure code of `assertion.action.redactionMismatch`.
+.. If there is a `softwareAgent` field in the `action-common-map-v2` or one or more `softwareAgents` listed in the `softwareAgents` field of the `actions-map-v2`:
+... If there is an `icon` field in the `generator-info-map`, then it shall be validated as described in <<_validation_of_references>>.
+.. If the action's `parameters` field exists and contains a `relatedAssertions` field:
+... If the value of `relatedAssertions` is not an array with at least one element, the claim shall be rejected with a failure code of `assertion.action.malformed`.
+... For each element of the `relatedAssertions` array:
+.... Validate the hashed URI as described in <<_validation_of_references>>.
+.... Resolve the hashed URI to locate the referenced assertion.
+.... If the referenced assertion cannot be resolved, or does not resolve to an assertion within the current manifest, the claim shall be rejected with a failure code of `assertion.action.malformed`.
+.... If the referenced assertion is of of type `c2pa.ingredients`, `c2pa.ingredients.v2`, `c2pa.ingredients.v3`, `c2pa.actions`, or `c2pa.actions.v2`, the claim shall be rejected with a failure code of `assertion.action.malformed`.
+.. If the `action` field is either `c2pa.watermarked` [DEPRECATED] or `c2pa.watermarked.bound`:
+... Verify that there is also a <<soft_binding_assertion, `c2pa.soft-binding` assertion>> present in the manifest. If there is not, the claim shall be rejected with a failure code of `assertion.action.softBindingMissing`.
+.. For each template in the `templates` list:
+... If there is an `icon` field in the `action-template-map-v2`, then it shall be validated as described in <<_validation_of_references>>.
+
+###### `c2pa.metadata` validation
+No assertion-specific validation is required for `c2pa.metadata`.
+
+Previous versions of this specification required validators to check metadata against the xref:metadata_annex[allowed list]. While generators are xref:_the_c2pa_metadata_assertion[still required] to limit provided metadata to this set of fields, validators should not reject assertions containing unlisted fields, to support forward compatibility as the allowed list evolves.
+
+###### `c2pa.session-keys` validation
+
+If the assertion's label is `c2pa.session-keys`, the validator shall ensure that the `signerBinding` signature is correct (which indicates  that the session key private key is known to the Signer). This is done by verifying that the `signerBinding` signature  successfully validates (using the session key), and that the payload of the signature is the Signer's end-entity certificate . Session keys are only valid if the `signerBinding` signature is successfully validated.
+
+###### `c2pa.time-stamp` validation
+
+If the assertion's label is `c2pa.time-stamp`, the validator shall ensure that the assertion is well-formed CBOR consisting of a single map (Major type `5`) with at least one key/value pair. If this is not the case, the claim shall be rejected with a failure code of `assertion.timestamp.malformed`.
+
+Since validation of the time-stamp token is performed as described in <<_validating_the_timestamptoken>>, the validator needs to store the time-stamp token (and its associated C2PA Manifest identifier) for later use. 
+
+[[alternative_content_representation_validation]]
+###### `c2pa.alternative-content-representation` validation
+
+If the assertion's label is `c2pa.alternative-content-representation`, a validator shall perform the following steps:
+
+. If the `type` field is `exif.originalPreservationImage`, the validator shall proceed to the original preservation image representation validation defined in `original-preservation-image-representation validation`.
+
+*original-preservation-image-representation validation*
+ 
+. Check that no more than one `c2pa.alternative-content-representation` assertion where the `type` field is `exif.originalPreservationImage` is present in the active manifest. If more than one is found, the active manifest shall be rejected with a failure code of `assertion.alternativeContentRepresentation.malformed`.
+. The `original-preservation-image-params` contains either the `multiAssetPartIndex` field or the `embeddedOriginalPreservationImage` field. If both fields are present, or neither is present, the assertion shall be rejected with a failure code of `assertion.alternativeContentRepresentation.malformed`.
+. If the `multiAssetPartIndex` field is present and parameters is present in the active manifest: 
+.. If the active manifest does not include a `c2pa.hash.multi-asset` assertion, the assertion shall be rejected with a failure code of `assertion.alternativeContentRepresentation.malformed`.
+.. The `multiAssetPartIndex` field shall be a valid zero-based index for an element within the parts array of the located c2pa.hash.multi-asset assertion. If the index is out of bounds (i.e., greater than or equal to the total length of the parts array), the assertion shall be rejected with a failure code of `assertion.alternativeContentRepresentation.malformed`.
+. If the `embeddedOriginalPreservationImage` field is present: 
+.. Resolve the URI reference in the `embeddedOriginalPreservationImage` field to obtain the data of this embedded data assertion. 
+.. The `embeddedOriginalPreservationImage` field shall be a hashed-uri-map structure, and its hash field shall be present. If this hash field is missing, the assertion shall be rejected with a failure code of `assertion.alternativeContentRepresentation.malformed`. 
+.. Compute the hash of the resolved embedded data using the determined algorithm. If the computed hash does not match the hash value provided in the `embeddedOriginalPreservationImage` field, the assertion shall be rejected with a failure code of `assertion.alternativeContentRepresentation.hashMismatch`.
+. If no failure codes are encountered during the validation of the `c2pa.alternative-content-representation` assertion, a success code of `assertion.alternativeContentRepresentation.match` shall be recorded.
+
+##### Validation of References
+
+Some C2PA standard assertions support referencing other boxes in the C2PA Manifest via the use of a `hashed_uri` and `hashed_ext_uri`. For example, there can be various references in xref:_actions[actions], xref:ingredient_assertion[ingredient], and xref:thumbnail_assertion[thumbnail] assertions. 
+
+For all `hashed_uri` and `hashed_ext_uri` fields in standard assertions, except for the `activeManifest` field in `c2pa.ingredient.v3` (for which special validation behavior is specified in <<_ingredient_assertion_validation>>), the validator shall perform the following validation:
+. For a `hashed_ext_uri` whose resource the validator chooses to retrieve, the validator shall perform the steps described in <<_validation_of_external_references>>.
+. For a `hashed_uri`, the validator shall perform the steps described below.
+
+The destination of a `hashed_uri` is found in its `url` field. If the field is not present or the destination cannot be located (i.e., that data isn't present where it is supposed to be) then it shall be treated as a validation failure with code `hashedURI.missing`.
+
+If the destination can be located, then proceed as follows:
+. Follow the procedure in <<_determining_the_hashing_algorithm>> to determine the hash algorithm and any possible failure codes.
+. Ensure that the `hash` field is present in the `hashed_uri` structure. If it is not, the claim shall be rejected with a failure code of `hashedURI.mismatch`.
+. Compute the hash of the assertion using the determined hash algorithm and the procedure described in <<_hashing_jumbf_boxes>>.
+. Compare the computed hash value with the value in the `hash` field. If they do not match, the claim shall be rejected with a failure code of `hashedURI.mismatch`.
+
+#### External Data Validation
+
+##### General
+A xref:_cloud_data[cloud data] assertion or a hashed xref:external_reference_assertion[external reference] assertion contains URI references to (and hashes of) externally hosted data. Those references are not retrieved and validated as part of standard validation. A validator shall first successfully validate a claim before attempting to retrieve the external data referenced. A validator shall not attempt to retrieve external data from a rejected claim. As the retrieval of external data is optional, the inability to retrieve or validate external data shall not cause a claim to be rejected.
+
+If a validator chooses to retrieve any of the external data in a cloud data or hashed external reference assertion, the validator shall perform the steps described in <<_validation_of_external_references>>. If successful, retrieved externally hosted assertions (identified by a `label` field) shall be validated as if the same assertion were embedded.
+
+##### Validation of External References
+
+The following procedure shall be used to validate the external data referenced in a cloud data or hashed external reference assertion:
+
+. Resolve the URI reference in the `url` field to obtain its data. If the `url` field is not present or the URI cannot be resolved and the data retrieved, the validator shall abort the attempt to retrieve the external data.
+. If the size of the retrieved data is not equal to the value of the `size` field, the validator shall return a failure code of `assertion.hashedURI.mismatch` to the application and not provide the retrieved data.
+. Validate that the content type returned in the `Content-Type` header of the HTTP response is equal to the declared content type. If they do not match, the validator shall return a failure code of `assertion.hashedURI.mismatch` to the application and not provide the retrieved data. The declared content type is determined by:
+.. For external data, the content type is determined by the `dc:format` field of the `hashed_ext_uri` or `unhashed_ext_uri` structure. If the `dc:format` field is absent, content type validation is always successful.
+.. For a cloud data assertion, if the `dc:format` field is not present in its `location` field, the media type shall default to `application/jumbf`. The `content_type` field in the cloud data assertion, if present, shall be ignored.
+. For a `hashed_ext_uri`, determine the hash algorithm to be used as specified in <<_for_hashed_ext_uris>> or possible failure codes.
+.. Compute the hash of the data using the determined hash algorithm and the procedure described in <<_hashing_jumbf_boxes>> on the retrieved content. For external data, use the hash algorithm and the exact retrieved content as input to the hash function.
+.. Compare the computed hash value with the value in the `hash` field. If the `hash` field is not present or they do not match, the validator shall return a failure code of `assertion.hashedURI.mismatch` to the application and not provide the retrieved data.
+.. Otherwise, the validator shall record a success code of `assertion.hashedURI.match` and provide the retrieved data to the application.
+
+### Validate the Ingredients
+
+#### Explanation
+A validator shall perform the xref:_validation_process[validation steps] for the asset being presented and its active manifest. If any of the steps conclude the active manifest is invalid, that manifest shall be rejected with the indicated failure code.
+
+An asset's active manifest may list one or more ingredients, through the use of xref:ingredient_assertion[ingredient assertions]. Some of those ingredients may have their own manifests associated with them, and some of those manifests may themselves have ingredients and ingredient manifests.
+
+#### Processing Ingredient Manifests
+
+##### Standard Manifests in an ingredient
+When processing a xref:_standard_manifests[standard manifest], a validator shall validate each ingredient (regardless of the value of its `relationship` field), as described xref:_ingredient_assertion_validation[below]. 
+
+##### Update Manifests in an ingredient
+For xref:_update_manifests[update manifests], the `parentOf` ingredient of the update manifest shall be validated as described xref:_ingredient_assertion_validation[below].
+
+##### Time-Stamp Manifests in an ingredient
+IMPORTANT: This feature has been deprecated in favour of the xref:timestamp_assertion[time-stamp assertion].  The information below is retained for historical purposes.
+
+Any xref:time_stamp_manifests[time-stamp manifests] found in an ingredient shall be ignored.
+
+#### Ingredient Assertion Validation
+
+##### Validation Overview
+
+[[validation_flow]]
+.Ingredient Validation
+ifdef::backend-html5[]
+[mermaid,target=ingredient,format=svg,align="center"]
+....
+include::../Diagrams/ingredient_validation_flowchart.mmd[]
+....
+endif::[]
+ifdef::backend-pdf[]
+[plantuml,target=ingredient,format=svg,align="center"]
+....
+include::../Diagrams/ingredient_validation_flowchart.puml[]
+....
+// image::Ingredient_validation.drawio.png[Ingredient Validation,align="center"]
+endif::[]
+The flowchart in <<validation_flow>> describes the process of validating any ingredient assertions contained in a given C2PA Manifest.
+
+NOTE: If there are any discrepancies between the visual representation and the text, the text is considered authoritative.
+
+##### Performing explicit validation
+
+If the `relationship` field is not present in an ingredient assertion, the assertion shall be rejected with a failure code of `assertion.ingredient.malformed`.
+
+The value of the `relationship` field shall be one of the following: `parentOf`, `inputTo`, or `componentOf`. If the value of the `relationship` field is not one of these, the assertion shall be rejected with a failure code of `assertion.ingredient.malformed`.
+
+If both an `activeManifest` and a `digitalSourceType` field are present, the assertion shall be rejected with a failure code of `assertion.ingredient.malformed`.
+
+##### Performing recursive validation
+The validator shall recursively validate all ingredient manifests in the asset, for example using a depth-first search as described below. A validator need not implement the algorithm exactly as described, but the results of the validation shall be equivalent to the results of this algorithm.
+
+. Create two empty lists:
+.. A list to hold the `hashed_uri` values of all ingredient manifests used in the asset, anywhere in its lineage.
+.. A list to hold the JUMBF URIs of all redacted assertions in the asset, anywhere in its lineage.
+. Set the active manifest of the asset being validated as the target manifest
+. Begin recursion. 
+. Locate the claim, as described in <<_locating_and_validating_the_claim>>. If unable to, reject claim with a `claim.missing` failure code.
+. If the claim of the target manifest contains a `redacted_assertions` field, check the JUMBF URI of each redacted assertion. 
+.. If the redacted assertion is from the target manifest, reject the claim with an `assertion.selfRedacted` failure code.
+.. Otherwise, append the JUMBF URI of the redacted assertion to the list of all redacted assertions. 
+. If the claim of the target manifest includes ingredient assertions:
+.. For each ingredient assertion:
+... Attempt to resolve the hashed URI of the ingredient assertion. If the URI does not resolve, or the hash does not match, or the assertion's JUMBF Content boxes contain only zeros, skip to the next ingredient assertion.
+... If the ingredient assertion has an `activeManifest` field (or `c2pa_manifest` field in a v1 or v2 ingredient assertion):
+.... Append a tuple that includes the following values to the list of all ingredient manifests: 
+***** The `hashed_uri` value of the `activeManifest` (or `c2pa_manifest`) field in the ingredient assertion
+***** The `hashed_uri` value of the `claimSignature` field in the ingredient assertion
+.... Set the just-appended ingredient manifest as the target manifest, and repeat the process as above from the "Begin recursion" step.
+... If the ingredient assertion does not have an `activeManifest` (or `c2pa_manifest`) field, record an `ingredient.unknownProvenance` informational code unless the value of the `relationship` field is `inputTo`, and then skip to the next ingredient assertion until they are all exhausted. At that point, return from the current recursion level.
+. If the claim of the target manifest does not include ingredient assertions, return from the current recursion level. 
+. End recursion.
+
+Having compiled a list of all ingredient manifests and a list of all redacted assertions, the validator shall perform the following validation algorithm:
+
+. For each ingredient manifest in the list of all ingredient manifests:
+.. Extract the <<manifest-identifier, manifest label>> from the ingredient manifest JUMBF URI from each tuple
+.. Search the list of all redacted assertions for assertions with a matching <<manifest-identifier, manifest label>>
+.. If one or more matching redacted assertions are found:
+... Validate the ingredient using the claim signature hash validation method, described in <<_claim_signature_hash_validation_method>>.
+.. If no matching redacted assertions are found:
+... Validate the ingredient using either the manifest hash validation method, described in <<_manifest_hash_validation_method>>, or the claim signature hash validation method, described in <<_claim_signature_hash_validation_method>>.
+.. If the ingredient assertion contains a `validationResults` field:
+... For each entry in the value of the `validationResults` field, if an equivalent entry was not returned as part of the validation process, return it as part of the validation results.
+... If there are any entries returned as part of the validation process that are not present in the `validationResults` field, return it as part of the validation results.
+.. If no `validationResults` field is present and the ingredient assertion is a v3 ingredient assertion with the `activeManifest` field present, then return the failure code `assertion.ingredient.malformed`.
+
+Validators should ignore any additional C2PA Manifests that appear in the C2PA Manifest Store but are not in the list of ingredient manifests.
+
+NOTE: Ignoring additional C2PA Manifests supports compatibility with custom assertions and future constructs that may reference C2PA Manifests in ways that the validator does not recognize.
+
+###### Claim Signature Hash Validation Method
+
+This method includes a full validation of the ingredient's claim, like that performed for the active manifest, except that content bindings are not evaluated:
+
+. Resolve the URI reference in the `url` value of the `claimSignature` field to obtain the ingredient's claim signature box. If the URI reference cannot be resolved, or the `claimSignature` field is not present, the ingredient claim is rejected with a failure code of `ingredient.claimSignature.missing`. 
+. Determine the hash algorithm identifier (or possible failure code) by following the procedure in <<_determining_the_hashing_algorithm>>. 
+. Compute the hash of the ingredient claim signature box using that algorithm and the procedure described in <<_hashing_jumbf_boxes>>.
+. Compare the computed hash with the value in the `hash` field. 
+.. If the hashes are not equal or the `hash` field is not present:
+... Reject the claim with a failure code of `ingredient.claimSignature.mismatch`.
+.. If the hashes are equal, issue a `ingredient.claimSignature.validated`.
+... Validate the claim signature, time-stamp, and credential revocation information as per <<_validate_the_signature>>, <<_validate_the_time_stamp>>, and <<_validate_the_credential_revocation_information>>.
+... For each URI in the list of redacted assertions with a matching <<manifest-identifier, manifest label>>, if the referenced assertion is present and any JUMBF Content box or padding box within it contains anything other than zero or more `0x00` bytes, the claim shall be rejected with a failure code of `assertion.notRedacted`.
+... Validate each non-redacted assertion per <<_validate_the_assertions>>, except for the hard binding assertions, which cannot be validated for ingredients. 
+
+When using the claim signature hash validation method, the validator shall not record hash mismatch failure codes for the `activeManifest` field.
+
+NOTE: The reason for this is that if redactions affect the referenced manifest, it is possible that the hash for this field would not match.
+
+###### Manifest Hash Validation Method
+
+An ingredient manifest that has not been changed due to redaction can be validated faster if the current validator trusts the previous claim generator's validation results:
+
+. Resolve the URI reference in the `url` value of the `activeManifest` field to obtain the ingredient's manifest box. If the `url` field is not present or the URI reference cannot be resolved, the ingredient claim is rejected with a failure code of `ingredient.manifest.missing`. 
+. Determine the hash algorithm identifier (or possible failure code) by following the procedure in <<_determining_the_hashing_algorithm>>. 
+. Compute the hash of the ingredient manifest box using that algorithm and the procedure described in <<_hashing_jumbf_boxes>>.
+. Compare the computed hash with the value in the `hash` field. 
+.. If the hashes are not equal or the `hash` field is not present:
+... Reject the claim with a failure code of `ingredient.manifest.mismatch`.
+.. If the hashes are equal, the ingredient is fully validated and a `ingredient.manifest.validated` success code is issued.
+
+### Validate the Asset's Content 
+
+The asset's content shall be validated using the xref:_hard_bindings[hard binding] in the active manifest if the active manifest is a standard manifest. If the active manifest is an update manifest, the hard binding shall be found in the `parentOf` ingredient's manifest, or if that manifest is also an update manifest, by following the chain of `parentOf` ingredients to the first standard manifest. If no standard manifest is found, or the standard manifest has no hard binding, then the active manifest's claim shall be rejected with a failure code of `claim.hardBindings.missing`.
+
+An asset may also be composed of multiple parts, where each part has its own associated hash (see <<_multi_asset_hash>>) which may be validated separately. For example, an asset may consist of separate static image & video parts, each of which can be validated separately.
+
+#### Validating a data hash
+
+##### General
+Once a standard manifest (and its bindings) has been located, the exclusion range(s) shall be extracted from the `c2pa.hash.data` assertion.
+
+If the ending byte offset of one exclusion range (`start` + `length`) is greater than the starting byte offset of the next exclusion range in the array, or a `start` or `length` value is negative, then the manifest shall be rejected with a failure code of `assertion.dataHash.malformed`.
+
+If any update manifests were encountered then the `length` value of the exclusion range whose `start` value is the offset of the start of the entire C2PA Manifest Store shall be treated as the current length of the entire C2PA Manifest Store plus any file format specific extras.  The difference between this new length and the length specified in the exclusion represents an adjustment value.  Any other exclusion ranges that occur after this C2PA exclusion range must be modified to reflect the fact that all content after the C2PA Manifest Store has been shifted; the `start` value of each subsequent exclusion range must be incremented by the adjustment value.
+
+Follow the procedure in <<_determining_the_hashing_algorithm>> to determine the hash algorithm and any possible failure codes. The hash shall be computed over the bytes of the asset, except for those specified in the exclusion range(s). If the end of an exclusion range falls beyond the end of the asset, then the manifest shall be rejected with a failure code of `assertion.dataHash.mismatch`.
+
+If the hash algorithm specified in the `alg` field does not appear in the allowed or deprecated list in <<_hashing>>, then the manifest shall be rejected with a failure code of `algorithm.unsupported`. If the `hash` field is not present, then the manifest shall be rejected with a failure code of `assertion.dataHash.mismatch`. 
+
+A validator shall ensure that the data contained within the exclusion range containing the C2PA Manifest Store consists of only the C2PA Manifest Store and any appropriate padding (e.g., zero'd data) in clearly marked pad fields or free/skip boxes.  If a validator encounters any data other than what is permitted, then the manifest shall be rejected with a failure code of `assertion.dataHash.mismatch`. 
+
+If a validator encounters exclusion ranges other than for just the C2PA Manifest Store and appropriate padding (e.g., zero'd data), such as for all or part of the asset metadata (as described in <<asset_metadata_bindings>>), the informational code `assertion.dataHash.additionalExclusionsPresent` shall be issued.
+
+NOTE: The combination of exclusion ranges and padding values, especially padding needed to support multi-pass processing workflows, may enable an attacker to replace parts of that padding with arbitrary data that could impact the consumption of the asset without invalidating the hash.
+
+The validator shall ignore the presence and contents of `pad` and `pad2` fields.
+
+If no error conditions were encountered, the validator shall add the success code `assertion.dataHash.match` to the list it eventually returns.
+
+If the hash computed over all the asset's data (minus any exclusion ranges) does not match the value of the `hash` field in the `c2pa.hash.data`, then the validator shall look for presence of a xref:_multi_asset_hash[multi-asset hash assertion].  If one is present, it shall be validated as described in <<validating_a_multi_asset_hash>>, but if one is not present, the manifest shall be rejected with a failure code of `assertion.dataHash.mismatch`. 
+
+##### Hashing of JPEG 1 files
+
+In JPEG 1 files, the file format extras described above would include any `APP11` markers and their respective segment length bytes for `APP11` segments.  Because the segment lengths are inside the exclusion range, a validator shall match the total length of the exclusion range with that of the total length of all `APP11` segments representing the C2PA Manifest to ensure that the length was not tampered with.
+
+NOTE: A JPEG 1 file can contain `APP11` segments for reasons other than C2PA (e.g., JPEG 360 or JPEG Privacy and Security) and those are not included in these calculations.
+
+##### Hashing of Unstructured Text
+
+[[validating_a_text_data_hash]]
+###### Validating a text data hash
+
+For assets consisting of unstructured text with an embedded `C2PATextManifestWrapper`, validators shall perform the following when validating a `c2pa.hash.data` hard binding:
+
+. Locate all valid `C2PATextManifestWrapper` instances as described in <<text_manifest_detection_algorithm,Locating the manifest in unstructured text>>.
+. Identify the wrapper(s) whose byte range exactly matches the exclusion range(s) specified in the `exclusions` field of the `c2pa.hash.data` assertion.
+. If no wrapper matches the `exclusions`, reject with `assertion.dataHash.malformed`.
+. If more than one wrapper matches the `exclusions`, reject with `manifest.text.multipleWrappers`.
+. Remove the wrapper bytes from the text according to the exclusion range(s).
+. Normalize the remaining text to NFC (Normalization Form Canonical Composition).
+. Encode the normalized text as UTF-8 bytes.
+. Compute the hash over these bytes using the algorithm specified by the `alg` field of the `c2pa.hash.data` assertion (see <<_determining_the_hashing_algorithm,Determining the hashing algorithm>> and <<_algorithm_validation,Algorithm validation>>).
+. Compare the computed hash with the `hash` value stored in the `c2pa.hash.data` assertion.
+.. If the hashes match, record the success code `assertion.dataHash.match`.
+.. If the hashes do not match, reject with the failure code `assertion.dataHash.mismatch`.
+
+###### Handling Corrupted Wrappers
+
+If the `C2PATextManifestWrapper` is found but appears to be corrupted (invalid version, algorithm, or manifest length):
+
+. The validator shall reject the manifest with a failure code of `manifest.text.corruptedWrapper`
+. If possible, the validator should provide details about the specific corruption detected
+
+###### Validation Result Codes
+
+Standard result codes for text validation:
+
+* `assertion.dataHash.match`: Data hash validation succeeded
+* `assertion.dataHash.mismatch`: Data hash does not match, indicating tampering
+* `assertion.dataHash.malformed`: The data hash assertion is malformed (e.g., invalid exclusion ranges)
+* `manifest.text.corruptedWrapper`: The `C2PATextManifestWrapper` was found but is corrupted
+* `manifest.text.multipleWrappers`: Multiple valid wrappers were found in the same text
+
+###### Partial Text Extraction
+
+If text with an embedded manifest is partially copied:
+
+. The validator should detect that the manifest is incomplete or invalid
+. The validator shall reject the manifest with an appropriate failure code
+. If possible, the validator should indicate that the text appears to be a fragment of a larger, signed text
+
+#### Validating a BMFF-hash
+
+For any portions of an asset rendered for presentation to a user, including but not limited to audio, video, or text, the corresponding hard binding corresponding to the rendered content shall be validated in accordance with <<_hard_bindings>>. If the standard hard binding does not validate, and a multi-asset hash assertion is present, it shall be validated as described in <<validating_a_multi_asset_hash>>. If at any time content fails to be validated, the validator shall clearly signal to the user that some of the content does not match the claim, and if possible, should indicate what part of the content did not validate. If any content is absent for which content bindings exist, discovery of this absence is also a validation failure. The validator shall continue to report validation has failed, even if later portions of the content validate correctly. 
+
+For content that is not wholly available before rendering begins, such as during adaptive bitrate streaming (ABR) and progressive download, absence of not-yet-available portions of content is not considered a validation failure. As the content becomes available, the validator shall validate each portion of the content before it is rendered as previously described. In addition, the validator shall validate that the sequence of said content is the same as when the manifest was produced. Unless the player has explicitly signalled the validator that a discontinuity is expected (e.g., when the consumer performs a manual seek operation via the UI), the validator shall clearly signal to the user that an unexpected discontinuity has occurred whenever the sequence does not match. This includes validating that the `location` values for a given Merkle tree start at zero and increments by one for each following chunk; equivalently, the `location` value always indicates which chunk is being rendered.
+
+For content that is to be validated during playback via progressive download, the leaf nodes of the merkle tree may align to synchronization points of the video track in the `'mdat'` (e.g., the RAP points random access points).  When the `'variableBlockSizes'` are setup to achieve such alignment, validation during linear playback or seeking to desired playback time can be both achieved via the same sequence. The desired blocks shall be fetched, validated and the tracks within them selected for rendering.
+
+For content that is intentionally not being rendered as the claim generator originally intended, such as during fast-forward, rewind, or playback at a different speed, the validator may not be able to validate the content. In this case, the validator shall clearly signal to the user that the content cannot be validated during the corresponding operation.
+
+For content with xref:_embedding_manifests_into_bmff_based_assets[C2PA ContentProvenanceBox] with `box_purpose` set to `update` presence, the active manifest is first searched in the xref:_embedding_manifests_into_bmff_based_assets[C2PA ContentProvenanceBox] with `box_purpose` set to `update` then in the  xref:_embedding_manifests_into_bmff_based_assets[C2PA ContentProvenanceBox] with `box_purpose` set to `original`. If the active manifest is in the xref:_embedding_manifests_into_bmff_based_assets[C2PA ContentProvenanceBox] with `box_purpose` set to `update`, trace the ingredient parent chain (looking in either  xref:_embedding_manifests_into_bmff_based_assets[C2PA ContentProvenanceBox] with `box_purpose` set to `update` or `original` as needed) until the first non update manifest is found. The BMFF hash of this manifest content shall be validated in accordance with <<_hard_bindings>>. The addition of an  xref:_embedding_manifests_into_bmff_based_assets[C2PA ContentProvenanceBox] with `box_purpose` set to `update` should not affect the hash calculation since it was added to the end of the file not changing any offsets.
+
+If the `bmff-hash-map` does not contain an `exclusions` field or that field's value is not of type array with at least one entry, then the manifest shall be rejected with a failure code of `assertion.bmffHash.malformed`.
+
+If a validator encounters exclusion ranges other the required exclusions (as described in <<_exclusion_list_requirements>>), `free`, or `skip`, the informational code `assertion.bmffHash.additionalExclusionsPresent` shall be issued.
+
+The validator shall ignore the presence and contents of `pad` and `pad2` fields.
+
+Determine the hash algorithm identifier (or possible failure code) by following the procedure in <<_determining_the_hashing_algorithm>>. 
+
+If the ending byte offset of one `subset` range (`offset` + `length`) is greater than the `offset` value of the next range in the array, or an `offset` or `length` value is negative, then the manifest shall be rejected with a failure code of `assertion.bmffHash.malformed`. The `assertion.bmffHash.mismatch` failure code is used for all other failures described in this section. Otherwise, the validator shall add the success code `assertion.bmffHash.match` to the list it eventually returns.
+
+If the BMFF hashing process produces a `assertion.bmffHash.mismatch` failure code, then the validator shall look for presence of a xref:_multi_asset_hash[multi-asset hash assertion].  If one is present, the `assertion.bmffHash.mismatch` failure code shall not be issued, and instead the multi-asset hash assertion shall be validated as described in <<validating_a_multi_asset_hash>>; otherwise, the manifest shall be rejected with a failure code of `assertion.bmffHash.mismatch`. 
+
+##### Non-fragmented asset using Merkle tree
+
+If the `bmff-hash-map.merkle` field is present, the validator shall xref:bmff-validation[validate the Merkle tree]. If the `merkle-map.fixedBlockSize` and `merkle-map.variableBlockSizes` fields are not present, the whole payload of the `mdat` is treated as a single leaf node for hash calculation. If the `fixedBlockSize` is present and if `variableBlockSizes` is not present, the payload of the `mdat` is divided into fixed-length blocks, and each block is treated as a leaf node. If the final block exceeds the end of the mdat payload, the size of the last block should be set to extend only to the end of the mdat payload. If the `variableBlockSize` is present and if `fixedBlockSizes` is not present, the payload of the `mdat` is divided into sizes defined by the array of `variableBlockSizes`.  If the number of elements is not equal to `count` or sum of the values is not equal to size of payload of mdat, then the manifest shall be rejected with a failure code of `assertion.bmffHash.malformed`. If the `merkle-map.fixedBlockSize` and `merkle-map.variableBlockSizes` fields are present, then the manifest shall be rejected with a failure code of `assertion.bmffHash.malformed`.
+
+* If `merkle-map.count` is equal to the number of elements of `merkle-map.hashes`, and if the hash of a leaf node doesn't match the corresponding element of `merkle-map.hashes`, then the manifest shall be rejected with a failure code of `assertion.bmffHash.mismatch`.
+* If `merkle-map.count` is larger than the number of elements of `merkle-map.hashes`, and if the auxiliary `uuid` C2PA box doesn't exist as described in <<_auxiliary_c2pa_boxes_for_large_and_fragmented_files>>, then the manifest shall be rejected with a failure code of `assertion.bmffHash.malformed`.  If the hash calculated from the auxiliary `uuid` C2PA box and leaf node doesn't match the corresponding element of `merkle-map.hashes`, then the manifest shall be rejected with a failure code of `assertion.bmffHash.mismatch`.
+* If `merkle-map.count` is smaller than the number of calculated leaf nodes (either the number of auxiliary uuid C2PA boxes or the number of leaf node `merkle-map.hashes`), then the manifest shall be rejected with a failure code of `assertion.bmffHash.malformed`.
+
+##### Fragmented asset using Merkle tree
+
+If the `bmff-hash-map.merkle` field is present, the validator shall xref:bmff-validation[validate the Merkle tree]. If the auxiliary `uuid` C2PA box doesn't exist as described in <<_auxiliary_c2pa_boxes_for_large_and_fragmented_files>>, then the manifest shall be rejected with a failure code of `assertion.bmffHash.malformed`. If the hash calculated from the auxiliary `uuid` C2PA box and leaf node doesn't match the corresponding element of `merkle-map.hashes`, then the manifest shall be rejected with a failure code of `assertion.bmffHash.mismatch`
+
+#### Validating a general box hash
+
+Once a standard manifest (and its bindings) has been located, the list of boxes to be validated shall be extracted from the `boxes` field of the `box-map` structure stored in the `c2pa.hash.boxes` assertion. If no such field is present, then the manifest shall be rejected with a failure code of `assertion.boxesHash.malformed`.
+
+The boxes shall appear in the asset in the same order that they appear in the `boxes` array, including the box containing the C2PA Manifest. If there are any other boxes present in the asset, then the manifest shall be rejected with a failure code of `assertion.boxesHash.unknownBox`. If the boxes appear out of order, then the manifest shall be rejected with a failure code of `assertion.boxesHash.mismatch`. 
+
+The hash algorithm for each `box-hash-map` shall be determined by its `alg` field, or if that is not present, by the `alg` field in the containing `box-map`, or if that is not present, by the `alg` field in the Claim. If the hash algorithm is not specified in any of these places, or does not appear in the allowed or deprecated list in <<_hashing>>, then the manifest shall be rejected with a failure code of `algorithm.unsupported`. 
+
+Refer to `boxIndex` to determine which box the exclusion ranges indicated in the `exclusions` field correspond to. If the box indicated by `boxIndex` does not exist, the manifest shall be rejected with a failure code of `assertion.boxesHash.malformed`. The `start` that indicates the beginning of an exclusion range specifies an offset measured from the start of the box indicated by `boxIndex`. If the ending byte offset of one exclusion range (`start` + `length`) is greater than the starting byte offset of the next exclusion range in the array, or a `start` or `length` value is negative, then the manifest shall be rejected with a failure code of `assertion.boxesHash.malformed`.
+
+The validator shall ignore the presence and contents of `pad` and `pad2` fields.
+
+Follow the procedure in <<_determining_the_hashing_algorithm>> to determine the hash algorithm and any possible failure codes. The hash shall be computed over the bytes of the asset, except for the ranges specified in the `exclusions` field and any boxes where `excluded` field is `true`. If the end of an exclusion range falls beyond the end of the box that contains the exclusion range, then the manifest shall be rejected with a failure code of `assertion.boxesHash.mismatch`.
+
+The combination of exclusion ranges and padding values, especially padding needed to support multi-pass processing workflows, may enable an attacker to replace parts of that padding with arbitrary data that could impact the consumption of the asset without invalidating the hash.  For this reason a validator shall ensure that the data contained within the exclusion range including a C2PA Manifest Store consists only of the C2PA Manifest Store and appropriate padding (e.g., zero'd data) in clearly marked pad fields or free/skip boxes.  Within other exclusion ranges than above C2PA Manifest Store, all or part of the asset metadata may also be included as described in <<asset_metadata_bindings>>. If a validator encounters any data other than those permitted above, then the manifest shall be rejected with a failure code of `assertion.boxesHash.mismatch`. If a validator encounters exclusion ranges other than that for the C2PA Manifest Store and appropriate padding (e.g., zero'd data) in clearly marked pad fields or free/skip boxes, an informational code `assertion.boxesHash.additionalExclusionsPresent` shall be set.
+
+If the hash value for any box does not match, and that box does not have an `excluded` field with a value of `true`, then the manifest shall be rejected with a failure code of `assertion.boxesHash.mismatch`. 
+
+If any `box-hash-map` in the `boxes` array does not contain a `names` field, then the manifest shall be rejected with a failure code of `assertion.boxesHash.malformed`. 
+
+For each box listed in the `names` and `boxes` array, the specified hash algorithm shall be computed over the bytes of the box (along with any associated header). If there are multiple entries in a `names` array, the hash value for that range of boxes shall be computed from the start of the first box (in the range) until the end of the last box (in the range).  This would include any arbitrary bytes that may be present between boxes.
+ 
+If the `hash` field is not present, or any resultant hash does not match the value of the `hash` field for those boxes, then the manifest shall be rejected with a failure code of `assertion.boxesHash.mismatch`. If the box hashing process produces a `assertion.boxesHash.mismatch` failure code, then the validator shall look for presence of a xref:_multi_asset_hash[multi-asset hash assertion].  If one is present, it shall be validated as described in <<validating_a_multi_asset_hash>>, but if one is not present, the manifest shall be rejected with a failure code of `assertion.boxesHash.mismatch`. 
+
+Otherwise, the validator shall add the success code `assertion.boxesHash.match` to the list it eventually returns.
+
+##### JPEG Special Handling
+When validating a JPEG, a validator shall check that each box identified with the special `C2PA` box identifier is indeed an `APP11` containing some or all of the C2PA Manifest Store.  The C2PA Manifest Store is identified by it being a JUMBF superbox with a label of `c2pa` and a JUMBF type UUID of `63327061-0011-0010-8000-00AA00389B71`  as described in <<_manifest_store>>.
+
+If an `APP11` that is not part of the C2PA Manifest Store is present and not included in the list of hashed boxes, then the manifest shall be rejected with a failure code of `assertion.boxesHash.unknownBox`.
+
+##### JPEG-XL Special Handling
+When validating JPEG-XL the C2PA Manifest Store is a top level JUMBF box (JUMB).  The box containing the C2PA Manifest Store shall be identified with the special `C2PA` box identifier.  The C2PA Manifest Store is identified by it being a JUMBF superbox with a label of `c2pa` and a JUMBF type UUID of `63327061-0011-0010-8000-00AA00389B71`  as described in <<_manifest_store>>.
+
+##### Font Special Handling
+When validating a font, a validator shall check that the box corresponding with the font's `C2PA` table is present, and determine whether it contains an embedded manifest, a remote manifest URI or both.
+
+If any font tables are present which are not covered by any box, then the manifest shall be rejected with a failure code of `assertion.boxesHash.unknownBox`.
+
+[[validating_a_multi_asset_hash]]
+#### Validating a multi-asset hash
+If the standard validation of the asset's hard binding fails, and the asset contains a multi-asset hash assertion, then the validator shall proceed to validate the multi-asset hash assertion. If more than one multi-asset hash assertion is present, then the manifest shall be rejected with a failure code of `assertion.multiAssetHash.malformed`.
+
+Validation of the multi-asset hash assertion (`c2pa.hash.multi-asset`) shall be performed by iterating over the array of `parts` in the `multi-asset-hash-map`.  If the `parts` field is not present, or it is present with a value that is an empty array, then the manifest shall be rejected with a failure code of `assertion.multiAssetHash.malformed`.
+
+For each part, the validator shall ensure that it contains both valid a `locator` and a valid `hashAssertion` field. If either of these are missing, then the manifest shall be rejected with a failure code of `assertion.multiAssetHash.malformed`.
+
+If the locator is a `byte-offset-locator`, then the validator shall ensure that the `byteOffset` and `length` fields are present and non-negative. If these conditions are not met, then the manifest shall be rejected with a failure code of `assertion.multiAssetHash.malformed`.
+
+If the locator is a `bmffBox`, then the validator shall ensure that the specified box is present in the asset. If the box is not present, then the manifest shall be rejected with a failure code of `assertion.multiAssetHash.malformed`.
+
+Given a valid locator and hash, the validator shall attempt to locate the part using the locator information. If it is not present, and the `optional` field is either not present or present with a value of `false`, then the manifest shall be rejected with a failure code of `assertion.multiAssetHash.missingPart`. If the `optional` field is present with a value of `true`, then the validator shall skip over this part and continue with the next part.
+
+NOTE: Discarding certain parts may prevent a validator from being able to unambiguously identify the remaining parts. In most cases, only one or more parts at the end of the file, rather than any parts in the middle, can be discarded effectively.
+
+If the located parts are overlapping or do not, in aggregate, cover every byte of the asset, then the manifest shall be rejected with a failure code of `assertion.multiAssetHash.malformed`.
+
+For each located part, the validator shall compute the hash of the part using the specified algorithm & methodology (i.e., data hash, general box hash, or BMFF hash) over the bytes of the part. Any uses of absolute byte offsets in a part's hash assertion (e.g., the `start` value in a data hash exclusion range) shall be interpreted relative to the beginning of that part. If the part is truncated (shorter than the length in the locator), or the resultant hash does not match the value present in the hard binding assertion referenced from the `hashAssertion` field, then the manifest shall be rejected with a failure code of `assertion.multiAssetHash.mismatch`.
+
+If the hash assertion for each located part validates successfully, then the validator shall record the success code `assertion.multiAssetHash.match` and shall not record any failure codes associated with the asset's hard binding.
+
+#### Validating a collection data hash
+
+##### General
+Validation of a collection data hash assertion (`c2pa.hash.collection.data`) that has been located in a standard manifest shall be performed by iterating over the array of `uris` in the `collection-data-hash-map`.  If there is no `uris` field present, then the manifest shall be rejected with a failure code of `assertion.collectionHash.malformed`.
+
+Follow the procedure in <<_determining_the_hashing_algorithm>> to determine the hash algorithm and any possible failure codes. Once determined, hashing shall be processed as specified in <<_algorithm_validation>>. 
+
+For each `uri-hashed-data-map` in the `uris` array, the validator shall ensure that it contains both a `uri` and a `hash` field. If either of these fields are missing, then the manifest shall be rejected with a failure code of `assertion.collectionHash.malformed`.
+
+In order to avoid any potential security concerns, a validator shall validate the URIs (i.e., the value of the `uri` field) before use, ensuring that neither `.` nor `..` appear as part of the URI.  If either of these are found in a URI, the manifest shall be rejected with a failure code of `assertion.collectionHash.invalidURI`.
+
+For the asset retrieved from the URI, its hash shall be computing using the specified algorithm over all bytes of its data. If the resultant hash does not match the value of the `hash` field, then the manifest shall be rejected with a failure code of `assertion.collectionHash.mismatch`. Otherwise, the validator shall add the success code `assertion.collectionHash.match` to the list it eventually returns.
+
+If there are any files listed in the collection data hash assertion that are not found by the validator, then the manifest shall be rejected with a failure code of `assertion.collectionHash.incorrectFileCount`. 
+
+##### Extras for ZIP
+
+In a ZIP file with an associated C2PA Manifest, the xref:_collection_data_hash[collection data hash] contains the additional `zip_central_directory_hash` field.  As described xref:_hashing_the_zip_central_directory[earlier], this field contains a hash of every "central directory header" in the ZIP Central Directory as well as the the "end of central directory record" (which is the last part of a ZIP file). The hash algorithm used for this field is the same as the one used for the `hash` field in the `c2pa.hash.collection.data` assertion.
+
+When validating a ZIP file, the validator shall check that the `zip_central_directory_hash` field is present and that the hash of the ZIP Central Directory and "end of central directory record" matches its value.  If the hash does not match, then the manifest shall be rejected with a failure code of `assertion.collectionHash.mismatch`.

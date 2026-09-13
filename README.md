@@ -66,6 +66,15 @@ Outside the workspace (see its own README for why):
   seam (`examples/compare_corpus.rs`) for running that comparison across a
   whole directory of assets rather than one fixture.
 
+## Specification reference
+
+[`reference/c2pa-specs-core`](reference/c2pa-specs-core) contains a pinned
+snapshot of the C2PA Technical Specification's `.adoc` source (tag `2.4`),
+kept for reference alongside the reader and builder crates that implement
+it. See its [README](reference/c2pa-specs-core/README.md) for provenance,
+scope, and license — those files are CC-BY-4.0, separate from the MIT OR
+Apache-2.0 terms covering the rest of this repository.
+
 ## Building
 
 This repo is a Cargo workspace; the usual commands run across all members

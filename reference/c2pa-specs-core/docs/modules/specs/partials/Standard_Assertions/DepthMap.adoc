@@ -1,0 +1,40 @@
+#### Description
+A depthmap assertion provides a 3D description of the scene being captured by a camera. A depthmap assertion may contain a pre-computed https://en.wikipedia.org/wiki/Depth_map[depth map], or data which can later be used to compute a depth map by downstream ingestion or viewing software (e.g., left/right stereo images).
+
+All depthmap assertions shall have a label that starts with `c2pa.depthmap` and be followed by a third section that identifies the type of depth map.
+
+C2PA depthmap assertions shall be captured optically, not inferred from a single 2D image via, for example, a machine learning model.
+
+#### GDepth Depthmap
+
+A GDepth depth map assertion leverages the well-established https://developers.google.com/depthmap-metadata/reference[GDepth format] to encode a pre-computed depth map.
+
+A GDepth depthmap assertion shall have a label of `c2pa.depthmap.GDepth`.
+
+The schema for the data stored in this assertion shall always mirror the schema at https://developers.google.com/depthmap-metadata/reference.
+
+NOTE: There are no concerns with splitting up the GDepth data when it grows beyond 64KB, as that limit existed in XMP to accommodate `APP1` segment size limitations.
+
+#### Schema and Example
+
+The schema for this type is defined by the `depthmap-gdepth-map` rule in the following {cddl}:
+
+[source,cddl]
+----
+include::../schemas/cddl/depthmap-gdepth.cddl[]
+----
+
+An example in CBOR diagnostic notation ({8949}, clause 8) is shown below:
+
+[source]
+----
+include::../examples/cbordiag/depthmap-gdepth.cbordiag[]
+----
+
+As defined by the GDepth specification, the following fields shall be present in all GDepth depth map assertions:
+
+- GDepth:Format;
+- GDepth:Near;
+- GDepth:Far;
+- GDepth:Mime;
+- GDepth:Data.

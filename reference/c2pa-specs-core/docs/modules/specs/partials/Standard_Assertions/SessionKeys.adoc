@@ -1,0 +1,43 @@
+[[session_keys_assertion]]
+==== Description
+
+This assertion provides the session keys that are used, as part of a live video workflow based on the "<<verifiable_segment_info>>", to sign the `verifiable-segment-info-map`.  Live video workflows that rely solely on the "<<using_c2pa_manifest_box>>" are not required to use this assertion.
+
+==== Requirements
+
+A session keys assertion shall have a label of `c2pa.session-keys`, and a C2PA Manifest may contain at most one session keys assertion.
+
+// TODO: Update the validation section to include session keys assertion validation
+
+The session keys assertion consists of a CBOR map (defined as a `session-keys-data`) and shall contain the following fields:
+
+`keys`:: An array of one or more session key objects. 
+
+Each session key in the `keys` array is represented as an object containing the following fields:
+
+`key`:: A COSE key that shall include a `kid` (key identifier) to ensure that the keys can be uniquely identified.
+`minSequenceNumber`:: An unsigned integer representing the earliest sequence number that can be signed with this key.
+`createdAt`:: The timestamp indicating when the session key was created formatted as CBOR tag 0 (RFC 3339 date-time).
+`validityPeriod`:: An unsigned integer representing the validity period of the session keys in seconds, starting from the `createdAt` timestamp
+`signerBinding`:: A detached signature of the Signer's end-entity certificate, signed using the (private key) of the session key `key`, enabling verification that this session key used to protect the media is uniquely associated with the Signer.  The payload of `Sig_structure` shall be the Signer's end-entity certificate (the first certificate in the x5chain header parameter, as defined in <<x509_certificates>> ) encoded as a CBOR byte string.
+
+Session keys are valid from their individual `createdAt` until `createdAt + validityPeriod`, and shall only be used within their validity period. The `minSequenceNumber` field indicates the earliest segment sequence number that can be signed with a given key, supporting key rotation and preventing replay attacks.  
+
+When providing an new C2PA Manifest (via a C2PA Manifest Box), new session keys may be included in that C2PA Manifest.  The new session keys may have overlapping validity periods with previous session keys, but the `minSequenceNumber` for the new keys shall be greater than or equal to the current sequence number. This ensures a clear transition between keys and supports overlap for seamless key rotation.
+
+==== Schema and Example
+
+The schema for this type is defined by the `session-keys-data` rule in the following {cddl}:
+
+[source,cddl]
+----
+include::../schemas/cddl/session-keys.cddl[]
+----
+
+An example in CBOR Diagnostic Format (`.cbordiag`) is shown below:
+
+[source]
+----
+include::../examples/cbordiag/session-keys.cbordiag[]
+----
+

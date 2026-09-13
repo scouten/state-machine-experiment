@@ -1,0 +1,13 @@
+[bibliography]
+== Bibliography
+
+* [[[RFC7230, RFC 7230]]] _Hypertext Transfer Protocol (HTTP/1.1): Message Syntax and Routing_, https://tools.ietf.org/html/rfc7230
+
+* [[[RFC8259, RFC 8259]]], _The JavaScript Object Notation (JSON) Data Interchange Format_, https://tools.ietf.org/html/rfc8259
+
+* [[[JADES,ETSI TS 119 182-1 V1.1.1]]], _Electronic Signatures and Infrastructures (ESI); JAdES digital signatures; Part 1: Building blocks and JAdES baseline signatures_, https://www.etsi.org/deliver/etsi_ts/119100_119199/11918201/01.01.01_60/ts_11918201v010101p.pdf
+
+* [[[IANASuffixes,Structured Syntax Suffixes]]] _Structured Syntax Suffixes_, https://www.iana.org/assignments/media-type-structured-suffix/media-type-structured-suffix.xhtml
+
+* [[[SEMVER,Semantic Versioning 2.0.0]]], _Semantic Versioning 2.0.0_, https://semver.org/spec/v2.0.0.html
+

@@ -1,0 +1,112 @@
+= Content Credentials : C2PA Technical Specification
+:docinfo: shared
+:doctype: book
+:title: Content Credentials : C2PA Technical Specification
+:revdate: 2026-04-01
+:revnumber: 2.4
+:revremark:
+:version-label!: 
+:toc: left
+:sectnums:
+:sectnumlevels: 5 
+:source-highlighter: rouge
+:pdf-version: 1.7
+:xrefstyle: full
+:imagesdir: ../images
+:title-logo-image: ../images/c2pa-hero.svg
+
+// setup the file extension for output
+ifdef::backend-html5,backend-pdf[]
+:image-ext: svg
+:alt-image-ext: svg
+endif::[]
+ifdef::backend-docbook5[]
+:image-ext: png
+:alt-image-ext: png
+endif::[]
+:plantuml-ext: png
+
+// custom attributes for the C2PA spec
+:not-for-iso: true
+:jumbf-iso: ISO 19566-5:2023
+:jumbf-iso-a3: ISO 19566-5:2023, A.3
+:jumbf-iso-a4: ISO 19566-5:2023, A.4
+:jumbf-iso-b: ISO 19566-5:2023, Annex B
+:jpegxl: ISO/IEC 18181-2:2024
+:jpegxl-4: ISO/IEC 18181-2:2024, Clause 4
+:jpegxl-93: ISO/IEC 18181-2:2024, Clause 9.3
+:uuid: https://tools.ietf.org/html/rfc9562[RFC 9562, UUIDs]
+:urn: https://tools.ietf.org/html/rfc8141[RFC 8141, URNs]
+:hash-urn: https://datatracker.ietf.org/doc/html/draft-thiemann-hash-urn-01
+:mpf: https://www.cipa.jp/e/std/std-sec.html[Multi-Picture Format (MPF)]
+:jades: https://www.etsi.org/deliver/etsi_ts/119100_119199/11918201/01.01.01_60/ts_11918201v010101p.pdf[JAdES]
+:cddl: https://datatracker.ietf.org/doc/html/rfc8610[CDDL Definition]
+:xmp: https://www.iso.org/standard/57421.html[XMP Data Model]
+:xmp222: https://github.com/adobe/xmp-docs/blob/master/XMPNamespaces/XMPDataTypes/ResourceEvent.md[XMP Specification Part 2, 2.2]
+:xmpResEvt: https://github.com/adobe/xmp-docs/blob/master/XMPNamespaces/XMPDataTypes/ResourceEvent.md[XMP ResourceEvents]
+:xmp-json: https://www.iso.org/standard/79384.html[JSON-LD serialization of XMP]
+:json-ld: https://www.w3.org/TR/json-ld[JSON-LD]
+:json-ld-lang: https://www.w3.org/TR/json-ld/#language-indexing[JSON-LD]
+:annot-fragment-selector: https://www.w3.org/TR/annotation-model/#fragment-selector[W3C Web Annotation fragment selector]
+:media-frag: https://www.w3.org/TR/media-frags/#media-fragment-syntax[W3C Media Fragments specification]
+:10918-b1: https://www.iso.org/standard/18902.html[ISO 10918-1:1994, Table B.1]
+:19566-4: ISO 19566-4:2020
+:8601: https://www.iso.org/iso-8601-date-and-time-format.html[ISO 8601]
+:2326: http://datatracker.ietf.org/doc/html/rfc2326[RFC 2326]
+:2630: http://datatracker.ietf.org/doc/html/rfc2630[RFC 2630]
+:3161: http://datatracker.ietf.org/doc/html/rfc3161[RFC 3161]
+:3339: http://datatracker.ietf.org/doc/html/rfc3339[RFC 3339]
+:3533: http://datatracker.ietf.org/doc/html/rfc3533[RFC 3533]
+:4287: https://datatracker.ietf.org/doc/html/rfc4287[RFC 4287]
+:5280: https://datatracker.ietf.org/doc/html/rfc5280[RFC 5280]
+:5480: https://datatracker.ietf.org/doc/html/rfc5480#section-2.1.1.1[RFC 5480, section 2.1.1.1]
+:5646: https://datatracker.ietf.org/doc/html/rfc5646[RFC 5646, BCP 47]
+:5758-32: https://datatracker.ietf.org/doc/html/rfc5758#section-3.2[RFC 5758, section 3.2]
+:6066: https://datatracker.ietf.org/doc/html/rfc6066[RFC 6066, Section 8]
+:6960: https://datatracker.ietf.org/doc/html/rfc6960[RFC 6960]
+:7230: https://datatracker.ietf.org/doc/html/rfc7230[RFC 7230]
+:8017-a23: https://datatracker.ietf.org/doc/html/rfc8017#appendix-A.2.3[RFC 8017, appendix A.2.3]
+:8017-a24: https://datatracker.ietf.org/doc/html/rfc8017#appendix-A.2.4[RFC 8017, appendix A.2.4]
+:8017-b1: https://datatracker.ietf.org/doc/html/rfc8017#appendix-B.1[RFC 8017, appendix B.1]
+:8152: https://datatracker.ietf.org/doc/html/rfc8152[RFC 8152]
+:8230: https://datatracker.ietf.org/doc/html/rfc8230/[RFC 8230]
+:8259: https://datatracker.ietf.org/doc/html/rfc8259[RFC 8259]
+:8288: https://datatracker.ietf.org/doc/html/rfc8288[RFC 8288]
+:8392: https://datatracker.ietf.org/doc/html/rfc8392[RFC 8392]
+:8949: https://datatracker.ietf.org/doc/html/rfc8949[RFC 8949]
+:9360: https://datatracker.ietf.org/doc/html/rfc9360[RFC 9360]
+:9399: https://datatracker.ietf.org/doc/rfc9399/[RFC 9399]
+
+//------- Document Starts Here --------------
+
+// license
+====
+include::../partials/CCLicense.adoc[]
+====
+
+// Table of Contents
+toc::[]
+
+// here are the files we include
+include::../partials/Introduction/Introduction.adoc[]
+
+include::../partials/Architecture/Architecture.adoc[]
+
+include::../partials/Trust_Model/TrustModel.adoc[]
+
+include::../partials/Validation/Validation.adoc[]
+
+include::../partials/UX/UX.adoc[]
+
+include::../partials/Threats-Harms/Threats_Harms.adoc[]
+
+include::../partials/Standard_Assertions/Standard_Assertions.adoc[]
+
+include::../partials/Live-Video/live-video.adoc[]
+
+include::../partials/PatentPolicy.adoc[]
+
+// any Annex/Appendix files
+include::../partials/Embedding/EmbeddedManifests.adoc[]
+include::../partials/Standard_Assertions/Metadata_Annex.adoc[]
+include::../partials/Architecture/Versioning_Annex.adoc[]

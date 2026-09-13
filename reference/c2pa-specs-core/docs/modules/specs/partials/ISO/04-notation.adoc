@@ -1,0 +1,47 @@
+== Notation
+
+// PDF operators, PDF keywords, the names of keys in PDF dictionaries, and other predefined names are written in bold sans serif font; operands of PDF operators or values of dictionary keys are written in italic font. Some names can also be used as values, depending on the context, and so the styling of the content will be context specific.
+
+// [example]
+// The _Default_ value for the *TR2* key.
+
+// Token characters used to delimit objects and describe the structure of PDF files, as defined in <<ISO32000-2,clause=7.2.1>>, may be identified by their ISO/IEC 646 character name written in upper case in bold font followed by a parenthetic two digit hexadecimal character value with the suffix “h”.
+
+// [example]
+// *CARRIAGE RETURN* (0Dh).
+
+// Text string characters, as defined by <<ISO32000-2,clause=7.9.2>>, may be identified by their ISO/IEC 10646 character name written in uppercase in bold font followed by a parenthetic four digit hexadecimal character code value with the prefix “U+”.
+
+// [example]
+// *EN SPACE* (U+2002).
+
+// The following terms, referring to this specification or parts thereof, are recommended when the full ISO name is not being used:
+
+// — "PDF/A" - a synonym for the ISO 19005 family of standards;
+
+// — "PDF/A-1" - a synonym for ISO 19005-1;
+
+// — "PDF/A-1a" - a synonym for ISO 19005-1 Level A conformance;
+
+// — "PDF/A-1b" - a synonym for ISO 19005-1 Level B conformance;
+
+// — "PDF/A-2" - a synonym for ISO 19005-2;
+
+// — "PDF/A-2a" - a synonym for ISO 19005-2 Level A conformance;
+
+// — "PDF/A-2b" - a synonym for ISO 19005-2 Level B conformance;
+
+// — "PDF/A-2u" - a synonym for ISO 19005-2 Level U conformance;
+
+// — "PDF/A-3a" - a synonym for ISO 19005-3 Level A conformance;
+
+// — "PDF/A-3b" - a synonym for ISO 19005-3 Level B conformance;
+
+// — "PDF/A-3u" - a synonym for ISO 19005-3 Level U conformance;
+
+// — "PDF/A-4" - a synonym for ISO 19005-4;
+
+// — "PDF/A-4e" - a synonym for ISO 19005-4 Level E conformance;
+
+// — "PDF/A-4f" - a synonym for ISO 19005-4 Level F conformance;
+

@@ -1,0 +1,156 @@
+:revdate: {docdate}
+:version-label!: 
+:sectnums:
+:sectnumlevels: 5 
+:chapter-label:
+:source-highlighter: rouge
+
+== Assertions
+=== General
+
+It is expected that each claim generator, used by actors in the system that creates or processes an asset, will create or assemble one or more assertions about when, where, and how the asset was originated or transformed. An assertion is labelled data, typically (though not required to be) in a CBOR-based structure which represents a declaration about an asset. Some of these assertions will contain human-generated information (e.g., alternate text for accessibility) while others will come from machines (software/hardware) providing the information they generated (e.g., camera type).
+
+Some examples of assertions are:
+
+* metadata (e.g., camera information such as maker or lens);
+* actions performed on the asset (e.g., clipping, color correction);
+* thumbnail of the asset or its ingredients;
+* content bindings (e.g., cryptographic hashes).
+
+Certain assertions may be redacted by subsequent claims (see <<_redaction_of_assertions>>), but they cannot be modified once made as part of a claim.
+
+[[assertion_labels]]
+=== Labels
+
+==== Namespacing
+String values in C2PA data structures may be organized into namespaces using a period (`.`) as a separator. The C2PA namespace, `c2pa`, shall be the beginning of any string value defined in this specification. Entity-specific namespaces shall begin with the Internet domain name for the entity similar to how Java packages are defined (e.g., `com.litware`, `net.fineartschool`). 
+
+The period-separated components of an entity-specific namespace shall follow the variable naming convention (`[a-zA-Z0-9][a-zA-Z0-9_-]*`) specified in the POSIX or C locale, as defined in the ABNF below (<<abnf_for_namespaces>>).
+
+[[abnf_for_namespaces]]
+[source,abnf]
+.ABNF for Namespaces
+----
+qualified-namespace = "c2pa" / entity
+entity = entity-component *( "." entity-component )
+entity-component = 1( DIGIT / ALPHA ) *( DIGIT / ALPHA / "-" / "_" )
+----
+
+==== Label Naming
+Each assertion has a label defined either by the C2PA specifications or an external entity. These labels are strings which are namespaced, as described in the preceding clause or by an entity. The most common labels will be defined in the `c2pa` namespace, but labels may use any namespace that follows the conventions. Labels are also versioned with a simple incrementing integer scheme (e.g., `c2pa.actions.v2`). If no version is provided, it is considered as `v1`. The list of publicly known labels can be found in <<_c2pa_standard_assertions>>.
+
+ifdef::not-for-iso[]
+NOTE: Previous versions of this document also provided for namespacing for well-established standards, but that has been superseded by simply having them via entity-specific namespaces (e.g., `org.iso`, `org.w3`).
+endif::[]
+
+[[abnf_for_assertion_labels]]
+[source,abnf]
+.ABNF for Assertion Labels
+----
+namespaced-label = qualified-namespace label
+qualified-namespace = "c2pa" / entity
+entity = entity-component *( "." entity-component )
+entity-component = 1( DIGIT / ALPHA ) *( DIGIT / ALPHA / "-" / "_" )
+label = 1*( "." label-component )
+label-component = 1( DIGIT / ALPHA ) *( DIGIT / ALPHA / "-" / "_" )
+----
+
+The period-separated components of a label follow the variable naming convention (`[a-zA-Z][a-zA-Z0-9_-]*`) specified in the POSIX or C locale, with the restriction that the use of a repeated underscore character (`__`) is reserved for labelling multiple assertions of the same type.
+
+=== Versioning
+
+When an assertion's schema is changed, it should be done in a backwards-compatible manner. This means that new fields may be added and existing ones may be marked as deprecated (i.e., can be read, but never written). Existing fields shall not be removed. The label would then consist of an incremented version number, for example moving from `c2pa.actions` (deprecated) to `c2pa.actions.v2`.
+
+Since the addition of optional fields can be done while maintaining backwards compatibility, such fields may be added to an existing assertion's schema without a change to the version number.
+
+Deprecated fields for C2PA standard assertions shall be indicated in <<_c2pa_standard_assertions>>. Claim generators shall not insert data into deprecated assertion fields when creating assertions.
+
+In those situations where a non-backwards compatible change is required, instead of increasing the label's version number, the assertion shall be given a new label. 
+
+NOTE: For example, `c2pa.ingredient` could be changed to the fictional `c2pa.component`.
+
+=== Multiple Instances
+
+Multiple assertions of the same type can occur in the same manifest, but since assertions are referenced by claims via their label, the assertion labels are required to be unique.  This is accomplished by adding a double-underscore and a monotonically increasing index to the label.  For example, if a manifest contains a single assertion of type `c2pa.metadata`, then the assertion label will be `c2pa.metadata`.  If a manifest contains three assertions of this type, the labels will be `c2pa.metadata`, `c2pa.metadata\__1` and `c2pa.metadata__2`.
+
+When a label includes a version number, that version number is part of the label itself. As such, when there are multiple instances, the instance number continues to follow the label - e.g., `c2pa.ingredient.v2__2`.
+
+[[schema-validation]]
+=== Schema Validation
+
+The schemas provided in this document, as well as the machine readable ones that can be downloaded from the C2PA website, should be used by claim generators to ensure that the assertions they create are consistent with the expected structures. These schemas can also be used as aids in understanding the syntax to be read or written. Validators should not validate inputs against these schemas.
+
+=== Assertion Store
+
+The set of assertions referenced by a xref:_claims[claim] in a manifest are collected together into a logical construct that is referred to as the _assertion store_. The assertions and assertion store shall be stored as described in <<_use_of_jumbf>>; in particular, each assertion referenced in a claim's `created_assertions` or `gathered_assertions` (but not xref:_redaction_of_assertions[`redacted_assertions`]) shall be present in the assertion store located in the same C2PA Manifest as the claim.
+
+In each manifest, there is a single assertion store. However, as an asset may have multiple manifests associated with it, each one representing a specific series of assertions, there may be multiple assertion stores associated with an asset.
+
+Each assertion in the assertion store should include a randomly-generated salt in the private `c2sh` box within its JUMBF Description Box, as documented in <<_hashing_jumbf_boxes>>, so that subsequent generators can xref:_redaction_of_assertions[redact assertions] securely.
+
+=== Embedded vs Externally-Stored Data
+
+Some assertion data, due to its size or an infrequent need for it, may be externally hosted. Such data are not embedded in the assertion store, but instead are referenced by URI. This is accomplished through either a xref:_cloud_data[cloud data] assertion for remotely-stored C2PA assertions (JUMBF) or an xref:external_reference_assertion[external reference] assertion for either remotely stored assertion or non-assertion data. In both cases, the externally hosted data is not retrieved nor validated as part of manifest validation, and is only retrieved and validated when specifically needed by an application according to a different set of validation rules as described in <<_validate_the_assertions>>.
+
+=== Redaction of Assertions
+
+Assertions that are present in an asset-embedded manifest may be removed from that asset's manifest when the asset is xref:_ingredient_storage[used as an ingredient]. This process is called redaction.
+
+Redaction involves either removing the entire assertion from the manifest's assertion store or retaining the labelled assertion container but replacing the JUMBF Content boxes within that assertion with a single UUID Content box whose `ID` field has a value of `CAA98EEE-9D4D-F80E-86AD-4DFFCA263973` (called the C2PA Redaction UUID) and whose `DATA` field contains only zeros (binary `0x00` values). 
+
+In addition, a record that something was removed shall be added to the xref:_claims[claim] in the form of a xref:_uri_references[URI reference] to the redacted assertion in the `redacted_assertions` field of the claim. It is also strongly recommended that the claim generator should add a `c2pa.redacted` xref:_actions[action] with a `redacted` field as described in <<_parameters>>.
+
+When redacting an ingredient assertion that references a C2PA Manifest, the associated manifest shall be removed from the C2PA Manifest Store if no other references to it remain after redacting.
+
+[NOTE]
+====
+Because each assertion's xref:_uri_references[URI reference] includes the assertion label, it is also known what type of information (e.g., thumbnail, metadata, etc.) was removed. This enables both humans and machines to apply rules to determine if the removal was acceptable.
+====
+
+Unless the assertion redaction is accompanied by changes to the data covered by xref:_binding_to_content[content bindings], an xref:_update_manifests[update manifest] should be used to document the redaction, to indicate that xref:_digital_content[digital content] was not changed.
+
+Claim generators shall not redact assertions with a label of `c2pa.actions` or `c2pa.actions.v2` as this assertion type represents essential information in understanding the history of an asset. When creating an xref:_update_manifests[update manifest], the claim generator shall not redact the xref:_binding_to_content[hard binding to content] assertion that applies to the current asset.
+
+NOTE: When assertions are redacted in an ingredient manifest that is referenced via either of the deprecated ingredient assertions (`c2pa.ingredient` or `c2pa.ingredient.v2`), validation of that assertion will fail (as described in <<_ingredient_assertion_validation>>), because only `c2pa.ingredient.v3` assertions support the claim signature hash validation method, described in <<_claim_signature_hash_validation_method>>.
+
+=== Specifications of time in assertions
+
+The default specification for a date/time value in an assertion is the date/time format which is serialized in CBOR as tag number `0` ({8949}, 3.4.1) and represented in CDDL as type `tdate`.
+
+NOTE: CBOR Tag 0 is described in {8949} as "the date-time production in {3339}, as refined by Section 3.3 of {4287}, representing the point in time described there".  This means that the presence of either an explicit timezone or `Z` (for UTC) is required.
+
+
+There is one case, as described when xref:_adding_a_claimed_time_of_signing[adding a claimed time of signing], where the time is represented as a CBOR tag number `1` ({8949}, 3.4.2) (as the number of seconds from 1970-01-01T00:00Z).
+
+Additionally there is the xref:timestamp_assertion[time-stamp assertion], which uses the standard time-stamping formats as described in xref:_signing_a_claim[the signing process].
+
+The reason why there are different types of date & time representations is to allow for the most appropriate representation, based on existing standards in use, for each specific use case.
+
+== Data Boxes
+
+[IMPORTANT]
+====
+This section is retained for historical purposes. The concept of a data box has been deprecated in favour of a standard assertion that uses a standard JUMBF Embedded File content type box to contain the data. For more information, see <<_data_boxes>>.
+====
+
+=== General
+Data boxes provide a way to include arbitrary data into the C2PA Manifest that is referenced from an assertion, instead of embedding it directly into a field of the assertion as a binary string. These data boxes are placed in the xref:_data_storage[Data Box Store] and each one will be a single CBOR Content Type box (`cbor`).
+
+The data of a data box is provided directly as the value of the `data` field, which is a `bstr`, so any binary data can be provided.  The type of the data shall be identified using the `dc:format` field, with a standard IANA media type.  
+
+NOTE: IANA structured suffixes (https://www.iana.org/assignments/media-type-structured-suffix/media-type-structured-suffix.xhtml[]), such as `+json` and `+zip`, are also supported as values of the `dc:format` field.
+
+Sometimes, it may also be necessary to provide one or more xref:_asset_type[asset types] as the value of the `data_types` field for more clarity on the format and usage of that data.
+
+A data box shall have a label of `c2pa.data` and follows the xref:_multiple_instances[rules of assertion labels] with respect to multiple instances.
+
+=== Schema and Example
+
+The schema for this type is defined by the `data-box-map` rule in the {cddl} in <<cddl_for_data_box>>.:
+
+[[cddl_for_data_box]]
+[source,cddl]
+.CDDL for data box
+----
+include::../schemas/cddl/data-box.cddl[]
+----

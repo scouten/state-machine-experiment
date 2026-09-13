@@ -1,0 +1,134 @@
+=== Embedding manifests into non-BMFF-based assets
+
+==== Embedding manifests into JPEG
+
+The C2PA Manifest Store shall be embedded as the data contained in an *APP11* marker segment as defined in https://www.iso.org/standard/66071.html[JPEG XT, ISO/IEC 18477-3]. 
+
+Since a single marker segment in JPEG 1 cannot be larger than 64K bytes, it is likely that multiple *APP11* segments will be required, and they shall be constructed as per the JPEG 1 standard and {jumbf-iso}, D.2. When writing multiple segments, they shall be written in sequential order, and they shall be contiguous (i.e., one segment immediately following the next).
+
+==== Embedding manifests into PNG
+
+The C2PA Manifest Store shall be embedded using an ancillary, private, not safe to copy, chunk type of `'caBX'` (as per https://www.w3.org/TR/2003/REC-PNG-20031110/[PNG, 4.7.2]). It is recommended that the `'caBX'` chunk precede the `'IDAT'` chunks.
+
+NOTE: Although PNG supports it, it's considered bad-form to have a data block after the `'IDAT'` and before the `'IEND'`. (The exception being animated PNG blocks)
+
+==== Embedding manifests into SVG
+
+https://www.w3.org/TR/SVG11/[SVG] is an XML-based format that can exist either stand-alone or embedded into other text-based formats such as HTML. As such, it is necessary to Base64 encode the binary C2PA Manifest Store to perform the embedding. While this section describes how to do that, the use of an xref:_external_manifests[external manifest] is preferred.
+
+The C2PA Manifest Store shall be embedded as the Base64-encoded value of a `c2pa:manifest` element in the https://www.w3.org/TR/SVG11/metadata.html#MetadataElement[`metadata` element] of the SVG. Because XML, and SVG in particular, strongly recommend the declaration of a namespace prior to its use, a `xmlns:c2pa = "http://c2pa.org/manifest"` attribute declaration should be added to the `svg` element.
+
+[figure]
+.Example of a C2PA Manifest Store in an SVG
+====
+An example of a C2PA Manifest Store in an SVG (with the actual C2PA Manifest's data left out).
+
+[source,xml]
+----
+<?xml version="1.0" standalone="yes"?>
+<svg width="4in" height="3in" version="1.1"
+    xmlns = "http://www.w3.org/2000/svg"
+    xmlns:c2pa = "http://c2pa.org/manifest">
+    <metadata>
+        <c2pa:manifest>...Base64 data goes here...</c2pa:manifest>
+    </metadata>
+</svg>
+----
+====
+
+==== Embedding manifests into ID3
+
+The C2PA Manifest Store shall be embedded into a ID3v2-compatible, compressed audio file (e.g., MP3 or FLAC) file as the Encapsulated object data of a General Encapsulated Object (GEOB) as defined in https://id3.org/id3v2.3.0#General_encapsulated_object[https://id3.org/id3v2.3.0]. The GEOB's `MIME type` field shall be present and shall use the value for the media type for JUMBF as described in <<_external_manifests>>.
+
+==== Embedding manifests into OGG Vorbis
+
+Ogg Vorbis (as described in {3533}) is an open-source, lossy audio compression format encapsulated within the Ogg multimedia container. The C2PA Manifest Store shall be embedded in its own dedicated logical bitstream within the container. The first packet of this stream starts with the 5-byte identifier `\x00c2pa`, and the C2PA Manifest Store data follows immediately after.
+
+==== Embedding manifests into TIFF-based assets
+
+The https://helpx.adobe.com/content/dam/help/en/photoshop/pdf/dng_spec_1_6_0_0.pdf[Digital Negative or DNG] format provides camera manufacturers to provide their camera raw formats in a standardized manner. DNG is based on which is based on https://www.iso.org/standard/29377.html[TIFF/EP] (which is, itself, based on https://www.itu.int/itudoc/itu-t/com16/tiff-fx/docs/tiff6.pdf[TIFF]).
+
+The C2PA Manifest Store shall be embedded into a TIFF-compatible file (i.e., TIFF/EP, DNG or other TIFF-based RAW formats) as the data of a tag with ID 52545 (decimal) or 0xCD41 (hexadecimal), with a tag type of 7.
+
+NOTE: The value of the `ByteOrder` field in the TIFF header does not govern the endianness of the embedded C2PA Manifest Store.
+
+Although TIFF supports the concept of multiple pages or layers (via chaining main IFDs), there shall only be one C2PA Manifest Store for the entire asset - not one per IFD.  As such, the C2PA IFD Entry shall always be located within the last IFD of the main-IFD chain. For TIFF assets containing one main IFD, the C2PA IFD Entry shall be located within that IFD or be the only entity within a new IFD following the existing one. For all other TIFF assets, the C2PA IFD Entry shall be the only entry in its IFD. To support update manifests, the C2PA Manifest Store should be located at the end of the file; this ensures that changes to the size of the C2PA Manifest Store do not impact any of the other tag offsets.
+
+ifdef::not-for-iso[]
+NOTE: Previous versions of this specification required or prevented the use of IFD 0, but it was recognized that doing so restricted its use in TIFF-based RAW formats.
+endif::[]
+
+==== Embedding manifests into RIFF-based assets
+
+The https://www.loc.gov/preservation/digital/formats/fdd/fdd000025.shtml[RIFF (Resource Interchange File Format)] format provides a generic container format for storing data in tagged chunks.  It is primarily used to store multimedia such as images, sound and video. It serves as the container format for https://en.wikipedia.org/wiki/WAV[WAV], https://en.wikipedia.org/wiki/Broadcast_Wave_Format[BWF, Broadcast Wave], https://en.wikipedia.org/wiki/Audio_Video_Interleave[AVI] and https://en.wikipedia.org/wiki/WebP[WebP].
+
+NOTE: RIFF is based on an older format called https://en.wikipedia.org/wiki/Interchange_File_Format[IFF].
+
+The C2PA Manifest Store shall be embedded into a RIFF-compatible file (i.e., WAV, AVI or WebP) as the data of a chunk with an identifier of `C2PA`. For compatibility reasons, this C2PA chunk shall appear as the last sub-chunk of the first RIFF header chunk.
+
+
+==== Embedding manifests into GIFs
+
+The C2PA Manifest Store shall be broken into chunks of a size no greater than 255 bytes and embedded into contiguous data sub-blocks (as per https://www.w3.org/Graphics/GIF/spec-gif89a.txt[GIF, 15]) within a C2PA-specialised Application Extension block (as per https://www.w3.org/Graphics/GIF/spec-gif89a.txt[GIF, 26]), specified below.
+
+NOTE: In this C2PA Application Extension Block, the Application Authentication Code is not used to authenticate the application producing the block. Instead, it is used as a block version, and set initially at major version 1, minor version 0, and is encoded as specified below.
+
+[source]
+----
+Extension Introducer: 0x21
+Application Extension Label: 0xFF
+Block Size: 0xB
+Application Identifier: 0x43, 0x32, 0x50, 0x41, 0x5F, 0x47, 0x49, 0x46 (“C2PA_GIF”)
+Application Authentication Code: 0x010000 (0x[MajorVersion][MinorVersion]00)
+Application Data: The C2PA Manifest Store, encoded as a series of data sub-blocks, each containing 1 byte size followed by up to 255 bytes of data
+Block Terminator: 0x00 (added after the last data sub-block of the C2PA Manifest Store)
+Quantity: One
+----
+
+This block shall be embedded after the header and prior to the first image descriptor box.
+
+==== Embedding manifests into JPEG XL
+
+As described in {jpegxl-4}, JPEG XL supports two different formats for the data. It may use a box structure that is compatible with JPEG 2000 and JPEG XS or it may be a direct JPEG XL codestream without the box structure. A JPEG XL file that uses the box structure shall contain at most one JUMBF (`jumb`) superbox ({jpegxl-93}) containing one C2PA Manifest JUMBF Box, which contains the C2PA Manifest Store as described in <<_manifest_store>>. A JPEG XL file that is only a codestream is unable to include an embedded C2PA Manifest.  The manifest store shall exist in its own top level JUMBF (`jumb`) and not shared with any other JUMBF boxes.
+
+[[figure-jxl-embedding]]
+.A C2PA Manifest embedded in a JPEG XL image
+image::Manifest-in-JXL.drawio.png[A C2PA Manifest embedded in a JPEG XL image,align="center"]
+
+
+==== Embedding manifests into fonts
+
+Fonts which conform to either https://www.iso.org/standard/74461.html[Open Font Format]
+or the https://learn.microsoft.com/en-us/typography/opentype/spec/[OpenType]
+specification may include a `C2PA` table. When present, this table may include
+an embedded manifest, a remote manifest URI, or both.
+
+The `C2PA` table format is not yet defined in the https://www.iso.org/standard/74461.html[Open Font Format]
+nor https://learn.microsoft.com/en-us/typography/opentype/spec/[OpenType] specification;
+the following definition is preliminary:
+
+===== Table Tag
+
+The C2PA table record will be identified by the following table tag: `C2PA`.
+
+===== Table Record
+
+The C2PA table provides full support for a Manifest Stores to be either embedded or remote or both. The table record is defined as follows:
+
+.C2PA table record
+[cols="16%,42%,42%"]
+|===
+|Type | Name | Description
+|`uint16` | `majorVersion` | Specifies the major version of the C2PA font table.
+|`uint16` | `minorVersion` | Specifies the minor version of the C2PA font table.
+|`Offset32` | `activeManifestUriOffset` | Offset from the beginning of the C2PA font table to the section containing a URI to the active manifest. If a URI is not provided a NULL offset = 0x0000 should be used.
+|`uint16` | `activeManifestUriLength` | Length of URI in bytes.
+|`uint16` | `reserved` | Reserved for future use.
+|`Offset32` | `manifestStoreOffset` | Offset from the beginning of the C2PA font table to the section containing a C2PA Manifest Store. If a Manifest Store is not provided a NULL offset = 0x0000 should be used.
+|`uint32` | `manifestStoreLength` | Length of the C2PA Manifest Store data in bytes.
+|===
+
+The non-embedded C2PA manifest may be remote or locally on the same storage system. If the reference is a JUMBF URI, it should be a valid reference within the C2PA Manifest Store.
+
+// we don't have this any more in 2.0, so commented out...
+// This use of a URI to a remote manifest store is analogous to the xref:_embedding_a_reference_to_the_active_manifest[method recommended for XMP-bearing formats].

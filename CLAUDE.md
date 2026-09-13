@@ -127,6 +127,14 @@ handler. New format = new crate implementing `FormatHandler` and passing
 `contentauth_c2pa_format::test_util::conformance::run_all`; nothing in
 the reader, builder, or contract crate changes.
 
+## Specification reference
+
+[`reference/c2pa-specs-core`](reference/c2pa-specs-core) holds a pinned
+snapshot of the C2PA Technical Specification's `.adoc` source (currently tag
+`2.4`), for reference only — nothing in this workspace builds or depends on
+it. See its own README for provenance and license (CC-BY-4.0, distinct from
+the rest of this repository's MIT OR Apache-2.0 terms).
+
 ## Stability
 
 This is a very experimental prototype, not a shipping product: nothing

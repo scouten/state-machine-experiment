@@ -1,0 +1,262 @@
+#### Description
+
+When assets are composed together, for example placing an image into a layer in an image editing tool or an audio clip into a video in a video editing tool, it is important that information about any claim from the placed asset be recorded into the new asset to provide a way to understand the entire history of the new composed asset. This is also true when an existing asset is used to create a derived asset or asset rendition.
+
+Another common use for an ingredient is to describe some assets or data that were used as input to a process, such as the training or inference requests associated with an AI/ML model.
+
+There are three versions of the ingredients assertion - the deprecated v1 (with label `c2pa.ingredient`), the deprecated v2 (with label `c2pa.ingredient.v2`), and the current v3 (which shall have a label of `c2pa.ingredient.v3`), which addresses the issue of validating ingredients after redaction. 
+
+NOTE: When there is more than one ingredient assertion, the xref:_multiple_instances[usual labelling rules] apply (e.g., `c2pa.ingredient.v3`, `+c2pa.ingredient.v3__1+`, `+c2pa.ingredient.v3__2+`).
+
+#### Establishing unique identifiers
+
+If the ingredient being added contains a C2PA Manifest, then its unique identifier shall be taken from the <<manifest-identifier, manifest label>> of the JUMBF superbox containing the ingredient's active C2PA Manifest, and it is not necessary to provide the optional `instanceID` field of the ingredient assertion. When the claim generator provides the optional `instanceID` field of the ingredient assertion, then the value of the unique identifier shall be determined as specified by <<_identifying_non_c2pa_assets>>.
+
+NOTE: A claim generator can provide an `instanceID` field in the ingredient assertion even if the ingredient has a C2PA Manifest.
+
+#### Relationship
+When adding an ingredient, its relationship to the current asset shall be described. The possible values of the `relationship` field and their meanings are shown in <<ingredient-relationships>>.
+
+[[ingredient-relationships]]
+.Ingredient Relationships
+|===
+| Value | Meaning
+
+|`parentOf` | The current asset is a derived asset or asset rendition of this ingredient. This relationship value is also used with xref:_update_manifests[update manifests].
+
+|`componentOf` | The current asset is composed of multiple parts, this ingredient being one of them.
+
+|`inputTo` | This ingredient was used as input to a computational process, such as an AI/ML model, that led to the creation or modification of this asset.
+|===
+
+When adding an ingredient assertion, a claim generator shall add a `c2pa.actions` assertion (see <<_actions>>), if one does not already exist in the active manifest. Depending on the type of ingredient, one of the following new entries shall be added to the `actions` array of a `c2pa.actions` assertion. 
+
+- When adding an ingredient with a `parentOf` relationship, a `c2pa.opened` action shall be added to the `actions` array. 
+- When adding an ingredient with a `componentOf` relationship, a `c2pa.placed` action shall be added to the `actions` array.
+
+This requirement only applies to xref:_standard_manifests[Standard Manifests], since recording actions is only supported in that manifest type. 
+
+#### Title
+
+If present, the value of `dc:title` shall be a human-readable name for the ingredient, which may be taken either from the asset's XMP or the asset's name in a local or remote (e.g., cloud-based) filesystem. However, claim generators should not set this value if the information is available in the ingredient's active C2PA Manifest.
+
+#### Format
+
+If present, the value of `dc:format` shall be the IANA Media Type for the ingredient. It is recommended that a claim generator should provide this field and it shall contain a valid value.  When describing a xref:_multi_file_ingredients[multi-file ingredient], such as the data set of an AI/ML model, the `dc:format` field shall be set to `multipart/mixed`.
+
+[[ingredient_schema]]
+#### Schema and Example
+
+The {cddl} for this type is:
+
+[source,cddl]
+----
+include::../schemas/cddl/ingredient.cddl[]
+----
+
+An example in CBOR diagnostic notation ({8949}, clause 8):
+
+[source]
+----
+include::../examples/cbordiag/ingredient.cbordiag[]
+----
+
+#### Description field
+
+An ingredient may include a free-text description, in the `description` field, of what an the ingredient is or is used for. If present, the content of this field should be produced by the claim generator, and should not contain user-provided information.
+
+NOTE: A user-provided ingredient description can be specified using a custom assertion.
+
+#### Ingredient Data
+
+##### Standard Usage
+In certain use cases, such as Generative AI, it may be important to have ingredients where the data of the ingredient is provided - either embedded into the C2PA Manifest or via a URL that references the data. This is accomplished through the `data` field in the ingredient, which uses a `hashed-uri` to point to an xref:_embedded_data[embedded data assertion] or a `hashed-ext-uri-map` to point to an external reference.
+
+NOTE: Previous versions of this specification allowed the `hashed_uri` to point to a xref:_data_boxes[data box].
+
+Using an xref:_embedded_data[embedded data assertion] implies that its content will be embedded in this C2PA Manifest and in any future C2PA Manifest (unless redacted) that contains this asset as an ingredient. Claim generators should take the size of this field into consideration when choosing whether to embed data.
+
+[figure]
+.Example of ingredients with data
+====
+An example of some ingredients with data, in CBOR diagnostic notation ({8949}, clause 8):
+
+[source]
+----
+include::../examples/cbordiag/ingredient-data.cbordiag[]
+----
+====
+
+There are also use cases where it is important to identify information about the ingredient's data but it is neither possible to embed it nor provide a valid URL - for example, when describing the use of a private/internal AI model. For those cases, an xref:_asset_type[asset type], as the value of the `data_types` field, can be provided for more clarity on the format and description of that data.
+
+[figure]
+.Example of ingredients with data_types
+====
+An example of an ingredient without a hashed uri, in CBOR diagnostic notation ({8949}, clause 8):
+
+[source]
+----
+include::../examples/cbordiag/ingredient-data-types.cbordiag[]
+----
+====
+
+##### Multi-file Ingredients
+
+In some cases, an ingredient may be represented as a set of multiple files, such as the training data set for an AI/ML model. It is recommended that in those instances that the xref:_existing_manifests[C2PA Manifest] be included in the ingredient assertion and that the C2PA Manifest for the full data set include an xref:_asset_reference[asset reference assertion] that references where to find those files. 
+
+NOTE: This method is well suited for when working with a collection of assets where all of the files are not contained in the same hierarchy.
+
+#### Informational URI
+
+When it is necessary to provide a URL to a web page with information about the ingredient, such as detailed information about an AI/ML model, it should be placed as the value of the `informationalURI` field of the ingredient assertion.
+
+NOTE: The `informationalURI` is not an authenticated link to the content of the ingredient itself, but something more generally of interest to a human user.
+
+NOTE: Older (and deprecated) versions of the ingredient assertion named this field `informational_URI`. 
+
+#### Thumbnails
+When adding an ingredient, it may be useful to also include a thumbnail of the ingredient to help establish the state of the ingredient at the time of import. For that purpose, a thumbnail shall be added as a xref:thumbnail_assertion[thumbnail assertion] and referenced herein via a hashed-uri reference.
+
+Manifest Consumers should also support the xref:_data_boxes[data box] approach recommended by earlier versions of this specification.
+
+#### Existing manifests
+##### General
+
+If the ingredient has an existing C2PA Manifest Store, then all C2PA Manifests in the ingredient's C2PA Manifest Store that have undergone validation, and that do not already exist in the asset's C2PA Manifest Store, shall be copied by the claim generator into the asset's C2PA Manifest Store, except as outlined in <<_copying_existing_manifests>> or when directed not to do so (for example via user input or via configuration).
+
+The claim generator should also copy into the asset's C2PA Manifest Store any additional C2PA Manifests that were not validated, as well as any additional JUMBF boxes and superboxes appearing in the C2PA Manifest Store that are not recognized as C2PA Manifests.
+
+NOTE: Copying these additional elements supports compatibility with custom assertions and future constructs that may reference elements of the C2PA Manifest Store in ways that the claim generator does not recognize.
+
+#### Copying existing manifests
+
+##### Determining the need
+To determine whether or not an existing manifest from the ingredient's C2PA Manifest Store needs to be copied into the asset's C2PA Manifest Store, the claim generator shall:
+
+. Validate the ingredient per the process described in <<_ingredient_validation>>. In case of validation failures, the claim generator may skip the rest of these steps if directed to do so (for example, via user input or via configuration). 
+. For each manifest in the ingredient's C2PA Manifest Store, compare its xref:_unique_identifiers[URN identifier] with the URN identifiers of each C2PA Manifest already present in the asset's C2PA Manifest Store. 
+.. If a match is found, compute and compare the hash of the manifest box from ingredient's C2PA Manifest Store to the hash of the matching manifest box from the asset's C2PA Manifest Store
+... If the hashes match, then the claim generator shall not copy the manifest from the ingredient's C2PA Manifest Store to the asset's C2PA Manifest Store. 
+... If the hashes do not match: 
+.... The claim generator shall check if any assertions from either manifest were redacted (optionally utilizing the list of redactions compiled in the xref:_performing_explicit_validation[Performing explicit validation] process). 
+..... If the validator is able to determine that the hashes differ only due to redaction, then:
+...... If all redactions were applied against the manifest already present in the asset's C2PA Manifest Store, then the claim generator shall not copy the manifest from the ingredient's C2PA Manifest Store into the asset's C2PA Manifest Store. 
+...... If all redactions were applied against the manifest from the ingredient's Manifest Store, then the claim generator shall replace the manifest in the asset's C2PA Manifest Store with the manifest from the ingredient's C2PA Manifest Store.
+...... If different redactions were applied against both the C2PA Manifest from the ingredient's C2PA Manifest Store and the asset's C2PA Manifest Store, then the claim generator shall redact as many assertions as needed from the existing manifest in the asset's C2PA Manifest Store to result in a union of the two sets of redactions.
+..... In all other cases, then the claim generator shall copy the manifest from the ingredient's C2PA Manifest Store, re-label it with an updated URN per the process described in xref:_unique_identifiers[Unique Identifiers], and insert the re-labeled version into the asset's C2PA Manifest Store. 
+
+NOTE: The process for determining whether the hashes differ only due to redaction is left up to the validator.
+
+##### Examples
+
+[example] 
+**EXAMPLE:** Consider a claim generator `D` that is importing ingredients. It begins by importing ingredient `B`, which itself has an ingredient Manifest `A`. After validating both manifests, claim generator `D` copies Manifests `B` and `A` into Asset `D` 's C2PA Manifest Store. Then it imports ingredient `C`, which also includes a redacted version of Manifest `A`. After validating Manifest `C` and the redacted Manifest `A`, it compares the hashes of both versions of Manifest `A`. Knowing that the version of Manifest `A` in ingredient `C` was redacted, claim generator `D` over-writes the version of Manifest `A` already present in asset `D` 's C2PA Manifest Store with the redacted version of Manifest `A` from ingredient `C`. 
+
+[example] 
+**EXAMPLE:** Consider the same scenario as above, except that the version of Manifest `A` in ingredient `C` failed validation because one of its assertions failed a hash comparison. In this situation, Claim generator `D` copies Manifest `A` from ingredient `C`, re-labels it with a new URN, and places the re-labeled copy in asset `D` 's C2PA Manifest Store.
+
+[NOTE]
+====
+A C2PA Manifest Store can contain JUMBF boxes or superboxes that are not C2PA Manifests. They need not be copied as part of this process.
+====
+
+##### Adding manifest references to the ingredient assertion
+If the active manifest of the ingredient has been copied into the asset's C2PA Manifest Store, then a xref:_uri_references[URI reference] to the ingredient's active xref:_c2pa_box_details[C2PA Manifest box] shall be stored as the value of the `activeManifest` field in the ingredient assertion, and an additional xref:_uri_references[URI reference] to the active Manifest's xref:_c2pa_box_details[C2PA Claim Signature box] shall be stored as the value of `claimSignature`. 
+
+For a C2PA Manifest present in the C2PA Manifest Store, `hashed_uri`s shall be used as the values for both of the ingredient assertion's `activeManifest` and `claimSignature` fields. 
+
+NOTE: Providing both values enables efficient ingredient validation and also supports validation if one of the ingredient's assertions were redacted. 
+
+In the case where an ingredient has an associated active manifest, it can be used to identify the `digitalSourceType` of the ingredient (through the assertions contained therein).  However, in those cases where an ingredient is being added without a manifest, the ingredient assertion may include a `digitalSourceType` key, whose value shall be one of those allowed for the corresponding action field (<<_digital_source_type>>).  An example of this can be found in <<ingredient-dst>>.
+
+NOTE: This approach is useful in scenarios where, as part of the asset creation process, an ingredient asset is created under the control of the signer, but without its own C2PA Manifest. Providing a `digitalSourceType` in the ingredient assertion makes a similar statement about the ingredient's nature as signing a full C2PA Manifest for the ingredient in which the only action is `c2pa.created` with the same `digitalSourceType`.
+
+An ingredient assertion shall not contain both an `activeManifest` and a `digitalSourceType` key.
+
+[[ingredient-dst]]
+[figure]
+.Example of ingredient with a digitalSourceType
+====
+An example of an ingredient containing a digitalSourceType identifying it as generative AI, in CBOR diagnostic notation ({8949}, clause 8):
+
+[source]
+----
+include::../examples/cbordiag/ingredient-dst.cbordiag[]
+----
+====
+
+
+NOTE: By including an ingredient assertion containing a `digitalSourceType` value in `created_assertions`, the signer is asserting that the ingredient has that specified `digitalSourceType`.
+
+##### Ingredient validation
+###### General
+In addition, when the ingredient assertion references a C2PA Manifest, the claim generator shall also act as a validator, performing validation of the ingredient as described in xref:_validation_process[validation steps]. The result of that validation - all xref:_success_codes[success codes], xref:_informational_codes[informational codes], and xref:_failure_codes[failure codes] - shall be used in populating the ingredient assertion's `validationResults` or `validationStatus` field as described below. This field is required to be present so that it can be used in future validations.
+
+[NOTE]
+====
+The presence of a `validationStatus` (ingredient v2) or `validationResults` (ingredient v3) with a failure status is considered an explicit statement by the claim generator that an actor has acknowledged validation errors in the ingredient's C2PA Claim itself and has chosen to proceed with incorporating the ingredient.
+
+As described in <<_displaying_manifest_information>>, it is desirable for a claim generator to prominently raise warnings so that an actor making use of an asset with a flawed provenance history is making an informed decision of how to proceed.
+====
+
+###### V2 ingredient assertions (DEPRECATED)
+In a v2 ingredient assertion with no `c2pa_manifest` field, the `validationStatus` field is optional, but if present may contain an empty array.
+
+In a v2 ingredient assertion with `c2pa_manifest` field, each object in the `validationStatus` array consists of a `code` field whose value describes the validation status of a specific part of the manifest along with an optional `success` field whose boolean value indicates whether the code reflects success (true) or failure (false). An optional description of the validation status may be present in the `explanation` field if there is a need for an additional human readable explanation. In addition, each `status-map` object has a `url` field which should contain, in the case of failures, a JUMBF URI reference to the specific element in the manifest about which the status refers. Depending on the code, the `url` will be to a C2PA Claim, a C2PA Claim Signature or a specific C2PA Assertion. Status codes are defined in <<_standard_status_codes>>.
+
+Custom status codes are permitted when a claim generator has a need to record some process-specific status information.  The code shall conform to the same syntax as xref:_namespacing[entity-specific namespaces] (e.g. `com.litware.malformedFrobber`) and the `validationStatus` object shall contain a `success` boolean.
+
+###### V3 ingredient assertions
+In a v3 ingredient assertion with no `activeManifest` field, the `validationResults` field shall not be present.
+
+In a v3 ingredient assertion with an `activeManifest` field, the `validationResults` field shall contain a `validation-results-map` object which in turn shall contain:
+
+. In `activeManifest`, full validation results for the ingredient's active manifest.
+
+. In `ingredientDeltas`, delta validation results for every ingredient assertion, that contains an `activeManifest` field, in every manifest in the ingredient's C2PA Manifest Store. The delta validation results for an ingredient assertion shall contain the following:
+.. In `ingredientAssertionURI`, the URI of the ingredient assertion.
+.. In `validationDeltas`, the validation results for the manifest referenced by the ingredient assertion, omitting any status values present in the `activeManifest` field of the `validationResults` field in the ingredient assertion (or for v1 or v2 ingredient assertions, the `validationStatus` field). This status value comparison shall consider the status type (success, informational, or failure), `code`, and `url`, ignoring other fields.
+
+[example] 
+====
+**EXAMPLE:** Consider a multi-ingredient Manifest `E` with a complex lineage. Claim generator `E` adds Manifest `C` and Manifest `D` as ingredients via ingredient assertions. Manifest `C` itself has Manifest `A` and Manifest `B` added via ingredient assertions. Manifest `D` also has Manifest `A` added via an ingredient assertion. When adding Manifest `C`, claim generator `E` creates an ingredient assertion with a `validationResults` object that stores validation results for the active manifest of `C` in `activeManifest`, and delta validation results for manifests `A` and `B` in `ingredientDeltas`. The `ingredientDeltas` array will have two elements: one for the delta results compared against the `activeManifest` object in the `validationResults` object in Manifest `C` 's ingredient assertion of Manifest `B` (with a `hashed-uri` link to said ingredient assertion in Manifest  `C`), and another element of the same attributes but for Manifest `C` 's ingredient assertion of Manifest `A`. And likewise when adding Manifest `D`, claim generator `E` creates an ingredient assertion which stores `validationResults` for both the `activeManifest` of `D`, as well as `ingredientDeltas` with a single array element containing delta validation results compared against the `activeManifest` object in the `validationResults` object in Manifest `D` 's ingredient assertion of Manifest `A`. 
+
+NOTE: While this is an intentionally contrived example, it is designed to elucidate the expectation of how the `validationResults` data structure is to be used. 
+====
+
+[[validation-results]]
+Each validation result (as described using a `status-codes-map`), consists of an array of `success`, `informational`, and `failure` codes. Each code is represented as a `status-map` object which shall contain a `code` field with the status code. In addition, it may contain a `url` field with a JUMBF URI reference to the specific element in the manifest about which the status refers, and an optional `explanation` field with a human-readable explanation of the status. Status codes are defined in <<_standard_status_codes>>.
+
+Custom status codes are permitted when a claim generator has a need to record some process-specific status information.  The code shall conform to the same syntax as xref:_namespacing[entity-specific namespaces] (e.g. `com.litware.malformedFrobber`). 
+
+Additionally, a `validation-results-map` may contain a SemVer formatted `specVersion` field which represents the version of this specification that was used as the basis for the validation procedure. It may also contain a `trustListURI` field, which is a URI that identifies the trust list that was used to xref:_validate_the_signature[validate the claim signature].
+
+EXAMPLE: For C2PA 2.3, the value of `specVersion` would be `2.3.0`.
+
+If the C2PA Trust List was used to validate the claim signature, the `trustListURI` field shall not be present. If present, its value shall be a URI.
+
+NOTE: `trustListURI` is a URI and not a URL, meaning that it need not resolve to an actual machine-readable list, but instead is a unique identifier for a specific trust list. 
+
+#### Ingredient Metadata
+
+As described in xref:_metadata_about_assertions[assertion metadata], the `metadata` field of the ingredient assertion may contain metadata about the ingredient, such as the date and time when it was generated or other data that may help Manifest Consumers to make informed decisions about the provenance or veracity of the assertion data. 
+
+One common use for the `metadata` field is when only a portion of an ingredient is used in the creation or editing of an asset. In such cases, the `metadata` field should contain a `regionOfInterest` field (as described in <<_region_of_interest>>) which describes the relevant portions of the ingredient that were used. An example of this can be found in <<ingredient-metadata>>.
+
+NOTE: Although the field contains only a single region of interest, the `region-map` object can specify multiple regions as the values of its `region` field. This would be useful when multiple parts of a single ingredient are involved.
+
+[[ingredient-metadata]]
+[figure]
+.Example of ingredient with metadata containing regions
+====
+An example of an ingredient containing a region of interest in its metadata, in CBOR diagnostic notation ({8949}, clause 8):
+
+[source]
+----
+include::../examples/cbordiag/ingredient-regions.cbordiag[]
+----
+====
+
+#### Soft Bindings
+
+An active manifest may include a C2PA Manifest as an ingredient (via a `parentOf` relationship) that was discovered using a soft binding lookup.  If the Claim Generator does include such a C2PA Manifest, then it shall include a `softBindingsMatched` field indicating true, and a `softBindingAlgorithmsMatched` field containing an array of strings (of soft binding algorithm names that were used to discover the ingredient C2PA Manifest).  The algorithm names shall be listed with the C2PA Soft Binding Algorithm List as identified within the `alg` field of entries in that list.

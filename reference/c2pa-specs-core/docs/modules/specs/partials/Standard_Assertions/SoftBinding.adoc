@@ -1,0 +1,93 @@
+#### Description
+If a claim generator will be providing a soft binding for the asset's content, it shall be described using a soft binding assertion. The types of soft bindings which may be created and stored in such an assertion are described in <<soft_binding_assertion>>. 
+
+ifdef::not-for-iso[]
+A previous version of this specification provided a `url` field to provide a pointer to where the hashed data may be located, but it was never used. This field is now deprecated in favor of the xref:_asset_reference[asset reference assertion]. Claim generators shall not add this field to a soft binding assertion, and consumers shall ignore the field when present, except this shall not affect inclusion of the field as part of the content being validated as described in <<_assertion_validation>>.
+
+A previous version of this specification provided an `extent` field within the `scope` field to describe a portion of the digital content covered by the soft binding assertion, in an algorithm specific format. This field is now deprecated in favor of the `region` field. Claim generators shall not add this field to a soft binding assertion, and consumers should ignore the field when present.  This does not affect inclusion of the field as part of the content being validated as described in <<_assertion_validation>>.
+endif::[]
+
+A soft binding assertion shall have a label of `c2pa.soft-binding`.
+
+#### Schema and Example
+
+The schema for this type is defined by the `soft-binding-map` rule in the following {cddl}:
+
+[source,cddl]
+----
+include::../schemas/cddl/soft-binding.cddl[]
+----
+
+An example in CBOR diagnostic notation ({8949}, clause 8) is shown below:
+
+[source]
+----
+include::../examples/cbordiag/soft-binding.cbordiag[]
+----
+
+#### Requirements
+
+The soft binding algorithm used shall be present as the value of the `alg` field, and the blocks over which is was applied shall be listed in the `blocks` field.  If the algorithm used requires any additional parameters, they should be present as the value of `alg-params`.
+
+The `scope` field may contain either a `region` or `timespan` field to describe the portion of digital content that the soft binding has been computed over.  The `region` field, when present, contains a `region-map` object (as defined in <<_regions_of_interest>>).  The `timespan` field, when present, describes the time interval over which the soft binding was computed in milliseconds from the start of the content.
+
+The optional `pad` and `pad2` values, if present, shall be zero-filled byte strings.
+
+===== bindingMetadata
+
+A soft binding assertion may include a `bindingMetadata` key that provides for the specification of some algorithm or workflow-specific information via some pre-defined as well as custom fields (and their associated values). Custom fields shall conform to the same syntax as xref:_namespacing[entity-specific namespacing], e.g. `com.litware.someFieldName`.
+
+NOTE: This is useful for providing extra information that would be useful to a specific workflow or C2PA Manifest Consumer. 
+
+A C2PA Validator should not use this information when validating the soft binding, but may use it for logging or informational purposes. The normative information for validating the soft binding is contained in the other fields of the soft binding assertion as well as the entry for the algorithm in the xref:_soft_binding_algorithm_list[Soft Binding Algorithm List].
+
+#### Soft Binding Algorithm List
+
+The soft binding algorithm list is a machine readable list of recommended values for the `alg` field.  The value of the `alg` field should correspond to the `alg` field of an algorithm present in that list. The format of `alg-params` and `value` fields are algorithm specific and described via a human readable information page referenced by `informationalUrl` within the entry for `alg` in the list.
+
+The list is maintained as a JSON document by the C2PA at the following location: https://spec.c2pa.org/softbinding-alg-list[]
+
+Entries in the soft binding algorithm list that have a `deprecated` field of `true` shall be considered deprecated and shall not be used to create soft binding assertions in manifests.  Soft binding algorithms marked deprecated may be used for resolving soft bindings but this behaviour is discouraged.
+
+The JSON schema for entries within the soft binding algorithm list is shown below:
+
+[source]
+----
+include::../schemas/soft-binding-algorithm-list/soft-binding-algorithm-list.schema.json[]
+----
+
+An JSON example of a entry in the soft binding algorithm list is shown below:
+
+[source]
+----
+include::../examples/soft-binding-algorithm-list/soft-binding-algorithm-list-example.json[]
+----
+
+The unique name of the algorithm is given in the `alg` field, and corresponds to the string that shall be used in the `alg` field a soft binding assertion that uses that algorithm.  The name shall follow the xref:_namespacing[namespacing] requirements and represent the owner of the algorithm.  A unique numeric identifier is also assigned for each algorithm.  If different versions of an algorithm are provided, then each shall have a separate entry in the Soft Binding Algorithm List.  
+
+The type of the algorithm shall be either 'watermark' or 'fingerprint' to represent that the algorithm is an invisible watermark, or a fingerprint.  
+
+The deprecation status of the algorithm is given in the `deprecated` field. A validator should not resolve any soft bindings that use deprecated algorithms. C2PA Manifests shall not be written using deprecated soft bindings.
+
+The soft binding algorithm list entry shall contain a list of supported media types either as `encodedMediaTypes` or as `decodedMediaTypes`. The supported media types for `decodedMediaTypes` shall correspond to one more of the top-level IANA media types comprising of: "application", "audio", "image", "model", "text", "video". The supported media types for `encodedMediaTypes` shall correspond to one more of the registered IANA subtypes of a `decodedMediaType` listed in the preceding sentence. These IANA top-level and subtypes are listed at https://www.iana.org/assignments/media-types/media-types.xhtml[]
+
+Additional information shall accompany each entry in the soft binding algorithm list, within the `entryMetadata` field.  These are a human readable description of the algorithm (`description`), and the date it was proposed for entry into the soft binding algorithm list (`dateEntered`).  
+
+The contact details of the owner of the entry shall be provided as an email address (`contact`, required).  An informational URL (`informationalUrl`, required) shall be provided that references a human readable page describing characteristics of the soft binding algorithm.  The information at that page is unconstrained but might include details such as how to interpret the `value` field in the soft binding registry, which is encoded in an algorithm specific form. 
+
+#### Soft Binding Resolution API
+
+The soft binding resolution API is a Web API providing a standard way of retrieving C2PA Manifest stores from a soft binding resolution API endpoint given a soft binding value, a manifest identifier, or an asset. The soft binding algorithm list entry may contain a list of URIs of soft binding resolution APIs in the `softBindingResolutionApis` field. If several URIs are given then any may be used for a soft binding resolution. 
+
+The API specification and documentation is available xref:softbinding:Decoupled.adoc#SBR-API[here].
+
+##### Validating Soft Binding Matches
+
+A common use for soft bindings is to discover the active manifest, from a manifest repository, for an asset whose C2PA Manifest is absent or invalid.
+
+Discovery of the C2PA Manifest shall be performed using one, or a combination of, algorithms identified by the `alg` field within the C2PA Soft Binding Algorithm List.  The list is maintained as a JSON document by the C2PA at the following location: https://spec.c2pa.org/softbinding-alg-list[]
+
+If a C2PA Manifest is found in a manifest repository, and that manifest contains one or more soft binding assertions, then the matcher shall ensure that all soft binding assertions in the located manifest match the soft bindings used to perform the discovery.  
+
+A soft binding assertion shall be considered a match  if both the algorithm identifier (`alg`) and the value (`value`) described within the assertion match the algorithm identifier (`alg`) and value (`value`) used to perform the match.  Matching is performed in the manner prescribed by the specified algorithm.
+

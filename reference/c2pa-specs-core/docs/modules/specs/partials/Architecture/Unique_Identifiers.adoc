@@ -1,0 +1,141 @@
+:revdate: {docdate}
+:version-label!: 
+:sectnums:
+:sectnumlevels: 5 
+:chapter-label:
+:source-highlighter: rouge
+:stem: asciimath
+
+## Unique Identifiers
+
+[[manifest-identifier]]
+### Uniquely Identifying C2PA Manifests and Assets
+Every C2PA Manifest is uniquely identified and referenced by a Uniform Resource Name {urn} from the `c2pa` URN namespace, and a C2PA asset is uniquely identified by the `c2pa` URN value of its active manifest. The ABNF for the C2PA URN is described by <<abnf_for_urn>>.
+
+A `c2pa` URN shall consist of two mandatory and two optional components, in the following order, with colons (`:`) between each section.
+
+	- URN identifier (`urn:c2pa`): REQUIRED.
+	- UUID v4, in string representation (as per RFC 9562, section 4): REQUIRED.
+	- Claim Generator identifier string : OPTIONAL.
+	- Version and Reason string (as described below) : OPTIONAL.
+
+When present, the "Claim Generator identifier" string shall consist of no more than 32 characters from the ASCII range (as per RFC 20), but which are not Control Characters (RFC 20, 5.2) or Graphic Characters (RFC 20, 5.3).
+   	
+When present, the "Version and Reason" string shall consist of a positive integer, followed by an underscore (`_`) and then another positive integer. The details of each of these values and how they are to be used is described in xref:_versioning_manifests_due_to_conflicts[Versioning Manifests Due to Conflicts]. In addition, when a "Version and Reason" string is present, a "Claim Generator identifier" string shall also be present but it may be empty.
+
+[[abnf_for_urn]]
+[source,abnf]
+.ABNF for C2PA URN
+----
+include::../schemas/c2pa_urn.abnf[]
+----
+
+
+Examples: 
+
+	- `urn:c2pa:F9168C5E-CEB2-4FAA-B6BF-329BF39FA1E4`
+	- `urn:c2pa:F9168C5E-CEB2-4FAA-B6BF-329BF39FA1E4:acme`
+	- `urn:c2pa:F9168C5E-CEB2-4FAA-B6BF-329BF39FA1E4:acme:2_1`
+	- `urn:c2pa:F9168C5E-CEB2-4FAA-B6BF-329BF39FA1E4::2_1`
+
+ifdef::not-for-iso[]
+NOTE: Previous versions of this specification used {uuid} URN, and had the identifier of the claim generator at the beginning of the URN. However, this was found to be not in compliance with either {uuid} or {urn}.
+endif::[]
+
+This `c2pa` URN identifier is used in various parts of a C2PA-enabled workflow, such as when identifying an asset as an xref:ingredient_assertion[ingredient] in a derived or composed asset. 
+
+### Versioning Manifests Due to Conflicts
+Situations may arise where it is necessary to re-label a C2PA Manifest due to a conflict of identifiers. For example, if a claim generator had already added an ingredient manifest into the asset's C2PA Manifest Store, then later added another ingredient which had a manifest with the same label in its manifest store, but this latter version of the manifest was different due, for example, to a manipulation of one of its assertion values. In such a case, the modified version of the ingredient manifest needs to be copied into the asset's C2PA Manifest Store, and shall be re-labeled. 
+
+To re-label a manifest: 
+
+- If the current URN does not contain a "Claim Generator identifier string", then the claim generator shall append a `:`.  
+- In all cases, the claim generator shall append a `:` to the URN followed by a monotonically increasing integer, starting with 1, followed by an underscore (`_`) and then an integer from the list below representing the reason for the re-labeling. 
+
+* 1: Conflict with another C2PA Manifest
+
+For example, if the claim generator has to re-label a C2PA Manifest for the second time due to a conflict, the appended string would be `:2_1`.
+
+### Identifying Non-C2PA Assets
+
+When working with assets that do not contain a C2PA Manifest, but the asset contains embedded XMP which include values for `xmpMM:DocumentID` and/or `xmpMM:InstanceID` as defined in {xmp222}, those values shall be used as identifiers for the asset.
+
+When working with assets that do not contain a C2PA Manifest and do not contain embedded XMP, the claim generator may use any method of its choosing to provide it with a unique identifier.
+
+### URI References
+
+#### Standard URIs
+All references to information in the manifest, whether stored internally to the asset (i.e., embedded) or stored externally to the asset (e.g., in the cloud), shall be referenced via JUMBF URI references as defined in {jumbf-iso}, C.2. These URIs are normally used either as part of a `hashed_uri` or `hashed_ext_uri` data structure. 
+
+When the reference is to a xref:_compressed_manifests[compressed manifest], the JUMBF URI shall not contain anything about the `brob` box, but the URI to the manifest is treated as if the manifest was not compressed. This means that the URI would include the label of the `c2ma` or `c2um` box, but not the label of the `c2cm` box. In addition, the URI reference to a compressed manifest shall not include the label of the `brob` box - but only the label of the compressed manifest itself.
+
+When resolving an internal JUMBF URI reference, if any label in the path is ambiguous due to multiple child boxes having the same label, a validator shall treat the reference as unresolved.
+
+#### Hashed URIs
+
+##### Embedded
+A `hashed_uri` is used when the URI is for something embedded in the same C2PA Manifest Store.
+
+This specification provides an equivalent `hashed-uri-map` data structure (in <<hashed-uri-map>>) for schemas using a {cddl}:
+
+[[hashed-uri-map]]
+[source,cddl]
+.CDDL for hashed URI
+----
+include::../schemas/cddl/hashed-uri.cddl[]
+----
+
+Because assertion stores shall be located in the same C2PA Manifest box as the claim that refers to them, only `self#jumbf` URIs are permitted. These `self#jumbf` URIs may be relative to the entire C2PA Manifest Store, in which case they shall start with a `/` (U+002F, Slash), or relative to the current C2PA Manifest. URIs shall not contain the sequence `..` (a pair of U+002E, Full Stop). 
+
+[figure]
+.Example `self#jumbf` URIs
+====
+The following are examples of valid `self#jumbf` URIs:
+
+- `self#jumbf=/c2pa/urn:c2pa:F095F30E-6CD5-4BF7-8C44-CE8420CA9FB7/c2pa.assertions/c2pa.thumbnail.claim` is relative to the entire store (since it starts with `/`);
+
+- `self#jumbf=c2pa.assertions/c2pa.thumbnail.claim` would be relative to the manifest of the box containing the URI.
+====
+
+[[hashed-ext-uri]]
+##### External
+
+When referring to a resource that exists externally to the C2PA Manifest Store, a `hashed-ext-uri-map` data structure is used.  It is a variation on the `hashed-uri`, in that it references an external URI instead of a `self#jumbf`. The `hashed-ext-uri` data structure is defined by the `hashed-ext-uri-map` rule in the following CDDL in <<hashed-ext-uri-map>>:
+
+[[hashed-ext-uri-map]]
+[source,cddl]
+.CDDL for hashed external URI
+----
+include::../schemas/cddl/hashed-ext-uri.cddl[]
+----
+
+ifdef::not-for-iso[]
+[IMPORTANT]
+====
+endif::[]
+In keeping with common practice, it is recommended that the `https` scheme be used to retrieve assertion data to protect the privacy of the data in transit, but `http` is also permitted because the data's integrity is protected by the `hash` field and this privacy may not be required in all circumstances. Authors of manifests with external URIs should choose the scheme to suit their needs.
+ifdef::not-for-iso[]
+====
+endif::[]
+
+The optional `dc:format` field, when present, provides an alternative to the `Content-Type` field of the http(s) headers. If present, this field shall be used as the required format retrieved during any content negotiate/request.  Sometimes, it may also be necessary to provide one or more xref:_asset_type[asset types] as the value of the `data_types` field for more clarity on the format and usage of that data.
+
+An optional `size` field is also provided to specify the size of the data to be retrieved.  This may be useful to a validator as a hint in addition to the hash.
+
+NOTE: It could be used to provide information about whether to perform downloading or validation or both.
+
+##### Hashing JUMBF Boxes
+
+When creating a URI reference to any JUMBF box (e.g., <<_assertions, assertions>> and <<_data_boxes,data boxes>>), the hash shall be performed over the contents of the structure's JUMBF superbox, which includes both the JUMBF Description Box and all content boxes therein (but does not include the structure's JUMBF superbox header).  
+
+NOTE: More details on hashing can be found at <<_hashing>>.
+
+As described in the latest version of JUMBF ({jumbf-iso}), and shown in <<example-actions-assertion>>, a new `Private` field can be present as part of any JUMBF Description box. This C2PA specification defines the C2PA salt as a `Private` field whose value is a standard box consisting of: 
+
+- a box length (LBox, as a 4-byte big-endian unsigned integer);
+- a box type (TBox, 4-byte big-endian unsigned integer, with a value of `c2sh` (for C2PA salt hash));
+- and payload data (consisting of randomly-generated binary data of either 16 or 32 bytes in length).
+
+[[example-actions-assertion]]
+.Example `c2pa.actions` assertion
+image::assertion_JUMBF.drawio.{image-ext}[Example assertion structure,width=361,height=451,align="center"]

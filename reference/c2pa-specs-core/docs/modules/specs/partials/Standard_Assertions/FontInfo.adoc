@@ -1,0 +1,27 @@
+#### Description
+A Font Information assertion is used to ensure that basic font metadata, such as the name, format, creator attribution, and licensing, are added to the asset in a manner which may be validated cryptographically.
+
+A Font Information assertion shall have a label of `font.info`, and there shall be at most one Font Information assertion per manifest.
+
+#### Schema and Example
+
+The schema for this type is defined by the `font-info-map` rule in the following {cddl}:
+
+[source,cddl]
+----
+include::../schemas/cddl/font-info.cddl[]
+----
+
+A basic example in CBOR diagnostic notation ({8949}, clause 8), containing only required fields, is shown below:
+
+[source]
+----
+include::../examples/cbordiag/font-info-basic.cbordiag[]
+----
+
+This extended example demonstrates optional fields as well:
+
+[source]
+----
+include::../examples/cbordiag/font-info.cbordiag[]
+----

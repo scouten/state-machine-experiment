@@ -1,0 +1,105 @@
+[appendix]
+[[embedding_annex]]
+
+== Embedding manifests
+
+
+=== Supported Formats
+A C2PA Manifest is embedded into an asset as part of the C2PA Manifest Store for that asset.
+
+When embedding the C2PA Manifest Store into an asset, the location will vary based on the type or format of the asset. Here are some well-known file formats and the location for the C2PA Manifest Store in each:
+
+JPEG:: Refer to <<_embedding_manifests_into_jpeg>> for more information.
++
+JPEG-XL:: Refer to <<_embedding_manifests_into_jpeg_xl>> for more information.
++
+PNG:: Refer to <<_embedding_manifests_into_png>> for more information.
++
+SVG:: Refer to <<_embedding_manifests_into_svg>> for more information.
++
+HTML:: Refer to <<_embedding_manifests_into_html>> for more information.
++
+FLAC:: Refer to <<_embedding_manifests_into_id3>> for more information.
++
+MP3:: Refer to <<_embedding_manifests_into_id3>> for more information.
++
+// .EDITORS NOTE
+// https://github.com/c2pa-org/specs-core/issues/1172
+// +
+GIF:: Refer to <<_embedding_manifests_into_gifs>> for more information.
++
+DNG:: Refer to <<_embedding_manifests_into_tiff_based_assets>> for more information.
++
+TIFF-based formats:: Refer to <<_embedding_manifests_into_tiff_based_assets>> for more information.
++
+WAV and BWF:: Refer to <<_embedding_manifests_into_riff_based_assets>> for more information.
++
+AVI:: Refer to <<_embedding_manifests_into_riff_based_assets>> for more information.
++
+WebP:: Refer to <<_embedding_manifests_into_riff_based_assets>> for more information.
++
+Other RIFF-based formats:: Refer to <<_embedding_manifests_into_riff_based_assets>> for more information.
++
+Fonts:: Refer to <<_embedding_manifests_into_fonts>> for more information.
++
+Unstructured text:: Refer to <<embedding_manifests_into_unstructured_text>> for more information.
++
+Structured text:: Refer to <<embedding_manifests_into_structured_text>> for more information.
++
+PDF:: Refer to <<_embedding_manifests_into_pdfs>> for more information.
++
+EPUB:: Refer to <<_embedding_manifests_into_zip_based_formats>> for more information.
++
+OOXML:: Refer to <<_embedding_manifests_into_zip_based_formats>> for more information.
++
+Open Document:: Refer to <<_embedding_manifests_into_zip_based_formats>> for more information.
++
+OpenXPS:: Refer to <<_embedding_manifests_into_zip_based_formats>> for more information.
++
+Other ZIP-based formats:: Refer to <<_embedding_manifests_into_zip_based_formats>> for more information.
++
+MP4:: Refer to <<_embedding_manifests_into_bmff_based_assets>> for more information.
++
+MOV:: Refer to <<_embedding_manifests_into_bmff_based_assets>> for more information.
++
+AAC:: Refer to <<_embedding_manifests_into_bmff_based_assets>> for more information.
++
+ALAC:: Refer to <<_embedding_manifests_into_bmff_based_assets>> for more information.
++
+HEIF:: Refer to <<_embedding_manifests_into_bmff_based_assets>> for more information.
++
+OGG VORBIS:: Refer to <<_embedding_manifests_into_ogg_vorbis>> for more information.
++
+Other BMFF-based formats:: The box specified in <<_embedding_manifests_into_bmff_based_assets>>.
+
+ifdef::not-for-iso[]
+NOTE: Non-BMFF-based audio formats which are being considered for addition to this specification include Ogg Vorbis and the native container version of the Free Lossless Audio Codec (Native FLAC).
+endif::[]
+
+=== Embedding manifests in multi-part assets
+
+When embedding a C2PA Manifest into a multi-part asset ("multi-asset"), there shall be a C2PA Manifest Store embedded into the primary part of the asset (which contains the active manifest), though additional parts may also contain their own C2PA Manifest Stores. The active manifest of the primary part shall contain a xref:_multi_asset_hash[multi-asset hash assertion] that describes the location and hash of each part within the asset and should describe the provenance of the whole multi-part asset.
+
+
+// Embedding manifests into non-BMFF-based assets
+include::Manifests_other.adoc[]
+
+// Embedding manifests into PDFs
+include::Manifests_PDF.adoc[]
+
+// Embedding manifests into BMFF-based assets
+include::Manifests_BMFF.adoc[]
+
+// Embedding manifests into ZIP-based assets
+include::Manifests_ZIP.adoc[]
+
+// Embedding manifests into HTML assets
+include::Manifests_HTML.adoc[]
+
+// Embedding manifests into Unstructured Text assets
+include::Manifests_Text.adoc[]
+
+// Embedding manifests into Structured Text assets
+include::Manifests_Structured_Text.adoc[]
+
+

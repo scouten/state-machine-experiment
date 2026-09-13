@@ -1,0 +1,54 @@
+[[aiDisclosure]]
+==== Summary
+
+As part of an ongoing effort to enhance AI transparency and accountability, a new AI Disclosure assertion is introduced to provide a means for a Claim Generator to provide machine-readable AI transparency information. This assertion enables verifiable AI transparency, automated compliance verification, and trustworthy AI content at scale.
+
+===== Details
+
+The AI Disclosure assertion shall have a label of `c2pa.ai-disclosure`. 
+
+The value of the `modelType` field is an enumeration of AI model types defined in <<model-types>> and it shall be present in the `ai-model-disclosure-map` object.  If present, the value of the `scientificDomain` field shall conform to the https://arxiv.org/category_taxonomy[arXiv taxonomy], e.g., "cs.AI", "physics.optics". All other fields are optional, but if present, they shall conform to the types specified in the CDDL schema defined below.
+
+=== Relationship Between `digitalSourceType` and `humanOversightLevel`
+
+The `c2pa.ai-disclosure` assertion is designed to complement existing C2PA signals rather than replace them. In particular, `c2pa.actions` and `digitalSourceType` already provide a strong foundation for recording how an asset was created or modified. What this assertion introduces are three critical provenance primitives not previously captured in the ecosystem: model provenance — full disclosure of the AI models used for maximum transparency; scientific routing metadata — surfacing the discipline and sensitivity of the content domain; and human oversight level — a structured signal of the degree of human involvement practised during the generation pipeline.
+
+Since there may be a perceived overlap between `digitalSourceType` and `humanOversightLevel`, the table below is intended to disambiguate the two — both serve different but complementary purposes.
+
+[cols="30%,20%,50%", options="header"]
+|===
+| `digitalSourceType` | `humanOversightLevel` | Interpretation
+
+| `trainedAlgorithmicMedia`
+| `fully_autonomous`
+| Pure AI generation, no human review
+
+| `trainedAlgorithmicMedia`
+| `prompt_guided`
+| AI generation guided by human prompts — moderate human involvement
+
+| `compositeWithTrainedAlgorithmicMedia`
+| `human_validated`
+| AI edits applied and reviewed/approved by a human editor prior to release
+
+| `digitalCreation`
+| *not applicable*
+| No trained model invoked; AI Model Disclosure assertion is not attached
+|===
+
+==== Schema and Example
+
+The schema for this type is defined by the `ai-model-disclosure-map` rule in the following {cddl}:
+
+[source,cddl]
+----
+include::../schemas/cddl/ai-disclosure.cddl[]
+----
+
+An example in CBOR diagnostic notation ({8949}, clause 8) is shown below. In this example, the asset is a TensorFlow model file of version 2.11.0 which is stored in the SavedModel format.
+
+[source]
+----
+include::../examples/cbordiag/ai-disclosure.cbordiag[]
+----
+

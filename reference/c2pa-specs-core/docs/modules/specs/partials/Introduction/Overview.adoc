@@ -1,0 +1,76 @@
+ifdef::not-for-iso[]
+=== Technical Overview
+
+endif::[]
+ifdef::for-iso[]
+== Technical Overview
+
+=== Overview
+endif::[]
+
+The C2PA information comprises a series of statements that cover areas such as asset creation, edit actions, capture device details, bindings to content and many other subjects. These statements, called assertions, make up the provenance of a given asset and represent a series of trust signals that can be used by a human to improve their view of trustworthiness concerning the asset. Assertions are wrapped up with additional information into a digitally signed entity called a claim. This claim is digitally signed by the claim generator on behalf of the xref:signer-definition[signer], using the signer's signing credential, producing the claim signature.
+
+These assertions, claims, and the claim signature are all bound together into a verifiable unit called a C2PA Manifest (see <<manifest-parts>>) by a hardware or software component called a claim generator. The set of C2PA Manifests, as stored in the asset's Content Credential, represent its provenance data.
+
+[[manifest-parts]]
+[height=150]
+.A C2PA Manifest and its constituent parts
+image::Manifest.drawio.{image-ext}[A C2PA Manifest and its parts,align="center"]
+
+ifdef::not-for-iso[]
+==== Establishing Trust
+endif::[]
+ifdef::for-iso[]
+=== Establishing Trust
+endif::[]
+
+The basis of making trust decisions in C2PA, our xref:_trust_model[trust model], is the identity of the signer associated with the cryptographic signing key used to sign a claim in a C2PA Manifest. The claim signatures of C2PA Manifests, when combined with trusted time-stamps, can undergo the validation process indefinitely to determine if claims were signed while the signing credentials were valid and not revoked.
+
+ifdef::not-for-iso[]
+==== An Example
+endif::[]
+ifdef::for-iso[]
+=== An Example
+endif::[]
+
+A very common scenario will be a user taking a photograph with their C2PA-enabled camera (or phone). In that instance, the camera would create a manifest containing some assertions including information about the camera itself, a thumbnail of the image and some cryptographic hashes that bind the photograph to the manifest. These assertions would then be listed in the Claim, which would be digitally signed and then the entire C2PA Manifest (see <<Photo_Manifest>>) would be embedded into the output JPEG. This C2PA Manifest would remain valid indefinitely.
+
+[[Photo_Manifest]]
+[width=142,height=212]
+.Example C2PA Manifest of a Photograph
+image::Photo_Manifest.{alt-image-ext}[Example C2PA Manifest of a Photograph,align="center"]
+
+A Manifest Consumer, such as a C2PA validator, helps users to establish the trustworthiness of the asset by first validating the digital signature and its associated credential. It also checks each of the assertions for validity and presents the information contained in them, and the signature, to the user in a way that they can then make an informed decision about the trustworthiness of the digital content.
+
+ifdef::not-for-iso[]
+==== Design Goals
+endif::[]
+ifdef::for-iso[]
+=== Design Goals
+endif::[]
+
+In the creation of the C2PA architecture, it was important to establish some clear goals for the work to ensure that the technology was usable across a wide spectrum of hardware and software implementations worldwide and accessible to all. Those goals can be found in <<design-goals>>.
+
+[[design-goals]]
+.C2PA Design Goals
+[cols="20%,80%"]
+|===
+|Goal | Description
+
+|Privacy | Enable users to control the privacy of their information, including consumption data and information recorded in provenance
+|Responsibility | Ensure consumers can determine the provenance of an asset
+|Scalability | Enable creation/consumption/validation of media provenance at the same scale as media creation/consumption on the web
+|Extensibility | Ensure future metadata and credential providers are able to add their information without requiring input or approval from the C2PA
+|Interoperability | Ensure that differing implementations are able to operate with each other without ambiguity
+|Whole Workflow Applicability | Maintain the provenance of the asset across multiple tools, from creation through all subsequent modification and publication/distribution
+|Technology Minimalism | Create only the minimum required novel technology in the specification by relying on prior, well-established techniques
+|Security | Design to ensure that consumers can trust the integrity and source of provenance, and ensure the design is reviewed by experts
+|Content Ubiquity | Enable the inclusion of provenance for all common media types, including documents
+|Flexible Locality | Enable both online and offline (asset-only) storage and consumption/validation of provenance
+|Global Universality | Design for the needs of interested users throughout the world
+|Accessibility| Ensure that the technology can be used in a way that conforms to recognized accessibility standards, such as WCAG
+|Harms and Misuse| Design to avert and mitigate potential harms, including threats to human rights and disproportionate risks to vulnerable groups
+|Evolving| Continuous review of the specification against these goals to ensure that they remain our priority
+
+|===
+

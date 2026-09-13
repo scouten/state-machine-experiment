@@ -1,0 +1,25 @@
+==== Description
+
+In some provenance workflows, a standard or update manifest is created offline, where it is not possible to obtain the revocation information (via OCSP) at the time of signing. Without that information available during the validation process, a validator may need to go online to determine the revocation status of the certificate. This assertion is used to provide the trusted certificate status for such C2PA Manifests, by adding the information after the fact.
+
+==== Schema and Example
+
+The schema for this type is defined by the `cert-status-map` rule in the following {cddl}:
+
+[source,cddl]
+----
+include::../schemas/cddl/certificate-status.cddl[]
+----
+
+An example in CBOR Diagnostic Format (`.cbordiag`) is shown below:
+
+[source]
+----
+include::../examples/cbordiag/certificate-status.cbordiag[]
+----
+
+==== Requirements
+
+A certificate status assertion shall have a label of `c2pa.certificate-status`, and a C2PA Manifest shall contain at most one certificate status assertion.
+
+The certificate status assertion consists of a CBOR map (defined as a `certificate-status-map`) and shall contain at least one entry in the `ocspVals` array. As described in <<_certificate_revocation>>, the claim generator queries the OCSP service indicated by the signing certificate, captures the response, and shall store it the same binary format as used when it is stored as an element of the `ocspVals` array of the `rVals` header (see <<rVals-cddl>>).

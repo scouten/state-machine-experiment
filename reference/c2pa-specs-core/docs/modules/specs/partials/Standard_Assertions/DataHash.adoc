@@ -1,0 +1,56 @@
+#### Description
+The most common way to uniquely verify the integrity of portions of a non-BMFF-based asset is via the hard bindings (i.e., cryptographic hash) present in data hash assertions. However, for those formats that are "box like" but not compatible with BMFF, the xref:_general_box_hash[general box hash] assertion is recommended.
+
+The `alg` field, if present, shall be a string that is one of the allowed hash algorithms as defined in <<_hashing>>, and that algorithm shall be used to compute the hash. If the `alg` field is not present, then the hashing algorithm shall be determined by the value of the `alg` field in the Claim. The hash value shall be present in the `hash` field.
+
+Each data hash assertion defines a specified range of bytes over which the hash has been computed. If only a portion of the asset shall be hashed, then the range(s) to be excluded shall be present in the array value of the `exclusions` field. These excluded ranges shall be ordered by increasing start position and shall not overlap.
+
+For data hash exclusion ranges, the range shall begin and end within the same logical unit (e.g., box, segment, object) and shall not overlap with any header or length field associated with that unit, except for freebox or pad data. It is the responsibility of the claim generator to define exclusion ranges in a way that ensures that whatever data an attacker might place in those ranges cannot materially affect the interpretation of the asset. Furthermore, the claim generator shall ensure the exclusion range only contains content from C2PA Manifest Store, or asset metadata (e.g., EXIF, IPTC metadata). Example metadata that could be skipped can be unverified user name or image rotation information. 
+
+ifdef::not-for-iso[]
+A previous version of this specification provided a `url` field to provide a pointer to where the hashed data can be located, but it was never used. This field is now deprecated in favour of the xref:_asset_reference[asset reference assertion]. Claim generators shall not add this field to a data hash assertion, and consumers shall ignore the field when present, except this shall not affect inclusion of the field as part of the content being validated as described in <<_assertion_validation>>.
+endif::[]
+
+A data hash assertion shall have a label of `c2pa.hash.data`.
+
+A data hash assertion shall not appear in a xref:_cloud_data[cloud data assertion] or an xref:_external_reference[external reference assertion].
+
+A data hash assertion shall not be used with a xref:_compressed_manifests[compressed manifest].
+
+NOTE: This restriction exists to address a technical incompatibility between the two.
+
+#### Schema and Example
+
+The schema for this type is defined by the `data-hash-map` rule in the following {cddl}:
+
+[source,cddl]
+----
+include::../schemas/cddl/data-hash.cddl[]
+----
+
+An example in CBOR diagnostic notation ({8949}, clause 8) is shown below:
+
+[source]
+----
+include::../examples/cbordiag/data-hash.cbordiag[]
+----
+
+Normally, the `start` and `length` values of an `exclusion` shall be written in their preferred serialization (i.e., "as short as possible"). However, when a data hash assertion needs to be created but the `start` and `length` values are not yet known, they shall be created "as large as possible", which would be as a 32-bit integer. 
+
+The `pad` value shall be present and shall be a zero-filled byte string. The `pad2` value, if present, shall be a zero-filled byte string.
+
+NOTE: <<_multiple_step_processing>> describes how to fill in the correct values and adjust the padding.
+
+#### Special consideration for JPEG 1
+
+When hashing a JPEG 1 (.jpg) file into which the C2PA Manifest will be embedded, the APP11 marker (`FFEB`)  and the segment's length (`Lp`) of all APP11 segments containing the JUMBF data shall be included in the exclusion range.
+
+NOTE: All the APP11 segments containing the C2PA Manifest JUMBF are contiguous so that only a single range is required.
+
+#### Special consideration for PNG
+
+When hashing a PNG (.png) file into which the C2PA Manifest will be embedded, it is important that the `Length` and the `'caBX'` (representing the chunk type) of the chunk containing the JUMBF data be included in the exclusion range.
+
+#### Special considerations for TIFF-based
+
+When hashing a TIFF-based asset into which the C2PA Manifest will be embedded, the `count` field of the C2PA Manifest Store's IFD Entry (representing the length of the JUMBF data) should be included in the exclusion ranges. This is to support Update Manifests, which could change the size of the embedded C2PA Manifest Store.

@@ -1,0 +1,45 @@
+#### Description
+In earlier versions of this specification, there were individual assertions for each metadata standard (e.g., IPTC, EXIF).  In this version, there now exists a category of assertions that shall be used to represent metadata, in a standardized serialization. Having the metadata in an assertion establishes that the metadata in that assertion is significant, because it has been explicitly included in the C2PA Manifest, and signed by a specific signer - thus enabling cryptographic validation and attribution of the data. In addition, by using a common serialization, it enables manifest consumers to process it in a consistent manner.
+
+NOTE: These assertions can represent existing standards or they can be private specifications.
+
+#### Common Requirements
+
+A metadata assertion shall have a label which ends in the string `.metadata`, and is preceded by either the standard `c2pa` identifier or any other provided that it conforms to the same syntax as xref:_namespacing[entity-specific namespaces]. For example, a `com.litware.metadata` assertion would be valid.
+
+Each metadata assertion shall contain a single JSON content type box containing the {json-ld} serialization of one or more metadata values. The `@context` property within the JSON-LD object shall be included, and used to provide context / namespaces for the metadata standards being specified.  The recommended procedure to create this JSON-LD object is to first create an {xmp} representation of the metadata and then serialize that to JSON-LD according to {xmp-json}. The JSON-LD would then be stored as a JSON content type box.
+
+#### The `c2pa.metadata` assertion
+
+This specification defines one metadata assertion, whose label is `c2pa.metadata`, which is used to represent a subset of common metadata schemas that may be used in any C2PA Manifest. Claim generators shall include in this assertion only the specific metadata fields enumerated in <<metadata_annex>>.
+
+NOTE: Custom labelled metadata assertions can contain any values from any schemas.
+
+[figure]
+.`c2pa.metadata` assertion for an image
+====
+
+An example of an `c2pa.metadata` assertion for an image:
+
+[source,json]
+----
+include::../examples/json-ld/common-metadata-image.jsonld[]
+----
+====
+
+[figure]
+.`c2pa.metadata` assertion for a PDF
+====
+An example of an `c2pa.metadata` assertion for a PDF:
+
+[source,json]
+----
+include::../examples/json-ld/common-metadata-pdf.jsonld[]
+----
+====
+
+#### Redaction of `c2pa.metadata`
+
+Although the redaction process works in such a way that only an entire assertion could be redacted (see <<_redaction_of_assertions>>), the use of an xref:_update_manifests[update manifest] enables partial redaction by removing the original and then placing the new, reduced, versions in the update manifest. This new assertion would be presented in a user experience in association with the signer of the update manifest and not with the signer of the C2PA Manifest that has been redacted.
+
+For example, a metadata assertion containing both location data and camera information which needs to have the location data redacted could be done through an update manifest with a new metadata assertion containing only the camera information.

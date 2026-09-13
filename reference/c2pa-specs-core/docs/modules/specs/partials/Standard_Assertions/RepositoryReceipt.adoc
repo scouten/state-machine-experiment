@@ -1,0 +1,39 @@
+#### Description
+
+There are use cases where a receipt may be desired in order to prove that a C2PA Manifest has been ingested by a C2PA Manifest Repository.
+
+Such use cases include providing non-repudiation of ingestion, establishing that a manifest was present in a repository at a particular time, or supporting workflows in which an external service attests to registration of the manifest.
+
+Such a receipt may be recorded via a repository receipt assertion. When recorded, it shall only appear within an xref:_update_manifests[update manifest].
+
+NOTE: Update manifests are used specifically for adding additional assertions to a C2PA Manifest without editorial modifications.
+
+A repository receipt assertion shall have a label of `c2pa.repository-receipt`.
+
+The assertion body shall contain a JSON content type box containing the {json-ld} object describing the repository that ingested the C2PA Manifest and a repository-specific proof that the C2PA Manifest was ingested. The `@context` property within the {json-ld} object shall be included.
+
+The `repository` object identifies the C2PA Manifest Repository that ingested the manifest.  The `uri` field shall contain the base URI of the C2PA Manifest Repository issuing the receipt. The `manifestId` field shall contain a C2PA Manifest identifier that is canonical to the C2PA Manifest Repository (for example, a manifest URN).
+
+The `anchor` object describes a repository-specific proof that the Manifest Store was ingested and the location at which that proof may be verified or retrieved. The `uri` field shall contain a URI at which the receipt or ingestion proof may be verified. The optional `parameters` field may contain repository-specific key/value parameters used when accessing the anchor URI.  The `proof` field shall contain a repository-defined JSON object demonstrating proof that the manifest was ingested.
+
+NOTE: The structure of the `proof` object is repository-specific.
+
+
+#### Repository Receipt Assertion Schema and Example
+
+The JSON schema for the repository receipt assertion payload is defined in the following:
+
+[source,json]
+----
+include::../schemas/json-ld/repository-receipt.jsonld[]
+----
+
+An example of a repository receipt JSON object is provided in the following:
+
+[source,json]
+----
+include::../examples/json-ld/repository-receipt.jsonld[]
+----
+
+
+

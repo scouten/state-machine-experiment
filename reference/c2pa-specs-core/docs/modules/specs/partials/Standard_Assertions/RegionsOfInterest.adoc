@@ -1,0 +1,94 @@
+#### Description
+In some use cases, a given assertion, such as an xref:_actions[actions assertion], may only be relevant to a specific portion of an asset as opposed to the entire asset.  In those cases, it is necessary to have a way to describe that region - whether it be temporal, spatial, textual or a combination of them.  A `region` definition serves that purpose.
+
+#### Common
+
+The most important part of the `region` definition is the `range` field which is used to describe a temporal range, a spatial range, a frame range, a textual range or a combination of them, for the region.
+
+[NOTE]
+====
+While the specification allows for specifying a combination of ranges, it is not defined how a Manifest Consumer will use them. 
+ifdef::not-for-iso[]
+It is expected that the C2PA's User Experience Task Force will take this up in the future.
+endif::[]
+====
+
+A `region` may also contain one of more common fields:
+
+`name`:: a free-text string representing a human-readable name for the region which might be used in a user interface.
+`identifier`:: a free-text string representing a machine-readable, unique to this assertion, identifier for the region.
+`type`:: a value from a controlled vocabulary such as https://cv.iptc.org/newscodes/imageregiontype/[] or an entity-specific value (e.g., `com.litware.newType`) that represents the type of thing(s) depicted by a region. 
+`description`:: a free-text string.
+
+Older versions of this specification included a `role` field.  This field has been deprecated and shall no longer be included when generating a region of interest.
+
+##### Ranges
+
+All ranges consist of a `type` field whose value is either "spatial", "temporal", "frame",  "textual" or "identified".  In addition, it shall contain one of the following fields whose data is an object consisting of the specific data for that range:
+
+- `shape` (for spatial);
+- `time` (for temporal);
+- `frame` (for temporal or textual);
+- `text` (for textual);
+- `item` (for specifically identified items).
+
+##### Spatial
+
+Spatial ranges are described using a `shape` object. A `shape` can be use to represent a rectangle, a circle or a polygon.  It is modelled on the http://www.iptc.org/std/photometadata/specification/IPTC-PhotoMetadata#region-boundary-structure[Region Boundary Structure] from the IPTC.
+
+##### Temporal
+
+Temporal ranges are described using a `time` object, which represents a range from a starting time to an ending time.  Times are normally described using a value that is relative to the start of the media.  This is commonly referred to as "Normal Play Time" (`npt`) as described in {2326} (as recommended in {media-frag}). Alternatively, it is possible to refer to an absolute time (e.g., "10:00am"). Absolute times, sometimes referred to as "wall clock time", shall be specified using the Internet profile of {8601} as described in {3339}.
+
+NOTE: Absolute, or wall clock time, is useful in scenarios where the media asset represents activity that took place during a specific date and time period, such as a news broadcast or a live event.
+
+If no `type` field is provided, the range shall be in `npt` format. If no `start` field is provided, the range shall start at the beginning of the asset.  If no `end` field is provided, the range shall end at the end of the asset.
+
+All `start` times are inclusive of that moment in time, and all `end` times are, by default, exclusive of it. The `endInclusivity` field may be set to `inclusive` to make the `end` time inclusive instead, which should be used where the range runs to the end of the asset.
+
+For `npt` time ranges (expressed via a `npt-time-map`): If neither the `start` nor the `end` fields are provided, the range shall represent the entire asset.
+
+For `wallClock` time ranges (expressed via a `wall-clock-time-map`): The `end` time shall not be earlier than the `start` time. At least one `start` or `end` field shall be provided. If one field is not provided, and the duration of the asset is available, the missing field is calculated by adding or subtracting the duration of the asset to/from the provided field. If the total asset duration is not available (such as for live streams), the time range extends forward or backward from the provided field, as appropriate, until the region is updated or the end of the asset is reached.
+
+Where temporal ranges use fractions of a second, and not a sample or frame count, implementations should use the smallest number of decimal places possible to accurately represent the point in their media timeline. Where the fractions of a second do not align to a sample or frame boundary, and that is important for the validator or its user interface, implementations should choose the nearest sample or frame whose time is less than or equal to the specified time.
+
+##### Frames
+
+A `frame` object defines a range using the starting and ending frames or pages (inclusive). If no `start` is provided, the range shall start at the beginning of the asset.  If no `end` is provided, the range shall end at the end of the asset.  If neither is provided, the range shall represent the entire asset.
+
+Frames are represented as a single ordinal numbers, where `0` is the first frame.  
+
+While frames are typically used to represent page numbers of a document, such as PDF, they may have uses in other media types, such as animation, video and audio. It is recommended that where possible, media types dealing with regions of interest over time use `temporal` ranges instead.
+
+##### Textual
+
+A `text` object defines a range using a one or more URL fragment identifiers, as defined by the {annot-fragment-selector}.  It may also refine the range using offsets to the starting and ending characters (inclusive). If no `start` is provided, the range shall start at the beginning of the fragment.  If no `end` is provided, the range shall end at the end of the fragment.  If neither is provided, the range shall represent the entire fragment.
+
+When used singularly, the `fragment` entry of the `text-selector-map` represents the entirety of the specified textual range. However, the `text-selector-range-map` supports a pair of `text-selector-map` objects. The value of `selector` is the start of the range (or its entirely, if no `end` entry is present) and the value of `end` (if present) represents the end of a contiguous range.  In addition, multiple pairs may be used to represent a range that is not contiguous.
+
+##### Identified
+
+An `item` object defines a a media track, media item, or other discrete content item in the asset, allowing the claim generator to indicate assertions that apply to only a subset of the content carried in the asset's file container. For example, it could be used to indicate that only the audio track of a video file is relevant.
+
+The media or content item is identified by an `identifier` string whose value should match the typical item identification naming scheme in that specific container format. For example, the value of `identifier` should be `track_id` for MP4 files, and `item_ID` for HEIF files. The value of the `identifier` is then provided in the `value` field. For example, a `value` of `2` with an `identifier` of `track_id` in an MP4 video file container would indicate an assertion related to the second media track in the file (which could be the audio track). 
+
+Another use for identified ranges is to indicate a specific region by a known semantic value. For example, the https://bioportal.bioontology.org/ontologies/FMA[Foundational Model of Anatomy] could be used to identify a specific region of a human body. In such a case, the `identifier` shall be the URL or URI to where to locate the schema (though not necessary directly to a machine readable one).
+
+#### Schema
+
+The schema for this type is defined by the `region-map` rule in the following {cddl}:
+
+[source,cddl]
+----
+include::../schemas/cddl/regions-of-interest.cddl[]
+----
+
+#### Examples
+
+A series of examples in CBOR diagnostic notation ({8949}, clause 8) are shown below:
+
+[source]
+----
+include::../examples/cbordiag/regions-of-interest.cbordiag[]
+----
+

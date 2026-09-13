@@ -1,0 +1,68 @@
+:revdate: {docdate}
+:version-label!: 
+:sectnums:
+:sectnumlevels: 5 
+:chapter-label:
+:source-highlighter: rouge
+
+## Binding to Content
+
+### Overview
+
+A key aspect to the xref:_standard_manifests[standard C2PA manifest] is the presence of one or more data structures, called content bindings, that can uniquely identify portions of the asset. There are two types of bindings that are supported by C2PA - hard bindings and soft bindings. A hard binding (also known as a cryptographic binding) enables the validator to ensure that (a) this manifest belongs with this asset and (b) that the asset has not been modified, by determining values that can match only this asset and no other, not even other assets derived from it or renditions produced from it.  A soft binding is computed from the xref:_digital_content[digital content] of an asset, rather than its raw bits.  A soft binding is useful for identifying derived assets and asset renditions.
+
+A single manifest shall not contain more than one assertion defining a hard binding but may contain zero or more assertions defining soft bindings.
+
+### Hard Bindings
+
+#### Hashing using byte ranges
+The simplest type of hard binding that can be used to detect tampering is a cryptographic hashing algorithm, as described in <<_hashing>>, over some or all of the bytes of an asset. This approach can be used on any type of asset, but should only be considered for formats that don't support one of the forms of box-based hashing. 
+
+When using this form of hard binding, a xref:_data_hash[data hash assertion] is used to define the range of bytes that are hashed (and those that are not). Because a data hash assertion defines a byte range, it is flexible enough to be usable whether the asset is a single binary or represented in multiple chunks or portions.
+
+#### Hashing using a general box hash
+When an asset's format is a non-BMFF-based box format, such as JPEG, PNG, GIF or others listed xref:_handling_for_specific_formats[here], then a xref:_general_box_hash[general box hash] assertion should be used. This assertion consists of an array of structures, each one listing one or more boxes (by their name/identifier) and a hash that covers that data of those boxes (and any possible data that may be present in the file between them), along with the algorithm used for xref:_hashing[hashing]. 
+
+#### Hashing a BMFF-formatted asset
+If the asset is based on https://www.iso.org/standard/74428.html[ISO BMFF] then a hard binding optimized for the box-based format (called xref:_bmff_based_hash[BMFF-based hash assertions]) may be used instead. 
+
+For a monolithic MP4 file asset where the `mdat` box is validated as a unit, the assertion is validated nearly identically to a data hash assertion.  It simply uses a box exclusion list instead of byte ranges to define the range of bytes that are hashed (and those that are not).
+
+For fragmented MP4 (fMP4) files, the assertion itself shall be combined with chunk-specific hashing information which is located as specified in <<_embedding_manifests_into_bmff_based_assets>>.  
+
+The details on how to hash individual segments for live video can be found <<live-video, here>>.
+
+#### Hashing unstructured text assets
+For unstructured text assets that have a C2PA Manifest embedded using Unicode Variation Selectors as described in <<embedding_manifests_into_unstructured_text>>, a xref:_data_hash[data hash assertions] shall be used. This assertion provides a hard binding mechanism specifically designed for text content where the C2PA Manifest is embedded as a sequence of non-rendering Unicode characters.
+
+Normative references: https://www.unicode.org/versions/latest/ch23.pdf[Unicode Standard, Ch. 23 (Variation Selectors)]
+
+#### Hashing a Collection
+
+In workflows where the C2PA Manifest will refer to a collection of assets, instead of a single asset, the xref:_collection_data_hash[collection data hash assertion] shall be used as the method to specify the hard bindings for the assets in the collection.  
+
+NOTE: For example, a collection data hash assertion can be used to describe each folder of a training data set for an AI/ML model.
+
+[[asset_metadata_bindings]]
+#### Binding Non-C2PA Asset Metadata
+
+One of the capabilities of a hard binding is that it can exclude parts of an asset, for various reasons. However, a Claim Generator should, where possible, include asset metadata (i.e., metadata outside a C2PA Manifest such as EXIF or XMP) in the hard binding, in order to protect its integrity throughout the asset's lifecycle.
+
+NOTE: Only signed C2PA created_assertions are attributed to the signer. Any asset metadata outside of this specific mechanism, whether included in hard bindings or not, is not attributed to the signer by this specification. For example, the signer is not responsible for the accuracy of a GPS location appearing in EXIF metadata, even if that metadata is covered by the hard binding. However, if the GPS EXIF metadata are serialized in a `c2pa.metadata` assertion that is included in `created_assertions`, that is an explicit signal from the signer that it is asserting the GPS location associated with the asset.
+
+Any asset metadata values that are supported by the xref:_metadata[common metadata assertion], as described in <<metadata_annex>>, and can be asserted by the signer, should be copied into such an assertion and included in the C2PA Manifest.
+
+### Soft Bindings
+
+#### General
+Soft bindings are described using xref:soft_binding_assertion[soft binding assertions] such as a fingerprint computed from the xref:_digital_content[digital content] or an invisible watermark embedded within the digital content. These soft bindings enable digital content to be matched even if the underlying bits differ.
+
+NOTE: For example, an asset rendition in a different resolution or encoding format. 
+
+Additionally, if a C2PA manifest is removed from an asset, but a copy of that manifest remains in a provenance store elsewhere, the manifest and asset may be matched using available soft bindings.
+
+Because they serve a different purpose, a soft binding shall not be used as a hard binding. 
+
+#### Referenced List of Soft Binding Algorithms
+
+Soft bindings are generated by an algorithm named in the `alg' field of the xref:soft_binding_assertion[soft binding assertion].  The algorithm name should be among those algorithms listed in the xref:_soft_binding_algorithm_list[soft binding algorithm list] as supported by this specification.

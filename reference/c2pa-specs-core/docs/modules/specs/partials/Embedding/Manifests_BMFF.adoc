@@ -1,0 +1,261 @@
+=== Embedding manifests into BMFF-based assets
+
+[[uuid_box]]
+==== The `'uuid'` Box for C2PA
+
+All BMFF-based C2PA assets, whether they are timed (e.g., videos with or without audio tracks), untimed (e.g., still photos) or mixed (e.g., live or animated photos) audiovisual media, shall use a `'uuid'` box that adheres to the following syntax and semantics defined below.
+
+[NOTE]
+====
+The reason that a `'uuid'` box instead of a `'c2pa'` box is being used is that browsers based on Chromium will immediately fail playback when they encounter any unknown top-level boxes.
+====
+
+Some file formats that are BMFF-based and would be supported via this method include:
+
+* MPEG-4 code-points, either complete (`.mp4`) or fragmented (`.m4s`); downloadable audio files (`.m4a`);
+* HEIF (`.heif`, `.heic`);
+* AVIF (`.avif`).
+
+===== Definition
+
+[source]
+----
+Box Type: 'uuid'
+Extended Box Type: 0xD8, 0xFE, 0xC3, 0xD6, 0x1B, 0x0E, 0x48, 0x3C, 0x92, 0x97, 0x58, 0x28, 0x87, 0x7E, 0xC4, 0x81
+Container: File
+Mandatory: No
+Quantity: Zero or more
+----
+
+C2PA's `'uuid'` box embeds provenance into BMFF. One such box contains a C2PA Manifest Store, and there may be one or more auxiliary boxes containing additional information required for validation.
+
+===== Syntax
+
+[source]
+----
+aligned(8) class ContentProvenanceBox extends FullBox('uuid', extended_type = 0xD8 0xFE 0xC3 0xD6 0x1B 0x0E 0x48 0x3C 0x92 0x97 0x58 0x28 0x87 0x7E 0xC4 0x81, version = 0, 0) {
+    string box_purpose;
+    bit(8) data[];
+}
+----
+
+
+===== Regarding unique IDs
+
+There are cases, such as fragmented MP4 (fMP4), where the ID for a subset of the asset, such as the track_id field of the `'tkhd'` box, is only locally unique to a subset of the overall asset rather than globally unique to the asset.
+
+Because a globally unique ID is needed to determine what to hash, a unique ID is included.  This unique ID does not equal any value from the original asset; each value is instead defined when the manifest is created.  The unique ID is then combined with an associated local ID to form an ID that's globally unique to the entire asset.
+
+==== Semantics
+
+The purpose of each box (`box_purpose`) and the fields that depend on it (`data`) are described below for each box.
+
+==== Box Containing the Manifest
+
+The box containing the C2PA Manifest Store shall appear before the first `'mdat'` box in the file and before any `'moov'` box in the file.  To accommodate major_brand and compatible_brand verification, it shall be placed after the `'ftyp'` box.
+When the active manifest of an asset is an update manifest, the previous standard C2PA Manifest Store is located as indicated above with `box_purpose` changed to `original`. The updated C2PA Manifest Store shall exist as the last  box of the file with `box_purpose` set to `update`.
+
+The fields in the corresponding box described above shall be set as follows.
+
+box_purpose:: For a C2PA Manifest Store, this value shall be `manifest`, `original` or `update`.
+data:: When box_purpose is `manifest`, the first 8 bytes inside `'data'` shall be the absolute file byte offset to the first auxiliary `'uuid'` C2PA box with box_purpose equal to `merkle`.  If this file contains no such boxes, those 8 bytes shall be zero.  Those 8 bytes shall be followed by the raw C2PA Manifest Store bytes followed by zero or more unused padding bytes. 
+When `box_purpose` is `original`, that indicates another C2PA box whose `box_purpose` value is set to `update` is present. The `'data'` within this `original` box is unchanged.
+When `box_purpose` is `update`, the C2PA Manifest Store shall only contain update manifests.
+
+[NOTE]
+====
+The `'data'` field inside the `'uuid'` box of type `manifest` or `original` includes the absolute file byte offset, manifest, and padding bytes.  
+The original and manifest boxes are identical apart from value of box_purpose and as such hash bindings are not changed.  No data hashed data is moved by appending 'update' box.     
+====
+
+Padding bytes are not permitted outside the `'uuid'` box unless they are contained in their own mp4 box such as a `'free'` box.
+
+[[exception-fmp4-manifest-init-seg]]
+For fragmented MP4 (fMP4) files, for each initialization segment that may be present, an identical `'uuid'` C2PA box of type `manifest` shall be present for 'pull' (typical) usage; the C2PA Manifest Store shall be identical.  For fragmented MP4 (fMP4) streams that are live video transmissions in a 'push' streaming scenario (e.g., over-the-air broadcast television without a pull mechanism), the manifest box need not be included in every initialization segment broadcast, but it shall be included in no fewer than one in every 10 initialization segments.
+
+==== Auxiliary `'c2pa'` Boxes for Large and Fragmented Files
+
+===== General
+
+Some files have one or more very large `'mdat'` boxes (e.g., large video or image files which may be downloaded and rendered progressively) or large numbers of independent 'mdat' boxes (e.g., fMP4 where each fragment can be downloaded independently).
+
+In these cases, it is unreasonable to require a client to completely download all `'mdat'` box(es) before validating any portion of the asset.  Avoiding that necessity is resolved by using multiple hashes.
+
+For each large `'mdat'` box, subsets of the box have individual hashes that can be validated independently; how to determine these subsets is specified below. For fMP4 content where each `'mdat'` box can be downloaded independently, each fragment has its own individual hash.
+
+In the simplest case, all of these hashes are stored in the active manifest. Each subset has an auxiliary `'uuid'` C2PA box that declares how to locate its hash in the active manifest; refer to the note regarding unique IDs above for why this is the case.
+
+However, for sufficiently large assets, including every subset's hash in the manifest itself would increase the size of the C2PA Manifest Store to one or more megabytes.
+
+Avoiding such a large C2PA Manifest Store for a large asset is achieved by using one or more Merkle trees.
+
+* For a large non-fragmented asset that contains one or more `'mdat'` boxes in a single large file, one Merkle tree is used for each `'mdat'` box.
+* For a large fragmented asset that contains a set of `'mdat'` boxes for a single track which may be spread across multiple files, one Merkle tree is used for each track.
+
+In either case:
+
+* Each leaf node of any given Merkle tree is the subset's hash.
+* The manifest stores one row of each Merkle tree.
+* The auxiliary `'uuid'` C2PA box that exists for each subset indicates which Merkle tree row in the active manifest it requires and which leaf node it represents. It also includes any additional hash(es) from the Merkle tree necessary to derive a hash in the active manifest's Merkle tree row.
+
+The selection of which Merkle tree row to store in the manifest creates a size tradeoff within the asset.  Specifically, storing a single hash per Merkle tree in the manifest minimizes the size of the manifest but requires log2(subsets) to be stored in each subset-specific box.  Each time the number of hashes stored in the manifest for a Merkle tree is doubled (by moving "down" one Merkle tree row), the number of hashes stored in each subset-specific box decreases by one.  Thus, increasing the size of the manifest decreases the size of the entire asset and vice-versa, and since hashes for individual subsets are replicated across subsets as required to derive a manifest-specified hash, the tradeoff is not 1 to 1.
+
+Making this size tradeoff is left up to the implementation creating the manifest; this spec neither mandates nor recommends that any specific Merkle tree row be stored in the manifest.  That said, because the simplest case of storing all subset hashes in the manifest is equivalent to using a Merkle tree where the leaf nodes are stored in the manifest, the same Merkle tree construction is used for multiple hashes in all cases.  That construction is defined as follows.
+
+The portion of the manifest containing the BMFF Hash shall include the `merkle` field.  Refer to <<_hashing_a_bmff_formatted_asset>> for more information.
+
+====== Non-fragmented asset that can be validated piecewise
+
+If the manifest contains a non-leaf row of the merkle tree, two or more auxiliary `'uuid'` C2PA boxes with `box_purpose` set to `'merkle'` as described below shall be included in the file. They are not required to be included in the file if the manifest contains the leaf row of the merkle tree. If they exists, they shall follow the last `'mdat'` box in the file.
+
+The hash used for a given leaf node in the merkle tree shall be computed from the subset of payload of the `'mdat'`. The `'mdat'` is divided into sizes defined by `'fixedBlockSize'` or the array of `'variableBlockSizes'` found in the `merkle-map`, and sum of the `'variableBlockSizes'` shall be equal to size of the `'mdat'` payload.
+
+All such auxiliary `'uuid'` C2PA boxes shall meet the following requirements.
+
+* They shall be in the same sequence as the subsets they hash as specified by the `'variableBlockSizes'` field.
+* They shall be grouped such that a single merkle tree's auxiliary `'uuid'` C2PA boxes are sequential with no intervening boxes.
+* The `location` value in the first box shall be set to 0, in the second box shall be set to 1, and shall increase sequentially thereafter.
+
+// .EDITORS NOTE
+// https://github.com/c2pa-org/specs-core/issues/1170
+
+====== Fragmented asset
+
+For fMP4 assets which are split across multiple files:
+
+* One auxiliary `'uuid'` C2PA box with `box_purpose` set to `'merkle'` as described below shall be included in each fragment file immediately preceding the `'moof'` box.
+* The hash used for a given leaf node in the Merkle tree shall be over all data in its containing single fragment file except data excluded by the exclusion list.
+
+[NOTE]
+====
+This specification does not enable support for fMP4 assets which are split across multiple files where individual fragment files contain more than one `'moof'` box or `'mdat'` box or both.
+====
+
+For fMP4 assets which are stored as a single flat MP4 file with a single `'moov'` for all tracks and then one `'moof'`/`'mdat'` pair for each fragment:
+
+* One auxiliary `'uuid'` C2PA box with `box_purpose` set to `'merkle'` as described below shall be included immediately preceding each `'moof'` box.
+* The hash used for a given leaf node in the Merkle tree shall be over that `'moof'` box plus all data preceding the next `'moof'` box or over all data through the end of the file if there is no further `'moof'` box.  The hash shall not cover data excluded by the exclusion list.
+
+ifdef::not-for-iso[]
+[IMPORTANT]
+====
+endif::[]
+Taking a C2PA-compliant fMP4 asset which is split across multiple files (i.e., has `'c2pa'` boxes of types `'manifest'` and `'merkle'`) and appending the individual files together will not produce a single file which is C2PA-compliant (nor vice-versa).  This is because which boxes are included in each `'merkle'` hash will be different in the two cases.  If both forms are desirable, the second form shall consider the first form as an ingredient and the new manifest shall include both an ingredient assertion with relationship `parentOf` and an actions assertion that includes an action of type `c2pa.repackaged`.
+ifdef::not-for-iso[]
+====
+endif::[]
+
+====== Live video fragmented asset
+
+For fMP4 assets which are live video transmissions, follow the instructions <<live-video, here>>.  
+
+As described <<exception-fmp4-manifest-init-seg, above>>, for fragmented MP4 (fMP4) streams that are live video transmissions in a 'push' streaming scenario (e.g., over-the-air broadcast television without a pull mechanism), the manifest box is only required to be included in a portion of initialization segments.
+
+
+====== Box containing the merkle auxiliary
+
+Regardless of how the asset is structured, the fields in the corresponding box described above shall be set as follows.
+
+box_purpose:: For an auxiliary `'uuid'` C2PA box, this value shall be `merkle`.
+data:: When `box_purpose` is `merkle`, this value shall contain raw CBOR bytes indicating how to validate a portion of the asset as defined as follows.  If there are multiple auxiliary `'uuid'` C2PA boxes with `box_purpose` `merkle` for a given Merkle tree in a single file, each shall be followed by sufficient padding bytes (zero or more) to make all auxiliary `'uuid'` C2PA boxes for that Merkle tree a fixed size.
+
+[NOTE]
+====
+When there are more than one of these boxes in a single file, i.e., the case where there are large `'mdat'`(s) being validated piecemeal, a fixed size is needed in order to enable a progressively downloading client to only download the boxes it needs to begin validation rather than the entire Merkle tree.  Such a client can download enough of the first of these boxes based on the absolute file byte offset in the `active manifest` to determine if its uniqueId and localId match the 'mdat' it is trying to validate.  If they do, it can determine the absolute file byte offset to the box it needs to validate by multiplying the subset number by that size then download just that box.  Otherwise, it can determine the absolute file byte offset to the beginning of the next Merkle tree by multiplying that fixed size by the current Merkle tree's total number of leaf nodes, and it can repeat this process until it locates the box it needs.  The total download size for this subset of boxes is very small relative to the size of a single subset.
+====
+
+===== Schema and Example
+
+The schema for this type is defined by the `bmff-merkle-map` rule in the following {cddl}:
+
+[source,cddl]
+----
+include::../schemas/cddl/bmff-merkle.cddl[]
+----
+
+An example in CBOR diagnostic notation ({8949}, clause 8) is shown below:
+
+[source]
+----
+include::../examples/cbordiag/bmff-merkle.cbordiag[]
+----
+
+For non-fragmented asset, the `localId` field in the `bmff-merkle-map` shall indicate the `'mdat'` box. This is a zero-based index indicating the order of 'mdat' within the file.
+For fragmented asset, the  `localId` field in the `bmff-merkle-map` shall be set to the `track_id` field of the `'tkhd'` box pertaining to the `'mdat'` being hashed.
+
+// .EDITORS NOTE
+// https://github.com/c2pa-org/specs-core/issues/1171
+
+==== Dynamic stream generation
+
+Many adaptive bitrate streaming (ABR) implementations store a single version of an asset, e.g., as a flat MP4 or in another intermediate format, and generate individual asset streams using various codecs, bitrates, etc. at consumption time. As a result, such a server shall either hash said streams and create a C2PA Manifest each time the content is consumed or, if generation is deterministic, create and cache the hashes and C2PA Manifests once and then embed them at consumption time.
+
+==== Exclusion List Requirements
+
+For all `c2pa.hash.bmff.v2` (deprecated) and `c2pa.hash.bmff.v3` assertions, the entries in <<always-excluded-boxes>> shall always appear on the exclusion list.  Other entries are allowed but not required.
+
+The entire `'uuid'` C2PA box shall be excluded.  (The `'data'` field is ensuring that other `'uuid'` boxes are not excluded.)
+
+[[always-excluded-boxes]]
+[figure]
+.Always excluded boxes
+====
+[source]
+----
+xpath = "/uuid"
+data = [ { offset = 8, data = b64'2P7D1hsOSDySl1goh37EgQ==' } ]
+----
+
+The entire `'ftyp'` and `'mfra'` boxes shall be excluded.
+
+[source]
+----
+xpath = "/ftyp"
+----
+
+[source]
+----
+xpath = "/mfra"
+----
+====
+
+ifdef::not-for-iso[]
+[NOTE]
+====
+Previous versions of this specification included additional mandatory exclusions, but it was discovered that excluding them is insecure.
+====
+endif::[]
+
+For all `c2pa.hash.bmff.v2` (deprecated) and `c2pa.hash.bmff.v3` assertions where the bmff-hash-map includes both the `hash` field and `merkle` fields, the entry in <<always-excluded-boxes-2>> shall appear on the exclusion list.
+
+[[always-excluded-boxes-2]]
+[figure]
+.Additional always excluded boxes
+====
+[source]
+----
+xpath = "/mdat"
+subset = { { offset = 16, length = 0 } }
+----
+====
+
+[NOTE]
+====
+As indicated in the CDDL Definition above, the `c2pa.hash.bmff` assertion excludes the entire `'mdat'` box in this case, but it was discovered that excluding it is insecure.
+====
+
+As indicated in the CDDL Definition above, a relative byte offset or relative byte offset plus length that exceeds the length of the box is permitted; bytes beyond the end of the box shall never bed hashed.  For example, if the `mdat` box is only 12 bytes long, all of it is hashed and the aforementioned mandatory exclusion entry has no effect although it is still required.
+
+
+==== Timed-media streams that are neither audio nor video
+
+Timed-media streams that are neither audio nor video, such as text streams for captions, that the claim generator wishes to make tamper evident shall be handled the same way as audio and video streams.
+
+==== External references
+
+Externally referenced content declared inside BMFF boxes, such as in a `'dref'`, `'url'`, or `'urn'` box, that the claim generator wishes to make tamper evident shall *not* exclude the referencing box and shall include a separate xref:_cloud_data[cloud data assertion] for each external reference to be hashed.
+
+==== Size requirements
+
+If a BMFF-based asset uses 32-bit sizes or offsets in any box(es), e.g. the `'stco'` box, and adding boxes to conform to this specification will push the file size over 4 gigabytes, it is the responsibility of the manifest creator to edit the file to use appropriate sizes and offsets, e.g. by replacing the `'stco'` box with a `'co64'` box, before creating the manifest.
+

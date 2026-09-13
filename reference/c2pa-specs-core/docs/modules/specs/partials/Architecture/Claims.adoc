@@ -1,0 +1,293 @@
+## Claims
+
+### Overview
+
+A *claim* gathers together all the assertions about an asset at a given time including the set of assertions for xref:_binding_to_content[binding to the content]. The claim is then cryptographically hashed and signed as described in <<_signing_a_claim>>. A claim is encoded as a JUMBF superbox with the label `c2pa.claim.v2` and a CBOR payload, which shall comply with the Core Deterministic Encoding Requirements of CBOR (see {8949}, clause 4.2.1).
+
+ifdef::not-for-iso[]
+NOTE: Previous versions supported the use of assertion metadata with claims, but this has been deprecated.
+
+A previous version of this specification used the label `c2pa.claim` and associated `claim-map` for the Claim, but those have now been deprecated. Validators should still accept this label (and associated `claim-map`), but claim generators shall not produce such a claim.
+endif::[]
+
+ifdef::for-iso[]
+Validators should accept the label `c2pa.claim` and associated `claim-map` for the Claim, but claim generators shall not produce such a claim, instead the label `c2pa.claim.v2` shall be used.
+endif::[]
+
+### Syntax
+
+#### Schema
+The schema for this type is defined by the `claim-map-v2` and `claim-map` rules in the following {cddl} for claims with labels `c2pa.claim.v2` and `c2pa.claim`, respectively:
+
+[source,cddl]
+----
+include::../schemas/cddl/claim.cddl[]
+----
+
+An example of the `claim-map-v2` structure in CBOR diagnostic notation ({8949}, clause 8):
+
+[source]
+----
+include::../examples/cbordiag/claim.cbordiag[]
+----
+
+#### Fields
+
+The `alg` field shall contain the hash algorithm used to compute the hash for any hashed-uri, hard binding assertion, or hash assertion that does not explicitly define it. The value of this field, if present, shall be a string that is one of the allowed hash algorithms as defined in <<_hashing>>. If the `alg` field is not present, then each hashed-uri, each hard binding assertion, and each hash assertion shall explicitly declare which hashing algorithm is to be used.
+
+If present, the value of `dc:title` shall be a human-readable name for the asset. However, instead of setting `dc:title`, claim generators should create a xref:_metadata[metadata assertion] containing the `dc:title` field.
+
+NOTE: The `c2pa.claim` has a `dc:format` field which is no longer present in `c2pa.claim.v2`.
+
+If the asset contains XMP, then the asset's `xmpMM:InstanceID` should be used as the `instanceID`. When no XMP is available, then some other xref:_unique_identifiers[unique identifier] for the asset shall be used as the value for `instanceID`. 
+
+NOTE: Some field names, such as `dc:title`, have namespace prefixes as their names and definitions are taken directly from the XMP standard.  However, their usage in C2PA does not require the use of XMP.
+
+The `signature` field shall be present and it shall contain an *absolute* xref:_uri_references[URI reference] to the xref:_signing_a_claim[claim signature] in the same C2PA Manifest.
+
+The `created_assertions` field shall be present and it shall contain one or more xref:_uri_references[URI references] to xref:_assertions[assertions] being made by this claim.  In a standard manifest, it shall contain, at minimum, a reference to an assertion that represents a xref:_hard_bindings[hard binding].
+
+NOTE: All `created_assertions` are attributed to the signer as the xref:_trust_model[Trust Model] is rooted in the trust of the signer.
+
+When present, the `gathered_assertions` field shall contain one or more xref:_uri_references[URI references] to assertions that have been provided to the claim generator by other components in the workflow.
+
+NOTE: By putting an assertion into this list, the claim generator is declaring that the assertion is part of the claim, but it was not sourced from the claim generator and is not attributed to the signer. For example, assertions containing information entered by a human actor or xref:external_reference_assertion[external references] would be listed in `gathered_assertions`.
+
+When present, the `redacted_assertions` field shall contain one or more xref:_uri_references[URI references] to xref:_redaction_of_assertions[redacted assertions].
+
+IMPORTANT: Previous versions of this specification had a `specVersion` field in the claim, but that field has been moved to the `claim_generator_info` field as described in <<claim-generator-info>>. The `specVersion` field in the claim is now deprecated. 
+
+#### Claim Generator Info
+##### General
+Detailed information about the claim generator shall be present as the value of `claim_generator_info`. A Manifest Consumer shall use the value of `claim_generator_info` in determining information about the claim generator for itself or for presentation in a UX. 
+
+[NOTE]
+====
+The `c2pa.claim` has a `claim_generator` field, whose value is a simple string, which is no longer present in `c2pa.claim.v2`. 
+====
+
+##### Generator Info Map
+When adding a `claim_generator_info` field, its value is a `generator-info-map` object which shall contain a `name` field.  It may also contain either a `version` field or an `icon` field or both. In addition, any other field is permitted, using the standard entity-specific namespacing described in <<_namespacing>>. The data in this object shall represent the non-human (hardware or software) actor that actually generated the claim (aka the claim generator itself).
+
+A claim generator may desire to provide a graphical representation of itself, referred here as an `icon`, to a Manifest Consumer that is presenting a user experience. The value of the `icon` field, if present, shall be a xref:_hashed_uris[hashed URI].  This hashed URI shall be to an xref:_embedded_data[embedded data assertion] whose label is `c2pa.icon` and follows the xref:_multiple_instances[rules of assertion labels] with respect to multiple instances. Manifest Consumers should also support the xref:_data_boxes[data box] approach recommended by earlier versions of this specification.
+
+[NOTE]
+====
+As with the assertions array, the hash algorithm used for a xref:_hashed_uris[hashed URI] is determined by the `alg` field present in the hashed URI, or when absent, by an `alg` field in the claim.
+====
+
+[[claim-specVersion]]
+A `specVersion` field should be present, and if so, shall contain a SemVer formatted `specVersion` field representing the version of this specification used as the normative reference by the Claim Generator to create this C2PA Manifest (e.g., "2.4.0" for version 2.4). Validators should treat this field as purely informational and should not change their validation logic based on this value.
+
+[source,json]
+.Example using claim generator info
+----
+{
+	"claim_generator_info" : {
+		"name": "Joe's Photo Editor",
+		"version": "2.0",
+		"operating_system": "Windows 10",
+		"icon": {
+			"url": "http://cdn.examplephotoagency.com/logo.svg",
+			"hash": "5bdec8169b4e4484b79aba44cee5c6bd"
+		},
+		"specVersion": "2.4.0"
+	}
+}
+----
+
+
+### Creating a Claim
+
+#### Creating Assertions
+
+Before the claim can be finalized, all xref:_assertions[assertions] need to be created and stored in a newly created xref:_c2pa_box_details[C2PA Assertion Store] as described xref:_types_of_manifests[later in this document].
+
+When creating a standard manifest, it may not be possible to know all of the required binding information at the time of claim creation, in which case use the xref:_multiple_step_processing[multiple step processing method] to setup and then later fill-in the information.
+
+#### Preparing the Claim
+
+##### Adding Assertions and Redactions
+
+The claim shall contain a `created_assertions` field and may contain a `gathered_assertions` field.  The combined values from those two fields represent a list of all of the URI references for all assertions that were added to the assertion store that are being "claimed" by this claim. In a standard manifest, the `created_assertions` field's value shall include at least one assertion that represents a xref:_hard_bindings[hard binding].
+
+If any assertions in ingredient claims are being redacted, their URI references shall be added to list which is the value of the `redacted_assertions` field.
+
+##### Adding Ingredients
+
+In many authoring scenarios, an actor does not create an entirely new asset but instead brings in other existing assets on which to create their work - either as a derived asset, a composed asset or an asset rendition. These existing assets are called ingredients and their use is documented in the provenance data through the use of an xref:ingredient_assertion[ingredient assertion]. 
+
+When an ingredient contains one or more C2PA manifests, those manifests should be inserted into this asset's C2PA Manifest Store to help ensure that the provenance data is kept intact. Such ingredient manifests are added to the JUMBF as described in <<_c2pa_box_details>>. If a manifest with the same unique identifier is already present in the C2PA Manifest Store, the two shall be compared. If they are identical, the new manifest shall be ignored. If they are different, the new manifest shall be added to the store after changing its unique identifier to a new value as described in <<_unique_identifiers>>.
+
+If an ingredient's manifest is xref:_external_manifests[remote], and the claim generator is unable to retrieve the manifest, it should use an error code of `manifest.inaccessible` to reflect that.
+
+##### Connecting the Signature
+
+The signature cannot be part of the signed payload, but since its label is pre-defined, then the full URI reference is also known. As such, we can include that in the claim by setting the value of the `signature` field of the claim to that URI reference.
+
+NOTE: This provides the explicit binding of the claim to its signature.
+
+##### Signing a Claim
+
+Producing the signature is specified in <<_digital_signatures>>. 
+
+For both types of manifests, standard and update, the `payload` field of `Sig_structure` shall be the serialized CBOR of the claim document, and shall use detached content mode. 
+
+The serialized `COSE_Sign1_Tagged` structure resulting from the digital signature procedure is written into the C2PA Claim Signature box.
+
+##### Time-stamps
+
+###### Use of RFC 3161
+
+If possible, the claim generator should use a RFC 3161-compliant Time Stamping Authority (TSA) ({3161}) to obtain a trusted time-stamp proving that the signature itself actually existed at a certain date and time and incorporate that into the `COSE_Sign1_Tagged` structure as a countersignature.
+
+Claim generators are encouraged to obtain and include time-stamps to ensure their manifests will remain valid. As described in <<validation-clause>>, manifests without time-stamps cease to be valid when the signing credential expires or becomes revoked. A manifest shall contain only one time-stamp.
+
+ifdef::not-for-iso[]
+NOTE: Previous versions of this specification allowed for multiple time-stamps to be included in a manifest. 
+endif::[]
+
+###### Choosing the Payload
+
+ifdef::not-for-iso[]
+A previous version of this specification used the same value for the `payload` field in the time-stamp as was used in the `Sig_signature` as described in <<_signing_a_claim>>. This payload is henceforth referred to as a "v1 payload" in a "v1 time-stamp" and is considered deprecated. A claim generator shall not create one, but a validator shall process one if present.
+endif::[]
+ifdef::for-iso[]
+When the same value for the `payload` field in the time-stamp as was used in the `Sig_signature` as described in <<_signing_a_claim>>, that payload is henceforth referred to as a "v1 payload" in a "v1 time-stamp" and is considered deprecated. A claim generator shall not create one, but a validator shall process one if present.
+endif::[]
+
+The "v2 payload", of the "v2 time-stamp", is the value of the `signature` field of the `COSE_Sign1_Tagged` structure created as part of <<_signing_a_claim>>. A "v2 payload" shall be used by claim generators performing a time-stamping operation.
+
+NOTE: The value of the `signature` field includes the entire serialized `bstr`, including the bytes that indicate the major type and the length (not just the string itself). 
+
+###### Obtaining the time-stamp
+All time-stamps shall be obtained as described in {3161} with the following additional requirements:
+
+* The `MessageImprint` of the `TimeStampReq` structure ({3161}, section 2.4.1) shall be computed by creating the `ToBeSigned` value in {8152}, section 4.4, with the following values for elements of `Sig_structure`:
+** The `context` element shall be `CounterSignature`. 
+** The `payload` element shall be the value described by <<_choosing_the_payload>>.
+** The remaining elements of `Sig_structure` are as described in <<_computing_the_signature>>.
+* The `ToBeSigned` value is then hashed using a hash algorithm from the allowed list in <<_hashing>> that the TSA supports, and that hash algorithm and value are placed in the `MessageImprint`. If the TSA does not support any hash algorithms from the allowed list, it cannot be used for time-stamping.
+** Where possible, the hash algorithm should use the same hash algorithm used in the digital signature of the claim.
+* The `certReq` boolean of the `TimeStampReq` structure shall be asserted in the request to the TSA, to ensure its certificate chain is provided in the response. 
+
+###### Storing the time-stamp
+
+v1 time-stamps (deprecated) are stored in a COSE unprotected header whose label is the string `sigTst`. If present, the value of this header shall be a `tstContainer` defined by <<tstContainer-CDDL>>. The content of the `TimeStampResp` structure received in reply from the TSA shall be stored as the value of the `val` property of an element of `tstTokens`.
+
+v2 time-stamps shall be stored in a COSE unprotected header whose label is the string `sigTst2`.  When present, the value of this header shall be a `tstContainer` defined by <<tstContainer-CDDL>>. The value of the `timeStampToken` field of the `TimeStampResp` structure received in reply from the TSA shall be stored as the value of the `val` property of an element of `tstTokens`. It shall be formatted as a DER-encoded {3161} `TimeStampToken` wrapped in a CBOR byte string. 
+
+NOTE: A v2 time-stamp is equivalent to the "CTT" model of https://datatracker.ietf.org/doc/draft-ietf-cose-tsa-tst-header-parameter/[COSE Header parameter for RFC 3161 Time-Stamp Tokens Draft]. It requires that the complete signature structure be completed prior to time-stamping, thus enabling the time-stamp to serve as a countersignature on the entire signature structure, including the actual certificate.
+
+If no time-stamps are included, then neither header (`sigTst` nor `sigTst2`) shall be present in the COSE unprotected header. 
+
+[[tstContainer-CDDL]]
+[figure]
+.CDDL for `tstContainer`
+====
+[source,cddl]
+----
+include::../schemas/cddl/tstContainer.cddl[]
+----
+====
+
+[NOTE]
+====
+The above definition is a CBOR adaptation of a subset of the schema from {jades}, section 5.3.4 and https://forge.etsi.org/rep/esi/x19_182_JAdES/raw/v1.1.1/19182-jsonSchema.json[its JSON schema], except with the modification that the content of `val` is a byte string and not a Base64-encoded string.
+====
+
+##### Credential Revocation Information
+
+If the signer's credential supports querying its online credential status, and the credential contains a pointer to a service to provide time-stamped credential status information, the claim generator should query the service, capture the response, and store it in the manner described for credentials in the xref:_trust_model[Trust Model]. If credential revocation information is attached in this manner, a trusted time-stamp shall also be obtained after signing, as described in <<_time_stamps>>.
+
+
+#### Examples of Claims
+
+##### Single Claim
+
+Here is a visual representation of an image containing a single claim with multiple assertions that have been embedded inside it.
+
+.A single claim with assertions
+ifdef::backend-html5[]
+image::Single_Claim.svg[A single claim with assertions,width=720,height=432,align="center"]
+endif::[]
+ifdef::backend-pdf[]
+image::Single_Claim.png[A single claim with assertions,pdfwidth=100%,align="center"]
+endif::[]
+ifdef::backend-docbook5[]
+image::Single_Claim.png[A single claim with assertions,width=720,height=432,align="center"]
+endif::[]
+
+##### Multiple Claims
+
+In this example of creating a second claim for the xref:_single_claim[previous example], one of the original assertions has been redacted from the previous claim. The visual representation for this scenario would look like:
+
+.Redacting assertions in a secondary claim
+ifdef::backend-html5[]
+image::Multiple_Claims.svg[Redacting assertions in a secondary claim,width=720,height=432,align="center"]
+endif::[]
+ifdef::backend-pdf[]
+image::Multiple_Claims.svg[Redacting assertions in a secondary claim,pdfwidth=100%,align="center"]
+endif::[]
+ifdef::backend-docbook5[]
+image::Multiple_Claims.png[Redacting assertions in a secondary claim,width=720,height=432,align="center"]
+endif::[]
+
+
+### Multiple Step Processing
+
+Some asset file formats require file offsets of the C2PA Manifest Store and asset content to be fixed before the manifest is signed, so that content bindings will correctly align with the content they authenticate. Unfortunately, the size of a manifest and its signature cannot be precisely known until after signing, which could cause file offsets to change. 
+
+As an example, in https://en.wikipedia.org/wiki/JPEG[JPEG 1] files, the entire C2PA Manifest Store is required to appear in the file before the image data, and so its size will affect the file offsets of content being authenticated.
+
+To accomplish this, a multiple step approach shall be taken, similar to how signatures in PDF are done.
+
+#### Create content bindings
+
+When creating a xref:_standard_manifests[standard manifest], its claim shall include one or more content binding assertions in its list of assertions to ensure that the asset is tamper-evident. 
+
+Create the data hash assertion and add it to the assertion store taking into account the following considerations.  
+
+In many cases, such as with JPEG 1, it is not possible to hash the asset in its entirety because the manifest will be embedded in the middle of the file, so the size or location of manifest data will not be known at the time the asset hash is computed.  This circular dependency is avoided by allowing exclusion ranges to be specified during hashing.  When exclusion ranges are specified, a single hash is performed, but only over the asset ranges that are not in any of the exclusions. 
+
+If a manifest is embedded in the center of a JPEG 1 file in an APP11 segment, then the claim creator may exclude the APP11 segment(s) from the hash calculation.
+
+In order to prevent insertion attacks, it is desirable to have only a single exclusion range when possible. When the size or location (or both) of the manifest in the asset is not known, then the `start` and `length` values in the data hash assertion shall both be zero and the size of the `pad` value should be large enough to accommodate writing in the values during the second pass.  At least 16 bytes is recommended. The value of the `pad` key shall consist of all 0x00's.
+
+If padding is employed, it is possible that the pad data could be changed without resulting in a validation failure. Claim generators shall ensure that changes to pad data (or any other excluded asset data) cannot change how the asset is interpreted.
+
+NOTE: In the case of JPEG 1 files, this can be achieved either by eliminating padding or by ensuring that the `JFIF APP11/C2PA` segments cannot be shortened of changed to a different segment type. This is accomplished by including all the C2PA manifest segment headers (APP11) and 2-byte length fields in the data-hash-map for all manifest-containing segments. Doing so ensures that any data changed in the exclusion region will not be misinterpreted by JPEG processors.
+
+#### Create a temporary Claim and Signature
+
+Add the newly created data hash assertion reference to the claim's assertion list providing a temporary hash value, such as empty spaces.
+
+At this point, the temporary claim is complete and can be added to the C2PA Manifest being created.
+
+Since the claim is only temporary at this time, it is not possible to sign it. To ensure the claim signature box contains a valid CBOR structure, create a temporary `COSE_Sign1_Tagged` structure as described in {8152}, section 4.2. The `COSE_Sign1_Tagged` is a tag byte followed by a `COSE_Sign1` structure, which is a four-element CBOR array. Construct the array as follows:
+
+* The first element is the `protected` header bucket ({8152}, section 3). Create an empty bucket by placing a `bstr` of size 0 in this position.
+* The second element is the `unprotected` header bucket, which is a CBOR map. Create a map of 1 pair. Use the string `pad` as the label, and place a `bstr` of the desired padding size filled with zero bytes (0x00) as the value. A 25 kilobyte size is recommended for the initial size of this padding.
+* The third element is the `payload`. Place the value `nil` (CBOR major type 7, value 22) here.
+* The fourth element is `signature`. Place a `bstr` of size 0 here.
+
+#### Complete the C2PA Manifest
+
+At this point all of the boxes that comprise the entire C2PA Manifest for the asset are completed and can be (if not already) constructed into its final form. The asset's C2PA Manifest, along with the manifests of any ingredients, are combined together to form the complete C2PA Manifest Store. The active manifest is required to be the last C2PA Manifest superbox in the C2PA Manifest Store superbox. The C2PA Manifest Store can then be embedded into the asset as discussed in <<_embedding_manifests_into_various_file_formats>>.
+
+#### Going back and filling in
+
+Now that the C2PA Manifest Store has been embedded into the asset, the starting offset and the length of the active manifest can be updated in its data hash assertion.  It is necessary that when doing so, you do not change the size of the assertion's box, only its data.  This is done by adjusting the value of the `pad` field to be the necessary length to "fill up" the remaining bytes.
+
+[NOTE]
+====
+Preferred/deterministic CBOR serialization of `pad` uses a variable length integer to specify the length of the encoded binary data. When the length goes from zero to 1 byte, or 1 to 2 bytes (etc.), the length of the resulting pad jumps by two bytes. This means that not all paddings can be expressed using a single padding field. For example, 24-byte and 26-byte pads can be created, but a 25-byte pad cannot.  If this situation arises, the desired padding can be split between `pad` and `pad2`. For example, to make a 25-byte pad, a claim generator can encode 19 bytes into `pad` (resulting in an encoded length of 20 bytes), and 4 bytes into `pad2` (resulting in 5 bytes.)
+====
+
+Once the data hash assertion has been updated, it can be hashed and the hash written over the empty spaces that were used previously to hold the location. 
+
+The claim is now complete, and it can be hashed and signed as described in <<_signing_a_claim>>, with the resultant signature filling the pre-allocated space. The `pad` header can then be shrunk as required so that the claim signature box remains the same size; because this header is unprotected, changing it does not invalidate the claim signature. 
+
+If the serialized `COSE_Sign1_Tagged` structure exceeds the reserved size of the C2PA Claim Signature box, multiple step processing shall be repeated with a larger padding size chosen in <<_create_a_temporary_claim_and_signature>>. Revocation information retrieved during the previous attempt should be reusable if it is still within its validity interval ({6960}, section 4.2.2.1), but a new time-stamp will be required on the new claim with the file offsets changed as the result of added padding.
+
+A C2PA Manifest may contain assertions defined outside of this specification, and they could depend on file layout. As such, the claim generator may no longer be able to change the file layout and/or offsets in a data hash assertion. In this case, claim generators should use padding prior to assertion creation to ensure that the file layout need not change once the assertion has been finalized.

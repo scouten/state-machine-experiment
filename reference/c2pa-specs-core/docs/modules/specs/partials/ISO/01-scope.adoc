@@ -1,0 +1,4 @@
+== Scope
+
+This document describes the technical aspects of the C2PA architecture known as Content Credentials. It is a model for storing and accessing cryptographically verifiable information whose trustworthiness can be assessed based on a defined trust model. Included in this document is information about how to create and process a C2PA Manifest and its components, including the use of digital signature technology for enabling tamper-evidence as well as establishing trust.
+

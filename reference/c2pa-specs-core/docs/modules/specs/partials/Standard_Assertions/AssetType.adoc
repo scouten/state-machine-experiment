@@ -1,0 +1,137 @@
+#### Description
+The asset type assertion provides a way to more completely describe an asset, specifically additional context on how to parse or otherwise process it. This assertion allows for specifying an IANA Media Type value and/or additional type information, since many assets have formats that cannot be completely described by a single Media Type value.
+
+The asset type assertion shall have a label of `c2pa.asset-type.v2`. There shall be at most one asset type assertion in a C2PA Manifest.
+
+NOTE: Earlier versions of this specification documented a `c2pa.asset-type` assertion, which is now deprecated.
+
+If present, the value of the `dc:format` field shall be the https://www.iana.org/assignments/media-types/media-types.xhtml[IANA Media Type] of the asset.
+
+If present, the value of the `types` field shall be an array of zero or more maps (`asset-type-map`) specifying types associated with the asset. The value of the `type` field in this map shall come from <<asset-types>>, <<model-types>>, or use an xref:_namespacing[entity-specific namespace] (e.g., `com.litware.types.abc`), conforming to the syntax defined for assertion labels in <<_label_naming>>. If relevant, the version of the asset (e.g., the version of a dataset or model) can be documented in the `version` field in the `asset-type-map`.
+
+[NOTE]
+====
+As C2PA is adopted to provide provenance for AI/ML (i.e., artificial intelligence/machine learning) assets in the future, the C2PA Manifest can be embedded in the model and dataset assets, and the asset type assertion used to specify the type of these model and dataset assets.
+====
+
+[[asset-types]]
+.Asset type values
+[cols="35%,60%"]
+|===
+|C2PA Type | Description of C2PA Type of the Asset
+
+|c2pa.types.audit-log | A structured log of creation-phase events collected during a creation process
+|c2pa.types.classifier | AI/ML classifier
+|c2pa.types.cluster | AI/ML clustering model
+|c2pa.types.dataset | AI/ML dataset which can be processed by multiple AI/ML frameworks or is not described by any other value
+|c2pa.types.dataset.jax | JAX dataset
+|c2pa.types.dataset.keras | Keras dataset
+|c2pa.types.dataset.ml_net | ML.NET dataset
+|c2pa.types.dataset.mxnet | MXNet dataset
+|c2pa.types.dataset.onnx | ONNX dataset
+|c2pa.types.dataset.openvino | OpenVINO dataset
+|c2pa.types.dataset.pytorch | PyTorch dataset
+|c2pa.types.dataset.tensorflow | TensorFlow dataset
+|c2pa.types.format.numpy | Stored using the serialized NumPy format
+|c2pa.types.format.pickle | Stored using the Python pickle format
+|c2pa.types.format.protobuf | Stored using the Protocol Buffer format
+|c2pa.types.generator | AI/ML content generator
+|c2pa.types.generator.prompt | Prompt used to drive an AI/ML content generator
+|c2pa.types.generator.seed | Seed value used to initialize an AI/ML content generator
+|c2pa.types.regressor | AI/ML regression model
+|c2pa.types.tensorflow.hubmodule | TensorFlow Hub module
+|c2pa.types.tensorflow.savedmodel | TensorFlow SavedModel
+|c2pa.types.version-history | A record of revisions to the asset over time
+|===
+
+[[model-types]]
+.Model type values
+[cols="35%,60%"]
+|===
+|C2PA Model Type | Description of C2PA Model Type
+
+|c2pa.types.model | AI/ML model which is not described by any other model type
+|c2pa.types.model.caffe | Caffe model
+|c2pa.types.model.caffe2 | Caffe2 model
+|c2pa.types.model.catboost | CatBoost model
+|c2pa.types.model.coreml | Core ML model
+|c2pa.types.model.flax | Flax model
+|c2pa.types.model.huggingface.transformers | Hugging Face Transformers model
+|c2pa.types.model.jax | JAX model
+|c2pa.types.model.keras | Keras model
+|c2pa.types.model.lightgbm | LightGBM model
+|c2pa.types.model.ml_net | ML.NET model
+|c2pa.types.model.mxnet | MXNet model
+|c2pa.types.model.onnx | ONNX model
+|c2pa.types.model.openvino | OpenVINO model
+|c2pa.types.model.openvino.parameter | OpenVINO model parameter
+|c2pa.types.model.openvino.topology | OpenVINO model topology
+|c2pa.types.model.paddle | PaddlePaddle model
+|c2pa.types.model.pytorch | PyTorch model
+|c2pa.types.model.sklearn | scikit-learn model
+|c2pa.types.model.tensorflow | TensorFlow model
+|c2pa.types.model.tensorrt | TensorRT model
+|c2pa.types.model.tflite | TensorFlow Lite model
+|c2pa.types.model.torchscript | TorchScript model
+|c2pa.types.model.xgboost | XGBoost model
+|===
+
+#### Schema and Example
+
+The schema for this type is defined by the `asset-types` rule in the following {cddl}:
+
+[source,cddl]
+----
+include::../schemas/cddl/asset-type.cddl[]
+----
+
+An example in CBOR diagnostic notation ({8949}, clause 8) is shown below. In this example, the asset is a TensorFlow model file of version 2.11.0 which is stored in the SavedModel format.
+
+[source]
+----
+include::../examples/cbordiag/asset-type.cbordiag[]
+----
+
+#### Details on selection of a value for `type`
+
+If an asset's exact type is specified in the https://www.iana.org/assignments/media-types/media-types.xhtml#application[IANA registry application type] or https://www.iana.org/assignments/media-types/media-types.xhtml#text[IANA registry text type], including JSON, CSV, and XML types, this information should be included in the asset type assertion `dc:format` field. 
+
+[figure]
+====
+For example, if the asset is a CSV formatted text file, the `dc:format` field would be `text/csv`. 
+====
+
+An asset type assertion may contain both a Dublin Core format and a C2PA standard or custom asset type to provide additional information about the asset's type. Some existing Dublin Core types that are commonly used in an asset type assertion in combination with other asset types are specified in <<common-dc-formats>>. 
+ 
+[[common-dc-formats]]
+.Common DC formats
+[cols="35%,60%"]
+|===
+|dc:format Value | Description of Dublin Core Type of the Asset
+
+|application/json | Stored using the JSON format
+|application/gzip | Stored using the GZIP format
+|application/vnd.rar | Stored using the RAR format
+|application/zip | Stored using the ZIP format
+|application/octet-stream | Stored using an arbitrary binary format
+|text/csv | Stored using the CSV format
+|text/plain | Stored using the plain text format
+|text/tab-separated-values | Stored using the tab-separated-values (TSV) text format
+|text/xml | Stored using the XML format
+
+|===
+
+https://www.iana.org/assignments/media-type-structured-suffix/media-type-structured-suffix.xhtml[IANA structured suffixes], such as `+json` and `+zip`, are also supported in the C2PA Claim's `dc:format` field to specify additional types.
+
+Some dc:format types are commonly used but are not specified in the https://www.iana.org/assignments/media-types/media-types.xhtml[IANA registry]. The following `dc:format` values are valid for C2PA assets, as shown in <<extra-dc-formats>>.
+
+[[extra-dc-formats]]
+.Additional formats
+[cols="35%,60%"]
+|===
+|dc:format Value | Description of Dublin Core Type of the Asset
+
+|application/x-hdf5 | Stored using the HDF5 format
+|application/x-7z-compressed | Stored using the 7Z format
+|===
+
