@@ -381,6 +381,57 @@ pub(crate) fn signature_hash(
     Ok(Some(params.hash.oid.as_bytes().to_vec()))
 }
 
+/// `2.16.840.1.101.3.4.2.1` — SHA-256.
+const SHA256_OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.2.1");
+
+/// The `AlgorithmIdentifier` naming SHA-256, with the explicit `NULL`
+/// parameters RFC 3279 §2.3 (and, by extension, RFC 6960's use of the same
+/// shape) expects for hash algorithm identifiers.
+///
+/// SHA-256 rather than SHA-1: RFC 6960 lets a requester pick any hash
+/// algorithm the responder recognizes, and SHA-1 remains the most widely
+/// supported choice among deployed responders, but this crate's own
+/// profile already forbids SHA-1 for content hashing (see
+/// [`contentauth_c2pa_primitives::HashAlgorithm`]), and a prototype
+/// exploring this plumbing is a reasonable place to prefer the modern
+/// algorithm over maximum interoperability with legacy responders.
+///
+/// `pub(crate)` for the same reason [`signature_hash`] is: `crate::ocsp`
+/// needs this exact shape for an OCSP `CertID`'s `hashAlgorithm` field
+/// (RFC 6960 §4.1.1), and building it here rather than there means that
+/// module never needs to name an `x509_cert` type of its own — see its
+/// own doc comment.
+pub(crate) fn sha256_algorithm_identifier() -> AlgorithmIdentifierOwned {
+    AlgorithmIdentifierOwned {
+        oid: SHA256_OID,
+        parameters: Some(der::asn1::Null.into()),
+    }
+}
+
+/// Encodes `bytes` as the ASN.1 `INTEGER` an OCSP `CertID`'s
+/// `serialNumber` field (RFC 6960 §4.1.1) needs — the same bytes
+/// [`Certificate::serial_number`] already carries, just wrapped in the
+/// type that field requires. `pub(crate)` for the same reason
+/// [`sha256_algorithm_identifier`] is.
+pub(crate) fn encode_serial_number(
+    bytes: &[u8],
+) -> Result<x509_cert::serial_number::SerialNumber, &'static str> {
+    x509_cert::serial_number::SerialNumber::new(bytes)
+        .map_err(|_| "serial number could not be encoded")
+}
+
+/// True if `reason` is the `removeFromCRL` reason code (RFC 5280's
+/// `CRLReason`, which OCSP's `RevokedInfo.revocationReason` reuses),
+/// which the C2PA specification's own OCSP disambiguation (§15.9.1/
+/// §15.9.2) requires reading as *not* revoked rather than as an actual
+/// revocation. `pub(crate)` for the same reason
+/// [`sha256_algorithm_identifier`] is: `crate::ocsp` decides what to do
+/// with this fact, but never needs to name the `x509_cert` type it comes
+/// from.
+pub(crate) fn is_remove_from_crl(reason: Option<x509_cert::ext::pkix::CrlReason>) -> bool {
+    reason == Some(x509_cert::ext::pkix::CrlReason::RemoveFromCRL)
+}
+
 /// `1.2.840.113549.1.1.10` — RSASSA-PSS.
 const RSA_PSS_OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.10");
 
@@ -522,6 +573,39 @@ mod tests {
         }]);
 
         assert_eq!(ocsp_responder_url(&aia), None);
+    }
+
+    #[test]
+    fn sha256_algorithm_identifier_names_sha256_with_null_parameters() {
+        let algorithm = sha256_algorithm_identifier();
+        assert_eq!(algorithm.oid, SHA256_OID);
+        assert_eq!(algorithm.parameters, Some(der::asn1::Null.into()));
+    }
+
+    #[test]
+    fn encode_serial_number_round_trips_the_given_bytes() {
+        let serial = encode_serial_number(&[1, 2, 3]).unwrap();
+        assert_eq!(serial.as_bytes(), [1, 2, 3]);
+    }
+
+    #[test]
+    fn encode_serial_number_rejects_bytes_over_the_20_byte_limit() {
+        // RFC 5280 §4.1.2.2 caps a certificate serial number at 20 octets;
+        // all-zero bytes would not trigger this (leading zeros are
+        // stripped when computing the encoded length), so this uses
+        // non-zero bytes to actually exceed it.
+        assert!(encode_serial_number(&[0xffu8; 21]).is_err());
+    }
+
+    #[test]
+    fn is_remove_from_crl_recognizes_only_that_reason() {
+        assert!(is_remove_from_crl(Some(
+            x509_cert::ext::pkix::CrlReason::RemoveFromCRL
+        )));
+        assert!(!is_remove_from_crl(Some(
+            x509_cert::ext::pkix::CrlReason::KeyCompromise
+        )));
+        assert!(!is_remove_from_crl(None));
     }
 
     #[test]

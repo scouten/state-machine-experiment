@@ -99,12 +99,7 @@
 //!   nothing this module would do with one.
 
 use contentauth_c2pa_primitives::HashAlgorithm;
-use der::{
-    asn1::{Null, OctetString},
-    oid::ObjectIdentifier,
-    Decode, Encode,
-};
-use x509_cert::ext::pkix::CrlReason;
+use der::{asn1::OctetString, Decode, Encode};
 use x509_ocsp::{
     BasicOcspResponse, CertId, CertStatus, OcspRequest, OcspResponse, OcspResponseStatus,
     Request as SingleRequest, ResponderId, SingleResponse, TbsRequest, Version,
@@ -114,17 +109,6 @@ use crate::{
     cert::{self, Certificate},
     chain,
 };
-
-/// SHA-256 (`2.16.840.1.101.3.4.2.1`), used for `CertID`'s hash algorithm.
-///
-/// RFC 6960 lets a requester pick any hash algorithm the responder
-/// recognizes; SHA-1 remains the most widely supported choice among
-/// deployed responders, but this crate's own profile already forbids SHA-1
-/// for content hashing (see [`contentauth_c2pa_primitives::HashAlgorithm`]),
-/// and a prototype exploring this plumbing is a reasonable place to prefer
-/// the modern algorithm over maximum interoperability with legacy
-/// responders.
-const SHA256_OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.2.1");
 
 /// One certificate's revocation check, still outstanding.
 ///
@@ -258,16 +242,12 @@ fn build_cert_id(subject: &Certificate, issuer: &Certificate) -> Result<CertId, 
     let algorithm = HashAlgorithm::Sha256;
 
     Ok(CertId {
-        hash_algorithm: x509_cert::spki::AlgorithmIdentifierOwned {
-            oid: SHA256_OID,
-            parameters: Some(Null.into()),
-        },
+        hash_algorithm: cert::sha256_algorithm_identifier(),
         issuer_name_hash: OctetString::new(algorithm.digest(&issuer.subject_der))
             .map_err(|_| "issuer name hash could not be encoded")?,
         issuer_key_hash: OctetString::new(algorithm.digest(&issuer.public_key_bitstring))
             .map_err(|_| "issuer key hash could not be encoded")?,
-        serial_number: x509_cert::serial_number::SerialNumber::new(&subject.serial_number)
-            .map_err(|_| "serial number could not be encoded")?,
+        serial_number: cert::encode_serial_number(&subject.serial_number)?,
     })
 }
 
@@ -286,12 +266,17 @@ struct Accepted {
 /// The three ways RFC 6960's `CertStatus` can come out, holding just
 /// enough about a `revoked` answer for the C2PA specification's
 /// `removeFromCRL` disambiguation and its "revoked after signing" rescue.
+///
+/// `is_remove_from_crl` is already resolved to a plain `bool` by
+/// [`status_of`], via [`cert::is_remove_from_crl`], rather than carrying
+/// the raw `CRLReason` here: this module never needs to name that
+/// `x509_cert` type of its own — see this module's own doc comment.
 #[derive(Clone, Copy)]
 enum Status {
     Good,
     Revoked {
         revocation_time: i64,
-        reason: Option<CrlReason>,
+        is_remove_from_crl: bool,
     },
     Unknown,
 }
@@ -340,17 +325,9 @@ fn status_of(single: &SingleResponse) -> Status {
         CertStatus::Unknown(_) => Status::Unknown,
         CertStatus::Revoked(info) => Status::Revoked {
             revocation_time: generalized_time_seconds(&info.revocation_time),
-            reason: info.revocation_reason,
+            is_remove_from_crl: cert::is_remove_from_crl(info.revocation_reason),
         },
     }
-}
-
-/// True if `reason` is the `removeFromCRL` `CRLReason` C2PA spec §15.9.1
-/// and §15.9.2 both call out: a certificate that a delta-CRL scheme once
-/// listed as revoked and has since removed, which both sections require
-/// reading as *not* revoked rather than as an actual revocation.
-fn is_remove_from_crl(reason: Option<CrlReason>) -> bool {
-    reason == Some(CrlReason::RemoveFromCRL)
 }
 
 /// Evaluates one response already present in the C2PA Manifest Store —
@@ -405,7 +382,10 @@ fn evaluate_stapled_checked(
 
     Some(match accepted.status {
         Status::Good => StapledOutcome::NotRevoked,
-        Status::Revoked { reason, .. } if is_remove_from_crl(reason) => StapledOutcome::NotRevoked,
+        Status::Revoked {
+            is_remove_from_crl: true,
+            ..
+        } => StapledOutcome::NotRevoked,
         Status::Revoked { .. } => StapledOutcome::Revoked,
         Status::Unknown => StapledOutcome::Inconclusive,
     })
@@ -448,7 +428,9 @@ fn evaluate_online_checked(
 
     let status_condition = match accepted.status {
         Status::Good => true,
-        Status::Revoked { reason, .. } => is_remove_from_crl(reason),
+        Status::Revoked {
+            is_remove_from_crl, ..
+        } => is_remove_from_crl,
         Status::Unknown => false,
     };
 
@@ -461,10 +443,10 @@ fn evaluate_online_checked(
     // before the revocation took effect.
     if let Status::Revoked {
         revocation_time,
-        reason,
+        is_remove_from_crl,
     } = accepted.status
     {
-        if !is_remove_from_crl(reason) {
+        if !is_remove_from_crl {
             if let Some(attested) = attested {
                 if in_validity_window(attested) && revocation_time > attested {
                     return Some(OnlineOutcome::NotRevoked);
@@ -628,8 +610,14 @@ mod tests {
 
     use core::time::Duration;
 
-    use der::asn1::{BitString, GeneralizedTime, OctetString};
-    use x509_cert::time::{Time, Validity};
+    use der::{
+        asn1::{BitString, GeneralizedTime, OctetString},
+        oid::ObjectIdentifier,
+    };
+    use x509_cert::{
+        ext::pkix::CrlReason,
+        time::{Time, Validity},
+    };
     use x509_ocsp::{OcspGeneralizedTime, ResponseData, RevokedInfo, SingleResponse};
 
     use super::*;

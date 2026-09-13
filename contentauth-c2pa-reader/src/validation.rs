@@ -163,7 +163,11 @@ pub mod status_code {
     /// Unlike [`SIGNING_CREDENTIAL_UNTRUSTED`] (used instead for a revoked
     /// certificate further up the path), this is a failure: the spec calls
     /// for the claim itself to be rejected when its own signer's
-    /// credential is revoked.
+    /// credential is revoked — *when this is the active manifest's own
+    /// chain*. The same code on an ingredient's chain is still recorded,
+    /// but built so it does not count as a failure instead, since an
+    /// ingredient's own revocation does not, by itself, invalidate the
+    /// asset being read (see the read session's own revocation handling).
     pub const SIGNING_CREDENTIAL_OCSP_REVOKED: &str = "signingCredential.ocsp.revoked";
 
     /// The validator chose not to query an OCSP responder online for the
@@ -267,16 +271,26 @@ pub struct ValidationStatus {
     /// Human-readable explanation.
     pub explanation: Option<String>,
 
-    /// Forces [`Self::is_failure`] to `true` regardless of [`Self::code`].
+    /// Overrides [`Self::is_failure`] to this value, regardless of
+    /// [`Self::code`], when set.
     ///
-    /// Exists for exactly one case: a CA certificate confirmed revoked by
-    /// OCSP is reported under [`status_code::SIGNING_CREDENTIAL_UNTRUSTED`]
-    /// — the same code an ordinary chain that simply does not reach a
-    /// trust anchor also carries — but, unlike that ordinary case, C2PA
-    /// spec §15.9 calls for the claim signature itself to be rejected.
-    /// Since the code string alone cannot carry that distinction, this
-    /// field does; see [`Self::for_url_forcing_failure`].
-    forced_failure: bool,
+    /// Two circumstances need this, both because a single code string is
+    /// shared between two findings of different severity:
+    ///
+    /// * A CA certificate confirmed revoked by OCSP is reported under
+    ///   [`status_code::SIGNING_CREDENTIAL_UNTRUSTED`] — the same code an
+    ///   ordinary chain that simply does not reach a trust anchor also
+    ///   carries — but, unlike that ordinary case, C2PA spec §15.9 calls
+    ///   for the claim signature itself to be rejected when it is *this*
+    ///   chain's own confirmed revocation, not merely a missing anchor.
+    ///   See [`Self::for_url_forcing_failure`].
+    /// * A revoked *signer* certificate on an ingredient's chain is
+    ///   reported under [`status_code::SIGNING_CREDENTIAL_OCSP_REVOKED`]
+    ///   — normally always a failure — but an ingredient's own revocation
+    ///   does not, by itself, invalidate the asset being read (see
+    ///   [`crate::read::ReadSession`]'s own `is_active` field). See
+    ///   [`Self::for_url_suppressing_failure`].
+    is_failure_override: Option<bool>,
 }
 
 impl ValidationStatus {
@@ -286,19 +300,32 @@ impl ValidationStatus {
             code: code.to_string(),
             url: Some(url.to_string()),
             explanation: Some(explanation.into()),
-            forced_failure: false,
+            is_failure_override: None,
         }
     }
 
     /// As [`Self::for_url`], but [`Self::is_failure`] reports `true`
-    /// regardless of `code` — see [`Self::forced_failure`].
+    /// regardless of `code` — see [`Self::is_failure_override`].
     pub(crate) fn for_url_forcing_failure(
         code: &str,
         url: &str,
         explanation: impl Into<String>,
     ) -> Self {
         Self {
-            forced_failure: true,
+            is_failure_override: Some(true),
+            ..Self::for_url(code, url, explanation)
+        }
+    }
+
+    /// As [`Self::for_url`], but [`Self::is_failure`] reports `false`
+    /// regardless of `code` — see [`Self::is_failure_override`].
+    pub(crate) fn for_url_suppressing_failure(
+        code: &str,
+        url: &str,
+        explanation: impl Into<String>,
+    ) -> Self {
+        Self {
+            is_failure_override: Some(false),
             ..Self::for_url(code, url, explanation)
         }
     }
@@ -320,21 +347,28 @@ impl ValidationStatus {
     /// excludes it again where the state is computed; this crate draws the
     /// line once, here.) A revoked-CA finding carrying that same code
     /// overrides this by forcing failure regardless of code, since that
-    /// circumstance is not the ordinary one.
+    /// circumstance is not the ordinary one — and a revoked ingredient
+    /// signer overrides the reverse way, since
+    /// [`status_code::SIGNING_CREDENTIAL_OCSP_REVOKED`] is otherwise
+    /// always a failure but an ingredient's own revocation must not, by
+    /// itself, invalidate the asset being read.
     pub fn is_failure(&self) -> bool {
-        self.forced_failure
-            || matches!(
-                self.code.as_str(),
-                status_code::ASSERTION_HASHEDURI_MISMATCH
-                    | status_code::ASSERTION_DATAHASH_MISMATCH
-                    | status_code::ASSERTION_DATAHASH_MALFORMED
-                    | status_code::CLAIM_SIGNATURE_MISMATCH
-                    | status_code::CLAIM_SIGNATURE_MISSING
-                    | status_code::CLAIM_SIGNATURE_OUTSIDE_VALIDITY
-                    | status_code::SIGNING_CREDENTIAL_INVALID
-                    | status_code::SIGNING_CREDENTIAL_EXPIRED
-                    | status_code::SIGNING_CREDENTIAL_OCSP_REVOKED
-            )
+        if let Some(is_failure) = self.is_failure_override {
+            return is_failure;
+        }
+
+        matches!(
+            self.code.as_str(),
+            status_code::ASSERTION_HASHEDURI_MISMATCH
+                | status_code::ASSERTION_DATAHASH_MISMATCH
+                | status_code::ASSERTION_DATAHASH_MALFORMED
+                | status_code::CLAIM_SIGNATURE_MISMATCH
+                | status_code::CLAIM_SIGNATURE_MISSING
+                | status_code::CLAIM_SIGNATURE_OUTSIDE_VALIDITY
+                | status_code::SIGNING_CREDENTIAL_INVALID
+                | status_code::SIGNING_CREDENTIAL_EXPIRED
+                | status_code::SIGNING_CREDENTIAL_OCSP_REVOKED
+        )
     }
 
     /// True if this status records a check that could not be carried out.
