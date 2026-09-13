@@ -71,8 +71,10 @@ The pieces, bottom up:
   c2pa-wasm's error-string contract (`format!("{err:?}")`) down to the
   `C2pa(JumbfNotFound)` string c2pa-web's `reader.ts` turns into `null`.
   `context_json` is c2pa-rs settings JSON; the slice recognized is
-  documented on `Context::from_json` (trust anchors as PEM, `ocsp_fetch`,
-  `remote_manifest_fetch`; everything else ignored).
+  documented on `Context::from_json` (trust anchors as PEM, and
+  `ocsp_fetch`, which takes c2pa-rs's off-by-default when absent rather
+  than the engine's on-by-default; everything else is ignored, including
+  `remote_manifest_fetch`, which the engine cannot act on yet).
 * **`web`** (feature, `wasm32-unknown-unknown` only) — the browser end:
   `Blob` for `web_sys::Blob`, `WebPlatform`, and a
   `#[wasm_bindgen]`-exported `WasmReader` whose JavaScript surface
@@ -120,10 +122,13 @@ produce, including the exact `C2pa(JumbfNotFound)` string.
   decoded assertion values, thumbnails. `ManifestStore` carries the
   top-level contract, populated with what the engine reports today, in
   the same shape `contentauth-c2pa-rs-compat`'s `Reader::json` produces.
+* **Remote manifests** — the engine has no remote-manifest request yet,
+  so an asset whose only manifest store is remotely hosted reads as
+  `C2pa(JumbfNotFound)` here however `remote_manifest_fetch` is set.
 * **A `fetch`-backed OCSP transport for the browser** — a `Platform`
   whose `ocsp` posts through `fetch`. `WebPlatform` declines OCSP today
-  (fail-open, and c2pa-rs's own default is off); a host that wants it
-  implements `Platform` itself.
+  (fail-open, and off by default here as in c2pa-rs); a host that wants
+  it implements `Platform` itself and opts in with `"ocsp_fetch": true`.
 * **Running the `web` module** — there is no browser in CI. It is held
   to `cargo check --all-features --target wasm32-unknown-unknown`, which
   CI runs, and to the shape of the code it delegates to, all of which is
