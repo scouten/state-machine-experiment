@@ -493,6 +493,38 @@ mod tests {
     }
 
     #[test]
+    fn ocsp_responder_url_skips_an_access_description_that_is_not_ocsp() {
+        use x509_cert::ext::pkix::AccessDescription;
+
+        // `id-ad-caIssuers` (RFC 5280 §4.2.2.1) — a real AIA access method,
+        // just not the one this crate looks for.
+        let ca_issuers = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.48.2");
+
+        let aia = AuthorityInfoAccessSyntax(vec![AccessDescription {
+            access_method: ca_issuers,
+            access_location: GeneralName::UniformResourceIdentifier(
+                der::asn1::Ia5String::new("http://ca.example/").unwrap(),
+            ),
+        }]);
+
+        assert_eq!(ocsp_responder_url(&aia), None);
+    }
+
+    #[test]
+    fn ocsp_responder_url_ignores_an_ocsp_entry_that_is_not_a_uri() {
+        use x509_cert::ext::pkix::AccessDescription;
+
+        let aia = AuthorityInfoAccessSyntax(vec![AccessDescription {
+            access_method: ID_AD_OCSP,
+            access_location: GeneralName::DnsName(
+                der::asn1::Ia5String::new("ocsp.example").unwrap(),
+            ),
+        }]);
+
+        assert_eq!(ocsp_responder_url(&aia), None);
+    }
+
+    #[test]
     fn decodes_a_ca_certificate() {
         let cert = decode(FIXTURE_ISSUER_CERT).unwrap();
 

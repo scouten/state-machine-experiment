@@ -210,6 +210,19 @@ mod tests {
     }
 
     #[test]
+    fn an_ocsp_request_is_reported_as_failed_since_this_host_has_no_network_access() {
+        let reply = answer(
+            &mut Cursor::new(vec![]),
+            &FileReadRequest::Ocsp {
+                url: "http://ocsp.example/".to_string(),
+                request_der: vec![1, 2, 3],
+            },
+        );
+
+        assert!(matches!(reply, FileReadReply::Failed(_)), "{reply:?}");
+    }
+
+    #[test]
     fn a_clock_before_the_epoch_reports_the_epoch_itself() {
         let before_epoch = UNIX_EPOCH
             .checked_sub(Duration::from_secs(1))

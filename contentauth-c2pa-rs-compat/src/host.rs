@@ -147,11 +147,17 @@ fn read_range(source: &mut File, range: ByteRange) -> io::Result<Vec<u8>> {
     Ok(buf)
 }
 
-/// The current wall-clock time as Unix seconds, falling back to the epoch
-/// for a clock reading before it — a hypothetical this crate has no better
-/// answer for, and the reader treats as any other implausible time.
+/// The current wall-clock time as Unix seconds.
 fn now_unix() -> i64 {
-    match SystemTime::now().duration_since(UNIX_EPOCH) {
+    unix_seconds(SystemTime::now())
+}
+
+/// `time` as Unix seconds, falling back to the epoch for a time before it —
+/// a hypothetical this crate has no better answer for, and the reader
+/// treats as any other implausible time. Split out from [`now_unix`] so a
+/// test can exercise the fallback without controlling the real clock.
+fn unix_seconds(time: SystemTime) -> i64 {
+    match time.duration_since(UNIX_EPOCH) {
         Ok(elapsed) => i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX),
         Err(_) => 0,
     }
@@ -373,6 +379,8 @@ mod tests {
         thread,
     };
 
+    use contentauth_c2pa_primitives::StreamId;
+
     use super::*;
 
     /// Starts a one-shot HTTP/1.1 server on an ephemeral local port that
@@ -531,16 +539,113 @@ mod tests {
     }
 
     #[test]
-    fn a_client_using_the_public_only_resolver_refuses_a_loopback_responder() {
-        // `spawn_responder` binds to loopback, so a client whose resolver
-        // rejects non-public addresses must never even connect to it.
+    fn fetch_ocsp_rejects_a_literal_loopback_address() {
+        // The literal-IP check in `fetch_ocsp_checked` runs regardless of
+        // which client (and so which resolver) is passed in — it exists
+        // precisely because a literal IP host never reaches the resolver
+        // at all. A plain, unrestricted client is used here to isolate
+        // that check from `PublicOnlyResolver`, which the next test
+        // covers instead.
         let (url, _received) = spawn_responder(vec![0xaa]);
+        let client = reqwest::blocking::Client::new();
+
+        let reply = fetch_ocsp(&client, &url, &[1, 2, 3]);
+
+        assert!(matches!(reply, FileReadReply::Failed(_)), "{reply:?}");
+    }
+
+    /// Rewrites a `spawn_responder` URL's host to `localhost` — still a
+    /// loopback destination, but a domain name (`url::Host::Domain`)
+    /// rather than a literal IP, so `fetch_ocsp_checked`'s literal-IP
+    /// check lets it through and whatever resolves it decides instead.
+    fn as_localhost_url(url: &str) -> String {
+        let port = reqwest::Url::parse(url)
+            .expect("parses")
+            .port()
+            .expect("has a port");
+        format!("http://localhost:{port}/")
+    }
+
+    #[test]
+    fn a_client_using_the_public_only_resolver_refuses_a_hostname_that_resolves_to_loopback() {
+        // This exercises `PublicOnlyResolver` itself, which resolves
+        // `localhost` to loopback and refuses it there.
+        let (url, _received) = spawn_responder(vec![0xaa]);
+        let localhost_url = as_localhost_url(&url);
+
         let client = reqwest::blocking::Client::builder()
             .dns_resolver(Arc::new(PublicOnlyResolver))
             .build()
             .expect("builds");
 
-        let reply = fetch_ocsp(&client, &url, &[1, 2, 3]);
+        let reply = fetch_ocsp(&client, &localhost_url, &[1, 2, 3]);
+
+        assert!(matches!(reply, FileReadReply::Failed(_)), "{reply:?}");
+    }
+
+    #[test]
+    fn fetch_ocsp_succeeds_end_to_end_through_a_hostname() {
+        // Unlike every other `fetch_ocsp` test, this one uses a plain,
+        // unrestricted client and a domain-name URL, so nothing in
+        // `fetch_ocsp_checked`'s own safeguards has a reason to refuse it
+        // — exercising `fetch_ocsp`'s success path, which every other
+        // test here deliberately avoids reaching (they call
+        // `send_ocsp_request` directly instead, or expect a refusal).
+        let (url, _received) = spawn_responder(vec![0xde, 0xad]);
+        let localhost_url = as_localhost_url(&url);
+        let client = reqwest::blocking::Client::new();
+
+        let reply = fetch_ocsp(&client, &localhost_url, &[1, 2, 3]);
+
+        assert!(
+            matches!(&reply, FileReadReply::OcspResponse(bytes) if *bytes == [0xde, 0xad]),
+            "{reply:?}"
+        );
+    }
+
+    #[test]
+    fn answer_dispatches_an_ocsp_request_to_fetch_ocsp() {
+        let (url, _received) = spawn_responder(vec![0x07]);
+        let localhost_url = as_localhost_url(&url);
+        let client = reqwest::blocking::Client::new();
+
+        let path = std::env::temp_dir().join("contentauth-c2pa-rs-compat-answer-ocsp-test");
+        File::create(&path).expect("creates a scratch file");
+        let mut source = File::open(&path).expect("opens the scratch file");
+
+        let reply = answer(
+            &mut source,
+            &client,
+            &FileReadRequest::Ocsp {
+                url: localhost_url,
+                request_der: vec![1, 2, 3],
+            },
+        );
+
+        let _ = std::fs::remove_file(&path);
+
+        assert!(
+            matches!(&reply, FileReadReply::OcspResponse(bytes) if *bytes == [0x07]),
+            "{reply:?}"
+        );
+    }
+
+    #[test]
+    fn read_range_reports_a_read_past_the_end_of_the_file_as_failed() {
+        let path = std::env::temp_dir().join("contentauth-c2pa-rs-compat-read-range-test");
+        std::fs::write(&path, [1u8, 2, 3]).expect("writes a scratch file");
+        let mut source = File::open(&path).expect("opens the scratch file");
+
+        let reply = answer(
+            &mut source,
+            &reqwest::blocking::Client::new(),
+            &FileReadRequest::Read {
+                stream: StreamId::new(0),
+                range: ByteRange { start: 0, len: 10 },
+            },
+        );
+
+        let _ = std::fs::remove_file(&path);
 
         assert!(matches!(reply, FileReadReply::Failed(_)), "{reply:?}");
     }
@@ -586,5 +691,20 @@ mod tests {
             let addr: Ipv6Addr = ip.parse().expect("parses");
             assert!(!is_global(&IpAddr::V6(addr)), "{ip} should not be global");
         }
+    }
+
+    #[test]
+    fn unix_seconds_falls_back_to_the_epoch_for_a_time_before_it() {
+        let before_epoch = UNIX_EPOCH
+            .checked_sub(std::time::Duration::from_secs(1))
+            .expect("this platform can represent an instant before the epoch");
+
+        assert_eq!(unix_seconds(before_epoch), 0);
+    }
+
+    #[test]
+    fn unix_seconds_converts_a_time_after_the_epoch() {
+        let one_hour_in = UNIX_EPOCH + std::time::Duration::from_secs(3_600);
+        assert_eq!(unix_seconds(one_hour_in), 3_600);
     }
 }

@@ -468,6 +468,17 @@ fn an_unrecognized_extension_is_reported_as_unsupported() {
 }
 
 #[test]
+fn a_nonexistent_file_is_reported_as_an_io_error() {
+    let path = std::env::temp_dir().join("contentauth-c2pa-rs-compat-does-not-exist.jpg");
+    let _ = std::fs::remove_file(&path);
+
+    let err = Reader::from_context(Context::new())
+        .with_file(&path)
+        .expect_err("there is nothing at this path to open");
+    assert!(matches!(err, Error::Io { .. }), "{err:?}");
+}
+
+#[test]
 fn a_bare_reader_default_reports_as_though_nothing_was_ever_read() {
     // `Reader::default()` — equivalently, `Reader::from_context(Context::default())`
     // — before `with_file` is ever called, the same way c2pa-rs's own
