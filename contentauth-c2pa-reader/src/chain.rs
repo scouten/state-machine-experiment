@@ -95,14 +95,9 @@ pub(crate) struct PendingChain {
     pub(crate) timestamp: Option<PendingTimestamp>,
 
     /// DER-encoded `OCSPResponse` values "stapled" into the signature's
-    /// `rVals` COSE header (C2PA spec §15.9.1), if it carried any.
-    ///
-    /// Always empty today: [`crate::cose`] does not read this header yet
-    /// (its CBOR shape is not yet confirmed against the specification), so
-    /// every chain reads as though it carried no staples — [`crate::ocsp::evaluate_stapled`]
-    /// is exercised directly by this crate's own tests in the meantime,
-    /// and [`crate::read::ReadSession`] already tries whatever is here
-    /// before ever asking a host to query a responder online.
+    /// `rVals` COSE header (C2PA spec §14.5.2), if it carried any. Empty if
+    /// the header was absent or malformed — see [`crate::cose`]'s own
+    /// parsing of it for why a malformed staple is not itself a finding.
     pub(crate) rvals: Vec<Vec<u8>>,
 }
 

@@ -667,10 +667,10 @@ impl ReadSession {
     /// one: it is what lets a manifest signed years ago with a
     /// since-expired certificate still read as valid.
     ///
-    /// Every certificate's stapled `rVals` responses — always empty today,
-    /// see [`PendingChain::rvals`] — are tried first, synchronously, since
-    /// they cost no host round trip; only a signer's certificate whose
-    /// staples left nothing established, and only when
+    /// Every certificate's stapled `rVals` responses (see
+    /// [`PendingChain::rvals`]) are tried first, synchronously, since they
+    /// cost no host round trip; only a signer's certificate whose staples
+    /// left nothing established, and only when
     /// [`ReadSettings::check_ocsp`] says to, goes on to an online query.
     /// Returns the chains that still have such a query outstanding.
     fn evaluate_trust(
@@ -1956,8 +1956,8 @@ mod tests {
     }
 
     /// A [`PendingChain`] over `certificates`, carrying no timestamp and no
-    /// stapled `rVals` — every test below exercises the online path, since
-    /// [`crate::cose`] does not populate [`PendingChain::rvals`] yet.
+    /// stapled `rVals` by default, so most tests below exercise the online
+    /// path; a test that wants a staple sets `rvals` on the result.
     fn pending_chain(label: &str, url: &str, certificates: Vec<Certificate>) -> PendingChain {
         PendingChain {
             manifest_label: label.to_string(),

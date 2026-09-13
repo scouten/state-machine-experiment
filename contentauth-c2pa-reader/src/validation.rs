@@ -497,9 +497,7 @@ pub(crate) fn check_claim_signature(
                 url,
                 certificates,
                 timestamp,
-                // `cose::parse` does not read the `rVals` header yet — see
-                // `PendingChain::rvals`'s own doc comment.
-                rvals: vec![],
+                rvals: signature.rvals,
             })
         }
 
@@ -869,6 +867,35 @@ mod tests {
         assert_eq!(
             statuses[1].explanation.as_deref(),
             Some("timestamp header is not a map")
+        );
+    }
+
+    #[test]
+    fn stapled_ocsp_responses_are_carried_onto_the_pending_chain() {
+        let mut ocsp_vals = BTreeMap::new();
+        ocsp_vals.insert(
+            Value::Text("ocspVals".to_string()),
+            Value::Array(vec![Value::Bytes(vec![1, 2, 3])]),
+        );
+        let unprotected = Value::Map(BTreeMap::from([(
+            Value::Text("rVals".to_string()),
+            Value::Map(ocsp_vals),
+        )]));
+        let signature = test_support::claim_signature_with_unprotected(b"claim", unprotected);
+
+        let mut statuses = Vec::new();
+        let chain = check_claim_signature(
+            "urn:uuid:x",
+            b"claim",
+            SignatureBox::Present(&signature),
+            &mut statuses,
+        )
+        .unwrap();
+
+        assert_eq!(chain.rvals, vec![vec![1, 2, 3]]);
+        assert_eq!(
+            statuses.iter().map(|s| s.code.as_str()).collect::<Vec<_>>(),
+            [status_code::CLAIM_SIGNATURE_VALIDATED]
         );
     }
 }
