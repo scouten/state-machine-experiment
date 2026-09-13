@@ -312,9 +312,13 @@ pub(crate) struct OcspCheckPlan {
 /// Rebuilds exactly the path [`validate`] itself would build — cheap, and
 /// it keeps [`validate`] itself unchanged rather than threading a second,
 /// asynchronous concern through a function that already has plenty to do.
-/// One check per link that has both a subject naming a responder and an
-/// issuer above it in the path; a link the profile checks have already
-/// rejected is still included; whether to bother asking is
+/// One check per link that has an issuer above it in the path, regardless
+/// of whether the subject names an online responder: matching a stapled
+/// response already in the manifest store needs only a `CertID`, not
+/// anywhere to send a request, so a certificate with no Authority
+/// Information Access extension still gets a check — see
+/// [`crate::ocsp::build_check`]. A link the profile checks have already
+/// rejected is still included; whether to bother asking online is
 /// [`crate::read::ReadSession`]'s call; this only reports what could be
 /// asked.
 pub(crate) fn ocsp_checks(chain: &[Certificate], anchors: &[Certificate]) -> Vec<OcspCheckPlan> {
@@ -1055,26 +1059,35 @@ mod tests {
     }
 
     #[test]
-    fn ocsp_checks_is_empty_when_no_certificate_names_a_responder() {
+    fn ocsp_checks_still_builds_a_check_when_no_certificate_names_a_responder() {
         // None of this crate's own trust fixtures carry an Authority
-        // Information Access extension.
-        assert!(ocsp_checks(&chain(), &[]).is_empty());
+        // Information Access extension — but a check is still built for
+        // each link, with no responder URL to query online, so that a
+        // stapled response for one of these certificates is not silently
+        // dropped just because there is nowhere to send a live request.
+        let checks = ocsp_checks(&chain(), &[]);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].check.responder_url, None);
     }
 
     #[test]
-    fn ocsp_checks_builds_one_check_per_link_that_names_a_responder() {
+    fn ocsp_checks_builds_one_check_per_link_regardless_of_responder_url() {
         let mut leaf = decode(LEAF);
         leaf.ocsp_responder_url = Some("http://ocsp.example/".to_string());
 
-        // The intermediate has no responder URL of its own, so only the
-        // leaf/intermediate link produces a check — there is no third
-        // certificate above the intermediate in this two-element chain to
-        // ask about *its* revocation status.
+        // The intermediate has no responder URL of its own, but still gets
+        // a check — there is no third certificate above the intermediate
+        // in this two-element chain to ask about *its* revocation status,
+        // so there is still only one link (and so one check) either way.
         let checks = ocsp_checks(&[leaf, decode(INTERMEDIATE)], &[]);
         assert_eq!(checks.len(), 1);
         assert!(
             checks[0].is_signer,
             "position 0 of the path is the claim signer"
+        );
+        assert_eq!(
+            checks[0].check.responder_url.as_deref(),
+            Some("http://ocsp.example/")
         );
     }
 

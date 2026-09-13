@@ -789,18 +789,30 @@ impl ReadSession {
                     // system does not know that, so both are handled the
                     // same way here rather than declared unreachable.)
                     None | Some(ocsp::StapledOutcome::Inconclusive) if is_signer => {
-                        if self.settings.check_ocsp {
-                            let request = self.core.issue(ReadRequest::Ocsp {
-                                url: check.responder_url.clone(),
-                                request_der: check.request_der.clone(),
-                            });
-                            online_checks.push((request, check));
-                        } else {
-                            self.record(ValidationStatus::for_url(
-                                status_code::SIGNING_CREDENTIAL_OCSP_SKIPPED,
-                                &pending.url,
-                                "no revocation information for this credential was found in the manifest, and online OCSP checking is disabled",
-                            ));
+                        match (&check.responder_url, self.settings.check_ocsp) {
+                            (Some(responder_url), true) => {
+                                let request = self.core.issue(ReadRequest::Ocsp {
+                                    url: responder_url.clone(),
+                                    request_der: check.request_der.clone(),
+                                });
+                                online_checks.push((request, check));
+                            }
+
+                            (Some(_), false) => {
+                                self.record(ValidationStatus::for_url(
+                                    status_code::SIGNING_CREDENTIAL_OCSP_SKIPPED,
+                                    &pending.url,
+                                    "no revocation information for this credential was found in the manifest, and online OCSP checking is disabled",
+                                ));
+                            }
+
+                            (None, _) => {
+                                self.record(ValidationStatus::for_url(
+                                    status_code::SIGNING_CREDENTIAL_OCSP_SKIPPED,
+                                    &pending.url,
+                                    "no revocation information for this credential was found in the manifest, and its certificate names no OCSP responder to query online",
+                                ));
+                            }
                         }
                     }
 
@@ -942,37 +954,34 @@ impl ReadSession {
 
     /// Records a confirmed revocation (C2PA spec §15.9), for either the
     /// claim signer's own certificate or a CA certificate above it — the
-    /// two are reported under, and act on, entirely different vocabulary.
-    ///
-    /// A revoked *signer* certificate invalidates the claim outright
-    /// ([`status_code::SIGNING_CREDENTIAL_OCSP_REVOKED`] is a failure —
-    /// see [`ValidationStatus::is_failure`] — so
+    /// two are reported under different vocabulary, but both are
+    /// failures: the spec calls for the claim signature itself to be
+    /// rejected either way ([`status_code::SIGNING_CREDENTIAL_OCSP_REVOKED`]
+    /// for the signer; a CA certificate is reported under
+    /// [`status_code::SIGNING_CREDENTIAL_UNTRUSTED`] — the same code an
+    /// ordinary untrusted chain also carries — but built with
+    /// [`ValidationStatus::for_url_forcing_failure`] rather than the
+    /// ordinary constructor, since §15.9's own text is explicit that this
+    /// circumstance is "a failure status", unlike the ordinary one).
     /// [`Trust::Rejected`] here is really just keeping [`Self::trust`] in
-    /// step with a verdict the status already recorded). A revoked *CA*
-    /// certificate only costs the chain its anchor, per the existing
-    /// [`status_code::SIGNING_CREDENTIAL_UNTRUSTED`] precedent — it never
-    /// takes an already-`Unanchored` or newly-revoked chain any lower.
+    /// step with a verdict the status already recorded.
     fn apply_revocation(&mut self, is_signer: bool, is_active: bool, url: &str, explanation: &str) {
-        if is_signer {
-            self.record(ValidationStatus::for_url(
+        self.record(if is_signer {
+            ValidationStatus::for_url(
                 status_code::SIGNING_CREDENTIAL_OCSP_REVOKED,
                 url,
                 explanation,
-            ));
-
-            if is_active {
-                self.trust = Some(Trust::Rejected);
-            }
+            )
         } else {
-            self.record(ValidationStatus::for_url(
+            ValidationStatus::for_url_forcing_failure(
                 status_code::SIGNING_CREDENTIAL_UNTRUSTED,
                 url,
                 explanation,
-            ));
+            )
+        });
 
-            if is_active && self.trust == Some(Trust::Anchored) {
-                self.trust = Some(Trust::Unanchored);
-            }
+        if is_active {
+            self.trust = Some(Trust::Rejected);
         }
     }
 
@@ -2202,29 +2211,41 @@ mod tests {
     }
 
     #[test]
-    fn a_revoked_ca_certificate_is_reported_as_untrusted_not_as_an_ocsp_failure() {
+    fn a_revoked_ca_certificate_is_reported_as_untrusted_but_still_fails_the_claim() {
         let mut session = ReadSession::new(ReadSettings::default());
         session.trust = Some(Trust::Anchored);
 
         session.apply_revocation(false, true, "self#jumbf=x", "a CA certificate was revoked");
 
-        // Downgraded, not rejected outright — the existing
-        // `signingCredential.untrusted` precedent, not a claim-invalidating
-        // failure.
-        assert_eq!(session.trust, Some(Trust::Unanchored));
+        // Reported under the same code an ordinary untrusted chain
+        // carries, but §15.9's own text calls this circumstance out as a
+        // failure, unlike the ordinary one — see
+        // `ValidationStatus::for_url_forcing_failure`.
+        assert_eq!(session.trust, Some(Trust::Rejected));
         let status = session.report.statuses.last().unwrap();
         assert_eq!(status.code, status_code::SIGNING_CREDENTIAL_UNTRUSTED);
-        assert!(!status.is_failure());
+        assert!(status.is_failure());
     }
 
     #[test]
-    fn a_revoked_ca_certificate_never_takes_an_unanchored_chain_lower() {
+    fn a_revoked_ca_certificate_for_an_inactive_chain_spares_trust() {
+        // An ingredient's chain is still checked and the failure still
+        // recorded, but only the *active* manifest's own trust is what
+        // `Self::trust` tracks.
         let mut session = ReadSession::new(ReadSettings::default());
-        session.trust = Some(Trust::Unanchored);
+        session.trust = Some(Trust::Anchored);
 
-        session.apply_revocation(false, true, "self#jumbf=x", "a CA certificate was revoked");
+        session.apply_revocation(
+            false,
+            false,
+            "self#jumbf=ingredient",
+            "a CA certificate was revoked",
+        );
 
-        assert_eq!(session.trust, Some(Trust::Unanchored));
+        assert_eq!(session.trust, Some(Trust::Anchored));
+        let status = session.report.statuses.last().unwrap();
+        assert_eq!(status.code, status_code::SIGNING_CREDENTIAL_UNTRUSTED);
+        assert!(status.is_failure());
     }
 
     #[test]

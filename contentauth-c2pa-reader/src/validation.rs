@@ -127,11 +127,20 @@ pub mod status_code {
     /// anchor — including because none are configured. Also the code the
     /// C2PA specification names for a *different* finding this crate
     /// reports the same way: a CA certificate above the signer, found
-    /// revoked by OCSP, per §15.9's own text ("the claim signature shall
-    /// be rejected with a failure status of `signingCredential.untrusted`").
+    /// revoked by OCSP.
     ///
-    /// Deliberately not a failure in this crate's own model either way;
-    /// see [`super::ValidationStatus::is_failure`].
+    /// The two are not equally severe, even though they share a code: an
+    /// ordinary untrusted chain is not a failure (see
+    /// [`super::ValidationStatus::is_failure`]) — a manifest with no
+    /// configured trust anchors is meant to read as
+    /// [`super::ValidationState::Valid`], not `Invalid`. A confirmed
+    /// *revoked* CA certificate is different: §15.9's own text is explicit
+    /// that "the claim signature shall be rejected with a failure status
+    /// of `signingCredential.untrusted`" in that case. Since the code
+    /// string alone cannot carry that distinction, the revoked-CA finding
+    /// is built with a constructor that forces it to be treated as a
+    /// failure regardless of code, instead of the plain one, in the read
+    /// session's own revocation handling.
     pub const SIGNING_CREDENTIAL_UNTRUSTED: &str = "signingCredential.untrusted";
 
     /// A validly signed, timely OCSP response established that the
@@ -257,6 +266,17 @@ pub struct ValidationStatus {
 
     /// Human-readable explanation.
     pub explanation: Option<String>,
+
+    /// Forces [`Self::is_failure`] to `true` regardless of [`Self::code`].
+    ///
+    /// Exists for exactly one case: a CA certificate confirmed revoked by
+    /// OCSP is reported under [`status_code::SIGNING_CREDENTIAL_UNTRUSTED`]
+    /// — the same code an ordinary chain that simply does not reach a
+    /// trust anchor also carries — but, unlike that ordinary case, C2PA
+    /// spec §15.9 calls for the claim signature itself to be rejected.
+    /// Since the code string alone cannot carry that distinction, this
+    /// field does; see [`Self::for_url_forcing_failure`].
+    forced_failure: bool,
 }
 
 impl ValidationStatus {
@@ -266,6 +286,20 @@ impl ValidationStatus {
             code: code.to_string(),
             url: Some(url.to_string()),
             explanation: Some(explanation.into()),
+            forced_failure: false,
+        }
+    }
+
+    /// As [`Self::for_url`], but [`Self::is_failure`] reports `true`
+    /// regardless of `code` — see [`Self::forced_failure`].
+    pub(crate) fn for_url_forcing_failure(
+        code: &str,
+        url: &str,
+        explanation: impl Into<String>,
+    ) -> Self {
+        Self {
+            forced_failure: true,
+            ..Self::for_url(code, url, explanation)
         }
     }
 
@@ -275,29 +309,32 @@ impl ValidationStatus {
     /// algorithm the core cannot compute) are deliberately not failures:
     /// they mean "not checked", which is weaker than "checked and wrong".
     ///
-    /// [`status_code::SIGNING_CREDENTIAL_UNTRUSTED`] is also not a failure,
-    /// for a different reason: the check ran and came back negative, but
-    /// what it found is that the signer is absent from *this verifier's*
+    /// [`status_code::SIGNING_CREDENTIAL_UNTRUSTED`] is also not a failure
+    /// by itself, for a different reason: usually the check ran and came
+    /// back negative because the signer is absent from *this verifier's*
     /// anchor list. That is a statement about the configuration, not about
     /// the manifest, and treating it as a failure would make
     /// [`ValidationState::Valid`] — defined as "cryptographically valid,
     /// but not on the configured trust list" — unreachable. (c2pa-rs
     /// classifies the same code as a failure in `log_kind` and then
     /// excludes it again where the state is computed; this crate draws the
-    /// line once, here.)
+    /// line once, here.) A revoked-CA finding carrying that same code
+    /// overrides this by forcing failure regardless of code, since that
+    /// circumstance is not the ordinary one.
     pub fn is_failure(&self) -> bool {
-        matches!(
-            self.code.as_str(),
-            status_code::ASSERTION_HASHEDURI_MISMATCH
-                | status_code::ASSERTION_DATAHASH_MISMATCH
-                | status_code::ASSERTION_DATAHASH_MALFORMED
-                | status_code::CLAIM_SIGNATURE_MISMATCH
-                | status_code::CLAIM_SIGNATURE_MISSING
-                | status_code::CLAIM_SIGNATURE_OUTSIDE_VALIDITY
-                | status_code::SIGNING_CREDENTIAL_INVALID
-                | status_code::SIGNING_CREDENTIAL_EXPIRED
-                | status_code::SIGNING_CREDENTIAL_OCSP_REVOKED
-        )
+        self.forced_failure
+            || matches!(
+                self.code.as_str(),
+                status_code::ASSERTION_HASHEDURI_MISMATCH
+                    | status_code::ASSERTION_DATAHASH_MISMATCH
+                    | status_code::ASSERTION_DATAHASH_MALFORMED
+                    | status_code::CLAIM_SIGNATURE_MISMATCH
+                    | status_code::CLAIM_SIGNATURE_MISSING
+                    | status_code::CLAIM_SIGNATURE_OUTSIDE_VALIDITY
+                    | status_code::SIGNING_CREDENTIAL_INVALID
+                    | status_code::SIGNING_CREDENTIAL_EXPIRED
+                    | status_code::SIGNING_CREDENTIAL_OCSP_REVOKED
+            )
     }
 
     /// True if this status records a check that could not be carried out.

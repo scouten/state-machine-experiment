@@ -143,7 +143,12 @@ const SHA256_OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.16.840.1.10
 pub(crate) struct PendingOcspCheck {
     /// Where to send [`Self::request_der`], taken from the subject
     /// certificate's Authority Information Access extension.
-    pub(crate) responder_url: String,
+    ///
+    /// `None` when the subject carries no AIA extension: this check can
+    /// still match a stapled response already sitting in the manifest
+    /// store by [`Self::cert_id`] — that costs no request of any kind —
+    /// but there is nowhere to send an online one.
+    pub(crate) responder_url: Option<String>,
 
     /// The DER-encoded `OCSPRequest` this check sends. Built once, here,
     /// so the host never has to know anything about OCSP's ASN.1 beyond
@@ -216,15 +221,20 @@ pub(crate) enum OnlineOutcome {
     Inconclusive,
 }
 
-/// Builds the OCSP check for one link of a certificate path, if the
-/// subject certificate names a responder to ask.
+/// Builds the OCSP check for one link of a certificate path.
 ///
-/// Returns `None` when `subject` carries no OCSP responder URL, or (only
-/// in a defensive, expected-unreachable case) if the request could not be
-/// DER-encoded — never a status finding of its own, since not every
-/// certificate is expected to carry the extension in the first place.
+/// Succeeds regardless of whether `subject` names an online responder:
+/// matching a stapled response already in the manifest store needs only
+/// the `CertID`, not anywhere to send a request, so gating this on the AIA
+/// extension would silently drop a staple for a certificate that happens
+/// not to carry one. [`PendingOcspCheck::responder_url`] is `None` in that
+/// case, and it is only the online query — not this function — that has
+/// nothing to do about it.
+///
+/// Returns `None` only in a defensive, expected-unreachable case: the
+/// `CertID` or request could not be DER-encoded. Never a status finding of
+/// its own.
 pub(crate) fn build_check(subject: &Certificate, issuer: &Certificate) -> Option<PendingOcspCheck> {
-    let responder_url = subject.ocsp_responder_url.clone()?;
     let cert_id = build_cert_id(subject, issuer).ok()?;
 
     let request = OcspRequest {
@@ -243,7 +253,7 @@ pub(crate) fn build_check(subject: &Certificate, issuer: &Certificate) -> Option
     let request_der = request.to_der().ok()?;
 
     Some(PendingOcspCheck {
-        responder_url,
+        responder_url: subject.ocsp_responder_url.clone(),
         request_der,
         issuer: issuer.clone(),
         cert_id,
@@ -318,13 +328,14 @@ fn accept(check: &PendingOcspCheck, response_der: &[u8]) -> Option<Accepted> {
         .iter()
         .find(|candidate| candidate.cert_id == check.cert_id)?;
 
-    let signer = responder_certificate(check, &basic)?;
+    let produced_at = generalized_time_seconds(&basic.tbs_response_data.produced_at);
+    let signer = responder_certificate(check, &basic, produced_at)?;
     verify_response_signature(&basic, &signer).ok()?;
 
     Some(Accepted {
         this_update: generalized_time_seconds(&single.this_update),
         next_update: single.next_update.as_ref().map(generalized_time_seconds),
-        produced_at: generalized_time_seconds(&basic.tbs_response_data.produced_at),
+        produced_at,
         status: status_of(single),
     })
 }
@@ -486,12 +497,18 @@ const ONE_DAY: i64 = 24 * 60 * 60;
 /// directly (`responderID` names the issuer itself), or a delegated
 /// responder certificate the issuer issued for exactly this purpose did —
 /// the same `id-kp-OCSPSigning` profile [`crate::chain::validate`] already
-/// holds an end-entity certificate to. See the module docs for the
-/// `responderID`-by-key-hash shape this does not resolve, and for the
-/// independently-client-trusted-responder shape RFC 6960 also allows.
+/// holds an end-entity certificate to, checked at `produced_at` (the
+/// instant the response itself claims to have been signed) exactly the
+/// way any other signing certificate's validity window is checked at its
+/// own signing instant elsewhere in this crate — an expired or
+/// not-yet-valid delegate is not entitled to answer for anyone. See the
+/// module docs for the `responderID`-by-key-hash shape this does not
+/// resolve, and for the independently-client-trusted-responder shape RFC
+/// 6960 also allows.
 fn responder_certificate(
     check: &PendingOcspCheck,
     basic: &BasicOcspResponse,
+    produced_at: i64,
 ) -> Option<Certificate> {
     let ResponderId::ByName(name) = &basic.tbs_response_data.responder_id else {
         return None;
@@ -520,7 +537,11 @@ fn responder_certificate(
             .as_deref()
             .is_some_and(|purposes| purposes.iter().any(|oid| oid == chain::OCSP_SIGNING));
 
-        if names_ocsp_signing && chain::verify(&candidate, &check.issuer).is_ok() {
+        let inside_validity =
+            produced_at >= candidate.not_before && produced_at <= candidate.not_after;
+
+        if names_ocsp_signing && inside_validity && chain::verify(&candidate, &check.issuer).is_ok()
+        {
             return Some(candidate);
         }
     }
@@ -570,7 +591,8 @@ mod tests {
 
     use core::time::Duration;
 
-    use der::asn1::{BitString, GeneralizedTime};
+    use der::asn1::{BitString, GeneralizedTime, OctetString};
+    use x509_cert::time::{Time, Validity};
     use x509_ocsp::{OcspGeneralizedTime, ResponseData, RevokedInfo, SingleResponse};
 
     use super::*;
@@ -602,7 +624,7 @@ mod tests {
     fn check() -> PendingOcspCheck {
         let issuer = issuer();
         PendingOcspCheck {
-            responder_url: "http://ocsp.example/".to_string(),
+            responder_url: Some("http://ocsp.example/".to_string()),
             request_der: vec![],
             cert_id: build_cert_id(&subject(), &issuer).expect("builds"),
             issuer,
@@ -701,11 +723,189 @@ mod tests {
         })
     }
 
+    /// Builds a real, cryptographically valid delegated OCSP responder
+    /// certificate: subject `CN=Delegate`, signed by [`TEST_SIGNER_KEY`]
+    /// (so it verifies against `issuer()`'s public key, exactly as
+    /// [`chain::verify`] would check any other certificate), reusing
+    /// [`TEST_SIGNER_CERT`]'s own `SubjectPublicKeyInfo` (so a response
+    /// signed with that same key also verifies against *this*
+    /// certificate's declared public key), asserting the
+    /// `id-kp-OCSPSigning` EKU, and valid over `[not_before, not_after]`.
+    fn delegated_responder_cert(not_before: i64, not_after: i64) -> Vec<u8> {
+        let issuer_cert = x509_cert::Certificate::from_der(TEST_SIGNER_CERT).expect("decodes");
+
+        let eku = x509_cert::ext::pkix::ExtendedKeyUsage(vec![ObjectIdentifier::new_unwrap(
+            chain::OCSP_SIGNING,
+        )]);
+        // `id-ce-extKeyUsage` (RFC 5280 §4.2.1.12) — the Extended Key Usage
+        // *extension's own* OID, distinct from `chain::OCSP_SIGNING`, which
+        // is one of the *purposes* it can list.
+        let extension = x509_cert::ext::Extension {
+            extn_id: ObjectIdentifier::new_unwrap("2.5.29.37"),
+            critical: false,
+            extn_value: OctetString::new(eku.to_der().expect("encodes")).expect("encodes"),
+        };
+
+        let tbs = x509_cert::TbsCertificate {
+            version: x509_cert::Version::V3,
+            serial_number: x509_cert::serial_number::SerialNumber::new(&[7]).expect("encodes"),
+            signature: issuer_cert.tbs_certificate.signature.clone(),
+            issuer: issuer_cert.tbs_certificate.subject.clone(),
+            validity: Validity {
+                not_before: Time::GeneralTime(generalized_time(not_before).0),
+                not_after: Time::GeneralTime(generalized_time(not_after).0),
+            },
+            subject: "CN=Delegate".parse().expect("parses"),
+            subject_public_key_info: issuer_cert.tbs_certificate.subject_public_key_info.clone(),
+            issuer_unique_id: None,
+            subject_unique_id: None,
+            extensions: Some(vec![extension]),
+        };
+
+        let signer = c2pa_raw_crypto::signer_from_private_key(
+            TEST_SIGNER_KEY,
+            c2pa_raw_crypto::SigningAlg::Es256,
+        )
+        .expect("the test key is valid");
+        let signature = signer.sign(&tbs.to_der().expect("encodes")).expect("signs");
+
+        let certificate = x509_cert::Certificate {
+            tbs_certificate: tbs,
+            signature_algorithm: x509_cert::spki::AlgorithmIdentifierOwned {
+                oid: ECDSA_WITH_SHA256_OID,
+                parameters: None,
+            },
+            signature: BitString::from_bytes(&signature).expect("encodes"),
+        };
+
+        certificate.to_der().expect("encodes")
+    }
+
+    /// As [`signed_response`], but names `delegate` (rather than the
+    /// issuer itself) as the responder, with `delegate`'s DER embedded in
+    /// the response's own `certs` field — exercising the delegated-
+    /// responder path in `responder_certificate` rather than the
+    /// issuer-answered-directly one every other test here uses.
+    fn signed_response_via_delegate(
+        check: &PendingOcspCheck,
+        status: CertStatus,
+        this_update: i64,
+        next_update: Option<i64>,
+        produced_at: i64,
+        delegate_der: &[u8],
+    ) -> Vec<u8> {
+        let single = SingleResponse {
+            cert_id: check.cert_id.clone(),
+            cert_status: status,
+            this_update: generalized_time(this_update),
+            next_update: next_update.map(generalized_time),
+            single_extensions: None,
+        };
+
+        let delegate = x509_cert::Certificate::from_der(delegate_der).expect("decodes");
+
+        let tbs = ResponseData {
+            version: Version::V1,
+            responder_id: ResponderId::ByName(delegate.tbs_certificate.subject.clone()),
+            produced_at: generalized_time(produced_at),
+            responses: vec![single],
+            response_extensions: None,
+        };
+
+        let signer = c2pa_raw_crypto::signer_from_private_key(
+            TEST_SIGNER_KEY,
+            c2pa_raw_crypto::SigningAlg::Es256,
+        )
+        .expect("the test key is valid");
+        let signature = signer.sign(&tbs.to_der().expect("encodes")).expect("signs");
+
+        let basic = BasicOcspResponse {
+            tbs_response_data: tbs,
+            signature_algorithm: x509_cert::spki::AlgorithmIdentifierOwned {
+                oid: ECDSA_WITH_SHA256_OID,
+                parameters: None,
+            },
+            signature: BitString::from_bytes(&signature).expect("encodes"),
+            certs: Some(vec![delegate]),
+        };
+
+        OcspResponse::successful(basic)
+            .expect("encodes")
+            .to_der()
+            .expect("encodes")
+    }
+
     #[test]
-    fn build_check_requires_a_responder_url() {
+    fn online_accepts_a_response_from_a_delegated_responder_inside_its_validity_window() {
+        let check = check();
+        let delegate = delegated_responder_cert(0, 1_000_000_000);
+        let response = signed_response_via_delegate(
+            &check,
+            CertStatus::good(),
+            1_000,
+            Some(2_000),
+            1_000,
+            &delegate,
+        );
+
+        assert_eq!(
+            evaluate_online(&check, &response, None, Some(1_500)),
+            OnlineOutcome::NotRevoked
+        );
+    }
+
+    #[test]
+    fn online_rejects_a_delegated_responder_whose_certificate_had_already_expired() {
+        // The delegate's validity window ends well before the response's
+        // own `producedAt`, so it was not entitled to answer at all —
+        // an expired delegated credential must not be able to authenticate
+        // a response just because its issuer signature still verifies.
+        let check = check();
+        let delegate = delegated_responder_cert(0, 500);
+        let response = signed_response_via_delegate(
+            &check,
+            CertStatus::good(),
+            1_000,
+            Some(2_000),
+            1_000,
+            &delegate,
+        );
+
+        assert_eq!(
+            evaluate_online(&check, &response, None, Some(1_500)),
+            OnlineOutcome::Inconclusive
+        );
+    }
+
+    #[test]
+    fn online_rejects_a_delegated_responder_whose_certificate_was_not_yet_valid() {
+        let check = check();
+        let delegate = delegated_responder_cert(2_000, 1_000_000_000);
+        let response = signed_response_via_delegate(
+            &check,
+            CertStatus::good(),
+            1_000,
+            Some(2_000),
+            1_000,
+            &delegate,
+        );
+
+        assert_eq!(
+            evaluate_online(&check, &response, None, Some(1_500)),
+            OnlineOutcome::Inconclusive
+        );
+    }
+
+    #[test]
+    fn build_check_succeeds_without_a_responder_url() {
+        // A certificate with no AIA extension still gets a check: it can be
+        // matched against a stapled response by `CertID` even though there
+        // is nowhere to send an online request.
         let mut subject = subject();
         subject.ocsp_responder_url = None;
-        assert!(build_check(&subject, &issuer()).is_none());
+
+        let check = build_check(&subject, &issuer()).expect("still builds a check");
+        assert_eq!(check.responder_url, None);
     }
 
     #[test]
@@ -714,7 +914,7 @@ mod tests {
         subject.ocsp_responder_url = Some("http://ocsp.example/".to_string());
 
         let check = build_check(&subject, &issuer()).expect("names a responder");
-        assert_eq!(check.responder_url, "http://ocsp.example/");
+        assert_eq!(check.responder_url.as_deref(), Some("http://ocsp.example/"));
 
         // The request this crate builds names exactly the `CertID` this
         // module would independently build for the same pair.

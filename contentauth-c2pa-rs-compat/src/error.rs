@@ -82,4 +82,14 @@ pub enum Error {
     /// richer report.
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+
+    /// The `reqwest` client used for live OCSP requests could not be
+    /// constructed.
+    ///
+    /// Expected to stay unreachable with this crate's own client
+    /// configuration (nothing it sets can fail to build) — kept as a real
+    /// error rather than a panic since nothing rules out a future
+    /// TLS/proxy configuration knob doing so.
+    #[error(transparent)]
+    Http(#[from] reqwest::Error),
 }

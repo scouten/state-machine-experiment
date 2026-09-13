@@ -55,6 +55,13 @@ serde_json = "1"
 # support, charset sniffing) is a reasonable default for a networked
 # convenience host rather than something this crate has an opinion about.
 reqwest = { version = "0.13.5", features = ["blocking"] }
+# Only for `url::Host`, to tell a literal IP address host apart from a
+# domain name when checking an OCSP responder URL against
+# `src/host.rs`'s own SSRF safeguards — a literal IP bypasses the DNS
+# resolution hook those rely on otherwise. Already in the tree via
+# `reqwest` (which re-exports `Url` itself but not `Host`), so this adds
+# no second copy.
+url = "2.5"
 
 [dev-dependencies]
 # Builds and signs a manifest to embed in this crate's own round-trip test
