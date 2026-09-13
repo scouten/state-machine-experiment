@@ -1,0 +1,263 @@
+#### Description
+Portion(s) of a BMFF-based asset that a claim generator wishes to uniquely identify with a hard binding (i.e., cryptographic hash) shall be described using BMFF-based hash assertions.
+
+A BMFF-based hash assertion shall have a label of `c2pa.hash.bmff.v3`. 
+
+All Merkle trees used in BMFF-based hash assertions shall be balanced binary trees with the minimum depth necessary to accomodate leaf nodes, where NULL padding is applied only to the rightmost positions as needed to maintain the complete binary tree structure.  This also requires that each level be more than half full, see <<bmff-validation>>.
+
+NOTE: Earlier versions of this specification also documented `c2pa.hash.bmff` and `c2pa.hash.bmff.v2` assertions.
+
+ifdef::not-for-iso[]
+[IMPORTANT]
+====
+endif::[]
+Validators shall ignore any `c2pa.hash.bmff` assertions, processing the manifest as if the assertion were not present.
+ifdef::not-for-iso[]
+====
+endif::[]
+
+A BMFF-based hash assertion shall not appear in a xref:_cloud_data[cloud data assertion] nor an xref:_external_reference[external reference assertion].
+
+ifdef::not-for-iso[]
+A previous version of this specification provided a `url` field to provide a pointer to where the hashed data can be located, but it was never used. This field is now deprecated in favour of the xref:_asset_reference[asset reference assertion]. Claim generators shall not add this field to a BMFF hash assertion, and consumers shall ignore the field when present, except this shall not affect inclusion of the field as part of the content being validated as described in <<_assertion_validation>>.
+endif::[]
+
+[[bmff-hash-computation]]
+#### Hash Computation
+The `alg` field, if present, shall be a string that is one of the allowed hash algorithms as defined in <<_hashing>>, and that algorithm shall be used to compute the hash. If the `alg` field is not present, then the hashing algorithm shall be determined by the value of the `alg` field in the Claim.
+
+To compute the hash specified in the value field of a BMFF hash, all bytes of the file are added to the hash excluding those BMFF boxes or subset[s] thereof which match any exclusion entry in the `exclusions` array.
+
+Boxes that are included in their entirety also include their box headers in the input data contributed to the hash.  Similarly, boxes that are excluded in their entirety also exclude their box headers from the input data contributed to the hash.  When a box is partially excluded from the input data contributed to the hash through the use of a `subset` field in the exclusion specification, the portion(s) of the box to be excluded defined by the relative byte offsets in the `subset` field are offsets from the start of the box including the box headers, not offsets from the start of the box's content. These `subset` ranges shall be ordered by increasing `offset` value and shall not overlap.
+
+In a `c2pa.hash.bmff.v2` (deprecated) and `c2pa.hash.bmff.v3` assertion, for any root box not excluded in its entirety, the input data contributed to the hash for that box is comprised of the concatenation of the binary strings `offset || data`, where `offset` is defined as the absolute file offset of the box as an 8-byte integer in big-endian format, and `data` is defined as the box's contents, including headers, minus any exclusions. In this definition, "||" represents the binary concatenation of the two.  The offset shall not be included for Merkle tree hashes when the bmff-hash-map includes both the `hash` and `merkle` fields.
+
+In addition, `c2pa.hash.bmff.v2` (deprecated) and `c2pa.hash.bmff.v3` assertions include the following features:
+
+- The absolute file byte offset is included at the start of the input data contributed to the hash for any root box.  This ensures that a root box included in the hash cannot change positions in the file.
+- The `mdat` box is no longer excluded in its entirety when the bmff-hash-map includes both the `hash` and `merkle` fields.  Instead, a mandatory entry on the exclusion list excludes most of the box.  
+
+NOTE: These two features ensure that the `mdat` cannot change positions in the file while also eliminating the need for the offset for each individual Merkle tree hash when the bmff-hash-map includes both the `hash` and `merkle` fields.
+
+A box matches an exclusion entry in the `exclusions` array if and only if all of the following conditions are met:
+
+- The box's location in the file matches the `exclusions-map` entry's `xpath` field. For example, exclusion xpath `/foo/bar[2]` would match locations `/foo[3]/bar[2]` and `/foo[2]/bar[2]`, but not `/foo[3]/bar[1]` or `/foo[3]/bar[2]/baz[1]`.
+- If `length` is specified in the `exclusions-map` entry, the box's length exactly matches the `exclusions-map` entry's `length` field.  Note: The length includes the box headers.
+- If `version` is specified in the `exclusions-map` entry, the box is a FullBox and the box's version exactly matches the `exclusions-map` entry's `version` field.
+- If `flags` (byte array of exactly 3 bytes) is specified in the `exclusions-map` entry and the box is a FullBox.  If `exact` is set to true or not specified, the box's flags (bit(24), i.e., 3 bytes) also exactly matches the `exclusions-map` entry's `flags` field.  If `exact` is set to false, the bitwise-and of the box's flags (bit(24), i.e., 3 bytes) with the `exclusions-map` entry's `flags` field exactly matches the `exclusions-map` entry's `flags` field (i.e., the box has at least those bits set but may also have additional bits set).
+- If `data` (array of objects) is specified in the `exclusions-map` entry, then for each item in the array, the box's binary data at that item's relative byte `offset` field exactly matches that item's `bytes` field.
+
+The `xpath` field's string syntax shall be limited to the following strict subset.
+
+- Only abbreviated syntax shall be used.
+- Only full paths shall be used.
+- Only node selection via `node` or `node[integer]` shall be used.
+- Descendent syntax, i.e., `//`, shall NOT be used.
+- All nodes shall be BMFF `4cc` codes.
+
+[figure]
+.Complete Syntax for `xpath` Field
+====
+[source]
+----
+  xpath = '/' nodes
+  nodes = node
+        | node '/' nodes
+  node = box4cc
+       | box4cc '[' integer ']'
+Where:
+  box4cc is any 4cc allowed by ISO/IEC 14496-12 for a BMFF box.
+  integer is any non-zero positive integer with no leading zeros.
+----
+====
+
+Any given exclusion entry may match zero or more boxes. It is not required that an exclusion entry match exactly one box.
+
+A non-leaf xpath node shall only point to a container box that has no fields of its own (i.e., contains no data, only child boxes) and that does not inherit from FullBox.  This ensures that a C2PA validator does not need to be aware of the syntax and semantics of unusual boxes that contain other boxes.  If a child box of such an unusual box needs to be excluded in full or in part, the `exclusions-map` entry's `xpath` field shall point to the unusual box itself and the `subset-map` field shall exclude the byte range(s) containing the excluded child box data.  For example, the `'sgpd'` box contains other boxes but is unusual in that it inherits from FullBox; as such, if excluding child box(es), in whole or in part, from `'sgpd'` is required, the assertion shall use an `xpath` field pointing to the `'sgpd'` itself (e.g., `/moof/traf/sgpd`) and shall use the `subset-map` field to exclude the desired bytes.
+
+If the C2PA Manifest is embedded into the file, the box containing it shall be one of the entries in the `exclusions` array.  Refer to <<_embedding_manifests_into_bmff_based_assets>> for more information.
+
+If a non-root excluded box is removed after the C2PA Manifest is created it shall be replaced with a `'free'` box of the same size to ensure that the input data contributed to the hash for other boxes are not invalidated.  If C2PA Manifest store size is reduced by using compressed manifest after the C2PA Manifest is created, a `'free'` box shall be inserted in its place to ensure the offsets remain the same.  If it is expected that a non-root excluded box may be added after the C2PA Manifest is created, then at manifest creation time, a `'free'` box shall be inserted with sufficient space for the excluded box and that `'free'` box shall also be excluded by an exclusion entry using its full xpath.  When the excluded box is added or the C2PA Manifest store size is increased, the `'free'` box shall be shrunk (or removed) to compensate for the added data. However if there is insufficient space in the `'free'` box, a standard manifest shall be used.
+
+Embedding C2PA data into a BMFF-based asset via MP4 boxes changes file offsets in other MP4 boxes as well as the absolute file byte offsets being included in the input data contributed to the hash for any root box.  Those boxes and offsets shall be included in the input data contributed to the hash with their post-embed values, not their pre-embed values, or the BMFF-based hash assertion will not validate.
+
+There are three possible ways an implementation can ensure that post-embed values for all file byte offsets are hashed:
+
+. Use `'free'` boxes.
+.. Determine reasonable maximum size(s) for the C2PA box(es) which will be embedded.  All MP4 boxes for C2PA support unused padding bytes at the end, so it is fine to overestimate the size for the `'free'` boxes because any extra bytes will be ignored.
+.. Insert `'free'` box(es) of said size(s) into the asset file(s) and update all offsets appropriately.
+.. Perform hashing of the asset with "/free" on the exclusion list.
+.. Create and sign the manifest.  Create the C2PA box(es).
+.. Overwrite the `'free'` box(es) with the C2PA box(es).
+
+. Use a two-pass approach.
+.. Compute the exact sizes of the BMFF-based hash assertion and the `merkle` box(es) if any.  The latter will require parsing the asset file(s) to determine the size of the Merkle tree.
+.. Compute the exact size of the final manifest.
+.. Perform hashing of the asset file(s).  Update any box that includes any file offsets to correct values before including that box in the input data contributed to the hash.  Compute the input data contributed to the hash using `(offset || data)` using the updated absolute file offset as described above.  As indicated above, the offset is not included in the data contributed for Merkle tree hashes when the bmff-hash-map includes both the `hash` and `merkle` fields.
+.. Create and sign the manifest.  Create the C2PA box(es).
+.. Insert the C2PA box(es).
+
+. Place updated Manifest Store at end of BMFF file.
+.. Set original manifest store `box_purpose` from `manifest` to `original`.
+.. Create and sign the manifest.  
+.. Create xref:_embedding_manifests_into_bmff_based_assets[C2PA ContentProvenanceBox] with `box_purpose` set to `update`.
+.. Insert updatedManifest into xref:_embedding_manifests_into_bmff_based_assets[C2PA ContentProvenanceBox].
+.. Insert the xref:_embedding_manifests_into_bmff_based_assets[C2PA ContentProvenanceBox] at end of BMFF file.
+.. If a standard manifest is added when an update manifest store is present, the update manifest store contents are moved to the 'original' manifest.
+.. The updated manifest store is then removed from the end of the file, allowing backward compatibility with a single manifest for common use-cases. 
+.. The 'original' manifest store `box_purpose` is changed back to `manifest` and the standard manifest is added as normal.
+
+
+[NOTE]
+====
+The `box_purpose` field is not included within the hash and can change without invalidating any existing hash.  Likewise, appending the new xref:_embedding_manifests_into_bmff_based_assets[C2PA ContentProvenanceBox] is not invalidating existing hashes.
+====
+
+While the two-pass approach method is significantly more complex, it does enable correct hashing without any foreknowledge of the maximum manifest size.  It also minimizes the final asset's size.
+Common boxes (*not* exhaustive) with file offsets include `'iloc'`, `'stco'`, `'co64'`, `'tfhd'`, `'sidx'`, and `'saio'`.
+
+The option of placing updated Manifests at the end of the BMFF file allows updates when there is not a large enough `'free'` box or when the two-pass approach complexity is not desired. This option also supports chunk offsets in atom 'stco' boxes with partial data offset information.
+
+#### Schema and Example
+
+The schema for the `c2pa.hash.bmff.v2` (deprecated) and `c2pa.hash.bmff.v3` assertions are defined by the `bmff-hash-map` rule in the following {cddl}:
+
+[source,cddl]
+----
+include::../schemas/cddl/bmff-hash.cddl[]
+----
+
+An example in CBOR diagnostic notation ({8949}, clause 8) for a monolithic MP4 file asset where the `mdat` box is validated as a unit is shown below:
+
+[source]
+----
+include::../examples/cbordiag/bmff-hash.cbordiag[]
+----
+
+An example in CBOR diagnostic notation ({8949}, clause 8) for an asset composed of fragmented MP4 files is shown below:
+
+[source]
+----
+include::../examples/cbordiag/bmff-hash-merkle.cbordiag[]
+----
+
+A pseudo-code implementation of this algorithm is in <<bmff-hash-assertion-algorithm>>.
+
+[[bmff-hash-assertion-algorithm]]
+[figure]
+.Pseudo-code for BMFF-based hash assertion
+====
+[source]
+----
+offset = 0
+While (offset < length of file)
+	Starting at offset, locate the first byte of the first box that matches any entry in the exclusions array, call this first_excluded_byte
+		If no such box is found, set first_excluded_byte = length of file
+	Determine the length of that box, call this excluded_byte_count
+		If no such box was found, set excluded_byte_count = 0
+	To the hash, add all bytes between offset and first_excluded_byte minus one (inclusive)
+	If first_excluded_byte < length of file and there exists a subset array within the exclusion that determined the value of first_excluded_byte
+		set next_included_begin = first_excluded_byte
+		For each entry in the subset array within the exclusion that determined the value of first_excluded_byte
+			Set next_excluded_begin = this subset array entry's offset field plus first_excluded_byte
+			If next_excluded_begin > next_included_begin
+				To the hash, add all bytes between next_included_begin and next_excluded_begin minus one (inclusive)
+			Set next_included_begin  = this subset array entry's length field plus next_excluded_begin
+		If next_included_begin < first_excluded_byte + excluded_byte_count
+			To the hash, add all bytes between next_included_begin and first_excluded_byte + excluded_byte_count minus one (inclusive)
+	Set offset = first_excluded_byte + excluded_byte_count
+----
+====
+
+A example of generating a hash for the Merkle map is in <<bmff-merkle-hash-example>>.
+
+[[bmff-merkle-hash-example]]
+[figure]
+.A suggested example of a merkle map
+====
+[source]
+----
+If the fields `fixedBlockSize` and `variableBlockSizes` are not present
+	To the hash, add all bytes between begin_address and last address of mdat payload
+If the `fixedBlockSize` field is present and the `variableBlockSizes` field is not present
+	While (1)
+		next_address = begin_address + fixedBlockSize
+		If next_address > last address of the mdat payload
+			next_address = last address of the mdat payload plus one
+			hash_complete = true
+		To the hash, add all bytes between begin_address and next_address minus one (inclusive)
+		If hash_complete is true
+			break
+		begin_address = next_address
+If the `variableBlockSizes` field is present and the `fixedBlockSize` field is not present
+	For (blockSize in variableBlockSizes)
+		next_address = begin_address + blockSize
+		If next_address > last address of the mdat payload
+			next_address = last address of the mdat payload plus one
+			hash_complete = true
+		To the hash, add all bytes between begin_address and next_address minus one (inclusive)
+		If hash_complete is true
+			break
+		begin_address = next_address
+----
+====
+
+#### Exclusion list profiles
+
+##### General
+
+This section describes a set of pre-defined, named, profiles of extensions lists. 
+
+##### Basic profile
+
+Typical untimed media (e.g., still photos) and timed media (e.g., videos with or without audio tracks, whether fragmented or not) need only include the mandatory exclusions listed in xref:_exclusion_list_requirements[Exclusion List Requirements].
+
+// .Editor's Note
+// https://github.com/c2pa-org/specs-core/issues/1174
+
+
+#### Fragmented BMFF Entity Diagram
+
+<<bmff-entity-diagram>> shows the relationship for C2PA objects comprising a fragmented BMFF manifest.
+
+[[bmff-entity-diagram]]
+.Fragmented BMFF Entity Diagram
+[plantuml,target=Validation,format=svg,width=612,align="center"]
+....
+include::../Diagrams/BMFF_fragmented_entity.puml[]
+....
+
+[[bmff-validation]]
+#### Validation
+
+Validating a given chunk requires first validating the `merkle-map` field's `initHash` over the corresponding initialization segment 
+and then locating the correct entry in the `merkle-map` field's `hashes` array and validating it against the hash of the chunk's data,
+and if needed, deriving that hash using the Merkle proof from the `hashes` specified in the chunk's `bmff-merkle-map`.
+
+.Validating intitialization segment and a chunk's data example
+image::BMFF_Validation.{image-ext}[Validating the fragmented BMFF data,align="center"]
+
+To verify track chunk *m+3* you must first verify the corresponding initialization segment.
+The c2pa-specific manifest box in each Track's initialization segment will contain the Manifest store. 
+If the asset contains multiple initialization segments then the Manifest store must be identical in each.  This allows validators 
+to verify a Track belong to the larger set.  
+The active manifest's `c2pa.bmff.hash` assertion will contain a `merkle` field with an array of `merkle-map` objects, one per track.
+
+##### Steps
+
+. From the `bmff-merkle-map` in chunk's c2pa-specific merkle box obtain the `uniqueld` & `localld`.  Use the `uniqueId` and `localId` to find
+a matching `merkle-map` from the `c2pa.bmff.hash` assertion `merkle` array in the init segment.  
+. If the hash of the init segment using the `c2pa.bmff.hash` `exclusions` and the `merkle-map` `alg` equals the `initHash` inside the `merkle-map` you just located, 
+the initialization segment is verified.
++
+NOTE: The parameters `alg` & `hash` at the top level of the `bmff-hash-map` are used for monolithic MP4, 
+whereas `alg` & `hashes` in the `merkle-map` are used for fragmented MP4.
+
++
+To complete verification of chunk *m+3*: 
+We are looking at Track #n's `merkle-map` found in step 1, and in this example it contains row 2 of the Merkle tree - *D2,0* and *D2,1*.
+
+. Hash chunk *m+3* using the `c2pa.hash.bmff` `exclusions` array and the `alg` from the `merkle-map`, yielding *D0,2(derived)*.
+. Chunk *m+3*'s `bmff-merkle-map` `hashes` array (Merkle proof) will contain the hash of chunk m+4 *(D0,3)* and row one hash value *D1,0*.
+. Hash *D0,2(derived)* and *D0,3* to yield *D1,1(derived)*. Hash *D1,0* with *D1,1(derived)* to yield *D2,0(derived)*.
+. If *D2,0(derived)* = *D2,0* as stored in the assertion `merkle-map` `hashes` parameter, and the corresponding initialization segment was verified in step 2, then chunk m+3 has been verified.

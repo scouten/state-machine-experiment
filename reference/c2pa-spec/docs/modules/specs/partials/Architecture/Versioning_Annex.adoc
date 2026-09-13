@@ -1,0 +1,72 @@
+[appendix]
+[[versioning_annex]]
+
+== Considerations for Deprecation
+
+=== Status of Constructs
+The table below lists constructs whose status has changed as this specification has evolved.
+
+The following status values are used:
+
+DEPRECATED:: Construct is deprecated (claim generators are required not to produce it; validators are encouraged to accept it).
+UNDEFINED:: Construct is not defined (validators are required to ignore it).
+<blank>:: Construct is fully supported (validators are required to accept it).
+
+[[deprecated_constructs_table]]
+.Status of constructs
+[cols="9*", options="header"]
+|===
+| Construct                                    | Type       | v1.3       | v1.4       | v2.0       | v2.1       | v2.2        | v2.3       | v2.4      
+| Time-Stamp manifest                          | Manifest   | UNDEFINED  | UNDEFINED  | UNDEFINED  |            | UNDEFINED   | UNDEFINED  |
+| `urn:uuid` namespace                         | Label      |            |            |            | DEPRECATED | DEPRECATED  | DEPRECATED |
+| `urn:c2pa` namespace                         | Label      | UNDEFINED  | UNDEFINED  | UNDEFINED  |            |             |            |
+| `c2pa.data` (Data Box)                       | Label      |            |            |            |            | DEPRECATED  | DEPRECATED |
+| `c2pa.databoxes` (Data Box Store)            | Label      |            |            |            |            | DEPRECATED  | DEPRECATED |
+| `sigTst` timestamp                           | Time-stamp |            |            |            | DEPRECATED | DEPRECATED  | DEPRECATED |
+| `sigTst2` timestamp                          | Time-stamp | UNDEFINED  | UNDEFINED  | UNDEFINED  |            |             |            |
+| `c2pa.claim`                                 | Assertion  |            |            | DEPRECATED | DEPRECATED | DEPRECATED  | DEPRECATED |
+| `c2pa.claim.v2`                              | Assertion  | UNDEFINED  | UNDEFINED  |            |            |             |            |
+| `c2pa.actions`                               | Assertion  |            |            |            |            |             | DEPRECATED |
+| `c2pa.actions.v2`                            | Assertion  |            |            |            |            |             |            |
+| `c2pa.asset-type`                            | Assertion  |            |            |            |            | DEPRECATED  | DEPRECATED |
+| `c2pa.asset-type.v2`                         | Assertion  | UNDEFINED  | UNDEFINED  | UNDEFINED  | UNDEFINED  |             |            |
+| `c2pa.certificate-status`                    | Assertion  | UNDEFINED  | UNDEFINED  | UNDEFINED  | UNDEFINED  |             |            |
+| `c2pa.embedded-data`                         | Assertion  | UNDEFINED  | UNDEFINED  | UNDEFINED  | UNDEFINED  |             |            |
+| `c2pa.font.info`                             | Assertion  | UNDEFINED  |            | DEPRECATED | DEPRECATED | DEPRECATED  | DEPRECATED |
+| `c2pa.hash.bmff`                             | Assertion  | DEPRECATED | DEPRECATED | UNDEFINED  | UNDEFINED  | UNDEFINED   | UNDEFINED  |
+| `c2pa.hash.bmff.v2`                          | Assertion  |            |            |            | DEPRECATED | DEPRECATED  | DEPRECATED |
+| `c2pa.hash.bmff.v3`                          | Assertion  | UNDEFINED  | UNDEFINED  | UNDEFINED  |            |             |            |
+| `c2pa.hash.boxes` for TIFF-based assets      | Assertion  |            |            |            |            |             | UNDEFINED  |
+| `c2pa.hash.collection.data`                  | Assertion  | UNDEFINED  |            |            |            |             |            |
+| `c2pa.hash.multi-asset`                      | Assertion  | UNDEFINED  | UNDEFINED  | UNDEFINED  | UNDEFINED  |             |            |
+| `c2pa.ingredient`                            | Assertion  |            |            | DEPRECATED | DEPRECATED | DEPRECATED  | DEPRECATED |
+| `c2pa.ingredient.v2`                         | Assertion  |            |            |            | DEPRECATED | DEPRECATED  | DEPRECATED |
+| `c2pa.ingredient.v3`                         | Assertion  | UNDEFINED  | UNDEFINED  | UNDEFINED  |            |             |            |
+| `stds.metadata`                              | Assertion  | UNDEFINED  |            | DEPRECATED | DEPRECATED | DEPRECATED  | DEPRECATED |
+| `c2pa.metadata`                              | Assertion  | UNDEFINED  | UNDEFINED  |            |            |             |            |
+| `c2pa.thumbnail.claim`                       | Assertion  | UNDEFINED  | UNDEFINED  | UNDEFINED  | UNDEFINED  |             |            |
+| `c2pa.thumbnail.claim.*`                     | Assertion  |            |            |            |            | DEPRECATED  | DEPRECATED |
+| `c2pa.thumbnail.ingredient`                  | Assertion  | UNDEFINED  | UNDEFINED  | UNDEFINED  | UNDEFINED  |             |            |
+| `c2pa.thumbnail.ingredient.*`                | Assertion  |            |            |            |            | DEPRECATED  | DEPRECATED |
+| `c2pa.time-stamp`                            | Assertion  | UNDEFINED  | UNDEFINED  | UNDEFINED  | UNDEFINED  |             |            |
+| `font.info`                                  | Assertion  | UNDEFINED  | UNDEFINED  |            |            |             |            |
+| `stds.iptc`                                  | Assertion  |            | DEPRECATED | DEPRECATED | DEPRECATED | DEPRECATED  | DEPRECATED |
+| `stds.exif`                                  | Assertion  |            | DEPRECATED | DEPRECATED | DEPRECATED | DEPRECATED  | DEPRECATED |
+| `stds.schema-org`                            | Assertion  |            | DEPRECATED | DEPRECATED | DEPRECATED | DEPRECATED  | DEPRECATED |
+| `role` in `region-map`                       | Field      |            |            |            | DEPRECATED | DEPRECATED  | DEPRECATED |
+| `actors` in `action-item-map-v2`            | Field      |            |            | DEPRECATED | DEPRECATED | DEPRECATED  | DEPRECATED |
+| `softwareAgents` in `actions-map-v2`         | Field      | UNDEFINED  | UNDEFINED  | UNDEFINED  |            |             |            |
+| `softwareAgentIndex` in `action-common-map-v2` | Field    | UNDEFINED  | UNDEFINED  |            |            |             |            |
+| `changed` in `action-item-map-v2`           | Field      |            |            |            | DEPRECATED | DEPRECATED  | DEPRECATED |
+| `changes` in `action-item-map-v2`           | Field      | UNDEFINED  | UNDEFINED  | UNDEFINED  |            |             |            |
+| `instanceID` in `parameters-map-v2`          | Field      |            |            |            | DEPRECATED | DEPRECATED  | DEPRECATED |
+| `sourceLanguage` in `parameters-map-v2`      | Field      | UNDEFINED  | UNDEFINED  | UNDEFINED  |            |             |            |
+| `targetLanguage` in `parameters-map-v2`      | Field      | UNDEFINED  | UNDEFINED  | UNDEFINED  |            |             |            |
+| `c2pa.trainedAlgorithmicData`                | DigitalSourceType |     |            |            |            | DEPRECATED  | DEPRECATED |
+| `http://c2pa.org/digitalsourcetype/trainedAlgorithmicData` | DigitalSourceType | UNDEFINED  | UNDEFINED  | UNDEFINED  | UNDEFINED  |             |            |
+| `http://c2pa.org/digitalsourcetype/empty`    | DigitalSourceType | UNDEFINED  | UNDEFINED  | UNDEFINED  | UNDEFINED  |             |            |
+| `c2pa.color_adjustments`                     | Action     |            |            | DEPRECATED | DEPRECATED | DEPRECATED  |            |
+| `c2pa.watermarked`                           | Action     | UNDEFINED  | UNDEFINED  |            |            | DEPRECATED  |            |
+| `assertion.dataHash.redacted`                | Status Code | UNDEFINED  | UNDEFINED  | UNDEFINED  |            |             | DEPRECATED |
+| `specVersion`                | Claim | UNDEFINED  | UNDEFINED  | UNDEFINED  |  UNDEFINED |   UNDEFINED   |  | DEPRECATED
+|===

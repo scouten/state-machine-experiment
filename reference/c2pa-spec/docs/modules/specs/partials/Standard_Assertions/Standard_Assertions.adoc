@@ -1,0 +1,171 @@
+:revdate: {docdate}
+:version-label!: 
+:sectnums:
+:sectnumlevels: 5 
+:chapter-label:
+:source-highlighter: rouge
+
+== C2PA Standard Assertions
+
+=== Introduction
+
+This section of the document lists the standard set of assertions for use by C2PA implementations, describing their syntax, usage, etc. To keep things simple, all example JUMBF URIs have been shortened for illustrative purposes - full URIs are necessary in the actual data.
+
+All assertions shall have a label as described in <<assertion_labels>> and shall be versioned as described in <<_versioning>>.
+
+All C2PA standardized assertions use the JSON JUMBF content type, the CBOR JUMBF content type, or the Embedded File content type from {jumbf-iso}. Entity-specific assertions can be any of those, any of the other JUMBF content types from {jumbf-iso-b} (such as XML) or may create its own (as per the instructions in {jumbf-iso}, Table B.1).  The Codestream content type shall not be used for a C2PA assertion.
+
+Unless otherwise mentioned, all assertions documented in this standard set of assertions shall be serialized as CBOR. All assertions that are serialized as CBOR shall comply with the Core Deterministic Encoding Requirements of CBOR (see {8949}, clause 4.2.1) with their schemas defined using a {cddl}.
+
+NOTE: All CDDLs are non-normative.
+
+For those defined using JSON, their schemas are defined using the latest version of https://json-schema.org/specification-links.html[JSON Schema].  
+
+=== Regions of Interest
+
+include::RegionsOfInterest.adoc[]
+
+
+=== Metadata About Assertions
+
+include::AssertionMetadata.adoc[]
+
+=== Standard C2PA Assertion Summary
+
+The standard C2PA assertions are listed in <<standard-assertions>>:
+
+[[standard-assertions]]
+.Standard C2PA assertions
+[cols="20%,40%,20%,20%"]
+|===
+| Type | Assertion  | Schema | Serialization
+
+| xref:_actions[Actions] | c2pa.actions, c2pa.actions.v2 | C2PA | CBOR 
+| xref:aiDisclosure[AI Disclosure] | c2pa.ai-disclosure | C2PA | CBOR
+| xref:alternative_content_representation_assertion[Alternative Content Representation] | c2pa.alternative-content-representation | C2PA | CBOR
+| xref:_metadata_about_assertions[Assertion Metadata] | c2pa.assertion.metadata | C2PA | CBOR
+| xref:_asset_reference[Asset Reference] | c2pa.asset-ref | C2PA | CBOR
+| xref:_asset_type[Asset Type] | c2pa.asset-type (deprecated), c2pa.asset-type.v2 | C2PA | CBOR
+| xref:_bmff_based_hash[BMFF-based Hash] | c2pa.hash.bmff (removed), c2pa.hash.bmff.v2 (deprecated), c2pa.hash.bmff.v3 | C2PA | CBOR
+| xref:certificate_status_assertion[Certificate Status] | c2pa.certificate-status | C2PA | CBOR
+| xref:_cloud_data[Cloud Data] | c2pa.cloud-data |  C2PA | CBOR
+| xref:_collection_data_hash[Collection Data Hash] | c2pa.hash.collection.data | C2PA | CBOR 
+| xref:_data_hash[Data Hash] | c2pa.hash.data | C2PA | CBOR 
+| xref:_depthmap[Depthmap] | c2pa.depthmap.GDepth | https://developers.google.com/depthmap-metadata/reference | CBOR
+| xref:_embedded_data[Embedded Data] | c2pa.embedded-data | C2PA | JUMBF Embedded File 
+| xref:_environmental_sustainability[Environmental Sustainability] | c2pa.environmental-sustainability |  C2PA | CBOR
+| xref:external_reference_assertion[External Reference] | c2pa.external-reference |  C2PA | CBOR
+| xref:_font_information[Font Information] | font.info | C2PA | CBOR
+| xref:_general_box_hash[General Box Hash] | c2pa.hash.boxes | C2PA | CBOR
+| xref:ingredient_assertion[Ingredient] | c2pa.ingredient, c2pa.ingredient.v2, c2pa.ingredient.v3 | C2PA | JUMBF Embedded File
+| xref:_metadata[Metadata] | c2pa.metadata | C2PA | JSON-LD
+| xref:_multi_asset_hash[Multi-Asset Hash] | c2pa.hash.multi-asset | C2PA | CBOR
+| xref:_repository_receipt[Repository Receipt] | c2pa.repository-receipt | C2PA | JSON-LD
+| xref:_session_keys[Session Keys] | c2pa.session-keys | C2PA | CBOR
+| xref:soft_binding_assertion[Soft Binding] | c2pa.soft-binding | C2PA | CBOR
+| xref:thumbnail_assertion[Thumbnail] | c2pa.thumbnail.claim (claim creation time), c2pa.thumbnail.ingredient (importing an ingredient) |  C2PA | Embedded File
+| xref:timestamp_assertion[Time-stamps] | c2pa.time-stamp | C2PA | CBOR
+|===
+
+=== Data Hash
+
+include::DataHash.adoc[]
+
+=== BMFF-Based Hash
+
+include::BMFFHash.adoc[]
+
+=== General Box Hash
+
+include::BoxesHash.adoc[]
+
+=== Collection Data Hash
+
+include::CollectionDataHash.adoc[]
+
+=== Multi-Asset Hash
+
+include::MultiAssetHash.adoc[]
+
+[[soft_binding_assertion]]
+=== Soft Binding
+
+include::SoftBinding.adoc[]
+
+=== Cloud Data
+
+include::CloudData.adoc[]
+
+=== Embedded Data
+
+include::EmbeddedData.adoc[]
+
+[[thumbnail_assertion]]
+=== Thumbnail
+
+include::Thumbnail.adoc[]
+
+[[alternative_content_representation_assertion]]
+=== Alternative Content Representation
+
+include::AlternativeContentRepresentation.adoc[]
+
+=== Actions
+
+include::Actions.adoc[]
+
+[[ingredient_assertion]]
+=== Ingredient
+
+include::Ingredient.adoc[]
+
+=== Metadata
+
+include::Metadata.adoc[]
+
+[[timestamp_assertion]]
+=== Time-stamps
+
+include::TimeStamps.adoc[]
+
+[[certificate_status_assertion]]
+=== Certificate Status
+
+include::CertStatus.adoc[]
+
+=== Asset Reference
+
+include::AssetRef.adoc[]
+
+=== Asset Type
+
+include::AssetType.adoc[]
+
+=== Depthmap
+
+include::DepthMap.adoc[]
+
+=== Font Information
+
+include::FontInfo.adoc[]
+
+=== External Reference
+
+include::ExternalReference.adoc[]
+
+=== Session Keys
+
+include::SessionKeys.adoc[]
+
+=== Environmental Sustainability
+
+include::EnvironmentalSustainability.adoc[]
+
+=== Repository Receipt
+
+include::RepositoryReceipt.adoc[]
+
+=== AI Disclosure
+
+include::AIDisclosure.adoc[]
+

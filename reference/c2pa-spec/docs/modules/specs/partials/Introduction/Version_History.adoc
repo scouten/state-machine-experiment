@@ -1,0 +1,273 @@
+### Version History
+
+#### 2.4 - April 2026
+
+This version introduces new asset format support, new assertions, and a new JSON-based serialization for Content Credentials, alongside clarifications and improvements to actions, ingredients, live video, and cryptography.
+
+* New Content Credential JSON (crJSON) Format
+	- Introduced a new JSON-LD serialization of a C2PA Manifest Store (called crJSON) for use in profile evaluation, interoperability testing, and validation reporting.
+	- crJSON is a derived view over C2PA data and is not independently verifiable or intended as an input format.
+* New Assertions
+	- Added a new Repository Receipt Assertion (`c2pa.repository-receipt`) to record proof that a C2PA Manifest has been ingested by a C2PA Manifest Repository.
+	- Added a new Environmental Sustainability Assertion (`c2pa.environmental-sustainability`) to convey machine-generated sustainability metrics (energy, greenhouse gas emissions, and water consumption).
+	- Added a new AI Disclosure Assertion (`c2pa.ai-disclosure`) for machine-readable AI transparency info.
+* Embedding Enhancements
+	- Added support for embedding C2PA Manifests into HTML documents.
+	- Added support for embedding C2PA Manifests into structured text formats (source code, YAML, Markdown, AsciiDoc, etc.).
+* Actions Enhancements
+	- Required that the mandatory actions assertion appear only in `created_assertions` (not `gathered_assertions`).
+	- Required that a `c2pa.opened` action include a hashed-uri reference to the corresponding ingredient assertion.
+	- Added a new `relatedAssertions` field in an action's `parameters` object.
+	- Added a recommendation that `c2pa.watermarked.bound` actions reference their corresponding soft binding assertion(s).
+	- Required that `allActionsIncluded` be set to `true` when a claim generator opens and immediately re-saves an asset without making other changes.
+* Ingredient Assertion Enhancements
+	- Added support for a `digitalSourceType` field in ingredient assertions for ingredients added without their own C2PA Manifest.
+* External Reference Assertion Improvements
+* Metadata assertion changes
+	- `dc:created` and `dc:modified` added to supported Dublin Core properties in `c2pa.metadata`.
+	- Relaxed metadata assertion validation (changed from error to advisory for some cases)
+* Live Video & Dynamic Packaging
+	- Extended the Live Video specification to cover dynamically packaged content (content packaged just-in-time for streaming), treating it equivalently to live video.
+	- Added a recommendation to use deterministic signature algorithms in video streaming implementations (e.g., those using ISO/IEC 23009-9 REaP) to avoid negatively impacting segment caching.
+* TIFF embedding
+	- Allow using IFD 0 for TIFF assets that contain only one IFD
+* Versioning
+	- Moved the `specVersion` field from the claim to the `claim_generator_info` object; the claim-level `specVersion` is now deprecated.
+	- Strengthened the recommendation for claim generators to include `specVersion` from "may" to "should".
+* External Reference Assertion Improvements
+	- Clarified the distinction between Cloud Data assertions and External Reference assertions.
+	- Extended External Reference Assertion validation to cover hashed external reference assertions.
+	- Added `assertion.external-reference.labelMismatch` validation status code.
+* Asset Type
+	- Completed the asset type values table to include all types defined in the CDDL schema.
+	- Corrected type names to match the CDDL (`c2pa.types.format.numpy`, `c2pa.types.format.pickle`, `c2pa.types.format.protobuf`, `c2pa.types.tensorflow.savedmodel`).
+* Soft Binding Updates
+	- Introduced routes to publish C2PA manifest stores to a manifest repository and to verify proof of their ingestion.
+	- Relaxed the requirement that the soft binding `alg` field match an entry in the algorithm list from normative (`shall`) to recommended (`should`).
+
+#### 2.3 - December 2025
+
+This version introduces several new features and enhancements to the C2PA Specification, focusing on expanding support for various asset types, improving validation processes, and refining existing assertions and actions. Key highlights include:
+
+* Support for Live Video Streaming
+	- Introduced specifications for live video streaming support.
+* Embedding Enhancements
+	- Added comprehensive support for embedding C2PA manifests in unstructured text files.
+	- Added support for OGG Vorbis audio files.
+	- Added support for AVI files > 2 Gig (i.e., AVIX)
+	- Added support for EXIF's Original Preservation Images
+* Revised support for cloud-hosted assertion data
+	- Updated the Cloud Data Assertion to improve its usability.
+	- Added a new External Reference Assertion allowing for non-hashed external URIs.
+* Enabled declaration of the version of the C2PA specification used to create or validate a given Manifest.
+* Enabled declaration of the trust list and version used to validate ingredient manifests.
+* Enhancements & Clarifications to Actions
+	- Introduced fine-grained watermarking actions.
+	- Added new actions including proportional resizing and markup addition.
+	- Added some new actions to better support audio assets.
+	- Allowed actions to be gathered (not only created).
+	- Deprecated old versions of actions and ingredient assertions.
+	- Clarified descriptions of `c2pa.converted` and `c2pa.redacted` actions.
+	- Recommend that all actions assertions declare `allActionsIncluded` state
+* Added exclusion ranges to box-based hashing to support more flexible hashing scenarios.
+* Enhanced temporal range handling for live streams, including support for undefined end times.
+* Updated various normative references
+* Clarified various aspects of content bindings
+	- BMFF Hashing, including Merkle tree requirements and count validation logic.
+	- Byte offsets in multi-asset part hashes
+	- Use of `pad` values
+	- Added validation procedures for soft-bindings
+* Clarified validation processes, including update manifests, claim signature resolution, and OCSP response handling.
+	- Also updated associated diagrams
+* Deprecated use of box hash for TIFF assets.
+
+
+#### 2.2 - May 2025
+
+This version focuses on both technical and editorial changes to the specification to clarify some of the new features of 2.1, while addressing requests from implementers. The specification has been updated to reflect the latest best practices in the field.
+
+* Added new supplementary specifications for the Soft Binding Resolution API
+* Added new fields to the ingredient assertion to indicate soft-binding manifest recovery
+* Added support for multi-part assets, such as Android Motion Photos
+* Added support for adding time-stamps and revocation information in an update manifest, replacing time-stamp manifests
+* Added support for a "claimed signature creation time"
+* Added support for new `c2pa-kp-claimSigning` EKU
+* Restricted use of the C2PA Trust List to certificates with the `c2pa-kp-claimSigning` EKU 
+* Introduced `digitalSourceType` values `http://c2pa.org/digitalsourcetype/trainedAlgorithmicData` (replacing `c2pa.trainedAlgorithmicData`) and `http://c2pa.org/digitalsourcetype/empty`
+* Replaced data boxes with embedded data assertions
+* Provided additional guidance on zeroing out redacted assertion
+* Clarified use of `created_assertions` and `gathered_assertions` with respect to the Trust Model
+* Clarified terminology around "signer" and "claim generator", with respect to their roles
+* Changes and improvements in various hard binding assertions
+	- Allow `c2pa.hash.data` to exclude classic metadata sections of an asset
+	- Add support for exclusions in the `c2pa.hash.boxes` assertion
+* Clarified what JUMBF boxes are allowed in the Assertion store
+* Clarified certificate revocation handling
+* Clarified time-stamp validation
+* Improvements and clarifications to action assertions
+* Improvements to soft-binding assertions
+* Reworked the BMFF hashing diagrams for clarity & correctness
+* Removed requirement that all manifests in a manifest store must be referenced
+
+#### 2.1 - September 2024
+
+This version focuses on both technical and editorial changes to the specification for the purposes of improving the security and reliability of Content Credentials. All publicly disclosed security vulnerabilities have been addressed, and the specification has been updated to reflect the latest best practices in the field.
+
+* Clear definitions of Manifest & Asset states
+	- Well-formed Manifests
+	- Valid Manifests
+	- Trusted Manifests
+	- Valid Assets
+* Clear definitions and processes for handling deprecation and versioning
+* New `c2pa` URN namespace for labelling manifests!
+	- including a fully specified ABNF
+* New `ingredients v3` assertion
+	- Supports richer models of ingredient-based workflows.
+	- Support for `dataTypes` and `claimSignature`.
+	- Fields renamed to be more consistent with other assertions.
+	- Added new validation status fields to accompany the new status info
+	- `dc:title` and `dc:format` are now optional
+* New `c2pa.hash.bmff.v3` assertion
+	- Supports hashing of fixed & variable block sizes for BMFF-based assets
+* New time-stamp manifest
+	- Establishing a "time of existence" for a given asset.
+	- Similar to an update manifest, but with the signer being a TSA
+* Improved model for doing standard RFC 3161 time-stamping.
+	- `sigTst2` & CTT time-stamping
+	- Introduces the new C2PA TSA Trust List
+* Improvements in Validation 
+	- Detailed validation instructions for all standard assertions
+	- Validation of ingredients is now required when using the `ingredients` assertion
+		- Extended ingredient validation to provide more detailed status information
+		- Support for validation of redacted assertions in ingredients
+	- Addition of detailed requirements for validation of time-stamps
+	- Hashed URIs to data boxes, and any custom boxes, are now validated
+	- Defined procedure for handling manifests with matching unique IDs
+	- Address "orphaned manifests" in the validation process
+	- LOTS of new validation status codes, including a new "informational" code type
+* Improvements in documentation & security of hashing methods 
+	- BMFF-based assets
+	- "general boxes"
+	- ZIP
+* The format embedding section has been moved to its own annex
+	- Added support for JPEG-XL
+* Improvements to soft bindings
+* Improvements to action assertions
+	- Either a `c2pa.created` or a `c2pa.opened` is now mandatory in a standard manifest
+	- Some new standard action types were added
+	- It is now possible to have multiple action assertions in a single manifest
+	- Action templates are now better explained with more examples.
+	- RFC 3339-based regions of interest
+* The various types/forms of unique identifiers for assets have been clarified.
+* Added some missing compatibility support for JPEG Trust
+* Cleaned up all CDDLs, including removing any normative language
+* And various areas of editorial improvements
+	- Redefined custom labels to a custom naming scheme.
+	- Embedding in PDFs
+	- LOTS of editorial improvements to prepare the document for standardization by ISO
+
+#### 2.0 - January 2024
+
+This version represents a significant departure from previous versions. It reduces the use of the term "actor", which no longer represents humans and organisations. In addition to validator-configured trust lists, it also introduces a new default trust list, the "C2PA Trust List", which is intended to cover certificates issued to hardware and software.  This philosophical change led to the following functional changes in the specification:
+
+	* Only X.509 certificates may be used for signing.
+	* Improvements to the Validation & Trust Model sections
+		- Introduces the concepts of "well-formed" and "valid" C2PA Manifests
+		- Clarifies various aspects of the validation process
+	* Refined metadata handling
+		- removed the deprecated Exif, IPTC and Schema.org metadata assertions
+		- defined a new general "metadata assertion" concept
+		- `c2pa.metadata` only allows a fixed set of schemas & values
+		- the process for creating `c2pa.metadata` is now documented in more detail
+		- XMP processing sections have been revamped to reflect relevant changes
+		- improved recommendations concerning hashing of standard metadata locations outside the manifest
+	* Removed the "W3C Verifiable Credentials" section
+		- Removed any references to it and the VC Store.
+		- Removed the `actors` field from the actions assertion
+		- Removed identified humans from assertion metadata
+	* Removed the "Training & Data Mining" assertion
+	* Removed the "Endorsements" assertion
+
+In addition, the following other changes were made to improve various aspects of the spec:
+
+	* Version v2 version of the claim.
+		- Removes deprecated and unused fields
+		- Split `assertions` into `created_assertions` & `gathered_assertions`
+		- Only allows a single claim generator, which must be the signer
+		- `claim-generator-info` now has a specific `operating_system` field
+	* Box-based hashing is now strongly recommended for any format that supports it
+	* Removed the deprecated `c2pa.hash.bmff` assertion
+	* Added a new `c2pa.watermarked` action
+	* `c2pa.font` actions are now just `font` actions
+		- also `c2pa.font.info` is now just `font.info`
+	* Cleaned up rendering of CDDL schemas
+	* Updated some normative references & removed notes about future versions
+	* Lots of editorial improvements including fixed links
+
+#### 1.4 - November 2023
+
+	- Added support for embedding a C2PA Manifest into a ZIP-based format (e.g., EPUB, OOXML, ODF, OpenXPS)
+	- Manifests can now be compressed into a special `brob` box.
+	- Added support for multiple file, aka collection, hashing
+	- Added new regions of interest for text-based formats (e.g., PDF, Office, EPUB, etc.)
+	- Added new `c2pa.metadata` assertion to support Exif, IPTC, Schema.org and XMP
+	- Major revision to TIFF embedding support
+	- Added support for embedding C2PA Manifests inside of OpenType and TrueType fonts
+	- Introduced support for object-level manifests in PDF
+	- Extended the Link header support for embedded manifests
+	- Clarified issues with box hashing
+	- Clarified issues on signing including time stamping, PKIStatus & document signing EKU
+	- Align with Exif 3.0
+	- Improvements to the CDDL schemas
+	- Many editorial improvements
+
+#### 1.3 - April 2023
+	
+	- New v2 version of the actions assertion with support for many new options
+	- New v2 version of the ingredient assertion with support for embedded data
+	- New asset reference & asset type assertions
+	- New data boxes, for storing arbitrary data inside the Manifest
+	- New general box hash methodology for a more inclusive byte range hashing
+	- New "Regions of Interest" data structures that can be applied to various assertions
+	- Added document signing EKU as an alternative default EKU for C2PA signers when a validator is not configured with an EKU list
+	- Added a new `digitalSourceType` field for use by C2PA
+	- Added support for many new formats: MPF, WebP, AIFF, AVI, GIF
+	- Updated Entity diagram to reflect additions since 1.0
+	- Updated COSE header definition for X.509 certificates to RFC 9360
+	- Updated the guidance on PDF embedding and its relationship to PDF signatures
+	- Updated information about JUMBF hashing and JUMBF box toggles
+	- Deprecated v1 of the BMFF Hash
+	- Clarified use of the JUMBF Protection Box in a C2PA Manifest
+	- Clarified C2PA-specific requirement that all intermediate X.509 certificates be included in COSE signatures
+	- Clarified that time-stamps are valid indefinitely
+	- LOTS of editorial improvements!!
+
+#### 1.2 - October 2022
+
+	- Added details about how to embed a C2PA Manifest in DNG or TIFF
+	- Added new `digitalSourceType` field to Actions
+	- Changed `stds.iptc.photometadata` -> `stds.iptc` to support IPTC video metadata
+	- Clarified versioning of assertions when adding optional fields
+
+#### 1.1 - September 2022
+
+	- Define a mechanism to support salting box hashing
+	- New `c2pa.hash.bmff.v2` assertion, with changes to hashing model, to improve security
+	- Enable assertion metadata for the Claim
+	- Replaced `claim_generator_hints` with `claim_generator_info`
+	- Added a new assertion to support the concept of Endorsements
+	- Improvements to the `c2pa.actions` assertion
+	- All Error & Status Codes are now prefixed with `c2pa`
+	- Define mechanism for redaction of W3C VC's
+	- Clarify validation of EKUs in certificates
+	- Validation algorithm revised to reflect technical changes
+	- Corrections to the CDDL and JSON schemas to match normative text
+	- Revise figures to reflect changes
+	- Various Editorial and Typographical Corrections
+	- Update Normative References (incl. JUMBF & W3C VC Data Model)
+
+#### 1.0 - December 2021
+
+	- Initial Release
+
+:sectnums:

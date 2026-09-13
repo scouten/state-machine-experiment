@@ -1,0 +1,336 @@
+==== Description
+An actions assertion provides information on edits and other actions taken that affect the asset's content. There will be an array of actions - each action declaring _what_ took place on the asset and (optionally) _when_ it took place, along with possible other information such as what software performed the action. Except where noted in <<_mandatory_presence_of_at_least_one_actions_assertion>>, the order of actions in this array is unspecified, and does not imply the order in which actions were performed.
+
+There are two versions of the actions assertion - the deprecated v1 (with label `c2pa.actions`) and the new v2 (which shall have a label of `c2pa.actions.v2`). Actions are modelled after {xmpResEvt}, but with a number of C2PA-specific adjustments.  
+
+Actions in a v1 actions assertion are fully specified in the `actions` array. However, in v2, an action may either be fully specified in an element of the `actions` array or it may be derived from an element in the `templates` array with the same action name.
+
+For each action present in either the `actions` or `templates` arrays, the value of the `action` field shall be either a pre-defined action name (`c2pa.resized`, `c2pa.edited`, etc.) or entity-specific action name (`com.fabrikam.gaussianBlur`, etc.). 
+
+The set of pre-defined names, prefixed with `c2pa.` are listed in <<list-of-actions>>:
+
+[[list-of-actions]]
+.List of pre-defined actions
+[cols="35%,60%"]
+|===
+|Action |Meaning
+|c2pa.addedText | (visible) Textual content was inserted into the asset, such as on a text layer or as a caption.
+|c2pa.adjustedColor | Changes to tone, saturation, etc.
+|c2pa.changedSpeed | Reduced or increased playback speed of a video or audio track
+|c2pa.color_adjustments | [DEPRECATED] Changes to tone, saturation, etc.
+|c2pa.converted | The file format of the asset was changed. This action is considered a xref:editorial-transformation-definition[non-editorial transformation]. Prefer the more specific actions `c2pa.repackaged` or `c2pa.transcoded` where appropriate.
+|c2pa.created | The asset was first created.
+|c2pa.cropped | Areas of the asset's xref:_digital_content[digital content] were cropped out.
+|c2pa.deleted | Areas of the asset's xref:_digital_content[digital content] were deleted.
+|c2pa.drawing | Changes using drawing tools including brushes or eraser.
+|c2pa.dubbed | Changes were made to audio, usually one or more tracks of a composite asset.
+|c2pa.edited |  Generalized actions that would be considered xref:editorial-transformation-definition[editorial transformations] of the content.
+|c2pa.edited.metadata |  Modifications to asset metadata or a metadata assertion but not the asset's xref:_digital_content[digital content].
+|c2pa.enhanced |  Applied enhancements such as noise reduction, multi-band compression, or sharpening that represent xref:editorial-transformation-definition[non-editorial transformations] of the content.
+|c2pa.filtered |  Changes to appearance with applied filters, styles, etc.
+|c2pa.mastered | Modifications to an audio asset for quality control purposes prior to delivery or distribution.
+|c2pa.mixed | Multiple, previously placed (via `c2pa.placed` actions) audio ingredients (e.g., stems, vocals, drums, bass, etc) are combined and optionally transformed.
+|c2pa.opened | An existing asset was opened and is being set as the `parentOf` ingredient.
+|c2pa.orientation | Changes to the direction and position of content.
+|c2pa.placed | Added/Placed one or more `componentOf` ingredient(s) into the asset.
+|c2pa.published |  Asset is released to a wider audience.
+|c2pa.redacted |  An assertion in another manifest was redacted.  
+|c2pa.remixed |  Transformation of a previously recorded audio asset. These transformations could include re-arranging, sampling, looping, time-stretching and re-interpreting. It could also include mashup and medley.
+|c2pa.removed |  A `componentOf` ingredient was removed.  
+|c2pa.repackaged | A conversion of one packaging or container format to another. Content is repackaged without transcoding. This action is considered a xref:editorial-transformation-definition[non-editorial transformation].
+|c2pa.resized |  Changes to either content dimensions, its file size or both.
+|c2pa.resized.proportional | Changes to content dimensions while maintaining the original aspect ratio. This action is considered a xref:editorial-transformation-definition[non-editorial transformation].
+|c2pa.transcoded | A conversion of one encoding to another, including resolution scaling, bitrate adjustment and encoding format change. This action is considered a xref:editorial-transformation-definition[non-editorial transformation].
+|c2pa.translated | Changes to the language of the content.
+|c2pa.trimmed | Removal of a temporal range from the start and/or end of the content. Removal of other temporal ranges within the content can be expressed with `c2pa.deleted`.
+|c2pa.unknown | Something happened, but the claim_generator cannot specify what.
+|c2pa.watermarked | [DEPRECATED] An xref:_invisible_watermark[invisible watermark] was inserted into the xref:_digital_content[digital content] for the purpose of creating a soft binding.
+|c2pa.watermarked.bound | An xref:_invisible_watermark[invisible watermark] was inserted into the xref:_digital_content[digital content] for the purpose of creating a soft binding.
+|c2pa.watermarked.unbound | An xref:_invisible_watermark[invisible watermark] was inserted into the xref:_digital_content[digital content] without creating a soft binding.
+
+|===
+
+In addition, the following set of pre-defined names (in <<font-actions>>), prefixed with `font.` are used specifically for font assets:
+
+NOTE: An earlier version of this specification labelled these as `c2pa.font`, but that has been deprecated in favour of the shorter `font` prefix.
+
+[[font-actions]]
+.List of font actions
+[cols="35%,60%"]
+|===
+|Action |Meaning
+
+|font.charactersAdded | Characters or character sets added.
+|font.charactersDeleted | Characters or character sets deleted.
+|font.charactersModified | Characters or character sets added and deleted.
+|font.createdFromVariableFont | Font was instantiated, in whole or part, from a variable font.
+|font.edited | Font has suffered an editing action not described by any more-specific action.
+|font.hinted | Hinting applied.
+|font.merged | Font is a combination of antecedent fonts.
+|font.openTypeFeatureAdded | OpenType feature added to font.
+|font.openTypeFeatureModified | OpenType feature altered.
+|font.openTypeFeatureRemoved | OpenType feature removed from font.
+|font.subset | Font has been stripped down to support an arbitrary (sui generis) sub-group of characters.
+|===
+
+==== Mandatory presence of at least one actions assertion
+
+There shall be at least one actions assertion present in the `created_assertions` array of the Claim of a xref:_standard_manifests[standard C2PA Manifest]. Furthermore:
+
+* If the asset was created _de novo_ (for example, as a result of performing a `File -> New` operation in a creative tool, capturing a photo or video, or generating the media by a generative AI model), then the `actions` array in the first `c2pa.actions` assertion in the `created_assertions` array of the Claim shall have a `c2pa.created` action as its first element.
+
+** For all assets, a corresponding `digitalSourceType` field, with an appropriate value, shall be recorded with the `c2pa.created` action, to indicate the nature of the asset at its inception. If the asset is created with no xref:_digital_content[digital content], then the `digitalSourceType` field shall have the value `http://c2pa.org/digitalsourcetype/empty`.
+
+* If the asset was created by opening an existing asset as a `parentOf` xref:_relationship[ingredient] for editing, then the `actions` array in the first `c2pa.actions` assertion in the `created_assertions` array of the Claim shall have a `c2pa.opened` action as its first element. The claim generator shall also add a corresponding `c2pa.ingredient.v3` assertion for the ingredient that was opened, and include a hashed-uri reference to it in the value of the `ingredients` field of its `parameters` object. 
+
+NOTE: This requirement does not apply to xref:_update_manifests[Update Manifests].
+
+NOTE: No `digitalSourceType` field is required in conjunction with a `c2pa.opened` action.
+
+The full set of actions assertions in a C2PA Manifest shall contain no more than one action whose type is either `c2pa.created` or `c2pa.opened`. 
+
+EXAMPLE: A generative AI model generates a video in response to a text prompt. The resulting video asset's active manifest would have a `c2pa.actions` assertion starting with a `c2pa.created` action, itself having a value of `http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia` in the corresponding `digitalSourceType` field.
+
+EXAMPLE: A user opens Emily's Mobile Poster Maker to create an image for a social media post. The user selects a template, then begins customizing it, importing some existing photos in the process. The resulting image asset's active manifest would have a `c2pa.actions` assertion starting with a `c2pa.created` action and a value of `http://c2pa.org/digitalsourcetype/empty` in the `digitalSourceType` field, indicating that this began as a new file. It would also have a `c2pa.placed` action for each photo that the user imported, each pointing to a corresponding ingredient assertion where a `componentOf` relationship is indicated. Finally, it will have additional actions recorded for other operations the user performs. 
+
+EXAMPLE: The media desk at a newspaper wants to edit a photo that was captured by a photojournalist with a C2PA-enabled camera. The media editor opens the photo and applies crop and vignette operations. The resulting edited photo asset's active manifest has a `c2pa.actions` assertion with a `c2pa.opened` action pointing to an ingredient assertion for the original photo, where a `parentOf` relationship is indicated. It would also have actions for the cropping and vignette edits. 
+
+[[all-actions]]
+==== All actions included
+
+The generator should set the `actions-map-v2` field, `allActionsIncluded`, which has a boolean value.  If `allActionsIncluded` has a value of true, then the claim generator is stating that all actions performed on the asset are described in the actions assertion(s).  If `allActionsIncluded` has a value of false, then the claim generator is stating that additional, unrecorded actions may have been performed. Validators should interpret an omitted `allActionsIncluded` field as indicating that additional, unrecorded actions may have been performed.
+
+In the situation where a claim generator is opening an asset strictly for the purposes of recording its `c2pa.opened` action and then immediately re-saving it without making any other changes, the claim generator shall set `allActionsIncluded` to true to assert that no other actions were performed on the asset.
+
+NOTE: An actions assertion declares _what_ was done to an asset. One use of an xref:external_reference_assertion[external reference] assertion with a hashed location is to provide a cryptographically bound reference to data about the process. When using them in this way, these assertions can be linked to actions via xref:related_assertions[`relatedAssertions`].
+
+==== Fields in the actions assertion
+
+===== Description
+An action may include a free-text description, in the `description` field, of what an action does.  This is most useful for non-standard actions, however, it may also be used as a way to provide additional information about a standard action. For example, a `c2pa.edited` action could have a `description` that says "Paintbrush tool".
+
+===== Reason
+If present, the `reason` field shall contain one of these standard values, or a custom value which conforms to the same syntax as xref:_namespacing[entity-specific namespacing], for the rationale behind the action:
+
+- `c2pa.PII.present`;
+- `c2pa.invalid.data`;
+- `c2pa.trade-secret.present`;
+- `c2pa.government.confidential`.
+
+NOTE: Although the `reason` field can be used for any actions, only redaction-focused `c2pa` values are defined at this time.
+
+When using a `c2pa.redacted` action, the `reason` field shall contain the rationale for the redaction. Additional requirements for the `c2pa.redacted` action can be found in <<_parameters>>.
+
+===== When
+Also present may be the date and time when the action took place in the `when` field. If included, the value of the `when` field shall be compliant with CBOR date/times ({8949}, 3.4.1).
+
+NOTE: The `when` field serves as a simple non-trusted time-stamp. UTC-based times are recommended.
+
+===== SoftwareAgent
+The software or hardware used to perform the action can be identified via the `softwareAgent` field.  In a v1 action, this is a simple text string.  However, for v2, `softwareAgent` uses the richer `generator-info-map` structure as described in <<_generator_info_map>>. When multiple softwareAgents are used, as described in <<_softwareagents>>, then the `softwareAgentIndex` field shall be used to reference the softwareAgent by its 0-based index in the `softwareAgents` array.  A given action shall only have one `softwareAgent` or `softwareAgentIndex` field.
+
+NOTE: These fields are useful for when the `softwareAgent` is not the same program as the claim generator.
+
+NOTE: An earlier version of this specification also included an `actors` field, however this was removed in version 2.0.
+
+===== Digital Source Type
+An action may include a `digitalSourceType` key, whose value shall be one of the terms http://cv.iptc.org/newscodes/digitalsourcetype/[defined by the IPTC] or a C2PA specific value from the list below:
+
+`http://c2pa.org/digitalsourcetype/empty`::
+Media whose xref:_digital_content[digital content] is effectively empty, such as a blank canvas or zero-length video.
+
+`http://c2pa.org/digitalsourcetype/trainedAlgorithmicData`::
+Data that is the result of algorithmically using a model derived from sampled content and data.  Differs from `http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia` in that the result isn't a media type (e.g., image or video) but is a data format (e.g., CSV, pickle)
+
+[NOTE]
+====
+One common use case for the `digitalSourceType` key is in conjunction with the `c2pa.created` action to provide a way to specify how the media item was created - such as "digital capture", "digitised from negative" or "trained algorithmic media".
+====
+
+For "trained algorithmic" assets and data, such as those created by Generative AI, one or more xref:ingredient_assertion[ingredients] may be added to the C2PA Manifest to provide info about the inputs that led to the production of the asset. They can be referenced from a `c2pa.placed` or `c2pa.created` action as shown in <<generative_example>>.
+
+===== Changes
+
+The action may be specific to only a portion of an asset - such as a range of frames in a video or a specific area on an image. In v1, the value was a simple text string.  For v2, they are identified using a `changes` field, whose value is an array of `region-map` objects (as defined in <<_regions_of_interest>>).
+
+===== Parameters
+
+An action may include a `parameters` key that provides for the specification of some action-specific information via some pre-defined as well as the open-ended inclusion of any custom fields (and their associated values). Custom fields shall conform to the same syntax as xref:_namespacing[entity-specific namespacing], e.g. `com.litware.someFieldName`.
+
+NOTE: This is useful for providing extra information that would be useful to a specific workflow or C2PA Manifest Consumer.
+
+A claim generator that performs the same action over and over, with the same parameters & settings, may use the `multipleInstances` field to indicate that the action was performed multiple times or not.  If the `multipleInstances` field is not present, then it is unknown whether the action was performed multiple times.
+
+When using a `c2pa.opened` or `c2pa.placed` action, the `ingredient` field (for v1) or `ingredients` field (for v2) in the `parameters` object shall contain the hashed JUMBF URIs to one or more related ingredient assertions. In a `c2pa.removed` action, this field shall contain the hashed JUMBF URI to a `componentOf` ingredient assertion in a different manifest. In some cases, only a portion of an ingredient is relevant to the action, in such cases the ingredient assertion should contain xref:_metadata_about_assertions[assertion metadata] containing a `regionOfInterest` field which would be used to specify the relevant regions of the ingredient (as described in <<_ingredient_metadata>>).
+
+NOTE: In previous versions of this specification, `c2pa.transcoded` and `c2pa.repackaged` actions were required to reference the `parentOf` ingredient assertion referenced by the preceding `c2pa.opened` action; claim generators can do so for compatibility with older validators.
+
+When using a `c2pa.translated` action, the `sourceLanguage` and `targetLanguage` fields in the `parameters` object shall contain {5646} language codes.
+
+[[generative_example]]
+[figure]
+.Example of an action for Generative AI
+====
+The `c2pa.created` action for an image created by a Generative AI model, could look like this, in CBOR diagnostic notation ({8949}, clause 8):
+
+[source]
+----
+include::../examples/cbordiag/actions-ingredients.cbordiag[]
+----
+====
+
+When using a `c2pa.redacted` action, the `redacted` field in the `parameters` object shall contain the JUMBF URI to the assertion that has been redacted.  
+
+[[related_assertions]]
+===== Related Assertions
+
+An action may include a `relatedAssertions` key in the `parameters` object. If present, the value shall be an array of one or more hashed JUMBF URIs identifying assertion(s) that are related to the action.
+
+Each entry in `relatedAssertions` shall reference an assertion in the same C2PA Manifest as the action. The related assertion(s) provide additional information about, or are otherwise related to, the action.
+
+Entries in `relatedAssertions` shall not reference an actions nor an ingredient assertion (i.e., an assertion whose label is `c2pa.actions`, `c2pa.actions.v2`, `c2pa.ingredients`, `c2pa.ingredients.v2`, or `c2pa.ingredients.v3`).
+
+Manifest Consumers may use these references to present additional contextual information about the action.
+
+NOTE: This mechanism provides a general-purpose way for actions to reference assertions other than ingredient assertions.
+
+==== Watermarking
+
+When using a`c2pa.watermarked.bound` action, a xref:soft_binding_assertion[soft binding assertion] shall also be included in the C2PA Manifest to describe the inserted watermark.  The `c2pa.watermarked.bound` action should reference one or more of these corresponding soft binding assertions using the `relatedAssertions` field in the `parameters` object of that action.
+
+NOTE: The `c2pa.watermarked` action is deprecated in favour of the more specific `c2pa.watermarked.bound` and `c2pa.watermarked.unbound` actions.
+
+==== Action Templates
+
+===== Templates
+The elements of the `templates` array, in a v2 action, are described using a combination of common elements about actions, along with some template-specific values. These values are combined by a C2PA Manifest Consumer with actions of the same name, or with all actions (if the value of the `action` field is the special `*` value), to get a full picture of an action. If there are multiple templates that apply to the same action, then the values are merged starting with the `*` template (if present) and then applied in the order they appear in the `templates` array.
+
+[[actions-template]]
+[figure]
+.Action template example
+====
+An action and template, in CBOR diagnostic notation ({8949}, clause 8):
+
+[source]
+----
+include::../examples/cbordiag/actions-templates.cbordiag[]
+----
+====
+
+A C2PA Manifest Consumer shall take the values from the template and overlay the values from the action itself, which will lead to replacing any with the same name. 
+
+.Actions Template Flow
+[plantuml,target=ActionsTemplate,format=svg,width=612,align="center"]
+....
+include::../Diagrams/Actions_template.puml[Action Template example]
+....
+// image::Actions_template.{image-ext}[Action Template example,width=720,height=432,align="center"]
+
+A template may include a `templateParameters` key that allows the inclusion of any other keys (and their associated values).  This is useful for providing extra information that would be useful to a specific workflow or C2PA Manifest Consumer.
+
+===== SoftwareAgents
+
+If multiple softwareAgents were used, they can be listed in the `softwareAgents` field instead.  This field is an array of `generator-info-map` objects, each of which describes a different software or hardware which can then be referenced by its index via the `softwareAgentIndex` field of a given action or template.
+
+[[actions-agents]]
+[figure]
+.Software Agents example
+====
+An example of specifying multiple agents across multiple actions, in CBOR diagnostic notation ({8949}, clause 8):
+
+[source]
+----
+include::../examples/cbordiag/actions-agents.cbordiag[]
+----
+====
+
+
+===== Icons
+
+A template may also include an icon - an image (raster or vector) that can be used in the C2PA Manifest Consumer's user experience to provide some graphic representation of the action.  Since a Manifest Consumer will know about all the defined actions, such icons shall only be present in templates for entity-specific actions.
+
+The value of the `icon` field, if present, shall be a xref:_hashed_uris[hashed URI].  This hashed URI shall be to either a xref:_embedded_data[embedded data assertion] or to a xref:_cloud_data[cloud data assertion]. If a embedded data assertion is used, then its label shall be `c2pa.icon` and shall follow the xref:_multiple_instances[rules of assertion labels] with respect to multiple instances.
+
+NOTE: This `icon` field is identical in structure to the `icon` field in the xref:_generator_info_map[Generator Info Map] of the Claim.
+
+Manifest Consumers should also support the xref:_data_boxes[data box] approach recommended by earlier versions of this specification.
+
+==== Localizations
+
+If the `metadata` of an actions assertion contains a xref:_localization_dictionary[localization dictionary] for a template, then the localizations shall also apply to any action based on that template.
+
+
+==== Related Actions
+
+When a series of actions are related to each other, usually taking place at the same time, it can be useful to associate them accordingly.  The `related` field, in the v2 action, provides a place to list the additional actions that are related.  Each related action should be a subset of the primary action, only including those fields that differ.  Just as with an action template, the values are merged with those of the primary action, by a C2PA Manifest Consumer to get a full picture of each related action.
+
+==== Asset Renditions
+
+Asset renditions are a common occurrence when distributing media on the internet. These renditions are often created for the purpose of delivering media to consumers in differing connectivity, screen resolution, and other environments. We can use the `actions` assertion to help consuming actors understand the intention of certain claim creators to create asset renditions.
+
+The presence of only `c2pa.published`, `c2pa.transcoded` and `c2pa.repackaged` actions in a `c2pa.actions` assertion provides a signal to the Manifest Consumer that the signer is asserting that no xref:editorial-transformation-definition[editorial changes] to the xref:_digital_content[digital content] have happened between the ingredient asset(s) and this one. 
+
+The additional presence of a single "parentOf" ingredient provides a further signal to the Manifest Consumer that the signer is asserting that the asset has been derived directly from that parent.
+
+==== Soft Binding Lookup
+
+When performing either a `c2pa.opened` or `c2pa.placed` action with an asset that does not contain a C2PA Manifest, the claim generator may use a soft binding lookup to find the C2PA Manifest for that asset. If successful, the claim generator should add the located C2PA Manifest as the value of the `activeManifest` field in the ingredient assertion. If it does so, then the ingredient assertion shall also contain a `softBindingsMatched` field with a value of true and a `softBindingAlgorithmsMatched` whose value contains at least one entry in the array.  
+
+NOTE: Adding these fields indicates to the C2PA Manifest consumer that soft binding lookup was used.
+
+NOTE: Since most soft binding recovered manifests will contain a hard binding assertion that does not match the asset being looked up, it is to be expected that validation failures will be reported in the ingredient assertion.
+
+An example of an ingredient action showing that its manifest was retrieved via soft binding, in CBOR diagnostic notation ({8949}, clause 8):
+
+[source]
+----
+include::../examples/cbordiag/ingredient-softbinding.cbordiag[]
+----
+
+==== Deprecated Actions
+
+ifdef::not-for-iso[]
+The following actions were part of previous versions of this specification and have since been deprecated:
+endif::[]
+ifdef::for-iso[]
+The following actions are deprecated:
+endif::[]
+
+- `c2pa.copied`;
+- `c2pa.formatted`;
+- `c2pa.version_updated`;
+- `c2pa.printed`;
+- `c2pa.managed`;
+- `c2pa.produced`;
+- `c2pa.saved`.
+
+They shall no longer be written into `c2pa.actions` or `c2pa.actions.v2` assertions but may appear in pre-existing C2PA Manifests.
+
+==== Schema and Example
+
+The schema for `c2pa.actions` is defined by the `actions-map` rule, and the schema for `c2pa.actions.v2` is defined by the `actions-map-v2` rule in the following {cddl}:
+
+[source,cddl]
+.CDDL for Actions
+----
+include::../schemas/cddl/actions.cddl[]
+----
+
+Standard actions specific to font assets are described in:
+
+[source,cddl]
+.CDDL for Font actions
+----
+include::../schemas/cddl/font-actions.cddl[]
+----
+
+[figure]
+.Example of a v2 action
+====
+An example of a v2 action, in CBOR diagnostic notation ({8949}, clause 8), is shown below:
+
+[source]
+----
+include::../examples/cbordiag/actions.cbordiag[]
+----
+====

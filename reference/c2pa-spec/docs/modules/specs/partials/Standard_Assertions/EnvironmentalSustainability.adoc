@@ -1,0 +1,18 @@
+#### Description
+
+The environmental sustainability assertion is used to convey machine-generated sustainability data associated with the creation or modification of an asset. The information carried by this assertion is intended to support transparency and auditing of environmental costs (for example, energy consumption, greenhouse gas emissions, and water use) across a content supply chain, including workflows that use Generative AI.
+
+A C2PA Manifest may contain one or more environmental sustainability assertions. Each environmental sustainability assertion describes a set of sustainability measurements and may be associated with a specific action. The data contained within any environmental sustainability assertions present within a C2PA Manifest may be aggregated to determine the environmental sustainability impact associated with the creation of the corresponding asset from any ingredients. Furthermore, the data may be aggregated recursively across ingredients where appropriate.
+
+When environmental sustainability data is intended to be presented as context for a particular action, the corresponding action may reference the environmental sustainability assertion using the `relatedAssertions` field in the `parameters` object of that action. Any such reference shall be a hashed JUMBF URI that resolves to an environmental sustainability assertion in the same C2PA Manifest.  It is not required to ascribe environmental sustainability assertions to actions in this granular manner.
+
+The `data` object of a `c2pa.environmental-sustainability` assertion may contain one or more of the following fields: `energy_kwh`, `carbon_kgco2e`, and `water_litres`. Each field represents a sustainability measurement associated with the creation or modification of the asset.
+
+If the `energy_kwh` field is present, it shall contain an object with a mandatory `value` field. The `value` shall be a non-negative number representing the energy consumption in "kWh" (kilowatt-hours), the standard unit for measurement of energy consumption (ISO/IEC TR 20226:2025).
+
+If the `carbon_kgco2e` field is present, it shall contain an object with a mandatory `value` field.  The `value` shall be a non-negative number representing gross green house gas (GHG) emissions, and does not include accounting adjustments such as carbon offsets. The value is expressed in "kgCO2e" (kilograms of carbon dioxide equivalent), the standard unit for measurement of GHG emissions (ISO 14064-1:2018, 3.1.13).
+
+If the `water_litres` field is present, it shall contain an object with a mandatory `value` field.  The `value` shall be a non-negative number representing water consumption in "litres", the SI unit for measurement of fluid volume.
+
+If present within the `energy_kwh`, `carbon_kgco2e`, or `water_litres` objects, the `measurementMethod` field shall contain a namespaced custom value describing the method used to obtain the measurement. Custom values shall use reverse-DNS namespacing (for example, com.example.fabrikam.direct-measurement).
+

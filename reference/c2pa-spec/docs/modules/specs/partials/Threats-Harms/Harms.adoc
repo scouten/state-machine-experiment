@@ -1,0 +1,45 @@
+### Harms, Misuse, and Abuse
+
+#### Introduction
+
+The C2PA https://c2pa.org/principles/[Guiding Principles] establish that C2PA specifications shall be reviewed with a critical eye towards the potential abuse or misuse of the framework to cause unintended harms, threats to human rights, or disproportionate risks to vulnerable groups globally. 
+
+To ensure that the C2PA is meeting this aspect of its principles, the harms, misuse, and abuse assessment aims to identify and address potential concerns during the specifications development and as encountered in subsequent implementations. 
+
+In addition, the specifications are being reviewed to:
+
+* Anticipate and mitigate potential abuse and misuse;
+* Address common privacy concerns of its users; and
+* Consider the needs of users and stakeholders throughout the world.
+
+
+#### Considerations
+
+The harms, misuse, and abuse assessment is an ongoing process. The information presented in the xref:2.4@security:Harms_Modelling.adoc[Harms Modelling documentation] should not be considered the end result of a comprehensive evaluation, but as a basis for ongoing discussions centered on impacted communities, and aimed at mitigating potential abuse and misuse and protecting human rights. 
+
+There are two critical aspects of the approach:
+
+Ongoing:: The harms, misuse, and abuse assessment necessarily accompanies the design and development, as well as implementation and use-stages of the C2PA by continuously informing the specifications development process, the implementation and user-experience guides, sensitization efforts, the governance of the Coalition and potentially multilateral cooperation for the promotion of a diverse C2PA ecosystem that serves a broad range of global contexts. 
+
+Multi-disciplinary and diverse:: The harms, misuse, and abuse assessment should be a collaborative effort that includes multi-disciplinary experts and a broad range of stakeholders with lived, practical and technical experience of the issues from diverse geographical locations, cultural backgrounds and individual identities. 
+
+
+#### Assessment
+
+Harms modelling focuses on analysing how a socio-technical system might negatively impact users, other stakeholders or broader society, or otherwise create or re-enforce structures  of injustice, threats to human rights, or disproportionate risks to vulnerable groups globally. The process of harms modelling systematically requires combining knowledge about a system architecture and its user affordances with historical and contextual evidence about the impact of similar existing systems on different social groups and participatory consultation with a range of communities who may be implicated by the system. This combined information frames the ability to anticipate harm and proactively identify responses.
+
+The xref:1.0@security:Harms_Modelling.adoc[Harms Modelling documentation] describes the framework and the process carried out to date, followed by the methodology, an overview of the assessment, an outline for public review and feedback, and due diligence actions being developed to accompany version 1.0 of these specifications, its implementations and evolution.
+
+
+#### Due Diligence Actions
+
+The harms, misuse and abuse assessment has informed, and should continue to inform, the development of the C2PA technical specifications as well as its accompanying documentation:
+
+* xref:2.2@guidance:Guidance.adoc[Guidance for implementers]
+* xref:2.2@ux:UX_Recommendations.adoc[User experience guidance]
+* xref:1.0@security:Security_Considerations.adoc[Security Considerations]
+* xref:2.2@explainer:Explainer.adoc[Explainer]
+
+In addition, the harms, misuse and abuse assessment should inform the governance of the Coalition and guide potential multilateral cooperation for the promotion of a diverse C2PA ecosystem that pushes for the optimization of the benefits in terms of trust in media, user control and transparency that prompted the development of the C2PA specifications.
+
+

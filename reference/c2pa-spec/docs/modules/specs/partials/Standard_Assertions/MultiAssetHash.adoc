@@ -1,0 +1,67 @@
+==== Description
+There exist a number of file formats that are composed of multiple parts, where each part is itself a valid file format, such as when multiple individual images are aggregated into a single file. Some examples include:
+
+* CIPA https://www.cipa.jp/std/documents/download_e.html?CIPA_DC-007-2025_E[Multi-Picture] Format (MPF)
+* Android https://developer.android.com/media/platform/hdr-image-format[Ultra HDR] format (which uses MPF)
+* https://www.iso.org/standard/86775.html[ISO 21496] HDR (which uses MPF)
+* https://developer.android.com/media/platform/motion-photo-format[Android Motion Photo] format (which doesn't use MPF, but can exist alongside MPF in the same file)
+
+In some cases, it may be desirable or even required to verify the integrity of each individual part of the file, rather than just the file as a whole. Accordingly, the current set of hard binding assertions are not sufficient to separately verify the integrity of each part. Additionally, the individual parts may have their own C2PA Manifests that need to be recorded. The multi-asset hash assertion is used to provide this functionality.
+
+One additional unique case is where an individual part is optional - meaning that it is possible that it can/will be removed as part of a workflow that does not involve a trusted signer - but the ability to verify the integrity of the rest of the file is still desired. 
+
+
+==== Details
+
+A multi-asset hash assertion shall have a label of `c2pa.hash.multi-asset`. Although it contains hashes and modifies the handling of the hard binding, it is not considered a hard binding.
+
+A multi-asset hash assertion shall not appear in a xref:_cloud_data[cloud data assertion] nor an xref:_external_reference[external reference assertion].
+
+A multi-asset hash assertion should not be used with a xref:_compressed_manifests[compressed manifest].
+
+NOTE: It is not clear if there exists a technical incompatibility between the two, so it is recommended to avoid using them together until further evaluation is complete.
+
+Each part, including the primary part, shall be represented as a `part-hash-map` object within the `parts` array. The `location` field shall contain a `locator` object that describes the location of the part within the file.  The `locator` object shall contain either a `bmffBox` field or `byteOffset` and `length` fields.  The `byteOffset` field shall contain the byte offset (from the physical start of the file) of the part within the file, and the `length` shall contain the length of the part in bytes.  The `bmffBox` field shall contain the BMFF box of the part, when the part is contained with the primary part but as a specific BMFF box (e.g., `mpvd` as used by Motion Photo). For a part described by a `bmffBox` field, the content of the part shall be considered the payload of that box only, excluding the box header.
+
+The parts within the `parts` array shall be listed in the order in which they appear in the file, and the parts shall be contiguous, non-overlapping, and cover every byte of the asset.
+
+NOTE: Appearance in the file is defined as their sequential order as they would be located if starting from byte 0 and scanning through to the last byte of the file.
+
+The `hashAssertion` field shall contain a hashed URI to the hash assertion for the part.  A part's hash assertion shall be a standard hard binding assertion (e.g., `c2pa.hash.data`), but the label shall have the string `.part` and any xref:_multiple_instances[multiple instance identifier] appended. For example, `c2pa.hash.data.part__2`. Any uses of absolute byte offsets in a part's hash assertion (e.g., the `start` value in a data hash exclusion range) shall be computed relative to the beginning of that part.
+
+NOTE: Adding these label suffixes makes it clear that hard binding assertions for parts are not considered standard hard binding assertions and thus there can exist multiple instances of them within a C2PA Manifest. 
+
+The `optional` field shall be a boolean indicating if the presence of the part is optional - the default is `false` if not present.
+
+If a part has its own C2PA Manifest, which is not self-contained within that part (e.g., individual frames in a multi-frame asset), then it is recommended to store that C2PA Manifest into the asset's Manifest Store and create a `componentOf` ingredient to reference it.	
+
+// ==== Examples
+
+// There are some common scenarios that can be addressed by the multi-asset hash assertion:
+
+// 1. A file that contains multiple parts, where each part is a valid file (usually of the same type) and all parts of required to be present. For example, a file that contains multiple images (e.g. pages of a scan or frames of an animation). In this case, the multi-asset hash assertion can be used to verify the integrity of each individual image.
+
+// 2. A file that contains multiple parts, where each part is a valid file, but one or more of the parts is optional. For example, a file that contains an image, along with an HDR gain map or an associated video. In this case, the multi-asset hash assertion can be used to verify the integrity of each individual part (if they are present) but also provides for the case where one (or more) of the optional parts may not be present but their absence does not impact the validation of the primary part (or any other present parts).
+
+
+==== Schema and Example
+
+The schema for this type is defined by the `multi-asset-hash-map` rule in the following {cddl}:
+
+[source,cddl]
+----
+include::../schemas/cddl/multi-asset-hash.cddl[]
+----
+
+An example in CBOR diagnostic notation ({8949}, clause 8) is shown below:
+
+[source]
+----
+include::../examples/cbordiag/multi-asset-hash.cbordiag[]
+----
+
+Such a sample multi-asset hash assertion might be included in an image, as shown <<multi_asset_hdr_image, below>>.
+
+[[multi_asset_hdr_image]]
+.Example of a multi-asset hash assertion used for an HDR gain map
+image::multi-hash-hdr.drawio.svg[Example of a multi-asset hash assertion used for an HDR gain map,align="center"]

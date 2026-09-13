@@ -1,0 +1,17 @@
+:revdate: {docdate}
+:version-label!: 
+:sectnums:
+:sectnumlevels: 5 
+:chapter-label: Entities
+:source-highlighter: rouge
+
+## Entity Diagram
+
+<<entity-diagram>> provides a look at how all of the pieces of the C2PA system integrate and relate to each other.
+
+[[entity-diagram]]
+.C2PA Entity Diagram
+[plantuml,target=Entities,format=svg,width=612,align="center"]
+....
+include::../Diagrams/C2PAEntities.puml[]
+....

@@ -1,0 +1,157 @@
+#### Description
+A claim generator should use a general box hash assertion to verify the integrity, with a hard binding (i.e., cryptographic hash), of assets whose formats use a non-BMFF-based box format such as JPEG, PNG, or GIF.
+
+A general box hash assertion shall have a label of `c2pa.hash.boxes`.  Such an assertion consists of an array of structures, each one listing one or more boxes (by their name/identifier) and a hash that covers that data of those boxes (and any possible data that may be present in the file between them), along with the algorithm used for hashing. The boxes shall appear in the assertion in the same order that they appear in the asset, including the box containing the C2PA Manifest. If there are any other boxes present in the asset that are not explicitly included in this assertion, or if the boxes appear out of order, the manifest will be rejected during validation as described in <<_validating_a_general_box_hash>>. 
+
+A box may also have an `excluded` field, which is a boolean value indicating whether a validator can ignore this box (and associated hash) during validation. If this field is absent, or the field is present and its value is `false`, the box shall be hashed and the values compared. For boxes that have an `excluded` field with a value of `true`, the claim generator should include an accurate hash for compatibility with older validators that do not recognize the `excluded` field. If the claim generator is not concerned with backwards compatibility, it should write the binary string `00` (a single byte with a value of 0) for the hash.
+
+A box may also include an `exclusions` field, which is an array of byte ranges to be excluded from the hash calculation. Each exclusion range shall be a map with `start` and `length` fields, indicating the byte offset (from the start of the box) and number of bytes to exclude. When multiple boxes exist in a `box-hash-map` structure, it is necessary to specify which box an exclusion range belongs to by using a `boxIndex` field. The first `boxIndex` in the `box-hash-map` structure is 0, 1 for the next, and so on. These ranges shall be ordered by increasing start offset and shall not overlap.
+
+For box hash exclusion ranges, the range shall begin and end within one box and shall not overlap with any header or length field associated with that box, except for freebox or pad data. It is the responsibility of the claim generator to define exclusion ranges in a way that ensures that whatever data an attacker might place in those ranges cannot materially affect the interpretation of the asset. Furthermore, the claim generator shall ensure the exclusion range only contains content from C2PA Manifest Store, or asset metadata (e.g., EXIF, IPTC metadata). Example metadata that could be skipped can be unverified user name or image rotation information.
+
+The `excluded` and `exclusions` fields serve different purposes. `excluded` is a boolean flag indicating that the entire box may be ignored during validation. `exclusions` is a list of byte ranges within the box that should be excluded from the hash calculation. If both fields are present, the `excluded` field is set to `true` takes precedence and the `exclusions` field shall be ignored.  When the `excluded` field is set to `false` or the `excluded` field is absent, the `exclusions` field shall be applied.
+
+In the case where there are multiple instances of the same box type, such as multiple `APP1` segments in a JPEG 1 file, each instance shall be listed separately in the assertion. JPEG segments that are fragments sharing the same segment identifier are also listed as separate boxes, with the exception of the segments comprising the C2PA Manifest Store (as described below).
+
+The `alg` field in `box-hash-map`, if present, shall be a string that is one of the allowed hash algorithms as defined in <<_hashing>>, and that algorithm shall be used to compute the hash. If the `alg` field is not present in `box-hash-map`, then the hashing algorithm shall be determined by the value of the `alg` field in the containing `box-map`, or if that is not present, by the value of the `alg` field in the Claim.
+
+The creation of the hashes is described in <<_hashing>>, and the value shall be present in the `hash` field. The hash value for a range of boxes shall be computed from the start of the first box (in the range) until the end of the last box (in the range).  This would include any arbitrary bytes that may be present between boxes.
+
+NOTE: When using a range of boxes, all data between the start of the first box and the end of the last box is included in the hash. However, when listing each box separately, additional data is not included, only data within the listed box.
+
+The box containing the C2PA Manifest Store (e.g. `caBX` for PNG, or `21FF` for GIF) shall also be listed in its own array. In order to clearly identify it as the C2PA Manifest box, it shall have the name `C2PA` and the value of `hash` shall be the binary string `00` (a single byte with a value of 0). The C2PA Manifest Store shall be represented as a single box, even in the case of a JPEG file where the box is fragmented across multiple `APP11` marker segments.
+
+NOTE: As validators are often used in combination with output of file parsers, it is a security best practice to hash all of the file content outside of the C2PA Manifest Store. This will ensure the integrity of the media and the linked manifest.
+
+The optional `pad` and `pad2` values, if present, shall be zero-filled byte strings.
+
+NOTE: <<_multiple_step_processing>> describes how to fill in the correct values and adjust the padding.
+
+A General Box Hash assertion shall not appear in a xref:_cloud_data[Cloud Data assertion] or a xref:_external_reference[External Reference assertion].
+
+==== Special handling of multi-part assets
+
+To support file formats that consist of multiple parts (as described in <<_multi_asset_hash>>), one additional logical box is defined for cases where the data of one or more parts comes after the box-based data of the primary part. This box shall be labelled `c2pa.after` (for arbitrary data beyond the end of the box structure). The `c2pa.after` box, if present, shall be the last box listed, and its hash shall be computed from the byte following the last box until the end of the physical file.
+
+The hard binding assertion, which covers the whole asset, shall be the only assertion that can include a `c2pa.after` box.  A hash assertion for an individual part shall cover only the contents of that part itself, and not any other part.
+
+#### Handling for specific formats
+
+##### JPEG-specific Handling
+When working with JPEG, the `APP11` box is used for standards other than C2PA (i.e., JPEG 360). In those situations, all non-C2PA `APP11` boxes shall be included in the list of hashed boxes.  The `APP11` boxes containing the C2PA Manifest Store shall be identified by `C2PA`. All other boxes shall be identified by the symbol found in {10918-b1}.
+
+The C2PA Manifest Store can be identified by it being a JUMBF superbox with a label of `c2pa` and a JUMBF type UUID of `63327061-0011-0010-8000-00AA00389B71`  as described in <<_manifest_store>>.
+
+NOTE: The Start of Scan box and Restart boxes, label of `SOS` and `RST[n]`, will include the entropy coded segments following the respective marker. 
+
+The {mpf} extension to JPEG can also be supported using this method by listing all boxes contained in the file as they appear, assuming there is no data between the `EOI` of one Individual Image and the `SOI` of the next. The `boxes` list would enumerate the segments from each Individual Image in the MPF in sequence (`SOI`, ..., `EOI`, `SOI`, ..., `EOI`, ...). However, if the claim generator plans to treat the MPF file as a multi-part asset, then the `c2pa.after` box shall be used to hash the additional parts that follow the `EOI` of the first Individual Image (the primary part).
+
+##### PNG-specific Handling
+A PNG file always begins with an 8 byte header (`89 50 4E 47 0D 0A 1A 0A`). To include it, use the special value `PNGh` as the first box in the list of boxes and start hashing from the first byte of the image.
+
+##### TIFF-specific Handling
+
+NOTE: Previous versions of this specification documented use of general box hash with TIFF. However, the use of indirection and other characteristics of the TIFF structure make box hashing awkward, inefficient, and prone to interoperability issues, so it has been decided to remove the general box hash support for TIFF, in favor of the data hash.
+
+##### GIF-specific Handling
+The hash of a box containing a 'Packed Fields' attribute will also hash the optional data indicated by that attribute. For example, The Image Descriptor will include the Local Color Table block, and the Logical Screen Descriptor will include the Global Color Table block, if they exist.
+
+For all boxes containing a block label, the naming convention shall be as follows: "<Block Label>".
+
+For all extension blocks, the naming convention is as follows: "<Extension Introducer><Extension Label>".
+
+The only other blocks that are not described by the above naming convention are:
+
+- The header will be marked with "GIF89a".
+- The Table Based Image Data will be marked with "TBID".
+- The Logical Screen Descriptor will be marked with "LSD".
+
+For example:
+
+- Header: "GIF89a".
+- Trailer: "3B".
+- Image Descriptor: "2C".
+- Comment Extension: "21FE".
+
+##### RIFF-specific Handling
+RIFF file chunks may be nested in a tree structure of arbitrary depth. The root of this structure consists of one or more *L0* chunks, each with the chunk identifier of `RIFF`. These `RIFF` chunks are defined with the following structure:
+
+- Bytes 0-3: Chunk identifier, always `RIFF`.
+- Bytes 4-7: Chunk length (minus 8 bytes for the chunk identifier and chunk length fields).
+- Bytes 8-11: Media type identifier.
+- Bytes 12-n: Chunk data (all *L1* chunks).
+
+After the media type identifier, the `RIFF` chunk may contain one or more *L1* sub-chunks, each with the following structure:
+
+- Bytes 0-3: Chunk identifier.
+- Bytes 4-7: Chunk length (minus 8 bytes for the chunk identifier and chunk length fields).
+- Bytes 8-n: Chunk data.
+- Byte n+1: Padding byte (if necessary).
+
+A special chunk identifier of `LIST` may be used to nest chunks within an *L1* chunk. These `LIST` chunks mimic the structure of *L0* `RIFF` chunks:
+
+- Bytes 0-3: Chunk identifier, always `LIST`.
+- Bytes 4-7: Chunk length (minus 8 bytes for the chunk identifier and chunk length fields).
+- Bytes 8-11: List type identifier.
+- Bytes 12-n: Chunk data (all *L2* chunks).
+- Byte n+1: Padding byte (if necessary).
+
+For the purposes of calculating a general box hash, each *L0* chunk shall be treated as a single box with a size of exactly 12 bytes, and a box name equal to the media type identifier (bytes 8-11). Each non-`LIST` *L1* chunk shall be treated as a box with a name equal to the chunk identifier (bytes 0-3) and content extending from the beginning of the chunk identifier (byte 0) to the padding byte, if any, inclusive. Each `LIST` *L1* chunk shall be treated as a box with a name equal to the list type identifier (bytes 8-11) and content extending from the beginning of the chunk identifier (byte 0) to the padding byte, if any, inclusive. All chunks nested within a `LIST` *L1* chunk (*L2* and higher) shall be treated as a part of the `LIST` *L1* chunk's content and hashed as a single box.
+
+In all cases, padding bytes shall be treated as part of the preceding chunk's content, and shall be included in the hash for that box.
+
+##### Font-specific Handling
+The tables of a font correspond directly to the hash boxes, including the `C2PA` table.
+
+Tables are always enumerated in the order they appear in the font's table directory.
+
+Note that the table directory itself is not part of the hashed content, and therefore not covered by any box.
+
+The `checkSumAdjustment` value shall be treated as zero (`0`) when computing the hash for the box containing the `head` table.
+
+The grouping, or lack thereof, of Font tables in the general box hash assertion is up to the claim generator.
+
+Note: Fonts created for wide distribution may benefit from assigning each table
+to an individual box; in this way, if the font is re-packaged in another format,
+its hash will continue to validate correctly. By contrast, systems which
+generate large numbers of fonts automatically, such as a subsetter, may choose
+to combine tables into fewer boxes to streamline processing. In this case,
+the box hash(es) may not validate following a format transformation, due to the
+inclusion of inter-table padding.
+
+Because font consumers shall not react to tables they do not recognize, existing font-handling infrastructure will expect that the `head` table's `checkSumAdjustment` value incorporate the final settled content of the `C2PA` table itself, including any local manifest in its entirety.
+
+##### Ogg-specific Handling
+In an Ogg file, the structure consists of one or more logical bitstreams, and the data for each stream is held in Ogg Pages. For the purpose of hashing, each logical bitstream is treated as a single 'box', which includes every Page, in order, with the same bitstream_serial_number. The C2PA Manifest Store 'box' is the logical bitstream identified in <<_embedding_manifests_into_ogg_vorbis>>.
+
+The box-name for each non-C2PA logical bitstream shall be a string constructed in the format: Stream-[bitstream_serial_number].
+
+The bitstream_serial_number in the box name shall be the ASCII-encoded base-10 value of the 4-byte number for that stream, read as a 32-bit little-endian unsigned integer, found in its Ogg Page headers. For example, a logical bitstream with the bitstream_serial_number `\x01\x00\x00\x00` will have the box-name "Stream-1".
+
+#### Schema and Example
+
+The schema for this type is defined by the `box-map` rule in the {cddl} in <<cddl_for_box_hash>>:
+
+[[cddl_for_box_hash]]
+[source,cddl]
+.CDDL for Box Hash
+----
+include::../schemas/cddl/boxes-hash.cddl[]
+----
+
+Five examples in CBOR diagnostic notation ({8949}, clause 8) are shown in <<example_box_hash>>:
+
+. JPEG;
+. PNG;
+. GIF;
+. TTF;
+. JXL.
+
+[[example_box_hash]]
+[source]
+.Example Box Hash
+----
+include::../examples/cbordiag/boxes-hash.cbordiag[]
+----
+
+Normally, the `start` and `length` values of an `exclusion` shall be written in their preferred serialization (i.e., "as short as possible"). However, when a box hash assertion needs to be created but the `start` and `length` values are not yet known, they shall be created "as large as possible", which would be as a 32-bit integer.

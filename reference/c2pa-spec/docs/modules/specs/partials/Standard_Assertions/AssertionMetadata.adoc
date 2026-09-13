@@ -1,0 +1,160 @@
+#### Description
+In many cases, it is useful or even necessary to provide additional information about an assertion, such as the date and time when it was generated or other data that may help Manifest Consumers to make informed decisions about the provenance or veracity of the assertion data. 
+
+[NOTE]
+====
+A Manifest Consumer is not required to read any portion of assertion metadata. It can choose which, if any, fields it wishes to consume, perhaps even varying based on the assertion type to which it is applied.
+====
+
+#### Custom Values
+
+The assertion metadata structure may include custom key/value pairs, in addition to the standard fields defined below.  Such custom map keys shall be namespaced using the same xref:_namespacing[entity-specific namespaces] approach as described in <<_namespacing>>.  This ensures that there are no collisions between different organizations adding their own custom data.
+
+#### Schema and Example
+Below shows the core schemas used inside other assertions.
+
+The {cddl} for the `assertion-metadata-map` rule is found in <<assertion-metadata-cddl>>:
+
+[[assertion-metadata-cddl]]
+[source,cddl]
+.CDDL for Assertion Metadata
+----
+include::../schemas/cddl/assertion-metadata-common.cddl[]
+----
+
+An example in CBOR diagnostic notation ({8949}, clause 8):
+
+[source]
+----
+include::../examples/cbordiag/assertion-metadata.cbordiag[]
+----
+
+// .Editors Note
+// https://github.com/c2pa-org/specs-core/issues/1173
+
+In most cases, this assertion specific metadata will appear directly inside of other assertions (e.g., ingredients) as the value of their `metadata` field. However, sometimes it is necessary or desirable to store the assertion metadata in a separate, independent assertion metadata assertion, such as when an assertion is not in JSON or CBOR, such as thumbnails. 
+
+The label for the assertion metadata assertion is `c2pa.assertion.metadata`.
+
+#### Data Source
+This `dataSource` field is an optional field that allows the claim generator to inform downstream Manifest Consumers about the source from which the assertion contents originated. If no `dataSource` is provided for a given assertion, the `dataSource` is considered to be the `signer`.
+
+[NOTE]
+====
+By default, all `created_assertions` are attributed to the signer, as the Trust Model is rooted in the trust of the signer, which is usually also the claim generator.
+====
+
+The value of the field is a `dataSource` object that is composed of two fields: `type` and `details`. 
+
+The dataSource `type` field defines the type of the dataSource. It is assembled with labels in the format described in <<assertion_labels>>. The value can be one of the following specification-defined values from <<data-source-types>>, or xref:_namespacing[entity-specific namespaces] can be used as an extension mechanism.
+
+[[data-source-types]]
+.Data source types
+[width="100%",cols="3,10",options="header"]
+|=======================
+|Value of `type`        |   Meaning
+| `signer`				|	The assertion contents came from the signer 
+|`claimGenerator.REE`   |   Assertion contents came from a claim generator running in a rich execution environment (REE), such as a desktop or mobile operating system
+|`claimGenerator.TEE`   |   Assertion contents came from a claim generator running in a trusted execution environment (TEE), such as a trusted OS
+|`localProvider.REE`   |   Assertion contents came from a data source running in an REE on the same physical computing device as the claim generator
+|`localProvider.TEE`   |   Assertion contents came from a data source running in a TEE on the same physical computing device as the claim generator
+|`remoteProvider`   |   Assertion contents came from a remote data source controlled by the signer or claim generator vendor 
+|`remoteProvider.external`   |   Assertion contents came from an external, remote data source that is not the signer or claim generator vendor
+|`humanEntry`   |   Assertion contents were entered by a human
+|=======================
+
+The `details` field is a human-readable string that provides additional information about the dataSource, e.g., the name of the API used to provide the assertion contents, or the URL of the server from which the contents were provided. For example, a broad location assertion source may have a `type` value of `remoteProvider.3rdParty`, with the `details` value set to `www.googleapis.com/geolocation/v1/geolocate`. 
+
+
+#### Review Ratings
+When present, the `reviewRatings` array provides a place for the claim generator to provide one or more `rating` objects on the quality (or lack thereof) of an assertion. A `reviewRatings` shall not be present if a `dataSource` object is present with a `type` field whose value is either `humanEntry.anonymous` or `humanEntry.credentialed`.
+
+The `value` field of the `rating` object shall be present with any integer value from _1_ (worst) through _5_ (best). If present, the `explanation` field shall contain a human-consumable string description of the type of rating. In addition, an optional machine-readable `code` field which defines assertion-specific evaluation outcome codes may be provided. The value of the `code` field is defined using the same format described in <<assertion_labels>>. The value can be one of the following specification-defined values from <<code-values>>, or xref:_namespacing[entity-specific namespaces] can be used as an extension mechanism.
+
+[[code-values]]
+.Values of `code` field
+[width="100%",cols="4,4,10",options="header"]
+|=======================
+|Value of `code`        |   Applicable Assertion | Meaning
+|`actions.unknownActionsPerformed`   |   `c2pa.actions` | The actions assertion does not contain a full list of all actions performed in the authoring tool (e.g., because of the use of a 3rd party filter whose effect is unknown to the authoring tool).
+|`actions.placedIngredientNotFound`   |   `c2pa.actions` | The actions assertion being reviewed has a `placed` action without a resolvable `ingredient` URI. `value` should be `1`.
+|`ingredient.actionMissing`   |   `c2pa.ingredient` | The ingredient assertion being reviewed does not have at least one action that references it in its claim. `value` should be `1`.
+|`ingredient.notVisible` | `c2pa.ingredient` | The ingredient assertion being reviewed is not visible in the digital content bound to that manifest. `value` should be `1`.
+|`depthMap.sceneMismatch`   |   `c2pa.depthmap.GDepth` | The contents of the depth map assertion do not correspond to the scene portrayed in the primary presentation in the asset (e.g., because of a picture-of-picture attack).
+|`thumbnail.primaryMismatch`   |   `c2pa.thumbnail.claim` | The thumbnail's contents do not match the contents of the primary presentation in the asset.
+|=======================
+
+#### References
+Because the `reference` field of the assertion metadata assertion is a standard xref:_uri_references[hashed_uri], it is also possible to have an xref:_metadata_about_assertions[assertion metadata assertion] refer to assertions in other manifests than the active one. For example, the active manifest may include an `assertion metadata` assertion that validates the `c2pa.metadata` assertion present in an ingredient's manifest.
+
+[NOTE]
+====
+Since the claim is a special type of assertion, this same method can be used to refer to claims in other manifests.
+====
+
+
+#### DateTime
+If a `dateTime` field is present, its value shall be a date time string that complies with CBOR date/times ({8949}, 3.4.1).
+
+#### Region of Interest
+The assertion may be specific to only a portion of an asset - such as a range of frames in a video or a specific area on an image.  Such a portion may be identified using a `regionOfInterest` field, whose value is a `region-map` object (as defined in <<_regions_of_interest>>).
+
+#### Localization
+
+##### General
+It is important that consumers of C2PA manifests be able to understand the information in their native language, when possible. To this end, it is possible to add localization information for an assertion with a dictionary that is included in the assertion's metadata.
+
+##### Localization Dictionary
+
+A localization dictionary shall consist of a single object, where each of its keys represent the translations using the language indexing technique from {json-ld-lang}.  If the value that requires translation is not associated with a top-level key, then "dot notation" (`.`) shall be used to reference keys nested in objects. Array indexing notation (`[n]`, `n>=0`) shall be used where a specific element in an array needs to be traversed. When the value requiring translation is itself an array, a specific element may be referenced. Some examples are shown in <<localization-dictionary-examples>>: 
+
+[[localization-dictionary-examples]]
+.Examples of Localization Dictionaries
+====
+[source, json]
+----
+{
+  "dc:title": {
+    "en-US": "Kevin's Five Cats",
+    "en-GB": "Lord Kevin's Five Cats",
+    "es-MX": "Los Cinco Gatos de Kevin",
+    "es-ES": "Los Thinco Gatos de Kevin",
+    "fr": "Les Cinq Chats de Kevin",
+    "jp": "ケヴィンの５匹の猫"  
+  }
+}
+----
+[source, json]
+----
+{
+  "actions[0].softwareAgent": {
+    "en-US": "Joe's Photo Editor",
+    "en-GB": "Joe's Photo Editor",
+    "es": "Editor de fotos de Joe",
+    "fr": "L'éditeur de photos de Joe",
+    "jp": "ジョーの写真編集者"
+  }
+}
+----
+====
+
+Any such 3rd party keys or values are required to be namespaced in the same way as <<_namespacing>>, e.g. `com.litware`. In order for a Manifest Consumer to display human-readable information about these keys and values, the claim generator should provide the strings via this localization approach.
+
+<<localized-actions>> shows its use in localizing custom xref:_actions[actions], by using it in the assertion metadata of a `c2pa.actions` assertion.
+
+[[localized-actions]]
+[source, json]
+.Localized Actions
+----
+{
+  "com.litware.blur": {
+    "en-US": "Blur",
+    "fr-FR": "Brouiller",
+  },
+  "com.litware.filter": {
+    "en-US": "Filter",
+    "es-ES": "Filtrar",
+    "jp-JP": "フィルター"
+  }
+}
+----

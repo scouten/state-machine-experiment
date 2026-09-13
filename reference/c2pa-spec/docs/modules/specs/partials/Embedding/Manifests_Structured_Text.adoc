@@ -1,0 +1,182 @@
+[[embedding_manifests_into_structured_text]]
+=== Embedding Manifests into Structured Text
+
+==== General
+
+Structured text formats that support comment syntax -- including source code, configuration files (YAML, TOML, INI), markup (Markdown, AsciiDoc, LaTeX), and similar formats -- allow human-readable annotations without altering the interpreted content. This section defines a method for associating a C2PA Manifest Store with such formats using a clearly delimited block with fixed ASCII armour-style delimiters (modelled on https://www.rfc-editor.org/rfc/rfc4880#section-6.2[OpenPGP ASCII Armor, RFC 4880 §6.2]). It supports both referencing an external C2PA Manifest Store and embedding the C2PA Manifest Store directly within the file.
+
+Unlike the Unicode Variation Selector method defined in <<embedding_manifests_into_unstructured_text>> for unstructured text, this approach:
+
+* Preserves human readability of the manifest association (though not the C2PA Manifest Store itself)
+* Requires no special Unicode support from editors or renderers
+* Works with any format that has a comment or front matter convention
+* Uses well-established ASCII Armour delimiters to prevent accidental matches
+
+When a format-specific embedding mechanism is available, it should be preferred over this general method.
+
+==== Applicability
+
+The structured text embedding method is applicable to any file with a media type of `text/*` that is not already covered by a format-specific embedding section in this specification. The following `text/*` subtypes are excluded because they have their own embedding methods:
+
+* `text/html` — see <<_embedding_manifests_into_html>>
+
+XML-based formats (`text/xml`, `application/xml`, and XML-derived types) that do not have a format-specific embedding section may use the structured text method with XML comment syntax (`\<!-- -->`). The following XML-based media types are excluded because they have their own embedding methods:
+
+* `image/svg+xml` — see <<_embedding_manifests_into_svg>>
+
+The structured text method shall not be used for binary formats or formats without either a comment syntax or front matter convention (e.g., `text/csv`). Such formats are not candidates for this embedding method.
+
+==== Manifest Block Format
+
+For structured text formats that support front matter, the C2PA Manifest block shall appear inside that front matter. For formats without front matter, but which support comments, the manifest block shall be expressed as a single comment line. In either case, the manifest block is delimited by the fixed ASCII Armour-style delimiters `-----BEGIN C2PA MANIFEST-----` and `-----END C2PA MANIFEST-----`, with the manifest reference/data appearing between them.
+
+There shall be at most one manifest block per file. If a validator detects more than one, it shall report a `manifest.structuredText.multipleReferences` failure.
+
+[[single-line-form]]
+===== Single-Line Form (Comments)
+
+For formats with single-line or block comment syntax, the manifest block is expressed as a single comment line:
+
+[source]
+----
+<commentPrefix> -----BEGIN C2PA MANIFEST----- <manifest-reference> -----END C2PA MANIFEST----- <commentSuffix>
+----
+
+Where:
+
+* `<commentPrefix>` is the host format's comment introducer (e.g., `#`, `//`, `--`, `;`, `%`, `/*`, `\<!--`)
+* `-----BEGIN C2PA MANIFEST-----` and `-----END C2PA MANIFEST-----` are the fixed delimiters
+* `<manifest-reference>` is one of:
+** A URL to an external manifest store (preferred)
+** A `data:` URI (https://www.rfc-editor.org/rfc/rfc2397[RFC 2397]) containing the Base64-encoded C2PA Manifest Store: `data:application/c2pa;base64,<data>`
+* `<commentSuffix>` is the host format's comment terminator, if required (e.g., `*/`, `-->`)
+
+Where possible, it is strongly recommended to place the manifest block at the beginning of the file. When the first line of the file is reserved by the host format (e.g., a shebang line `#!/...` in scripts, or an XML declaration `<?xml ...?>` in XML documents), the manifest block shall be placed at the end of the file so that the `-----END C2PA MANIFEST-----` delimiter appears on the last line.
+
+The use of the ASCII Armour-style delimiters enables format-agnostic discovery: a validator reads the first and last lines of the file and checks for the presence of this delimiter without needing to understand the host format's comment syntax.
+
+When host formats define comment conventions that signal toolchains to preserve specific comments (e.g., comments beginning with `/*!` in JavaScript and CSS), claim generators should use them for the reference line.
+
+NOTE: Comment-based embedding relies on the host format preserving comments through its toolchain. 
+
+NOTE: Preservation-hint conventions do not guarantee that comments will survive all toolchains.
+
+===== Multi-Line Form (Front Matter)
+
+Formats that support front matter blocks -- such as CommonMark (YAML front matter), TOML front matter (`+++`), and similar conventions -- may use a multi-line manifest block within the front matter. Claim generators should prefer the front matter form when possible, as front matter is more reliably preserved by format-specific toolchains.
+
+
+[source, yaml]
+----
+---
+-----BEGIN C2PA MANIFEST-----
+<manifest-reference>
+-----END C2PA MANIFEST-----
+---
+----
+
+The delimiters shall each appear on their own line within the front matter. The `<manifest-reference>` appears on the line between them and follows the same rules as the <<single-line-form,single-line form (URL or `data:` URI)>>.
+
+NOTE: The front matter delimiters (e.g., `---` for YAML) are part of the host format and not part of the C2PA manifest block. The C2PA delimiters are always `-----BEGIN C2PA MANIFEST-----` and `-----END C2PA MANIFEST-----` regardless of the host format.
+
+===== Examples
+
+====== Single-Line (Referenced)
+
+[cols="1,1,3"]
+|===
+| Comment style | Format | Reference Line
+
+| `#`
+| Python
+| `# -----BEGIN C2PA MANIFEST----- \https://fabrikam.com/manifests/a1b2c3.c2pa -----END C2PA MANIFEST-----`
+
+| `//`
+| JavaScript
+| `// -----BEGIN C2PA MANIFEST----- \https://fabrikam.com/manifests/a1b2c3.c2pa -----END C2PA MANIFEST-----`
+
+| `--`
+| SQL
+| `-- -----BEGIN C2PA MANIFEST----- \https://fabrikam.com/manifests/a1b2c3.c2pa -----END C2PA MANIFEST-----`
+
+| `/* */`
+| CSS
+| `/* -----BEGIN C2PA MANIFEST----- \https://fabrikam.com/manifests/a1b2c3.c2pa -----END C2PA MANIFEST----- */`
+
+| `\<!-- -->`
+| Markdown
+| `\<!-- -----BEGIN C2PA MANIFEST----- \https://fabrikam.com/manifests/a1b2c3.c2pa -----END C2PA MANIFEST----- -->`
+|===
+
+====== Single-Line (Embedded via Data URI)
+
+[source,python]
+----
+# -----BEGIN C2PA MANIFEST----- data:application/c2pa;base64,oWV...truncated... -----END C2PA MANIFEST-----
+----
+
+====== Front Matter (Referenced)
+
+[source,markdown]
+----
+---
+-----BEGIN C2PA MANIFEST-----
+https://fabrikam.com/manifests/a1b2c3.c2pa
+-----END C2PA MANIFEST-----
+title: My Document
+---
+----
+
+====== Front Matter (Embedded via Data URI)
+
+[source,markdown]
+----
+---
+-----BEGIN C2PA MANIFEST-----
+data:application/c2pa;base64,oWV...truncated...
+-----END C2PA MANIFEST-----
+title: My Document
+---
+----
+
+[[structured_text_hard_binding]]
+==== Hard Binding
+
+A claim generator embedding a manifest block in a structured text file shall include a xref:_data_hash[`c2pa.hash.data`] assertion with a single exclusion range covering the entire manifest block. Files shall be read in binary mode to preserve the exact byte representation of line terminators.
+
+For the *single-line form*, the manifest block is the single comment line containing the delimiters. For the *multi-line form*, the manifest block spans from the `-----BEGIN C2PA MANIFEST-----` line through the `-----END C2PA MANIFEST-----` line, inclusive.
+
+If the manifest block is at the *beginning* of the file:
+
+* `start`: 0
+* `length`: byte length of the manifest block including its trailing line terminator (LF or CRLF)
+
+If the manifest block is at the *end* of the file:
+
+* `start`: byte offset of the newline character preceding the manifest block
+* `length`: number of bytes from that offset to end of file
+
+If the file contains only the manifest block:
+
+* `start`: 0
+* `length`: byte length of the entire file
+
+NOTE: When the manifest block appears inside a front matter section, the front matter delimiters (e.g., `---`) are **not** part of the exclusion range. Only the lines from `-----BEGIN C2PA MANIFEST-----` through `-----END C2PA MANIFEST-----` are excluded.
+
+IMPORTANT: Line terminators shall be either LF (0x0A) or CRLF (0x0D 0x0A). Files using bare CR (0x0D) line endings -- a convention originating from Classic Mac OS (pre-2001) and extinct in modern practice -- are not supported by this method because bare CR creates ambiguity in line boundary detection. Such files shall be converted to LF or CRLF before embedding. A claim generator shall not alter the line ending convention of the file content outside the manifest block.
+
+==== Validation Behaviour
+
+A validator encountering a structured text file shall perform the following steps:
+
+. Read the file in binary mode. 
+. Check the starting bytes for the `-----BEGIN C2PA MANIFEST-----` delimiter. If not found, check the ending bytes for the `-----END C2PA MANIFEST-----` delimiter.
+. If the manifest block was not found, start scanning the entire file (from byte 0), looking for the `-----BEGIN C2PA MANIFEST-----` and `-----END C2PA MANIFEST-----` delimiters.
++
+. If the delimiters are not found, or only one of the delimiters is found, the file does not contain a valid structured text manifest block. The validator shall report a `manifest.structuredText.noManifest` failure and stop validation.
+. If the manifest block is found:
+.. Extract the `<manifest-reference>` — the content between the `-----BEGIN C2PA MANIFEST-----` and `-----END C2PA MANIFEST-----` delimiters (on the same line for single-line form, or on the line between them for multi-line form).
+.. If the `<manifest-reference>` is empty or contains only whitespace, report a `manifest.structuredText.emptyReference` failure and stop validation.
+.. If the `<manifest-reference>` is a valid `data:` URI, decode it back into its standard binary structure.
+.. If the `<manifest-reference>` is a standard URI, follow the procedure defined in <<manifests-by-reference>> to retrieve it (if desired). 
+.. Using the retrieved C2PA Manifest Store, follow the procedure at <<validating_the_claim>>.

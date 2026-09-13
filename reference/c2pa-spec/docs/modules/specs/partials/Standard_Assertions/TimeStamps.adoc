@@ -1,0 +1,30 @@
+==== Description
+
+In some provenance workflows, a standard or update manifest is created offline, where it is not possible to obtain a trusted time-stamp (as per {3161}) from a TSA at the time of signing. However, in such cases those signing certificates will expire after a certain period of time, thus leading to an invalid C2PA Manifest.
+
+To prevent that expiration, a trusted time-stamp can be added at a later point in time (provided the certificate has not yet expired) providing for a "proof of existence" for that C2PA Manifest and (in the case of the active manifest) its associated asset. This time-stamp assertion is used to provide a trusted time-stamp for such C2PA Manifests.
+
+==== Schema and Example
+
+The schema for this type is defined by the `time-stamp-map` rule in the following {cddl}:
+
+[source,cddl]
+----
+include::../schemas/cddl/time-stamp.cddl[]
+----
+
+An example in CBOR diagnostic notation ({8949}, clause 8) is shown below:
+
+[source]
+----
+include::../examples/cbordiag/time-stamp.cbordiag[]
+----
+
+==== Requirements
+
+A time-stamp assertion shall have a label of `c2pa.time-stamp`, and there shall be at most one time-stamp assertion per C2PA Manifest.
+
+The time-stamp assertion consists of a CBOR map (defined as a `time-stamp-map`) which shall contain at least one key-value pair (defined as a `time-stamp-entry`). The key shall be the label of the C2PA Manifest that is being time-stamped, and the value shall be a CBOR byte string whose contents are described in the following paragraph.
+
+
+The value for each `time-stamp-entry` shall be the same binary data found in the `timeStampToken` field of the `TimeStampResp` structure received in reply from an RFC 3161-compliant Time Stamping Authority (TSA) ({3161}) using detached content mode. The `TimeStampResp` itself shall be obtained using the same process as described in <<_obtaining_the_time_stamp>>, with the exception that the contents of the `payload` field of `Sig_structure` shall be the value of the `signature` field of the `COSE_Sign1_Tagged` structure contained in the C2PA Claim Signature box of the C2PA Manifest that is being time-stamped.

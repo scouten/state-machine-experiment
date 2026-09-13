@@ -1,0 +1,60 @@
+=== Embedding manifests into ZIP-based formats
+
+==== General
+
+Because of its longevity and being an https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT[openly published specification], many command file formats are really ZIP archives, but with a specific organization of the content files. This includes formats such as https://www.w3.org/TR/epub/[EPUB], https://www.iso.org/standard/61796.html[Office Open XML], https://www.iso.org/standard/66376.html[Open Document] and https://www.ecma-international.org/publications-and-standards/standards/ecma-376/[OpenXPS].
+
+==== Hashing
+
+===== Hashing the Files
+
+A ZIP-based file format shall be hashed using a xref:_collection_data_hash[collection data hash], where each file contained in the ZIP (except the C2PA Manifest itself) shall be included. The hash of each file in the collection is computed over the file's `local file header` followed by the compressed and/or encrypted content, and any data description if present. The hash algorithm used shall be specified in the `alg` field of the xref:_collection_data_hash[collection data hash] structure.
+
+NOTE: The reason that the hash is over the compressed/encrypted content is to enable validation without the need to decompress or have the decryption key. This is important for formats that can be encrypted, such as EPUB.
+
+
+===== Hashing the ZIP Central Directory
+
+As described in 4.3.12 of the ZIP AppNote, the Central Directory is an array of central directory headers - one per file in the ZIP archive.  It is stored at the end of the ZIP archive and used to locate the files in the ZIP archive and necessary information/metadata about them. It is immediately followed by the End of Central Directory record (ZIP AppNote, 4.3.16), which contains information about the ZIP archive itself.
+
+In order to prevent tampering with the ZIP Central Directory, such as adding new files or modifying information about the existing files, each "central directory header" in the ZIP Central Directory as well as the the "end of central directory record" shall be hashed. The hash is computed using the hash algorithm specified in the `alg` field of the xref:_collection_data_hash[collection data hash] structure. The hash shall be computed by sequentially processing each "central directory header" in its entirety, except for the one that contains the C2PA Manifest Store file, where its `crc-32` field shall be skipped. Following the processing of the "central directory headers", the hash shall also include the entire "end of central directory record". 
+
+NOTE: We cannot compute and set a valid CRC32 for the manifest without hashing it, but that can't happen until it is complete, which can't happen until the collection data hash has been computed.
+
+The resultant hash value shall be stored in the `zip_central_directory_hash` field of the xref:_collection_data_hash[collection data hash] structure.
+
+NOTE: Using a specially named file in the list of files was considered, but was not accepted because of the two-pass scenario described below.
+
+[source,cddl]
+----
+include::../schemas/cddl/collection-data-hash.cddl[]
+----
+
+
+Because the ZIP file needs to be completed prior to the completion of the C2PA Manifest, a two pass approach (as described for JPEG, BMFF and PDF) shall be used. The first pass creates a ZIP file with a zero-filled `content_credential.c2pa` file, and computes the hash of the ZIP Central Directory. The second pass completes the C2PA Manifest including filling the value of the `zip_central_directory_hash` field.   
+
+One possible implementation of this two-pass approach would be:
+
+* create a ZIP with an zero-filled C2PA Manifest Store file (large enough to be replaced);
+* compute the hash of the ZIP Central Directory;
+* add the hash to the `zip_central_directory_hash` field of the `collection-data-hash-map`;
+* complete the manifest ;
+* overwrite the zero-filled `content_credential.c2pa` file with the completed manifest data.
+
+When creating the `content_credential.c2pa` file in the ZIP archive, it shall be stored (compression method 0) and not encrypted.  Its `general purpose bit flag` shall be set to 0. The date and time fields may be set to the time of creation of the ZIP archive, or set to 0. It may have a file comment.
+
+==== Placement of the Manifest Store
+
+The C2PA Manifest Store shall be stored in the `META-INF` directory of the ZIP archive with a filename of `content_credential.c2pa` and a media type as recommended for xref:_external_manifests[external manifests]. The file shall be stored (compression method 0) and not encrypted.
+
+==== Digitally signing ZIP-based formats
+
+===== EPUB
+
+EPUB's digital signatures are based on https://www.w3.org/TR/xmldsig-core1/[W3C XML DigSig Core], where each file that is signed is listed in the `<Manifest>` element of the `<Signature>` element. In addition, no support exists for signing the ZIP Central Directory.  As such, EPUB native signing shall take place before the introduction of the C2PA Manifest.  
+
+===== Office Open XML
+
+OOXML's digital signatures are based on https://www.w3.org/TR/xmldsig-core1/[W3C XML DigSig Core], where each file that is signed is listed as a `<Reference>` element in the `<Manifest>` element of the `<Signature>` element. In addition, no support exists for signing the ZIP Central Directory.  As such, OOXML native signing shall take place before the introduction of the C2PA Manifest.  
+
+NOTE: OpenXPS is based on the same Open Packaging Convention (OPC) standard as OOXML, and as such, the same approach applies.

@@ -1,0 +1,51 @@
+==== General
+
+This assertion is used to refer to an alternative digital content that is different from the primary asset, and to provide functionality depending on the referenced digital content. It shall have a label of `c2pa.alternative-content-representation`.
+
+This assertion has the parameters depending on the file format specification. Individual specifications are specified in the following sections.
+
+==== Original Preservation Image
+
+===== Description
+This type is used to reference "Original Preservation Image(OPI)" in https://www.cipa.jp/j/std/std-sec.html[CIPA Exif]. The OPI is introduced for recording authenticity of the image at the time of capture in which subsequent post image processing is not applied, along with metadata that describes image properties. This enables users to recognize the difference between the image at the time of capture and the main image developed through the image processing by camera systems when the main image has noticeable differences from the real scene. This assertion enables applications to reference the OPI through a Manifest as an element of provenance data.
+
+Considering that OPI is normally recorded at the time of capture as an individual image in MPF, this assertion provides both 
+
+- 1) the method to refer to OPI stored in the Asset (including validation) at capture time and 
+- 2) the method to move and record the OPI into the manifest 
+
+Moving OPI metadata typically occurs during editing, particularly under the following conditions
+
+- when the file format will be changed from Exif and / or
+- when the file is used as an ingredient.
+
+When referencing the OPI in MPF, the location shall be specified in the alternative content representation assertion by the index number of the item from the `parts` array described in the multi-asset hash assertion in the same C2PA Manifest. If the asset is subsequently edited and the OPI is preserved, a new alternative content representation assertion should be included in the new C2PA Manifest, referencing the OPI location in the new multi-asset hash assertion.
+
+NOTE: An OPI referenced using a multi-asset part index can only be validated when the alternative content representation assertion exists in the active manifest, or in the presence of update manifests, the standard manifest containing the current hard binding.
+
+When moving the OPI into the C2PA Manifest, the OPI shall be recorded using the embedded data assertion without any changes.
+
+If the OPI in the asset is removed, the action assertion with the pre-defined “c2pa.deleted” shall be used, and when the image in the manifest is removed, the record of remove operation shall be described following the redaction rules (see <<_redaction_of_assertions>>).
+
+A C2PA Manifest shall not contain more than one alternative content representation assertion with the label `exif.originalPreservationImage`.
+
+===== Schema and Example
+
+The schema for this assertion is defined by the `original-preservation-image-representation` rule in the following {cddl}:
+
+[source,cddl]
+----
+include::../schemas/cddl/alternative-content-representation.cddl[]
+----
+The schema for the `c2pa.alternative-content-representation` assertion is defined by the following abstract rule, which permits the inclusion of either an `original-preservation-image-representation` or a `generic-representation structure`.
+The `type` field within the the alternative content representation assertion shall be set to `exif.originalPreservationImage`.
+The `parameters` field shall be the `original-preservation-image-params` structure.
+The `original-preservation-image-params` structure shall use either the `multiAssetPartIndex` field to reference OPI data located within the asset in MPF, or the `embeddedOriginalPreservationImage` field to record the OPI inside the manifest, but shall not use both.
+
+An example in CBOR Diagnostic Format (`.cbordiag`) is shown below:
+
+[source]
+----
+include::../examples/cbordiag/alternative-content-representation.cbordiag[]
+----
+

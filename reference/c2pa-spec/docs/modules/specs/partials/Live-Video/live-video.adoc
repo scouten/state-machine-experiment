@@ -1,0 +1,252 @@
+:revdate: {docdate}
+:version-label!: 
+:sectnums:
+:sectnumlevels: 5 
+:chapter-label: Live Video
+:source-highlighter: rouge
+:stem: latexmath
+
+[[live-video]]
+== Live Video
+
+=== Introduction
+The C2PA Live Video specification is designed to support the unique requirements of live video workflows, streaming workflows and dynamic packaging, where content is created and distributed in real-time, or packaged in a just-in-time manner. This specification outlines how to manage assertions related to tracks (video, audio, subtitles, etc) in live sessions, ensuring the integrity and authenticity of the content as it is produced and shared.
+
+This version of the specification applies to content packaged using the https://www.iso.org/standard/83102.html[ISO BMFF]
+standard, while being agnostic of manifest and delivery protocols.  It also applies to https://www.iso.org/standard/85623.html[CMAF] content, which is a constrained subset of ISO BMFF optimized for adaptive streaming.
+
+NOTE: It does not support https://www.iso.org/standard/91403.html[MPEG Transport Streams].
+
+=== Architecture
+
+[[c2pa_manifest_box]]
+==== C2PA Manifest transport
+
+The live video architecture builds upon this specification's support for BMFF-based asset embedding, adding mechanisms to support real-time content validation. The two key parts of that are (1) any hashing of content shall be done using a standard `bmff-hash-map` (where the target of the hash is a segment) and (2) anytime that a C2PA Manifest Store is included in a live video stream, it shall be incorporated into a `uuid` box as described in <<uuid_box>> (as that is the standard location for a C2PA Manifest Store in BMFF content). 
+
+For live video or dynamically packaged content, the `uuid` box containing a C2PA Manifest Store may also be present in any segment. This box will be referred to as the "C2PA Manifest Box" in the context of live video.
+
+Dynamically packaged content is prepared "just-in-time" for streaming. That is, the content segments and manifest describing the content, are prepared once a request is received for the content and not before (which would be the case for statically packaged content). In this specification the terms "live video" and "dynamically packaged content" are used interchangeably.
+
+NOTE: Live streams are, by definition, dynamically packaged but not all dynamically packaged content is live.
+
+==== Segment-based validation
+
+Live video, or dynamically packaged, streams require the validation of each segment of the stream independently of other segments. As such, the hash of each segment's content needs to be provided as part of that segment. Two different methods for signing that information are described, enabling a given claim generator to choose the most appropriate one for its needs. Either method can be used, and validators are not required to support both.
+
+These methods are:
+
+- "<<using_c2pa_manifest_box>>" which uses a standard C2PA Manifest Box in each segment.
+- "<<verifiable_segment_info>>" which uses a `verifiable-segment-info`, carried in an `emsg` box, along with session keys.
+
+Other C2PA-defined live video binding schemes (for example, per-segment manifest box-based schemes that derive per-segment validation values by chaining across segments) may also be used, provided that they (a) compute segment hashes using a standard `bmff-hash-map` as defined by this specification and (b) embed or reference a C2PA Manifest Store using a `uuid` box as described in <<uuid_box>>.
+
+==== C2PA Manifest binding in an initialization segment
+
+For those use cases that require (or desire) the presence of an initialization segment, it shall contain a `uuid` box, whose `bmff-hash-map` includes the `moov` box to establish a cryptographic relationship between the initialization segment and the media segments. For the subset of live video streams that are in a broadcast 'push' streaming scenario (e.g., over-the-air broadcast television without a pull mechanism), the initialization segment may be repeated periodically, and the `uuid` box need not be included in each initialization segment, see <<exception-fmp4-manifest-init-seg, here>>.
+
+NOTE: The reason for this binding is to ensure that the C2PA Manifest corresponds to the specific media content, which prevents replay attacks and content substitution.
+
+[[using_c2pa_manifest_box]]
+=== Per-segment C2PA Manifest Box method
+
+==== Description
+
+A live video stream may use per-segment C2PA Manifest Boxes to provide per-segment validation. When using this approach, each media segment shall contain a C2PA Manifest Box carried in a `uuid` box as defined in <<uuid_box>>. The active C2PA Manifest for each segment shall contain a BMFF hash assertion (`c2pa.hash.bmff.v3`) that covers the bytes of that segment, a <<livevideo_segment>> and may also contain any other assertions relevant to that segment.
+
+Claim generators may derive additional per-segment validation values (e.g., anchor-point-based chaining values) from segment hashes and embed them in the Manifest.
+
+NOTE: This method does not require session keys, `verifiable-segment-info-map`, or `emsg` boxes, and can be used independently of the <<verifiable_segment_info>>.
+
+[[livevideo_segment]]
+==== Live Video Segment Assertion
+
+When using the per-segment C2PA Manifest Box method, a live video segment assertion shall be included in the C2PA Manifest of each segment. This assertion, which provides metadata about the segment and its relationship to the live video stream, shall have a label of `c2pa.livevideo.segment`.
+
+The live video segment assertion shall contain a `sequenceNumber` field that provides a unique identifier for the segment.  It shall also contain a `streamId` field that provides a unique identifier for the entire live video stream.
+
+NOTE: The value of `streamId` can be any string that uniquely identifies the live video stream, such as a UUID or a URL.
+
+While each segment is validated independently, it is important to maintain the continuity of the live video stream. To facilitate this, the live video segment assertion shall contain a `continuityMethod` field that indicates the method used to ensure continuity between segments, through the use of cryptographic links between adjacent segments. 
+
+This specification only defines a single value at this time - `c2pa.manifestId` - which indicates that the continuity is ensured by matching the `previousManifestId` field (to the previous segment's C2PA Manifest). Implementers may define additional continuity methods and shall use a label as described in <<assertion_labels>> to identify them.
+
+When using the `c2pa.manifestId` continuity method, the live video segment assertion shall contain a `previousManifestId` field that provides the manifest identifier of the previous segment's C2PA Manifest (described in the `livevideo-segment-map-manifestId` rule). Other continuity methods may add additional fields as needed, provided the fields are also named as described in <<assertion_labels>>.
+
+
+===== Schema and Example
+
+The schema for this type is defined by the `livevideo-segment-map` rule in the following {cddl}:
+
+[source,cddl]
+----
+include::../schemas/cddl/livevideo-segment.cddl[]
+----
+
+An example in CBOR diagnostic notation ({8949}, clause 8) is shown below:
+
+[source]
+----
+include::../examples/cbordiag/livevideo-segment.cbordiag[]
+----
+
+
+
+[[verifiable_segment_info]]
+=== Verifiable Segment Info method
+
+==== Description
+
+The Verifiable Segment Info Map (`verifiable-segment-info`) is a structure designed to provide concise per-segment information for a live video stream allowing for each segment to be validated independently. It enables the validation of each segment's integrity and authenticity during playback, ensuring that the content has not been tampered with. It is used in workflows which are using <<session_keys>> to sign the segment information. 
+
+A `verifiable-segment-info` is a `COSE_Sign1_Tagged` structure
+where the payload field is the CBOR serialized `segment-info-map`.
+The payload shall be present and shall not be detached.
+The signature is created by a private <<session_keys,session key>>.
+The protected header shall carry the identifier of the algorithm used for the signature (`alg` field)
+and optionally, a timestamp representing "claimed time of signing" for the segment (`iat` field, {8392}).
+The unprotected header shall carry the identifier of the session key (`kid` field).
+
+A `segment-info-map` shall contain the following fields:
+
+`sequenceNumber`:: A unique identifier for the segment that is used to ensure the content order.  This value shall either match the `mfhd.sequence_number` field defined in ISO/IEC 14496-12 or shall follow the segment-indexing rules defined in ISO/IEC 23009-9, Section 6.2 (conditions (a) and (f)).  When used in conjunction with the per-segment C2PA Manifest Box method, the `sequenceNumber` in the `verifiable-segment-info-map` shall match the `sequenceNumber` value in the <<livevideo_segment>>.
++
+NOTE: These both provide for the sequence number to increase by 1 for each subsequent segment, while not decreasing or repeating.
+
+`manifestId`:: A unique identifier for the manifest as described in <<manifest-identifier>>. This is either the identifier of the manifest included in the current segment (via `uuid` box),  or the identifier of the manifest referenced by `manifestUrl`, or the identifier of the manifest included in a previous segment (including an init segment) that is still the active manifest.
+
+`bmffHash`:: A C2PA `bmff-hash-map` that shall contain the hash of the segment (as described in <<bmff-hash-computation>>), excluding all the C2PA `emsg` boxes (i.e., all `emsg` boxes with the `scheme_id_uri` <<c2pa_emsg_box,described above>>). The `merkle` field shall be absent.
++
+In order to exclude the C2PA `emsg` boxes, `bmffHash` shall at least contain one `exclusion-map` with:
+
+- `xpath` set to `"/emsg"`.
+- `data` set with `offset` field equal to 0 and the `value` field set to `urn:c2pa:verifiable-segment-info`.
+
+A `segment-info-map` may also contain the following optional field:
+
+`manifestUri` (optional):: A `hashed-ext-uri` that contains a URL from which a C2PA Manifest can be retrieved.
+
+
+==== Use in an `emsg` box
+When using the `verifiable-segment-info` in a live video workflow, a `verifiable-segment-info` shall be present in the `emsg` box of each segment of a live video stream to verify the integrity of the content during playback.
+
+NOTE: This requirement applies only to workflows that chose the `verifiable-segment-info` method and does not apply to workflows that rely solely on C2PA Manifest Boxes embedded in each segment.
+
+[[c2pa_emsg_box]]
+The C2PA `emsg` box fields shall have:
+
+- `version` set to `0`
+- `scheme_id_uri` set to `urn:c2pa:verifiable-segment-info`
+- `value` set to `"fseg"`
+- `presentation_time_delta` set to 0
+- `timescale` and `event_duration` set to cover the whole segment
+- `id` set to a session-unique value
+- `message_data` set to the encoded `verifiable-segment-info`
+
+[[_verifiable_segment_info_cddl]]
+[figure]
+.CDDL for `verifiable-segment-info`
+====
+[source,cddl]
+------
+include::../schemas/cddl/verifiable-segment-info.cddl[]
+------
+====
+
+==== C2PA Manifest Updates
+When different assertions are required for a new segment (for example, to indicate different provenance or replace expiring session keys), a new C2PA Manifest Store shall be provided, either embedded in the segment via a C2PA Manifest Box or linked externally. 
+
+NOTE: This allows for dynamic updates to the C2PA Manifest information while maintaining the integrity and authenticity of the content.
+
+[[session_keys]]
+==== Session Keys
+
+===== Description
+Session keys are asymmetric key pairs. Any of the cryptographic algorithms allowed for <<certificate-requirements,claim generator X.509 certificates>> may be used.
+
+When using session-specific keys, they shall be generated at the start of a live video session, but may also be generated and delivered via updated manifests in later segments (either initialization or other segments).  Each session key is used for a limited period, which enables key rotation. Session-specific keys should be updated when the provenance changes.
+
+The public halves of the session keys are delivered inside a C2PA Manifest. The initial set of keys shall be part of the C2PA Manifest included in the initialization segment.
+Session keys may also be retrieved from additional initialization segments, from the active C2PA Manifest included in a <<c2pa_manifest_box,C2PA Manifest Box>>, or from the `manifestUri` included in a `verifiable-segment-info`.
+If a receiver finds a `verifiable-segment-info` signed with a session key not yet known to the receiver, the receiver should extract updated session keys from the manifest carried in the <<c2pa_manifest_box,C2PA Manifest Box>>, if present.
+If no <<c2pa_manifest_box,C2PA Manifest Box>> is present in the segment, then the receiver should attempt to retrieve a C2PA Manifest Store from the URL specified in the `manifestUri` field of the `verifiable-segment-info`, if present (see <<_external_manifests>>).
+If no C2PA Manifest is present in the current segment, the receiver shall look in the C2PA Manifest that accompanied the initialization segment.
+After retrieving the C2PA Manifest, the receiver shall ensure that its manifest identifier matches the one provided in the `manifestId` field of the `verifiable-segment-info`.
+
+[IMPORTANT]
+==== 
+When using an externally hosted C2PA Manifest that is provided via a `manifestUri` in a `verifiable-segment-info`, that C2PA Manifest needs to exist at that URI for the entire period of time that the content is provided.
+====
+
+===== Session Keys Assertion
+
+A session keys assertion is used to carry one or more public session keys inside a C2PA Manifest. The session keys assertion is described in <<session_keys_assertion,Session Keys Assertion>>.
+
+=== Live Video Architecture Diagram
+<<live-video-diagram>> shows the general scheme of all the various data structures that can be used in a live video workflow and how each is connected to the others.
+
+[[live-video-diagram]]
+.Live Video Architecture
+[plantuml,target=LVA,format=svg,width=612,align="center"]
+....
+include::../Diagrams/LiveVideo.puml[]
+....
+
+
+=== Live Video Generation Process
+
+==== Per-segment C2PA Manifest Box method
+
+When using the per-segment C2PA Manifest Box method, the C2PA Manifest of each segment is constructed in the same way that is described in <<_embedding_manifests_into_bmff_based_assets>>, but with the `bmff-hash-map` only hashing the bytes of that segment. In addition, a <<livevideo_segment>> shall be included in the manifest to provide metadata about the segment.
+
+==== Verifiable Segment Info method
+
+When using the Verifiable Segment Info method, there are two main steps involved in generating the live video stream.
+
+Session Key Generation:: At the start of a live video session, one or more session keys are generated, each with its own `createdAt`, `validityPeriod`, and `minSequenceNumber`. These session keys are included in the C2PA Manifest in the C2PA Manifest Box that shall be present in the initialization segment(s). The `minSequenceNumber` for each key indicates the earliest segment that should be signed with that key, ensuring a clear transition between keys and supporting overlap for seamless key rotation.
++
+NOTE: For limited-duration live video streams, a single session key could be sufficient. For longer live video streams (e.g., 24/7 streams), session keys are rotated periodically by delivering new session keys in subsequent initialization segments before the old session keys expire. 
+
+Signing the Box Hash:: Each segment of a live video or dynamically packaged stream shall have an `emsg` box containing the `verifiable-segment-info`,
+which is a `segment-info-map` signed by a session key.
+The `segment-info-map` carries a `sequenceNumber` to address out-of-order attacks, and carries a `bmff-hash-map` that hashes the content in the segment.
+When manifests change during the live video stream, the updated manifest may be included in a C2PA Manifest Box in the segment or referenced via the `manifestUri` of the `segment-info-map`.
+
+=== Live Video Validation Process
+
+==== Initial/Common Validation Steps
+If the segment being validated is an initialization segment, the validator shall look for the presence of an `mdat` box. If an `mdat` box is found, the validation shall fail with a failure code of `livevideo.init.invalid`. 
+
+If a segment contains neither a C2PA Manifest Box nor an `emsg` box that meets the requirements <<c2pa_emsg_box,defined above>>, the validation of that segment shall fail with a failure code of `livevideo.segment.invalid`.
+
+If a C2PA Manifest Box is found in a given segment, it shall be validated according to the general C2PA validation rules described in <<validation-clause>>. If the C2PA Manifest fails validation, the validation of that segment shall fail with a failure code of `livevideo.manifest.invalid`.
+
+==== Per-segment C2PA Manifest Box Validation
+If the C2PA Manifest present in the C2PA Manifest Box contains a live video segment assertion, the validator shall perform the following tests:
+
+- Ensure that the `sequenceNumber` field in the live video segment assertion is greater than the previous segment's `sequenceNumber` (if any). If it is not, the validation of that segment shall fail with a failure code of `livevideo.assertion.invalid`. 
+- Ensure that the `streamId` field in the live video segment assertion matches the `streamId` from the previous segment (if any). If they do not match, the validation of that segment shall fail with a failure code of `livevideo.assertion.invalid`.
+- Ensure that the `continuityMethod` field is present in the live video segment assertion.  If it is not, the validation of that segment shall fail with a failure code of `livevideo.continuityMethod.invalid`.
+- If the `continuityMethod` field in the live video segment assertion has a value of "c2pa.manifestId", then the live video segment assertion shall contain a `previousManifestId` field.  If it does not, the validation of that segment shall fail with a failure code of `livevideo.continuityMethod.invalid`. If it does, then ensure that its value matches the `manifestId` of the previous segment's C2PA Manifest. If they do not match, the validation of that segment shall fail with a failure code of `livevideo.segment.invalid`.
+- If the `continuityMethod` field in the live video segment assertion has a value other than "c2pa.manifestId", and the validator does not recognize or support that continuity method, the validation of that segment shall fail with a failure code of `livevideo.continuityMethod.invalid`.
+
+==== Verifiable Segment Info Validation
+If the C2PA Manifest present in the C2PA Manifest Box contains a session keys assertion, the public session keys shall be extracted and stored for use in validating subsequent segments. If any public session key does not conform to the requirements described in <<session_keys_assertion,Session Keys Assertion>>, the validation of that segment shall fail with a failure code of `livevideo.sessionkey.invalid`.  Similarly, if signature validation (`signerBinding`) of any public session key structure fails, that session key is invalid and shall not be used to validate any media segment, and validation shall fail with a failure code of `livevideo.sessionkey.invalid`.
+
+If a segment contains an `emsg` box that meets the requirements <<c2pa_emsg_box,defined above>>, and the segment is not an initialization segment, and the validator does not have any valid session keys, the validation of that segment shall fail with a failure code of `livevideo.segment.invalid`.
+
+If there is a valid `emsg` box containing a valid `verifiable-segment-info`, the validator shall extract the value of `kid` from its unprotected header and use that to identify the correct public session key.
+If such key is not available, and if the `manifestUri` field is present, the validator retrieves and verifies the applicable manifest, extracting the public session key(s) as explained above.
+
+NOTE: There may not be valid session keys for a variety of reasons including (but not limited to) if the initialization segment containing the session keys assertion was not received, if a C2PA Manifest (containing the session keys) failed validation, or if the keys have expired. 
+
+Validation fails if the key cannot be found or if the signature in `verifiable-segment-info` cannot be verified with it, and shall fail with a failure code of `livevideo.segment.invalid`.
+
+Subsequently, when parsing the `segment-info-map`, validation of that segment shall fail with a failure code of `livevideo.segment.invalid` if any of the following errors occurs:
+
+- the segment's `sequenceNumber` is lower than the `minSequenceNumber` (of the matching session key);
+- the segment's presentation time is outside the key's validity period;
+- the segment's hash does not match the `bmffHash` field (see <<_bmff_based_hash>>).
+
+To address the risk of the Claim Generator's certificate getting revoked during a very long lived session, the validator should check that the certificate used to sign the C2PA Manifest from which the current session key was retrieved is still valid.  If it is not, the validation of that segment shall fail with a failure code of `livevideo.sessionkey.invalid`.
+

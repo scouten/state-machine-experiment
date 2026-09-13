@@ -1,0 +1,40 @@
+=== Embedding manifests into PDFs
+
+==== General
+
+All C2PA Manifest Stores shall be embedded using embedded file streams (ISO 32000, 7.11.4). The embedded file specification dictionary shall have a `Subtype` key whose value is `application/c2pa` and an `AFRelationship` key (ISO 32000, 7.11.3) whose value is `C2PA_Manifest`. If a C2PA Manifest Store is embedded into an encrypted PDF, the embedded file stream shall use an `Identity` crypt filter.
+
+
+==== Document-level Manifests
+
+===== Adding the Manifest to a PDF
+When adding a C2PA Manifest to the entire PDF, the document catalog dictionary shall contain an `AF` entry whose value is an indirect reference to the embedded file specification containing the active manifest. That embedded file specification shall also be referenced, via indirect object, either from the `EmbeddedFiles` NameTree (`/Catalog/Names/EmbeddedFiles`) or from a `FileAttachment` annotation. The annotation approach shall be used when adding a C2PA Manifest Store to a PDF that already has an existing PDF certifying signature in order to avoid invalidating its `DocMDP` restrictions. 
+
+NOTE: Values of _1_ or _2_ of the `P` field in the DocMDP dictionary do not allow this type of modification. Only a value of _3_ does.
+
+In most other formats, there only exists a single C2PA Manifest Store that contains all of the C2PA Manifests for the asset.  However, because of PDF's "incremental update" feature, it is necessary to instead support multiple manifests in a single PDF.  In this scenario, the C2PA Manifest Store found in the base PDF shall be considered the initial manifest and the one in the most recent update, the active manifest.  A C2PA Manifest Consumer shall process all C2PA Manifests in all C2PA Manifest Stores as if they were contained in a single C2PA Manifest Store.
+
+NOTE: Because a JUMBF URI is always a full URI, meaning that it starts at a given C2PA Manifest, and all C2PA Manifests are considered to be contained in a single C2PA Manifest Store, using such a URI to refer to a `parentOf` ingredient across C2PA Manifest Stores in a PDF is acceptable.   
+
+===== Compatibility with PDF Signatures
+It is necessary to know, when adding a new C2PA Manifest Store, if a PDF signature (certifying or approval) will also be applied. Since the PDF signature will change the data of the PDF after the C2PA Manifest is signed, the size and location of the PDF signature dictionary's `Contents` key shall be determined before C2PA signing. That range of bytes shall be added to the list of exclusions in the `c2pa.hash.data` assertion, so that the C2PA signature is not invalidated by the addition of the PDF signature.  The PDF signature shall be over the entire PDF, including the associated C2PA Manifest Store.
+
+NOTE: Adding the PDF signature in addition to the C2PA's claim signature improves compatibility with the existing PDF ecosystem.
+
+
+==== Object-level Manifests
+
+In addition to being able to provide provenance for the PDF itself, via document-level manifests, individual objects within a document may also have an associated C2PA Manifest Store. This is done by adding an `AF` entry to the object's stream or dictionary.  The value of the `AF` entry shall be an indirect reference to the embedded file specification containing the C2PA Manifest Store, embedded xref:_general[as described above].
+
+The most common uses for this feature are to provide provenance for embedded images - either as Image or Form XObjects and Fonts. It can also be used to provide provenance for specific pieces of content by adding the `AF` entry to the object (via property list) or a structure element, as described in the Associated Files clause of ISO 32000-2 (14.13.1).
+
+It is recommended that any object-level manifest that is added be referenced from the active manifest as a `componentOf` ingredient.  This will allow the C2PA Manifest Consumer to easily traverse the entire chain of provenance for the asset.
+
+In general, any PDF stream or dictionary may have a C2PA Manifest attached to it as long as the stream or dictionary represents an actual information resource. When there is ambiguity about exactly which stream or dictionary may bear the `AF` entry, the manifest shall be attached as closely as possible to the object that actually stores the data resource described.
+
+NOTE: The C2PA Manifest describing a raster image would be attached to the Image XObject stream describing it, and the manifest for embedded font files would be attached to font file streams rather than to font dictionaries. 
+
+==== Example
+
+.Example of a PDF with multiple ingredient manifests
+image::PDF_Manifests.drawio.svg["a PDF with multiple ingredient manifests",width=50%,align=center]

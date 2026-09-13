@@ -1,0 +1,233 @@
+:revdate: {docdate}
+:version-label!: 
+:sectnums:
+:sectnumlevels: 5 
+:chapter-label:
+:source-highlighter: rouge
+
+## Manifests
+
+### Use of JUMBF
+
+#### Rationale
+In order to support many of the requirements of C2PA, C2PA Manifests needed to be stored (serialized) into a structured binary data store that enables some specific functionality including:
+
+- Ability to store multiple manifests (e.g., parents and ingredients) in a single container.
+- Ability to refer to individual elements (both within and across manifests) via URIs.
+- Ability to clearly identify the parts of an element to be hashed.
+- Ability to store pre-defined data types used by C2PA (e.g., JSON and CBOR).
+- Ability to store arbitrary data formats (e.g., XML, JPEG, etc.).
+
+In addition to supporting all of the requirements above, our chosen container format - {jumbf-iso} (JUMBF) - is also natively supported by the JPEG family of formats and is compatible with the box-based model (i.e., https://www.iso.org/standard/68960.html[ISOBMFF, ISO 14496-12]) used by many common image and video file formats. Using JUMBF enables all the same benefits (and a few extras, such as xref:_uri_references[URI References]) while being able to work with classic image formats, such as JPEG/JFIF and PNG as well as 3D and document (e.g., PDF) formats. This serialized format shall be used also in formats that do not natively support JUMBF, or when C2PA Manifest Stores are stored separately from the asset, such as in a separate file or URI location.
+
+[NOTE]
+====
+Since most of the standard assertions, as well the claim signature, are serialized as CBOR, using CBOR for the entire C2PA Manifest was considered but not chosen because CBOR is not a container format. 
+
+For example, to store a "blob of JSON" inside of CBOR, and know that it is JSON (and not some other format) would necessitate designing a data structure for storing such things. Then the parent structure would need to be defined as to how to carry that structure. This same concept would also have to be done for each of the native features of JUMBF.
+
+While it would certainly be possible to re-implement all of the required functionality entirely in CBOR, it would be a lot of work and would not fully remove the need for a JUMBF/BMFF parser in all implementations.
+====
+
+#### Processing Rules
+A C2PA Manifest Consumer shall never process an assertion, assertion store, claim, claim signature or C2PA Manifest that is not contained inside of a C2PA Manifest Store. Additionally, when a C2PA Manifest Consumer encounters a JUMBF box or superbox whose JUMBF type UUID it does not recognize, it shall skip over (and ignore) its contents. 
+
+NOTE: This means that the C2PA Manifest Consumer can process private boxes that it knows about, but ignore ones of which it is unaware.
+
+If the _Requestable_ and _Label Present_ toggles are both set in the JUMBF Description box of any JUMBF box or superbox, that box or superbox shall be maintained in any updated C2PA Manifest Store.
+
+NOTE: Boxes with those toggles set are intended to be referenced via JUMBF URIs, and their removal could cause downstream workflows to fail.
+
+#### Extensions
+
+##### General
+
+This section describes extensions to the JUMBF specification ({jumbf-iso}) required by this specification. 
+
+##### Compressed boxes
+
+In order to support compressing manifests, a new `brob` content box is supported by C2PA. Based on a similar box in JPEG-XL ({jpegxl}), the `brob` box is a content box whose contents are the https://datatracker.ietf.org/doc/html/rfc7932[Brotli-compressed] bytes of either a xref:_standard_manifests[standard manifest] or xref:_update_manifests[update manifest], as described in the xref:_compressed_manifests[compressed manifests] clause. The `brob` box shall have box ID of `0x62726F62` (`brob`). 
+
+[[compressed_manifest_image]]
+.Example of a compressed manifest
+image::brob_box.drawio.png[Example of compressed manifest,width=360,align="center"]
+
+Hashing a compressed box is done in the same way as any other box, as described in <<_hashing_jumbf_boxes>>.
+
+NOTE: This implies that given a `hashed_uri` reference from an ingredient assertion to a C2PA Manifest via the `activeManifest` field, the hash is computed using the same process as any other JUMBF superbox: over the JUMBF Description Box and the `brob` box with its compressed payload, but excluding the superbox's header. The contents of the `brob` box are not decompressed first to compute the hash.
+
+#### C2PA Box details
+
+##### JUMBF Description boxes
+
+[[jumbf_labels]]
+###### Labels
+
+As described in the JUMBF specification ({jumbf-iso-a3}), a label shall be stored as ISO/IEC 10646 characters in the UTF-8 encoding. Characters in the ranges U+0000 to U+001F inclusive and U+007F to U+009F inclusive, as well as the specific characters '/', ';', '?', and '#', are not permitted in the label. The label shall be null-terminated.
+
+As labels used as part of JUMBF URIs, the characters U+FEFF, U+FFFF, and U+D800-U+DFFF shall also not be used. 
+
+###### Toggles
+
+All JUMBF Description boxes ({jumbf-iso-a3}) used in a C2PA Manifest require a label, the _Label Present_ toggle (`xxxxxx1x`) shall be set. In addition, because JUMBF URIs are used to refer to boxes throughout the system (e.g., listing assertions, references to ingredients, etc.), the _Requestable_ toggle (`xxxxxx11`) shall be set. 
+
+When including a salt in a _PRIVATE_ box as described in <<_hashing_jumbf_boxes>>, the _Private_ toggle (`xxx1xxxx`) shall also be set.
+
+##### Manifest Store
+C2PA data is serialized into a JUMBF-compatible box structure. The outermost box is referred to as the C2PA Manifest Store, also known as the Content Credentials. <<example_manifest_store>> is an example C2PA Manifest Store with a single C2PA Manifest:
+
+[[example_manifest_store]]
+.C2PA Manifest Store
+image::ManifestStore.{alt-image-ext}[C2PA Manifest Store,width=240,height=500,align="center"]
+
+
+The C2PA Manifest Store is a JUMBF superbox composed of a series of other JUMBF boxes and superboxes, each identified by their own JUMBF type UUID and label in their JUMBF Description box. The C2PA Manifest Store shall have a label of `c2pa`, a JUMBF type UUID of `63327061-0011-0010-8000-00AA00389B71` (`c2pa`) and shall contain one or more C2PA manifest superboxes, also known as C2PA Manifests, the last of which is the xref:_active_manifest[active manifest]. The C2PA Manifest Store may also contain JUMBF boxes and superboxes whose JUMBF type UUIDs are not defined in this specification.
+
+NOTE: Allowing other boxes and superboxes enables custom extensions to C2PA as well as enabling the addition of new boxes in future versions of this specification without breaking compatibility. 
+
+Each C2PA Manifest shall contain the data created at the time a claim is issued including the C2PA Assertion Store, a C2PA Claim, and a C2PA Claim Signature. A C2PA Manifest may also contain JUMBF boxes and superboxes whose JUMBF type UUIDs are not defined in this specification.
+
+The JUMBF type UUID for each C2PA Manifest shall be either `63326D61-0011-0010-8000-00AA00389B71` (`c2ma`), `6332636D-0011-0010-8000-00AA00389B71` (`c2cm`) or `6332756D-0011-0010-8000-00AA00389B71` (`c2um`) depending on the xref:_types_of_manifests[type of manifest]. The C2PA Manifest box shall be labelled with a `urn:c2pa` value computed as described in xref:_unique_identifiers[Unique Identifiers].
+
+##### Assertion Store
+
+The C2PA xref:_assertion_store[Assertion Store] is a superbox that shall have a label of `c2pa.assertions` and a JUMBF type UUID of `63326173-0011-0010-8000-00AA00389B71` (`c2as`). It shall contain one or more JUMBF superboxes (called C2PA Assertion boxes) whose JUMBF type defines the type of the sub-boxes that contain the assertion data ({jumbf-iso-b}). These superboxes shall each have a label as defined in xref:_c2pa_standard_assertions[Standard Assertions] and shall contain a JUMBF Description Box, one or more JUMBF Content Boxes and possibly a Padding Box ({jumbf-iso-a4}).
+
+The JUMBF Content Type ({jumbf-iso-b}) box(es) contained in each assertion superbox should be CBOR Content Type (`cbor`), JSON Content Type (`json`), Embedded File Content Type (`bfdb` & `bidb`) or UUID Content Type (`uuid`) though any Content Type defined in JUMBF ({jumbf-iso}) and its amendments is permitted. In addition, a JUMBF Protection Box as described in {19566-4} may also be used.
+
+[NOTE]
+====
+Custom assertions containing other formats/serializations of data, such as encrypted data, are supported through the use of a UUID Content Box containing the custom UUID followed by the data ({jumbf-iso}, B.5).
+====
+
+##### Claim and Claim Signature
+
+The C2PA xref:_claims[Claim] box shall have a label of `c2pa.claim.v2`, a JUMBF type UUID of `6332636C-0011-0010-8000-00AA00389B71` (`c2cl`) and shall consist of a single CBOR Content Type box (`cbor`). 
+
+The C2PA xref:_digital_signatures[Claim Signature] box shall have a label of `c2pa.signature`, a JUMBF type UUID of `63326373-0011-0010-8000-00AA00389B71` (`c2cs`) and shall consist of a single CBOR Content Type box (`cbor`).
+
+##### Ingredient Storage
+
+When a C2PA Manifest includes xref:ingredient_assertion[ingredient assertions], and an ingredient contains a C2PA Manifest Store, the C2PA Manifests it contains are normally included in the C2PA Manifest Store of the new asset to ensure that the provenance data is kept intact, as described in <<_adding_ingredients>>.
+
+.C2PA Manifest Store With an Ingredient
+// AsciiDoctor Diagram doesn't handle includes
+// [plantuml,target=StoreWithIngredient,format=svg,width=240,height=500,align="center"]
+// ....
+// include::../Diagrams/ManifestStore_Ingredient.puml[C2PA Manifest Store with Ingredient]
+// ....
+image::ManifestStore_Ingredient.{alt-image-ext}[C2PA Manifest Store with Ingredient,width=240,height=500,align="center"]
+
+##### Data Storage
+
+[IMPORTANT]
+====
+This section is retained for historical purposes. The concept of a data box has been deprecated in favor of a standard assertion that uses a standard JUMBF Embedded File content type box to contain the data. For more information about the embedded data assertion, see <<_embedded_data>>.
+====
+
+A C2PA Data Box Store is a JUMBF superbox that shall contain only one or more CBOR Content Type boxes (`cbor`). It shall not contain any other type of JUMBF box or superbox. It shall have a label of `c2pa.databoxes` and a JUMBF type UUID of `63326462-0011-0010-8000-00AA00389B71` (`c2db`). 
+
+The CBOR Content Type boxes shall have a label of `c2pa.data` (for xref:_data_boxes[embedded data]).
+
+.C2PA Manifest Store with Data Boxes
+image::ManifestStore_DataBoxes.{alt-image-ext}[C2PA Manifest Store with Data boxes,width=244,height=500,align="center"]
+
+
+### Types of Manifests
+
+#### Commonalities
+
+All C2PA Manifests shall contain an xref:_assertion_store[assertion store] with at least one xref:_assertions[assertion], a xref:_claims[claim] and a xref:_signing_a_claim[claim signature]. 
+
+#### Standard Manifests
+
+A standard C2PA Manifest (JUMBF type UUID: `63326D61-0011-0010-8000-00AA00389B71` (`c2ma`)) shall contain exactly one xref:_binding_to_content[hard binding to content] assertion - either a `c2pa.hash.data`, `c2pa.hash.boxes`, `c2pa.hash.collection.data`, `c2pa.hash.bmff.v2` (deprecated), or `c2pa.hash.bmff.v3` based on the type of asset and version for which the manifest is destined. Because of this requirement, they are the predominant type of manifest that will be present in C2PA provenance data. 
+
+Manifest Consumers shall also accept standard C2PA Manifests specified with JUMBF type UUID `63326D64-0011-0010-8000-00AA00389B71` (c2md), but claim generators shall not create manifests with this JUMBF type UUID.
+
+NOTE: A standard C2PA Manifest can be located either as the active manifest or as an ingredient manifest.
+
+#### Update Manifests
+
+There are, however, provenance workflows where additional assertions need to be added but no changes are made to the xref:_digital_content[digital content] or other data covered by xref:_binding_to_content[content bindings]. In these workflows, an Update Manifest (JUMBF type UUID: `6332756D-0011-0010-8000-00AA00389B71` (`c2um`)) should be used. 
+
+An Update Manifest shall not contain assertions of types `c2pa.hash.data`, `c2pa.hash.boxes`, `c2pa.hash.collection.data`, `c2pa.hash.bmff.v2` (deprecated), or `c2pa.hash.bmff.v3` because the content has not changed and therefore the bindings need not be updated. In the case of a file offset hash (`c2pa.hash.data`), the C2PA Manifest Store has to continue to start at the same file offset after updating - only its length may change.  In addition, it shall not contain a `c2pa.hash.multi-asset` assertion. 
+
+An Update Manifest may contain assertions of type `c2pa.actions` or `c2pa.actions.v2`, provided that the value of the `action` field of each action present in the `actions` array of these assertions shall only be one of the following values:
+
+* `c2pa.edited.metadata`
+* `c2pa.opened`
+* `c2pa.published`
+* `c2pa.redacted`
+
+An Update Manifest shall not contain an assertion of type `c2pa.actions` or `c2pa.actions.v2` that contains an `action` field outside of this list.
+
+An Update Manifest may contain either a xref:timestamp_assertion[time-stamp assertion], a xref:certificate_status_assertion[certificate status assertion] or both.
+
+NOTE: This is the replacement approach for the deprecated xref:time_stamp_manifests[time-stamp manifests] feature.
+
+An Update Manifest shall not contain a xref:thumbnail_assertion[thumbnail assertion].
+
+[NOTE]
+====
+The reason for these requirements is that an `action` field outside of this list or a thumbnail implies changes to the digital content.
+====
+
+The Update Manifest shall contain exactly one `c2pa.ingredient.v3` assertion that (a) includes both `activeManifest` and `claimSignature` fields  with values that are the xref:_uri_references[URI references] to the C2PA Manifest and Claim Signature respectively (or one `c2pa.ingredient.v2` or `c2pa.ingredient` that includes a `c2pa_manifest` field) of the asset that is being updated and (b) has the value of `parentOf` for the `relationship` field.
+
+NOTE: The ingredient's C2PA Manifest can be either a standard manifest or an update manifest.
+
+#### Compressed Manifests
+
+Standard and Update Manifests can be compressed, in their entirety, using the https://datatracker.ietf.org/doc/html/rfc7932[Brotli compression algorithm] as described xref:_compressed_boxes[above]. For either type of manifest, the value of the `TYPE` field shall be `c2cm`, the value of the xref:jumbf_labels[label field] shall be the identical to the label of the compressed manifest superbox, and the contents of the `brob` content box shall be the compressed bytes of the entire manifest superbox.  See <<compressed_manifest_image>> for an example of a compressed standard manifest.
+
+ifdef::not-for-iso[]
+[IMPORTANT]
+====
+endif::[]
+Any place in this specification that a standard or update manifest is referenced, a compressed standard or update manifest is also valid.
+ifdef::not-for-iso[]
+====
+endif::[]
+
+[[time_stamp_manifests]]
+#### Time-Stamp Manifests (HISTORICAL)
+
+IMPORTANT: This feature has been deprecated in favor of the xref:timestamp_assertion[time-stamp assertion] and is not to be written by claim generators nor read by manifest consumers.  Instead, a xref:timestamp_assertion[time-stamp assertion] is used to accomplish the same goals.
+
+NOTE: The information below is retained for historical purposes.
+
+In some provenance workflows, a standard or update manifest is created offline, where it is not possible to obtain a trusted time-stamp (as per {3161}) from a TSA at the time of signing. In order to accommodate this, it is possible to use a Time-Stamp Manifest (JUMBF type UUID: `6332746D-0011-0010-8000-00AA00389B71` (`c2tm`)) to add the time-stamp in a later operation when a TSA can be contacted.
+
+
+### Embedding manifests into various file formats
+
+A C2PA Manifest can be embedded into a variety of file formats covering media types including images, videos, audio, fonts, and documents. <<embedding_annex>> provides the technical details on how to embed C2PA Manifests into each specifically supported file format.
+
+NOTE: Many classic image formats such as BMP do not support the embedding of arbitrary data, so the use of an xref:_external_manifests[external manifest] is required.
+
+### External Manifests
+
+In some cases, it may not be possible (or practical) to embed a C2PA Manifest Store in an asset. In those cases, keeping the C2PA Manifests externally to the asset is an acceptable model for providing provenance to assets. The C2PA Manifest should be stored in a location, referred to as a manifest repository, that is easily locatable by a Manifest Consumer working with the asset, such as xref:_by_reference_or_uri[by reference or URI]. As the C2PA Manifest Store is a JUMBF box, it shall be served with the JUMBF Media Type, `application/c2pa`.
+
+ifdef::not-for-iso[]
+NOTE: Previous versions of this specification used the media type `application/x-c2pa-manifest-store` for the C2PA Manifest Store. That media type is deprecated.
+endif::[]
+
+Some common reasons to use an external manifest are:
+
+- It may not be technically possible, such as with a `.txt` file.
+- It may not be practical, such as when the size of the C2PA Manifest Store is larger than the asset's digital content.
+- It may not be appropriate, such as when it would modify an asset that should not be modified.
++
+NOTE: a good example of this is creating a manifest for a pre-existing asset.
+
+### Embedding a Reference to an external Manifest
+
+If the asset has embedded XMP, and the C2PA Manifest will be stored externally, it is recommended that the claim generator add a https://www.dublincore.org/specifications/dublin-core/dcmi-terms/#http://purl.org/dc/terms/provenance[`dcterms:provenance`] key to the XMP, the value (a URI reference) being where to locate the active manifest. 
+
+ifdef::not-for-iso[]
+NOTE: A previous version of this specification also recommended using this method for references to embedded manifests. Now this mechanism is only for external manifests.
+endif::[]
+
+Since fonts do not support XMP, an equivalent method for specifying a URI to a remote C2PA Manifest Store is described in xref:_embedding_manifests_into_fonts[this clause on fonts].

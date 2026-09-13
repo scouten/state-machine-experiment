@@ -1,0 +1,14 @@
+
+#### Description
+
+In previous versions of this specification, a concept of a data box as a special type of JUMBF box was used as a way to enable the arbitrary embedding of data into a C2PA Manifest, such as for thumbnails, icons and `inputTo` ingredients. It was determined that doing this via a new type of box introduced unnecessary complexities and missing functionality - such as the inability to redact data boxes. Accordingly, that concept has been deprecated in favor of a standard assertion which uses a standard JUMBF Embedded File content type box to contain the data.
+
+An embedded data assertion shall have a label that starts with `c2pa.embedded-data` and follows the xref:_multiple_instances[rules of assertion labels] with respect to multiple instances. Additionally, some other assertion types will be technically equivalent to a embedded data assertion, but will have their own unique labels (e.g., `c2pa.thumbnail.claim`).
+
+#### Technical Details
+
+Since the embedded data assertion is based on a JUMBF Embedded File content type box, it's Embedded File Description box shall contain an IANA media type (e.g., `image/png`) as the value of the _MEDIA TYPE_ field, and may contain a file name as the value of the _FILE NAME_ field.  It shall not have the `External` toggle bit set.
+
+NOTE: IANA structured suffixes (https://www.iana.org/assignments/media-type-structured-suffix/media-type-structured-suffix.xhtml[]), such as `+json` and `+zip`, are also supported as values of the _MEDIA TYPE_ field.
+
+The Binary Data box of the embedded data assertion shall be the bits of a file (such as a raster image or text prompt) in whatever format is desired by the claim generator, but matches the media type specified in the Embedded File Description box.

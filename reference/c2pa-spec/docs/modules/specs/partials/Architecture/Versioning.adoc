@@ -1,0 +1,19 @@
+### Compatibility
+
+As the Content Credentials specification has evolved, constructs such as box labels, assertions (and their fields), claims and time-stamps have also evolved. New assertions have been added, and some existing assertions and the claim have newer versions with additional fields. In addition, some constructs have been deprecated. In this specification, when a construct is marked as deprecated, that means that a claim generator shall not write that construct (or value), but that a validator should read it.
+
+To facilitate testing and diagnosing interoperability issues between claim generators and validators, a claim generator should declare which version of the specification it is using to generate the C2PA Manifest by providing a xref:claim-specVersion[`specVersion` key] in the `claim_generator_info` field of the claim. When a claim generator sets this field, it is declaring that the active manifest of the asset is produced in accordance with that version of the specification and thus, for example, does not contain any constructs that are deprecated in that version of the specification (see <<deprecated_constructs_table>> of <<versioning_annex>>).
+
+A validator shall be compatible with at least one version of the specification, but may be compatible with additional versions. A validator that is compatible with a specific version of the specification shall support all non-deprecated constructs listed for that version. If the validator encounters a C2PA Manifest that uses constructs from a version of the specification that the validator does not support (either because they are deprecated or unknown), it may ignore the unsupported construct and process the rest of C2PA Manifest as if that construct were not present.
+
+When a claim generator is performing ingredient validation, it should add a xref:validation-results[`specVersion` key] to the `validation-results-map` to declare what version of the specification was used as the basis for the validation procedure.
+
+### Forward Compatibility
+
+C2PA aims to ensure that Content Credentials created under newer versions of the specification remains parseable and validatable when processed by implementations conforming to earlier versions, wherever practical. Implementations of the C2PA specification should therefore be designed to:
+
+* Gracefully handle unknown or unrecognized data (e.g., new fields, structures, or claim types) without causing fatal errors.
+* Preserve the integrity of a C2PA Manifest even when parts of it cannot be fully interpreted.
+* Indicate partial interpretation to users or downstream systems, rather than rejecting the C2PA Manifest outright.
+
+While this specification strives to maintain both forward and backward compatibility, there may be occasions when breaking changes are necessary to enable significant advances or address fundamental security, trust, or interoperability concerns. In such cases, versioning guidance and migration considerations will be explicitly documented.

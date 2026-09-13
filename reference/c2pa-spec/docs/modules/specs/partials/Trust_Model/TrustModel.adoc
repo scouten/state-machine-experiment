@@ -1,0 +1,272 @@
+:revdate: {docdate}
+:version-label!: 
+:sectnums:
+:sectnumlevels: 5 
+:chapter-label: Trust Model
+
+## Trust Model
+
+NOTE: In this section, "user" refers to human actors that are using C2PA-compliant validators in consumption and authoring scenarios.
+
+### Overview
+
+[[trust-model-diagram]]
+.C2PA Trust Model Diagram
+[ditaa, target=TrustModel, format={plantuml-ext}, align="center"]
+....
++--------+                +----------+                    +---------+
+|        |Trusts signer to|          |  Trusts issuer to  |         |
+| Signer |  secure their  |Credential|  identify signers  |Validator|
+|        |<---------------+  Issuer  |<-------------------+         |
+|cFFB    |  credentials   |cBFB      |                    |cFBB     |
++--------+                +----------+                    +---------+
+    ^                                                        ^
+    |                                                        :
+    :                     +=========+  Trusts validator to   :
+    |Trusts assertions are:         :  check validity and    :
+    +---------------------+ Consumer+------------------------+
+      made by the signer  :         :  correctly identify
+                          +=========+  signers
+....
+
+<<trust-model-diagram>> shows, in yellow, green and red, the three entities specified in the trust model, which is concerned with trust in a signer's identity. In dashed lines, below, is the consumer (who is not specified in the trust model), who uses the identity of the signer, along with other trust signals, to decide whether the assertions made about an asset are true. 
+
+### Identity of Signers
+
+Identity in the trust model is the means by which a cryptographic signing key (aka credential) is associated with the signer for the basis of making trust decisions based on the claim signature or any structure (including, but not limited to, assertions and claims) signed with that key. 
+
+The credential shall be listed in the COSE protected headers of the `COSE_Sign1_Tagged` structure used for digital signatures in all C2PA manifests. Exactly one instance of an identity credential shall appear in the union of the protected and unprotected headers. `COSE_Sign1_Tagged` structures with no credentials, or two or more credentials, shall be rejected. Repeating the same credential more than once, including separately in the protected and unprotected headers, is also an instance of two or more credentials and shall be rejected.
+
+ifdef::not-for-iso[]
+NOTE: Older versions of this specification also allowed the credential to appear in the COSE unprotected headers. 
+endif::[]
+
+How the credential is stored in the header value, how trust chains are constructed are specified, and additional information can be found in <<x509_certificates>>.
+
+### Validation states
+
+#### General
+A validator is a Manifest Consumer that will make some xref:validation-clause[validation] statements about that asset and its associated active manifest. The process for retrieving these statements is described in the xref:validation-clause[validation section]. The actor consuming the asset, usually through their user agent and its user interface, then has to interpret those statements to arrive at a set of conclusions of their own about the provenance of the asset they are consuming. These conclusions will be drawn from those statements and the contents of the asset itself. 
+
+#### Manifest States
+Based on these statements, a C2PA Manifest may be one of the following:
+
+* xref:_well_formed_manifest[Well-Formed]
+* xref:_valid_manifest[Valid]
+* xref:_trusted_manifest[Trusted]
+
+NOTE: Any Trusted manifest is also Valid, and any Valid manifest is also Well-Formed.
+
+#### Asset States
+If a validator reports that the portions of the asset that are covered by content bindings have not been modified since the active manifest was produced [<<_validate_the_assets_content>>], and its active manifest is either xref:_valid_manifest[Valid] or xref:_trusted_manifest[Trusted], then the asset itself is a Valid asset.
+
+#### Well-Formed Manifest
+
+A C2PA Manifest is Well-Formed if validation determines that each of the following is true:
+
+* The manifest's contents abide by the normative requirements of this specification, that are validated via the xref:_validation_process[validation process].
+* Only those assertions allowed for the xref:_types_of_manifests[specific type] of the manifest are present [<<_validate_the_correct_assertions_for_the_type_of_manifest>>]. 
+* The assertions of the manifest meet all the requirements for assertions [<<_assertion_validation>>].
+* Any ingredients present in the manifest meet all the requirements for ingredients [<<_validate_the_ingredients>>].
+
+
+#### Valid Manifest
+
+A C2PA Manifest is Valid if validation determines that each of the following is true:
+
+* The manifest is Well-Formed [<<_well_formed_manifest>>].
+* The manifest has not been modified since the manifest was signed [<<_cryptographic_validation>>].
+* The claim signature receives a success code of `claimSignature.validated` [<<_validate_the_signature>>].
+* Validation of the claim signature validity period receives the success code of `claimSignature.insideValidity` [<<_validate_the_time_stamp>>]. 
+* The credential of the signer of the C2PA Manifest is not rejected with a failure code of `signingCredential.ocsp.revoked` [<<_validate_the_credential_revocation_information>>]. 
+
+If a C2PA Manifest is Valid, then the manifest's claim can be attributed to the claim generator which is identified by the `claim_generator_info` field of the claim [<<_claim_generator_info>>].
+
+
+#### Trusted Manifest
+
+A C2PA Manifest is Trusted if validation determines that each of the following is true:
+
+* The manifest is Valid [<<_valid_manifest>>].
+* The signing credential of the C2PA Manifest receives the success code of `signingCredential.trusted` [<<_validate_the_signature>>].
+
+### Trust Lists
+
+#### C2PA Signers
+A validator shall maintain the following information for evaluating C2PA signers:
+
+* A list of accepted Extended Key Usage (EKU) values.
+* For each accepted EKU value, a list of "trust anchor configurations".
+
+An individual trust anchor configuration shall include the X.509 certificate for that trust anchor. Additionally, the configuration should include a "notBefore" date/time, before which there is no trust for that trust anchor configuration. If the trust for that trust anchor configuration has ended, it should also include a "notAfter" date/time, after which there is no trust for that configuration.
+
+If a "notBefore" date/time is present, the trust anchor configuration shall not be used for claim signatures whose timestamp (or current time, if no timestamp is present) is before that date/time. If a "notAfter" date/time is present, the trust anchor configuration shall not be used for claim signatures whose timestamp (or current time, if no timestamp is present) is after that date/time.
+
+For the `c2pa-kp-claimSigning` (1.3.6.1.4.1.62558.2.1) EKU, the list of trust anchor configurations shall include, but need not be limited to, the signer trust anchor configurations provided by C2PA (i.e., the C2PA Trust List).
+
+NOTE: Some of these lists can be empty.
+
+In addition to the list of trust anchor configurations for the `c2pa-kp-claimSigning` EKU provided in the C2PA Trust List, a validator should allow a user to configure additional trust anchor configurations for that EKU and/or for other EKUs (e.g., `id-kp-emailProtection` (1.3.6.1.5.5.7.3.4) or `id-kp-documentSigning` (1.3.6.1.5.5.7.3.36)). A validator should provide default options or offer lists maintained by external parties that the user may opt into to populate the validator's trust anchor store for C2PA signers.
+
+NOTE: Previous versions of this specification required the presence of `id-kp-emailProtection` or `id-kp-documentSigning` EKUs, so including at least one of those two EKUs in a signer's certificate, together with `c2pa-kp-claimSigning`, can improve compatibility with older validators.
+
+[[time-stamp-authorities]]
+#### Time Stamping Authorities
+
+A validator shall maintain a list of X.509 certificate trust anchors for Time Stamping Authorities (TSAs), which shall be separate from the lists xref:_c2pa_signers[for C2PA signers]. This list shall include, but need not be limited to, the Time Stamping Authority trust anchors provided by the C2PA (i.e., the C2PA TSA Trust List).
+
+In addition to the list of trust anchors provided in the C2PA TSA Trust List, a validator should allow a user to configure additional TSA trust anchor stores, and should provide default options or offer lists maintained by external parties that the user may opt into to populate the validator's trust anchor store for Time Stamping Authorities.
+
+
+#### Private Credential Storage
+A validator may also allow the user to create and maintain a private credential store of signing credentials. This store is intended as an "address book" of credentials they have chosen to trust based on an out-of-band relationship. If present, the private credential store shall only apply to validating signed C2PA manifests, and shall not apply to validating time-stamps. If present, the private credential store shall only allow trust in signer credentials directly; entries in the private credential store cannot issue credentials and shall not be included as trust anchors during validation.
+
+A validator shall not be pre-configured with any entries in a private credential store.
+
+A validator shall only add entries to a private credential store in response to a user request to trust the credential. Similarly, a validator shall only remove entries from a private credential store in response to a user request to stop trusting the credential.
+
+[[x509_certificates]]
+### X.509 Certificates
+
+X.509 Certificates are stored as defined by {9360} (_CBOR Object Signing and Encryption (COSE): Header Parameters for Carrying and Referencing X.509 Certificates_). For convenience, the definition of `x5chain` is copied below.
+
+ifdef::not-for-iso[]
+[IMPORTANT]
+====
+endif::[]
+This specification adds additional requirements beyond those of {9360}, which are listed after the quoted text. In particular, this specification requires all intermediate certificate authorities' certificates of the signer's certificate chain to be included in the `x5chain` header, and requires claim generators to always place the `x5chain` header in the protected header bucket.
+ifdef::not-for-iso[]
+====
+endif::[]
+
+[quote]
+____
+x5chain: This header parameter contains an ordered array of X.509 certificates. The certificates are to be ordered starting with the certificate containing the end-entity key followed by the certificate that signed it, and so on. There is no requirement for the entire chain to be present in the element if there is reason to believe that the relying party already has, or can locate, the missing certificates. This means that the relying party is still required to do path building but that a candidate path is proposed in this header parameter.
+
+The trust mechanism MUST process any certificates in this parameter as untrusted input. The presence of a self-signed certificate in the parameter MUST NOT cause the update of the set of trust anchors without some out-of-band confirmation. As the contents of this header parameter are untrusted input, the header parameter can be in either the protected or unprotected header bucket. Sending the header parameter in the unprotected header bucket allows an intermediary to remove or add certificates.
+
+The end-entity certificate MUST be integrity protected by COSE. This can, for example, be done by sending the header parameter in the protected header, sending an 'x5chain' in the unprotected header combined with an 'x5t' in the protected header, or including the end-entity certificate in the external_aad.
+
+This header parameter allows for a single X.509 certificate or a chain of X.509 certificates to be carried in the message.
+
+* If a single certificate is conveyed, it is placed in a CBOR byte string.
+
+* If multiple certificates are conveyed, a CBOR array of byte strings is used, with each certificate being in its own byte string.
+____
+
+The validator is only expected to have the certificates for its trust anchors. Therefore, when creating the `x5chain` header as part of signing, the claim generator shall include the signer's certificate and all intermediate certificate authorities in the header's value. The trust anchor's certificate (also called the root certificate) should not be included.
+
+The `subjectPublicKeyInfo` element of the first or only certificate will be the public key used to validate the signature. The `validity` element of the `tbsCertificate` sequence provides the time validity period of the certificate.
+
+ifdef::not-for-iso[]
+A previous version of this specification required claim generators to write the string label `x5chain` only to avoid the unlikely possibility that the integer label `33` would not be standardized. 
+endif::[]
+
+Integer label `33` has now been standardized, and this specification now adopts it as standard, and deprecates use of the string label. Therefore:
+
+* Claim generators should use only the integer `33` as the label when inserting this header into a COSE signature. Claim generators may continue to write the string label `x5chain` but this behaviour is now deprecated and claim generators should be updated to use the integer label only. Claim generators shall place this header only in the protected header bucket of the COSE signature as required above.
+* Validators shall accept either the string `x5chain` or the integer `33` as the label for this header. If both labels are present, validators shall use the header with the integer label `33` and ignore the header with the string `x5chain` as the label. 
+ifdef::not-for-iso[]
+Validators shall accept the header from either the protected or unprotected bucket, to maintain compatibility with previous versions of this specification. 
+endif::[]
+ifdef::for-iso[]
+Validators shall accept the header from either the protected or unprotected bucket. 
+endif::[]
+In compliance with <<_identity_of_signers>>, if this header appears in both the protected and unprotected buckets with the same label, a validator shall reject the claim signature as malformed due to the presence of multiple credentials.
+
+#### Certificate Profiles
+
+[[certificate-requirements]]
+##### General Requirements
+
+This section defines the requirements to validate that an X.509 certificate is acceptable as a signing credential as described in <<_validate_the_signature>>.
+
+All certificates shall fulfill the following requirements.
+
+* The `algorithm` field of the `signatureAlgorithm` field shall be one of the following values:
+`ecdsa-with-SHA256`:: {5758-32}
+`ecdsa-with-SHA384`:: {5758-32}
+`ecdsa-with-SHA512`:: {5758-32}
+`sha256WithRSAEncryption`:: {8017-a24}
+`sha384WithRSAEncryption`:: {8017-a24}
+`sha512WithRSAEncryption`:: {8017-a24}
+`id-RSASSA-PSS`:: {8017-a23}
+`id-Ed25519`:: https://datatracker.ietf.org/doc/html/rfc8410#section-3[RFC 8410 section 3]
+* If the `algorithm` field of the `signatureAlgorithm` field is `id-RSASSA-PSS`, the `parameters` field is of type `RSASSA-PSS-params`. Its fields shall have the following requirements as defined in {8017-a23}:
+** The `hashAlgorithm` field shall be present.
+** The `algorithm` field of the `hashAlgorithm` field shall be one of the following values as defined in {8017-b1}:
+*** `id-sha256`.
+*** `id-sha384`.
+*** `id-sha512`.
+** The `maskGenAlgorithm` field shall be present.
+** The `algorithm` field of the `parameters` field of the `maskGenAlgorithm` field shall be equal to the `algorithm` field of the `hashAlgorithm` field.
+* If the `algorithm` field of the `algorithm` field of the certificate's `subjectPublicKeyInfo` is `id-ecPublicKey`, the `parameters` field shall be one of the following named curves from {5480}: 
+** `prime256v1`.
+** `secp384r1`.
+** `secp521r1`.
+* If the `algorithm` field of the `algorithm` field of the certificate's `subjectPublicKeyInfo` is `rsaEncryption` or `id-RSASSA-PSS`, the `modulus` field of the `parameters` field shall have a length of at least 2048 bits.
+
+All certificates except those in the private credential store for X.509 certificates shall fulfil the following additional requirements to be acceptable.
+
+* Version shall be `v3` as per {5280}, section 4.1.2.1.
+* The `issuerUniqueID` and `subjectUniqueID` optional fields of the `TBSCertificate` sequence shall not be present, as per {5280}, section 4.1.2.8.
+* The Basic Constraints extension shall follow {5280}, section 4.2.1.9. In particular, one of the following shall be true:
+** If the certified public key is used to sign certificates, the Basic Constraints extension shall be present with the `cA` boolean asserted.
+** If the certified public key is used to sign C2PA Claims, time-stamps, or OCSP responses, the `cA` boolean in the Basic Constraints extension shall not be asserted, and the `keyCertSign` boolean in the key usage extension shall not be asserted. Only end entity certificates shall be used to sign C2PA Claims, time-stamps, and OCSP responses.
+* The Authority Key Identifier extension shall be present in any certificate that is not self-signed, as per {5280}, section 4.2.1.1.
+* As prescribed in {5280}, section 4.2.1.2, the Subject Key Identifier extension shall be present in any certificate that acts as a CA. It should be present in end entity certificates. 
+* As prescribed in {5280}, section 4.2.1.3, the Key Usage extension shall be present and should be marked as critical. Certificates used to sign C2PA manifests shall assert the `digitalSignature` bit. The `keyCertSign` bit shall only be asserted if the `cA` boolean is asserted in the Basic Constraints extension. 
+* The Extended Key Usage (EKU) extension shall be present and non-empty in any certificate where the Basic Constraints extension is absent or the `cA` boolean is not asserted, as per {5280}, section 4.2.1.12. These are commonly called "end entity" or "leaf" certificates. 
+** The `anyExtendedKeyUsage` EKU (2.5.29.37.0) shall not be present.
+** A certificate that signs time-stamping countersignatures shall be valid for the `id-kp-timeStamping` (1.3.6.1.5.5.7.3.8) purpose.
+** A certificate that signs OCSP responses for certificates shall be valid for the `id-kp-OCSPSigning` (1.3.6.1.5.5.7.3.9) purpose.
+** If a certificate is valid for either `id-kp-timeStamping` or `id-kp-OCSPSigning`, it shall be valid for exactly one of those two purposes, and not valid for any other purpose.
+** A certificate should not be valid for any other purposes outside of the purposes listed above, but the presence of any EKUs not mentioned in this profile and not in the list of EKUs in the configuration store shall not cause the certificate to be rejected.
+
+##### Certificate Trust Chain
+
+When validating a certificate as the signing credential, if the certificate is present in the private credential store for X.509 certificates, the certificate is accepted. The private credential store is not consulted when validating time-stamps.
+
+If the certificate is not present in the private credential store, or the validator does not implement one, the trust chain shall be built and validated according to the procedure in {5280}, section 6 for the particular purpose required (signing, time-stamping, or OCSP signing) and for the appropriate trust anchor store for that purpose. Any failure of that validation algorithm shall mean the chain shall be rejected. The private credential store is never included when building certificate chains; certificates in the private credential store cannot act as CAs.
+
+A validator shall ensure a signing certificate is authorized for the purpose for which it is being used, and reject certificates used for an unauthorized purpose. A certificate is authorized for a particular purpose if the purpose's EKU Object Identifier (OID) is present in the Extended Key Usage extension of the certificate ({5280}, section 4.2.1.12).
+
+When validating a certificate used to sign a C2PA Claim, the signing certificate shall have at least one of the EKUs for which the validator has an associated list of trust anchors (see <<_c2pa_signers>>), and the validator shall use only the trust anchors it associates with EKUs present in the certificate.
+
+Except for certificates accepted through the private credential store for X.509 certificates, a validator shall verify a certificate's compliance with the Certificate Profile, and reject certificates that do not comply. This includes requiring the presence of the Extended Key Usage extension, as well as a certificate being authorized for no more than one of the three purposes listed in this section: C2PA signing, time-stamp signing, or OCSP response signing.
+
+As described in the Certificate Profile, Certification Authority (CA) certificates are not required to have an EKU extension, and usually will not. If one is present, then the validator shall ignore it.
+
+#### Certificate Revocation 
+
+X.509 certificates support revocation status queries. A claim generator should use the Online Certificate Status Protocol (OCSP, {6960}) and OCSP stapling (as originally conceptualized in {6066}, but implemented as described in this clause) to implement revocation. The claim generator shall not use Certificate Revocation Lists (CRLs, {5280}).
+``
+[NOTE]
+====
+Using CRLs requires downloading the entire list of revoked certificates for each Certificate Authority encountered, which can be time-consuming. Although a CRL could be included in the same way an OCSP response is stapled, the potential size of a CRL relative to an OCSP response also makes this undesirable.
+====
+
+A conforming CA should include an AuthorityInfoAccess (AIA) extension ({5280}, section 4.2.2.1) in their issued certificates to provide access information for the OCSP service operated by the CA. 
+
+If the certificate has an AIA extension, revocation information shall be stored in an unprotected header of the `COSE_Sign1` structure with the string label `rVals` and the value's schema shall follow the `rVals` rule in <<rVals-cddl>>:
+
+[[rVals-cddl]]
+[figure]
+.CDDL for `rVals`
+====
+[source,cddl]
+------
+include::../schemas/cddl/rVals.cddl[]
+------
+====
+
+[NOTE]
+====
+The above definition is a CBOR adaptation of a subset of the schema from {jades}, section 5.3.5.2, which only stores OCSP responses, and stores them as binary strings.
+====
+
+Before signing a claim, if a signer's certificate has the AIA extension, a claim generator should query the OCSP service indicated therein, capture the response, and store it in an element of the `ocspVals` array of the `rVals` header. The claim generator should do the same for any intermediate CA certificates it includes with the claim signature.
+
+Upon receipt of the claim, stapled OCSP responses shall be validated according to section 3.2 of {6960}.
+
+The process for validating the revocation status of a certificate after a claim has been signed is described in more detail in xref:_validate_the_credential_revocation_information[Validate the Credential Revocation Information].

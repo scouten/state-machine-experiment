@@ -1,0 +1,41 @@
+#### Description
+In workflows where it is known in advance that the C2PA Manifest will refer to a collection of assets, instead of a single asset, the collection data hash assertion shall be used as the method to specify the hard bindings (i.e., cryptographic hashes) for the assets in the collection.  
+
+NOTE: It is possible to describe each folder of the training data set of an AI/ML model by having each folder be a separate ingredient of the complete training data set's manifest.
+
+A collection data hash assertion shall have a label of `c2pa.hash.collection.data`.
+
+A collection data hash assertion shall not appear in a xref:_cloud_data[cloud data assertion].
+
+#### Schema and Example
+
+The schema for this type is defined by the `collection-data-hash-map` rule in the following {cddl}:
+
+[source,cddl]
+----
+include::../schemas/cddl/collection-data-hash.cddl[]
+----
+
+An example in CBOR diagnostic notation ({8949}, clause 8) is shown below:
+
+[source,]
+----
+include::../examples/cbordiag/collection-data-hash.cbordiag[]
+----
+
+#### Fields
+The `uris` field consists of an array of `uri-hashed-data-map` values that represents a collection of assets.  The `alg` field, if present, shall be a string that is one of the allowed hash algorithms as defined in <<_hashing>>, and that algorithm shall be used to compute the hash of each member of the collection. If the `alg` field is not present, then the hashing algorithm shall be determined by the value of the `alg` field in the Claim.
+
+For each `uri-hashed-data-map`,  the `uri` field shall be present and shall be a valid relative URI. All URIs shall be considered as relative to the location of the manifest, regardless of whether that is local, in a container (e.g., ZIP) or in the cloud. As a relative URI can contain navigation elements (e.g., `../`), it is possible to refer to content items that are not in the same folder as the manifest - which would be a security issue.  A claim generator shall validate or sanitize the URIs before use, ensuring that neither `.` nor `..` appear as part of the URI.
+
+The `hash` field is a byte string representing of the valid hash value for the content item, as determined by the `alg` field.  The hash shall be over all bytes (from 0 to n) of the content item - no exceptions. 
+
+The rest of the fields are identical to those of an xref:ingredient_assertion[ingredient assertion].
+
+#### Hashing the members of the collection
+
+Each file in the collection shall be hashed individually using the specific hash algorithm defined in the `alg` field.  The resultant hash value shall be stored in the `hash` field of the `uri-hashed-data-map` associated with the `uri` to the file.
+
+Not all files in a given hierarchy are required to be included in a hashed collection. 
+
+NOTE: While this is useful in cases where there are files present that aren't necessary to hash, it also provides an opening for an adversary to add files without invalidating the binding.

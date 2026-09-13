@@ -1,0 +1,24 @@
+#### Description
+A thumbnail assertion provides an approximate visual representation of the asset at a specific event in the lifecycle of an asset. There are currently two specific events: 
+
+- ingredient import and claim creation; 
+- each using a unique label for the assertion.
+
+##### Claim Thumbnails
+For thumbnails created at claim creation time, the thumbnail assertion shall have the label `c2pa.thumbnail.claim`. There shall be no more than one thumbnail assertion with this label in a C2PA Manifest.
+
+Previous versions of this specification required that the IANA registry media type of the thumbnail be included in the label name (e.g., `c2pa.thumbnail.claim.png`). This naming convention has been deprecated.
+
+##### Ingredient Thumbnails
+When importing an ingredient (see <<_adding_ingredients>>), one should reference that ingredient's own manifest-stored thumbnail. However, some ingredients may not include a thumbnail assertion, or even a manifest. In that case, a new thumbnail of the ingredient should be generated, and a new thumbnail assertion in the active manifest created. 
+
+The thumbnail assertion for an ingredient shall have a label that starts with `c2pa.thumbnail.ingredient` and follows the xref:_multiple_instances[rules of assertion labels] with respect to multiple instances. For example, an ingredient thumbnail might have the label `c2pa.thumbnail.ingredient__1`.
+
+Previous versions of this specification required that the IANA registry media type of the thumbnail be included in the label name (e.g., `c2pa.thumbnail.claim.png`). This naming convention has been deprecated.
+
+Previous versions of this specification required a `_1` suffix for the first instance, and required a single underscore. The current specification, by adopting consistent naming with all assertions, uses `c2pa.thumbnail.ingredient` for the first instance, `c2pa.thumbnail.ingredient__1` for the second, etc. The previous naming convention has been deprecated.
+
+##### Technical Details
+A thumbnail assertion is an xref:_embedded_data[embedded data assertion] but with a special label identifying this specific use case.
+
+// Add additional requirements/restrictions on types, sizes, etc. of thumbnails here.

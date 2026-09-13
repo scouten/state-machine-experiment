@@ -1,0 +1,26 @@
+#### Description
+In earlier versions of this specification, there were individual assertions for each metadata standard (e.g., IPTC, EXIF).  There is now a single `c2pa.metadata` assertion to simplify the specification and to allow for the addition of new metadata standards in the future, without the need to create more assertions. This simplification also makes it clearer that such metadata has been called out by the claim generator as significant - having been explicitly included in the Manifest to enable the cryptographic validation of the data. The relationship of these statements to the signer is specified in <<_statements>>.
+
+An common metadata assertion shall have a label of `c2pa.metadata`, and contain a single JSON content type box containing the {json-ld} serialization of one or more metadata values from other metadata standards including (but not limited to): IPTC, EXIF, XMP, and Schema.org. The `@context` property within the JSON-LD object shall be included, and used to provide context / namespaces for the metadata standards being specified.  The JSON-LD object may then contain other properties, as defined by those metadata standards, that specify the actual metadata.  These values may be unique to the assertion or they may be copied from the standard "metadata blocks" of the asset format.  When copying, it is recommended that for those formats that can be expressed in XMP, that the data shall be serialized according to the rules of {xmp-json}.
+
+An example of an common metadata assertion for an image:
+
+[source,json]
+----
+include::../examples/json-ld/common-metadata-image.jsonld[]
+----
+
+An example of an common metadata assertion for a PDF:
+
+[source,json]
+----
+include::../examples/json-ld/common-metadata-pdf.jsonld[]
+----
+
+[NOTE]
+====
+Although the redaction process works in such a way that only an entire assertion can be redacted (see <<_redaction_of_assertions>>), the use of an xref:_update_manifests[update manifest] enables partial redaction by removing the original and then placing the new, reduced, versions in the update manifest. This new assertion would be presented in a user experience in association with the signer of the update manifest and not with the signer of the C2PA Manifest that has been redacted.
+
+For example, an assertion containing both location data and camera information which may need to have the location data redacted which could be done through an update manifest with a new `c2pa.metadata` assertion with only the camera information.
+====
+

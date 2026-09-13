@@ -1,0 +1,86 @@
+[[embedding_manifests_into_html]]
+=== Embedding Manifests into HTML
+
+==== General
+https://www.w3.org/TR/html/[HTML] supports two methods for associating a C2PA Manifest Store with a document: an embedded `script` element for inline manifests and a `link` element for referencing external manifests. Both use the IANA Media type `application/c2pa`. While this section describes both approaches, the use of an xref:_external_manifests[external manifest] via the `link` element is preferred.
+
+There shall be at most one C2PA Manifest Store association per HTML document. An HTML document shall not contain more than one `script` element with `type="application/c2pa"`, and shall not contain both a `script` element and a `link` element referencing a C2PA Manifest Store. If a validator encounters multiple C2PA manifest elements, it shall report a `manifest.html.multipleManifests` failure.
+
+===== Embedded (inline) manifests
+
+When embedding the C2PA Manifest Store into the HTML document, it shall be embedded as the Base64-encoded (per https://www.rfc-editor.org/rfc/rfc4648#section-4[RFC 4648, Section 4]) content of a `script` element with `type="application/c2pa"` placed in the `head` of the HTML document. When performing validation, the validator shall strip leading and trailing whitespace from the `script` element's text content before Base64 decoding. 
+
+NOTE: Browsers ignore `script` elements with unrecognized types, and this approach follows the established HTML pattern for embedding structured data (e.g., JSON-LD uses `application/ld+json`).
+
+[figure]
+.Example of an inline C2PA Manifest Store in HTML
+====
+An example of a C2PA Manifest Store embedded inline in an HTML document (with the actual C2PA Manifest's data left out).
+
+[source,html]
+----
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Example</title>
+    <script type="application/c2pa">
+        ...Base64 data goes here...
+    </script>
+</head>
+<body>
+    <p>Content here.</p>
+</body>
+</html>
+----
+====
+
+===== External (referenced) manifests
+
+When referencing the C2PA Manifest Store, a `link` element with an attribute of `rel="c2pa-manifest"`, placed in the `head` of the HTML document, shall be used to reference an external C2PA Manifest Store via its `href` attribute. The `type="application/c2pa"` attribute should be included but is not required for discovery; the validator shall match on the `rel` attribute alone. The `c2pa-manifest` link relation is registered in the https://www.iana.org/assignments/link-relations/[IANA Link Relations registry]. The external manifest store shall contain a content binding as specified in <<_hard_binding,Hard Binding>>.
+
+[figure]
+.Example of a referenced C2PA Manifest Store in HTML
+====
+An example of an HTML document referencing an external C2PA Manifest Store (with the actual URI left as a placeholder).
+
+[source,html]
+----
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Example</title>
+    <link rel="c2pa-manifest"
+          href="https://fabrikam.com/manifest.c2pa"
+          type="application/c2pa">
+</head>
+<body>
+    <p>Content here.</p>
+</body>
+</html>
+----
+====
+
+// NOTE: When an HTML document is served over HTTP, a validator may also discover a C2PA Manifest Store via the HTTP `Link` header as described in <<_by_link_header>>. If both an in-document element and an HTTP `Link` header reference a C2PA Manifest Store, the referenced manifest (in the link header) takes precedence.  
+
+===== Hard Binding
+
+A claim generator embedding a C2PA Manifest Store in an HTML document shall include a xref:_data_hash[`c2pa.hash.data`] assertion.
+
+For an embedded `script` element, the data hash assertion shall include a single exclusion range covering the entire element from the opening `<script` tag through the closing `</script>` tag, inclusive. The hash shall be computed over the document content with the exclusion range removed.
+
+For an external `link` element, the manifest is not embedded in the document. The data hash assertion shall have no exclusion range; the hash shall be computed over the entire document.
+
+NOTE: The hash is defined over the byte representation of the document as stored. Any process that re-serializes the HTML (e.g., a CMS, CDN, or HTML formatter that normalizes whitespace, reorders attributes, or changes quote styles) will alter byte offsets and invalidate the content binding. This is by design: re-serialization is a content modification, and the hash should reflect that the document has changed. Claim generators operating in pipelines that re-serialize HTML should embed the manifest after the final serialization step, or use an xref:_external_manifests[external manifest] before final manifest generation.
+
+===== Validator Behaviour
+
+A validator encountering an HTML document (`text/html`) shall perform the following steps:
+
+. Treating the file as a series of bytes (vs. text), the validator shall parse the `head` element, searching for a `script` element with `type="application/c2pa"` or a `link` element with `rel="c2pa-manifest"`.
+. If multiple matching elements are found, report a `manifest.html.multipleManifests` failure.
+. If no matching element is found, the document does not contain an HTML-embedded manifest. 
+. If a `script` element is found, Base64-decode its content to obtain the C2PA Manifest Store.
+. If a `link` element is found, resolution of the external URI is optional. If the validator resolves it, it should follow the procedures in <<manifests-by-reference>>.
+. Once a C2PA Manifest Store is obtained, the validator shall validate it as per the normal validation process described in <<validating_the_claim,Locating and Validating the Claim>>.
