@@ -41,6 +41,9 @@ Not included, at least for now:
   specifications, not part of `C2PA_Specification.adoc` itself.
 - Superseded pre-2.0 archived content no longer part of the current
   specification.
+- The ISO-fast-track rendering of the specification (upstream's
+  `pages/ContentCredentials.adoc` and `partials/ISO/`) — deliberately
+  excluded; this snapshot only covers the general-release document.
 
 Any of these can be brought in later the same way, if a future task needs
 them.
