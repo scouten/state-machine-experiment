@@ -64,6 +64,18 @@ pub(crate) struct ClaimSignature {
 
     /// What the unprotected header offers by way of an RFC 3161 timestamp.
     pub(crate) timestamp: TimestampHeader,
+
+    /// DER-encoded OCSP responses stapled in the `rVals` header's
+    /// `ocspVals` array (C2PA spec §14.5.2).
+    ///
+    /// The array is not keyed by which certificate each response answers
+    /// for — a claim generator may staple one response per certificate in
+    /// the chain, signer and intermediates alike, in one flat list — so a
+    /// consumer matches each response to a certificate by `CertID` (RFC
+    /// 6960 §4.1.1) rather than by position. Empty if the header is absent
+    /// or is not shaped like `rVals` (C2PA spec, Example 3, "CDDL for
+    /// rVals").
+    pub(crate) rvals: Vec<Vec<u8>>,
 }
 
 impl ClaimSignature {
@@ -215,6 +227,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ClaimSignature, &'static str> {
         protected,
         signature,
         timestamp: timestamp_header(&unprotected),
+        rvals: rvals_header(&unprotected),
     })
 }
 
@@ -282,6 +295,49 @@ const TST_TOKENS_LABEL: &str = "tstTokens";
 
 /// Key of one token's bytes.
 const TST_VALUE_LABEL: &str = "val";
+
+/// Unprotected-header label of stapled OCSP responses (C2PA spec §14.5.2).
+const RVALS_LABEL: &str = "rVals";
+
+/// Key of the OCSP response array inside the `rVals` header.
+const OCSP_VALS_LABEL: &str = "ocspVals";
+
+/// Reads stapled OCSP responses out of the unprotected header bucket.
+///
+/// Per C2PA spec §14.5.2, Example 3 ("CDDL for rVals"):
+///
+/// ```text
+/// rVals = {
+///   "ocspVals": [1* bstr]
+/// }
+/// ```
+///
+/// Unlike [`timestamp_header`], a header that is present but the wrong
+/// shape is not distinguished from one that is absent: stapling is an
+/// optimization a claim generator may or may not have performed, and a
+/// validator falls back to an online query regardless (C2PA spec §15.9),
+/// so there is no separate finding worth reporting for a malformed staple.
+fn rvals_header(unprotected: &Value) -> Vec<Vec<u8>> {
+    let Value::Map(headers) = unprotected else {
+        return Vec::new();
+    };
+
+    let Some(Value::Map(rvals)) = headers.get(&Value::Text(RVALS_LABEL.to_string())) else {
+        return Vec::new();
+    };
+
+    let Some(Value::Array(ocsp_vals)) = rvals.get(&Value::Text(OCSP_VALS_LABEL.to_string())) else {
+        return Vec::new();
+    };
+
+    ocsp_vals
+        .iter()
+        .filter_map(|value| match value {
+            Value::Bytes(der) => Some(der.clone()),
+            _ => None,
+        })
+        .collect()
+}
 
 #[cfg(test)]
 mod tests {
@@ -703,5 +759,91 @@ mod tests {
             ),
             "the wrapping is part of what is countersigned"
         );
+    }
+
+    /// A `{ "ocspVals": [ bstr, … ] }` container, per C2PA spec §14.5.2's
+    /// "CDDL for rVals".
+    fn rvals_container(responses: Vec<Vec<u8>>) -> Value {
+        let mut container = BTreeMap::new();
+        container.insert(
+            Value::Text("ocspVals".to_string()),
+            Value::Array(responses.into_iter().map(Value::Bytes).collect()),
+        );
+        Value::Map(container)
+    }
+
+    #[test]
+    fn a_signature_without_an_rvals_header_carries_no_staples() {
+        let bytes = sign1_with_unprotected(Value::Map(BTreeMap::new()));
+        assert_eq!(parse(&bytes).unwrap().rvals, Vec::<Vec<u8>>::new());
+    }
+
+    #[test]
+    fn rvals_carries_every_stapled_response() {
+        let bytes = sign1_with_unprotected(unprotected_with(
+            "rVals",
+            rvals_container(vec![vec![1, 1, 1], vec![2, 2, 2]]),
+        ));
+
+        assert_eq!(
+            parse(&bytes).unwrap().rvals,
+            vec![vec![1, 1, 1], vec![2, 2, 2]]
+        );
+    }
+
+    #[test]
+    fn a_signature_can_carry_both_a_timestamp_and_stapled_responses() {
+        let mut map = BTreeMap::new();
+        map.insert(
+            Value::Text("sigTst".to_string()),
+            tst_container(vec![9, 9, 9]),
+        );
+        map.insert(
+            Value::Text("rVals".to_string()),
+            rvals_container(vec![vec![3, 3, 3]]),
+        );
+
+        let signature = parse(&sign1_with_unprotected(Value::Map(map))).unwrap();
+        assert_eq!(
+            signature.timestamp,
+            TimestampHeader::Present {
+                token: vec![9, 9, 9],
+                storage: TimestampStorage::SigTst,
+            }
+        );
+        assert_eq!(signature.rvals, vec![vec![3, 3, 3]]);
+    }
+
+    #[test]
+    fn a_malformed_rvals_header_is_read_as_no_staples_rather_than_an_error() {
+        // Unlike a malformed timestamp, none of these are reported as a
+        // distinct finding: stapling is optional, and a validator falls
+        // back to an online query regardless.
+        let cases = [Value::Integer(7), Value::Map(BTreeMap::new()), {
+            let mut wrong_value_type = BTreeMap::new();
+            wrong_value_type.insert(Value::Text("ocspVals".to_string()), Value::Integer(0));
+            Value::Map(wrong_value_type)
+        }];
+
+        for value in cases {
+            let bytes = sign1_with_unprotected(unprotected_with("rVals", value));
+            assert_eq!(parse(&bytes).unwrap().rvals, Vec::<Vec<u8>>::new());
+        }
+
+        // And an unprotected bucket that is not a map at all.
+        let bytes = sign1_with_unprotected(Value::Integer(0));
+        assert_eq!(parse(&bytes).unwrap().rvals, Vec::<Vec<u8>>::new());
+    }
+
+    #[test]
+    fn a_non_byte_string_entry_in_ocsp_vals_is_skipped_not_fatal() {
+        let mut container = BTreeMap::new();
+        container.insert(
+            Value::Text("ocspVals".to_string()),
+            Value::Array(vec![Value::Bytes(vec![4, 4, 4]), Value::Integer(0)]),
+        );
+
+        let bytes = sign1_with_unprotected(unprotected_with("rVals", Value::Map(container)));
+        assert_eq!(parse(&bytes).unwrap().rvals, vec![vec![4, 4, 4]]);
     }
 }

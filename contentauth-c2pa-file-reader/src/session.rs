@@ -66,6 +66,25 @@ pub enum FileReadRequest {
     /// Report the current wall-clock time. Reply with
     /// [`FileReadReply::CurrentDateTime`].
     CurrentDateTime,
+
+    /// Send a DER-encoded OCSP request and return whatever response bytes
+    /// come back. Reply with [`FileReadReply::OcspResponse`].
+    ///
+    /// A straight pass-through of
+    /// [`ReadRequest::Ocsp`](contentauth_c2pa_reader::ReadRequest::Ocsp):
+    /// this crate speaks no OCSP itself, and a host with no network access
+    /// (or that would rather not make this particular request) answers
+    /// with [`FileReadReply::Failed`] — see
+    /// [`ReadSettings::check_ocsp`](contentauth_c2pa_reader::ReadSettings::check_ocsp)
+    /// for why that is safe.
+    Ocsp {
+        /// The OCSP responder URL, taken from the certificate's Authority
+        /// Information Access extension.
+        url: String,
+
+        /// The DER-encoded `OCSPRequest` to send, exactly as built.
+        request_der: Vec<u8>,
+    },
 }
 
 impl Request for FileReadRequest {
@@ -76,6 +95,7 @@ impl Request for FileReadRequest {
             Self::Read { .. } => "Bytes",
             Self::Length { .. } => "Length",
             Self::CurrentDateTime => "CurrentDateTime",
+            Self::Ocsp { .. } => "OcspResponse",
         }
     }
 
@@ -86,6 +106,7 @@ impl Request for FileReadRequest {
                 | (Self::Read { .. }, FileReadReply::Bytes(_))
                 | (Self::Length { .. }, FileReadReply::Length(_))
                 | (Self::CurrentDateTime, FileReadReply::CurrentDateTime(_))
+                | (Self::Ocsp { .. }, FileReadReply::OcspResponse(_))
         )
     }
 }
@@ -104,6 +125,10 @@ pub enum FileReadReply {
     /// Answers [`FileReadRequest::CurrentDateTime`]: seconds since the Unix
     /// epoch (UTC).
     CurrentDateTime(i64),
+
+    /// Answers [`FileReadRequest::Ocsp`]: the DER-encoded `OCSPResponse`
+    /// bytes, exactly as the responder returned them.
+    OcspResponse(Vec<u8>),
 
     /// Reports that the host could not perform the requested operation.
     /// Valid for any request.
@@ -440,6 +465,10 @@ fn from_read_request(request: &ReadRequest) -> Option<FileReadRequest> {
         }),
         ReadRequest::AssetLength { stream } => Some(FileReadRequest::Length { stream: *stream }),
         ReadRequest::CurrentDateTime => Some(FileReadRequest::CurrentDateTime),
+        ReadRequest::Ocsp { url, request_der } => Some(FileReadRequest::Ocsp {
+            url: url.clone(),
+            request_der: request_der.clone(),
+        }),
         _ => None,
     }
 }
@@ -452,6 +481,9 @@ fn to_io_reply(reply: FileReadReply) -> IoReply {
         FileReadReply::CurrentDateTime(_) => {
             IoReply::Failed(HostError::new("locate never asks for the time"))
         }
+        FileReadReply::OcspResponse(_) => {
+            IoReply::Failed(HostError::new("locate never asks for an OCSP response"))
+        }
     }
 }
 
@@ -460,6 +492,7 @@ fn to_read_host_reply(reply: FileReadReply) -> ReadHostReply {
         FileReadReply::Bytes(bytes) => ReadHostReply::AssetBytes(bytes),
         FileReadReply::Length(len) => ReadHostReply::AssetLength(len),
         FileReadReply::CurrentDateTime(time) => ReadHostReply::CurrentDateTime(time),
+        FileReadReply::OcspResponse(bytes) => ReadHostReply::Ocsp(bytes),
         FileReadReply::Failed(err) => ReadHostReply::Failed(err),
     }
 }
@@ -486,6 +519,10 @@ mod tests {
             },
             FileReadRequest::Length { stream: stream() },
             FileReadRequest::CurrentDateTime,
+            FileReadRequest::Ocsp {
+                url: "http://ocsp.example/".to_string(),
+                request_der: vec![1, 2, 3],
+            },
         ]
     }
 
@@ -497,6 +534,7 @@ mod tests {
                 FileReadReply::CurrentDateTime(1_700_000_000),
                 "CurrentDateTime",
             ),
+            (FileReadReply::OcspResponse(vec![4, 5, 6]), "OcspResponse"),
             (FileReadReply::Failed(HostError::new("nope")), ""),
         ]
     }
@@ -551,6 +589,13 @@ mod tests {
             from_read_request(&ReadRequest::CurrentDateTime),
             Some(FileReadRequest::CurrentDateTime)
         ));
+        assert!(matches!(
+            from_read_request(&ReadRequest::Ocsp {
+                url: "http://ocsp.example/".to_string(),
+                request_der: vec![1],
+            }),
+            Some(FileReadRequest::Ocsp { .. })
+        ));
 
         // Never actually called this way — the caller special-cases
         // `ManifestStore` before reaching this function — but there is
@@ -583,6 +628,12 @@ mod tests {
             to_io_reply(FileReadReply::CurrentDateTime(1)),
             IoReply::Failed(_)
         ));
+
+        // Likewise: `locate` never issues `FileReadRequest::Ocsp` either.
+        assert!(matches!(
+            to_io_reply(FileReadReply::OcspResponse(vec![1])),
+            IoReply::Failed(_)
+        ));
     }
 
     #[test]
@@ -598,6 +649,10 @@ mod tests {
         assert!(matches!(
             to_read_host_reply(FileReadReply::CurrentDateTime(9)),
             ReadHostReply::CurrentDateTime(9)
+        ));
+        assert!(matches!(
+            to_read_host_reply(FileReadReply::OcspResponse(vec![1])),
+            ReadHostReply::Ocsp(bytes) if bytes == [1]
         ));
         assert!(matches!(
             to_read_host_reply(FileReadReply::Failed(HostError::new("x"))),

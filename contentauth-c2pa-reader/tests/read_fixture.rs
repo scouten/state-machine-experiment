@@ -299,6 +299,7 @@ fn every_hash_in_the_real_manifest_verifies() {
             status_code::TIMESTAMP_UNTRUSTED,
             status_code::CLAIM_SIGNATURE_INSIDE_VALIDITY,
             status_code::SIGNING_CREDENTIAL_UNTRUSTED,
+            status_code::SIGNING_CREDENTIAL_OCSP_SKIPPED,
             status_code::ASSERTION_DATAHASH_MATCH,
         ],
         "{report:#?}"
@@ -603,6 +604,7 @@ fn tampering_with_the_asset_breaks_the_hard_binding() {
             status_code::TIMESTAMP_UNTRUSTED,
             status_code::CLAIM_SIGNATURE_INSIDE_VALIDITY,
             status_code::SIGNING_CREDENTIAL_UNTRUSTED,
+            status_code::SIGNING_CREDENTIAL_OCSP_SKIPPED,
             status_code::ASSERTION_DATAHASH_MISMATCH,
         ],
         "the assertions and the credential are untouched; only the asset changed: {report:#?}"

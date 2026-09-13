@@ -70,6 +70,30 @@ skip = [
     { crate = "crypto-common" },
     { crate = "digest" },
     { crate = "sha2" },
+
+    # `reqwest` (contentauth-c2pa-rs-compat's default OCSP transport) wants
+    # `base64` 0.23 directly, while `hyper-util` — one of its own
+    # dependencies — is still on 0.22. Both live entirely inside
+    # `reqwest`'s own dependency graph; this workspace has no `base64`
+    # dependency of its own to align them with.
+    { crate = "base64" },
+
+    # Also entirely inside `reqwest`'s own dependency graph, and not this
+    # workspace's to resolve:
+    #
+    # * `core-foundation` 0.9 (via `system-configuration`, for
+    #   `reqwest`'s system-proxy support) vs. 0.10 (via
+    #   `rustls-platform-verifier`/`security-framework`, for its default
+    #   TLS certificate verification) — two macOS Security-framework
+    #   binding generations reqwest's own dependencies have not
+    #   converged on yet.
+    # * `getrandom` 0.2 (the RustCrypto generation this workspace's own
+    #   signing code already uses — see the `sha2` et al. entries above)
+    #   vs. 0.4, pulled in only as a *build-time* dependency of
+    #   `aws-lc-sys` (via `cc`/`jobserver`/`cmake`) and never linked into
+    #   the compiled library.
+    { crate = "core-foundation" },
+    { crate = "getrandom" },
 ]
 
 [licenses]
@@ -77,6 +101,13 @@ allow = [
     "Apache-2.0",
     "BSD-2-Clause",
     "BSD-3-Clause",
+    # `webpki-root-certs` (a compiled-in Mozilla root certificate bundle,
+    # pulled in transitively by `reqwest`'s default TLS stack via
+    # `rustls-platform-verifier`) licenses the bundled *data* under this
+    # license rather than one of the code licenses above. Permissive, and
+    # the same license Mozilla's own root program uses for its CA
+    # certificate data more broadly.
+    "CDLA-Permissive-2.0",
     "ISC",
     "MIT",
     "MPL-2.0",

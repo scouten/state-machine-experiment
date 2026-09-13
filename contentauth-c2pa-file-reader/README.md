@@ -24,14 +24,16 @@ reusable code instead of test scaffolding.
 same style as every other session in this workspace, that composes a
 handler's `locate` operation with a `ReadSession` and speaks a single
 merged request vocabulary — `FileReadRequest::{Read, Length,
-CurrentDateTime}` — to whatever host drives it. `ReadRequest::ManifestStore`
+CurrentDateTime, Ocsp}` — to whatever host drives it. `ReadRequest::ManifestStore`
 never reaches that host at all: this session answers it internally, from
 `locate`'s result. A host that fetches byte ranges over a network, that
-already has the asset cached in some other shape, or that wants to
-supply its own clock instead of the wall clock, drives `FileReadSession`
-directly — see
+already has the asset cached in some other shape, that wants to supply
+its own clock instead of the wall clock, or that can answer `Ocsp` with a
+real network request, drives `FileReadSession` directly — see
 [`examples/custom_host.rs`](examples/custom_host.rs) for one that answers
-from memory and reports a fixed instant instead of the wall clock:
+from memory and reports a fixed instant instead of the wall clock, and
+[`contentauth-c2pa-rs-compat`](../contentauth-c2pa-rs-compat)'s `src/host.rs`
+for one that answers `Ocsp` with a real, `reqwest`-backed HTTP request:
 
 ```sh
 cargo run --example custom_host -p contentauth-c2pa-file-reader
@@ -40,7 +42,9 @@ cargo run --example custom_host -p contentauth-c2pa-file-reader
 `read_manifest` and `read_manifest_from_file` are a host for exactly that
 session, for the common case: a caller with plain, synchronous
 `Read + Seek` access to the asset and no need for anything but the wall
-clock.
+clock. Neither has network access, so both answer `Ocsp` with
+`FileReadReply::Failed` — safe, since OCSP checking is fail-open (see
+`contentauth-c2pa-reader`'s `ReadSettings::check_ocsp`).
 
 ```rust,no_run
 use contentauth_c2pa_file_reader::{read_manifest_from_file, ReadSettings};

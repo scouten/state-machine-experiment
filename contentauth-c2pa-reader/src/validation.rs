@@ -124,10 +124,78 @@ pub mod status_code {
     pub const SIGNING_CREDENTIAL_TRUSTED: &str = "signingCredential.trusted";
 
     /// The signer's certificate does not chain to a configured trust
-    /// anchor — including because none are configured.
+    /// anchor — including because none are configured. Also the code the
+    /// C2PA specification names for a *different* finding this crate
+    /// reports the same way: a CA certificate above the signer, found
+    /// revoked by OCSP.
     ///
-    /// Deliberately not a failure; see [`super::ValidationStatus::is_failure`].
+    /// The two are not equally severe, even though they share a code: an
+    /// ordinary untrusted chain is not a failure (see
+    /// [`super::ValidationStatus::is_failure`]) — a manifest with no
+    /// configured trust anchors is meant to read as
+    /// [`super::ValidationState::Valid`], not `Invalid`. A confirmed
+    /// *revoked* CA certificate is different: §15.9's own text is explicit
+    /// that "the claim signature shall be rejected with a failure status
+    /// of `signingCredential.untrusted`" in that case. Since the code
+    /// string alone cannot carry that distinction, the revoked-CA finding
+    /// is built with a constructor that forces it to be treated as a
+    /// failure regardless of code, instead of the plain one, in the read
+    /// session's own revocation handling.
     pub const SIGNING_CREDENTIAL_UNTRUSTED: &str = "signingCredential.untrusted";
+
+    /// A validly signed, timely OCSP response established that the
+    /// *signer's own* certificate was not revoked at the time of signing
+    /// (C2PA spec §15.9.1/§15.9.2).
+    ///
+    /// A finding, not merely a non-failure: reached only when a stapled or
+    /// freshly fetched response actually satisfied the spec's acceptance
+    /// conditions (`CertID` match, an authorized responder's signature,
+    /// the right time window). See [`SIGNING_CREDENTIAL_OCSP_SKIPPED`],
+    /// [`SIGNING_CREDENTIAL_OCSP_INACCESSIBLE`] and
+    /// [`SIGNING_CREDENTIAL_OCSP_UNKNOWN`] for the ways nothing was
+    /// established either way.
+    pub const SIGNING_CREDENTIAL_OCSP_NOT_REVOKED: &str = "signingCredential.ocsp.notRevoked";
+
+    /// A validly signed OCSP response established that the *signer's own*
+    /// certificate had been revoked at the time of signing (C2PA spec
+    /// §15.9.1/§15.9.2).
+    ///
+    /// Unlike [`SIGNING_CREDENTIAL_UNTRUSTED`] (used instead for a revoked
+    /// certificate further up the path), this is a failure: the spec calls
+    /// for the claim itself to be rejected when its own signer's
+    /// credential is revoked — *when this is the active manifest's own
+    /// chain*. The same code on an ingredient's chain is still recorded,
+    /// but built so it does not count as a failure instead, since an
+    /// ingredient's own revocation does not, by itself, invalidate the
+    /// asset being read (see the read session's own revocation handling).
+    pub const SIGNING_CREDENTIAL_OCSP_REVOKED: &str = "signingCredential.ocsp.revoked";
+
+    /// The validator chose not to query an OCSP responder online for the
+    /// signer's certificate — no stapled or in-store response resolved
+    /// its status, and [`crate::read::ReadSettings::check_ocsp`] is
+    /// `false`.
+    ///
+    /// Informational, not a failure: the C2PA specification makes the
+    /// online query optional specifically because it can reveal the
+    /// asset's identity to an observer (§15.9.2's own note).
+    pub const SIGNING_CREDENTIAL_OCSP_SKIPPED: &str = "signingCredential.ocsp.skipped";
+
+    /// The validator attempted to query an OCSP responder for the
+    /// signer's certificate but could not obtain a usable response —
+    /// unreachable, malformed, unauthenticated, or naming the wrong
+    /// certificate.
+    ///
+    /// Informational, not a failure: this is exactly the fail-open case
+    /// the C2PA specification's own offline-verification design goal
+    /// requires. See [`crate::read::ReadSettings::check_ocsp`].
+    pub const SIGNING_CREDENTIAL_OCSP_INACCESSIBLE: &str = "signingCredential.ocsp.inaccessible";
+
+    /// An authenticated OCSP response for the signer's certificate
+    /// reported `certStatus` as `unknown`.
+    ///
+    /// Informational, not a failure — the responder was reached and
+    /// answered honestly; it simply does not know this certificate.
+    pub const SIGNING_CREDENTIAL_OCSP_UNKNOWN: &str = "signingCredential.ocsp.unknown";
 
     /// The timestamp token is well-formed, its message imprint covers the
     /// right bytes, and the authority's certificates were inside their
@@ -202,6 +270,27 @@ pub struct ValidationStatus {
 
     /// Human-readable explanation.
     pub explanation: Option<String>,
+
+    /// Overrides [`Self::is_failure`] to this value, regardless of
+    /// [`Self::code`], when set.
+    ///
+    /// Two circumstances need this, both because a single code string is
+    /// shared between two findings of different severity:
+    ///
+    /// * A CA certificate confirmed revoked by OCSP is reported under
+    ///   [`status_code::SIGNING_CREDENTIAL_UNTRUSTED`] — the same code an
+    ///   ordinary chain that simply does not reach a trust anchor also
+    ///   carries — but, unlike that ordinary case, C2PA spec §15.9 calls
+    ///   for the claim signature itself to be rejected when it is *this*
+    ///   chain's own confirmed revocation, not merely a missing anchor.
+    ///   See [`Self::for_url_forcing_failure`].
+    /// * A revoked *signer* certificate on an ingredient's chain is
+    ///   reported under [`status_code::SIGNING_CREDENTIAL_OCSP_REVOKED`]
+    ///   — normally always a failure — but an ingredient's own revocation
+    ///   does not, by itself, invalidate the asset being read (see
+    ///   [`crate::read::ReadSession`]'s own `is_active` field). See
+    ///   [`Self::for_url_suppressing_failure`].
+    is_failure_override: Option<bool>,
 }
 
 impl ValidationStatus {
@@ -211,6 +300,33 @@ impl ValidationStatus {
             code: code.to_string(),
             url: Some(url.to_string()),
             explanation: Some(explanation.into()),
+            is_failure_override: None,
+        }
+    }
+
+    /// As [`Self::for_url`], but [`Self::is_failure`] reports `true`
+    /// regardless of `code` — see [`Self::is_failure_override`].
+    pub(crate) fn for_url_forcing_failure(
+        code: &str,
+        url: &str,
+        explanation: impl Into<String>,
+    ) -> Self {
+        Self {
+            is_failure_override: Some(true),
+            ..Self::for_url(code, url, explanation)
+        }
+    }
+
+    /// As [`Self::for_url`], but [`Self::is_failure`] reports `false`
+    /// regardless of `code` — see [`Self::is_failure_override`].
+    pub(crate) fn for_url_suppressing_failure(
+        code: &str,
+        url: &str,
+        explanation: impl Into<String>,
+    ) -> Self {
+        Self {
+            is_failure_override: Some(false),
+            ..Self::for_url(code, url, explanation)
         }
     }
 
@@ -220,17 +336,27 @@ impl ValidationStatus {
     /// algorithm the core cannot compute) are deliberately not failures:
     /// they mean "not checked", which is weaker than "checked and wrong".
     ///
-    /// [`status_code::SIGNING_CREDENTIAL_UNTRUSTED`] is also not a failure,
-    /// for a different reason: the check ran and came back negative, but
-    /// what it found is that the signer is absent from *this verifier's*
+    /// [`status_code::SIGNING_CREDENTIAL_UNTRUSTED`] is also not a failure
+    /// by itself, for a different reason: usually the check ran and came
+    /// back negative because the signer is absent from *this verifier's*
     /// anchor list. That is a statement about the configuration, not about
     /// the manifest, and treating it as a failure would make
     /// [`ValidationState::Valid`] — defined as "cryptographically valid,
     /// but not on the configured trust list" — unreachable. (c2pa-rs
     /// classifies the same code as a failure in `log_kind` and then
     /// excludes it again where the state is computed; this crate draws the
-    /// line once, here.)
+    /// line once, here.) A revoked-CA finding carrying that same code
+    /// overrides this by forcing failure regardless of code, since that
+    /// circumstance is not the ordinary one — and a revoked ingredient
+    /// signer overrides the reverse way, since
+    /// [`status_code::SIGNING_CREDENTIAL_OCSP_REVOKED`] is otherwise
+    /// always a failure but an ingredient's own revocation must not, by
+    /// itself, invalidate the asset being read.
     pub fn is_failure(&self) -> bool {
+        if let Some(is_failure) = self.is_failure_override {
+            return is_failure;
+        }
+
         matches!(
             self.code.as_str(),
             status_code::ASSERTION_HASHEDURI_MISMATCH
@@ -241,6 +367,7 @@ impl ValidationStatus {
                 | status_code::CLAIM_SIGNATURE_OUTSIDE_VALIDITY
                 | status_code::SIGNING_CREDENTIAL_INVALID
                 | status_code::SIGNING_CREDENTIAL_EXPIRED
+                | status_code::SIGNING_CREDENTIAL_OCSP_REVOKED
         )
     }
 
@@ -441,6 +568,7 @@ pub(crate) fn check_claim_signature(
                 url,
                 certificates,
                 timestamp,
+                rvals: signature.rvals,
             })
         }
 
@@ -810,6 +938,35 @@ mod tests {
         assert_eq!(
             statuses[1].explanation.as_deref(),
             Some("timestamp header is not a map")
+        );
+    }
+
+    #[test]
+    fn stapled_ocsp_responses_are_carried_onto_the_pending_chain() {
+        let mut ocsp_vals = BTreeMap::new();
+        ocsp_vals.insert(
+            Value::Text("ocspVals".to_string()),
+            Value::Array(vec![Value::Bytes(vec![1, 2, 3])]),
+        );
+        let unprotected = Value::Map(BTreeMap::from([(
+            Value::Text("rVals".to_string()),
+            Value::Map(ocsp_vals),
+        )]));
+        let signature = test_support::claim_signature_with_unprotected(b"claim", unprotected);
+
+        let mut statuses = Vec::new();
+        let chain = check_claim_signature(
+            "urn:uuid:x",
+            b"claim",
+            SignatureBox::Present(&signature),
+            &mut statuses,
+        )
+        .unwrap();
+
+        assert_eq!(chain.rvals, vec![vec![1, 2, 3]]);
+        assert_eq!(
+            statuses.iter().map(|s| s.code.as_str()).collect::<Vec<_>>(),
+            [status_code::CLAIM_SIGNATURE_VALIDATED]
         );
     }
 }

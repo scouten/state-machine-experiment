@@ -56,6 +56,22 @@ pub enum Error {
     #[error(transparent)]
     Read(#[from] contentauth_c2pa_file_reader::Error),
 
+    /// The asset file could not be opened.
+    ///
+    /// A crate-local variant rather than
+    /// [`contentauth_c2pa_file_reader::Error::Io`]: `src/host.rs` opens the
+    /// file itself (so it can also answer OCSP requests over the network),
+    /// and that variant's fields are private to its own crate.
+    #[error("could not open {path}: {source}")]
+    Io {
+        /// The path that could not be opened.
+        path: PathBuf,
+
+        /// The underlying I/O error.
+        #[source]
+        source: std::io::Error,
+    },
+
     /// [`crate::Reader::json_checked`] could not serialize the report.
     ///
     /// Kept for parity with c2pa-rs's own fallible `json_checked`/`json`
@@ -66,4 +82,14 @@ pub enum Error {
     /// richer report.
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+
+    /// The `reqwest` client used for live OCSP requests could not be
+    /// constructed.
+    ///
+    /// Expected to stay unreachable with this crate's own client
+    /// configuration (nothing it sets can fail to build) — kept as a real
+    /// error rather than a panic since nothing rules out a future
+    /// TLS/proxy configuration knob doing so.
+    #[error(transparent)]
+    Http(#[from] reqwest::Error),
 }
