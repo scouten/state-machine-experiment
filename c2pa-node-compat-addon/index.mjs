@@ -177,25 +177,21 @@ export async function openSource(asset) {
 
   if (asset?.path) {
     const handle = await open(asset.path, "r");
-    try {
-      const { size } = await handle.stat();
-      return {
-        size,
-        async read(start, len) {
-          const out = Buffer.allocUnsafe(len);
-          for (let got = 0; got < len; ) {
-            const { bytesRead } = await handle.read(out, got, len - got, start + got);
-            if (bytesRead === 0) throw new Error(`unexpected end of file at ${start + got}`);
-            got += bytesRead;
-          }
-          return out;
-        },
-        close: () => handle.close(),
-      };
-    } catch (error) {
-      await handle.close();
-      throw error;
-    }
+    // Close the handle if it cannot even be measured.
+    const { size } = await handle.stat().catch((e) => handle.close().then(() => Promise.reject(e)));
+    return {
+      size,
+      async read(start, len) {
+        const out = Buffer.allocUnsafe(len);
+        for (let got = 0; got < len; ) {
+          const { bytesRead } = await handle.read(out, got, len - got, start + got);
+          if (bytesRead === 0) throw new Error(`unexpected end of file at ${start + got}`);
+          got += bytesRead;
+        }
+        return out;
+      },
+      close: () => handle.close(),
+    };
   }
 
   throw new TypeError("asset needs a path, a buffer, or read/size");

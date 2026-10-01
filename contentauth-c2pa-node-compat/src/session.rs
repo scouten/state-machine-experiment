@@ -166,9 +166,7 @@ impl NodeSession {
                         continue;
                     }
                     let handle = self.next_handle;
-                    let pending = describe(handle, &request.kind).ok_or_else(|| {
-                        C2paError::BadParam(format!("unsupported request {:?}", request.kind))
-                    })?;
+                    let pending = describe(handle, &request.kind)?;
                     self.next_handle += 1;
                     self.reported.insert(request.id, handle);
                     self.handles.insert(handle, request.id);
@@ -210,11 +208,11 @@ impl NodeSession {
 
 /// Describes `request` to the host as plain data, under `handle`.
 ///
-/// `None` for a request this wrapper has no description for:
+/// Fails for a request this wrapper has no description for:
 /// `FileReadRequest` is `#[non_exhaustive]`, so a future variant must fail
 /// the read loudly rather than be silently misdescribed.
-fn describe(handle: u64, request: &FileReadRequest) -> Option<PendingRequest> {
-    Some(match request {
+fn describe(handle: u64, request: &FileReadRequest) -> Result<PendingRequest, C2paError> {
+    Ok(match request {
         FileReadRequest::Read { range, .. } => PendingRequest::Read {
             id: handle,
             start: range.start,
@@ -227,7 +225,11 @@ fn describe(handle: u64, request: &FileReadRequest) -> Option<PendingRequest> {
             url: url.clone(),
             request_der: request_der.clone(),
         },
-        _ => return None,
+        other => {
+            return Err(C2paError::BadParam(format!(
+                "unsupported request {other:?}"
+            )))
+        }
     })
 }
 
@@ -259,7 +261,7 @@ mod tests {
         let range = ByteRange { start: 5, len: 7 };
 
         assert_eq!(
-            describe(1, &FileReadRequest::Read { stream, range }),
+            describe(1, &FileReadRequest::Read { stream, range }).ok(),
             Some(PendingRequest::Read {
                 id: 1,
                 start: 5,
@@ -267,11 +269,11 @@ mod tests {
             })
         );
         assert_eq!(
-            describe(2, &FileReadRequest::Length { stream }),
+            describe(2, &FileReadRequest::Length { stream }).ok(),
             Some(PendingRequest::Length { id: 2 })
         );
         assert_eq!(
-            describe(3, &FileReadRequest::CurrentDateTime),
+            describe(3, &FileReadRequest::CurrentDateTime).ok(),
             Some(PendingRequest::CurrentDateTime { id: 3 })
         );
         assert_eq!(
@@ -281,7 +283,8 @@ mod tests {
                     url: "http://ocsp.example/".to_string(),
                     request_der: vec![1, 2, 3],
                 }
-            ),
+            )
+            .ok(),
             Some(PendingRequest::Ocsp {
                 id: 4,
                 url: "http://ocsp.example/".to_string(),
