@@ -25,7 +25,7 @@ contentauth-c2pa-rs-compat = { path = "../contentauth-c2pa-rs-compat" }
 # workspace's own dev-dependency on `c2pa_raw_crypto` is configured, and
 # `default_http`/`openssl` (c2pa-rs's actual defaults) are dropped since
 # this crate never reads anything remote.
-c2pa = { version = "0.90", default-features = false, features = [
+c2pa = { version = "0.91", default-features = false, features = [
     "file_io",
     "rust_native_crypto",
 ] }

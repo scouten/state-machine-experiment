@@ -46,7 +46,11 @@ decoding, report population) and verifies:
   manifest, but a response that *is* received and authenticated, yet does
   not affirmatively vouch for the certificate, reads as revoked rather
   than merely inconclusive — see [`src/ocsp.rs`](src/ocsp.rs)'s own module
-  docs.
+  docs. CA certificates above the signer are checked the same way (stapled
+  response, else their own AIA responder), but are reported only if
+  revoked, as `signingCredential.untrusted`. A live response's responder
+  certificate must be valid *now*, not merely when the response says it
+  was produced.
 
 A report can reach `Trusted` or `Valid`. Not yet checked, and able to
 change a verdict: ingredient manifests and remote manifest retrieval.

@@ -113,7 +113,10 @@ pub struct ReadSettings {
     /// reads as [`status_code::SIGNING_CREDENTIAL_OCSP_REVOKED`] rather
     /// than merely inconclusive. A revoked *CA* certificate above the
     /// signer is reported differently — see
-    /// [`status_code::SIGNING_CREDENTIAL_UNTRUSTED`].
+    /// [`status_code::SIGNING_CREDENTIAL_UNTRUSTED`] — and is looked up the
+    /// same way (a stapled response, else its own AIA responder when this
+    /// is `true`), though a CA's responder being skipped, unreachable or
+    /// unconvincing records nothing, since §15.9 defines no status for it.
     ///
     /// The timestamping authority's own chain is never OCSP-checked: a
     /// stale timestamp authority credential is a much smaller concern than
@@ -347,9 +350,10 @@ struct PendingChainOcsp {
     attested: Option<i64>,
 
     /// Checks not yet answered by an online query, each paired with the
-    /// host request it was issued under. Always for the claim signer's
-    /// own certificate — see [`ReadSession::handle_awaiting_ocsp_responses`].
-    checks: Vec<(RequestId, crate::ocsp::PendingOcspCheck)>,
+    /// host request it was issued under and whether it asks about the
+    /// claim signer's own certificate (`true`) or a CA above it (`false`)
+    /// — see [`ReadSession::handle_awaiting_ocsp_responses`].
+    checks: Vec<(RequestId, crate::ocsp::PendingOcspCheck, bool)>,
 }
 
 impl ReadSession {
@@ -795,7 +799,7 @@ impl ReadSession {
                                     url: responder_url.clone(),
                                     request_der: check.request_der.clone(),
                                 });
-                                online_checks.push((request, check));
+                                online_checks.push((request, check, true));
                             }
 
                             (Some(_), false) => {
@@ -817,8 +821,23 @@ impl ReadSession {
                     }
 
                     // A CA certificate whose staples resolved nothing:
-                    // §15.9 has nothing further to say about it.
-                    None | Some(ocsp::StapledOutcome::Inconclusive) => {}
+                    // §15.9 says a validator "should" look its status up
+                    // through its own AIA extension, so ask online when
+                    // allowed to. Whatever the CA's responder says,
+                    // nothing is recorded unless the CA turns out to be
+                    // revoked: §15.9 defines no skipped, inaccessible or
+                    // not-revoked status for a CA.
+                    None | Some(ocsp::StapledOutcome::Inconclusive) => {
+                        if let (Some(responder_url), true) =
+                            (&check.responder_url, self.settings.check_ocsp)
+                        {
+                            let request = self.core.issue(ReadRequest::Ocsp {
+                                url: responder_url.clone(),
+                                request_der: check.request_der.clone(),
+                            });
+                            online_checks.push((request, check, false));
+                        }
+                    }
                 }
             }
 
@@ -856,9 +875,10 @@ impl ReadSession {
     /// establish, and moves on once every chain's checks are accounted
     /// for — answered or not.
     ///
-    /// Every check queued here is for a claim signer's own certificate —
-    /// [`Self::evaluate_trust`] never queues one for a CA certificate, since
-    /// §15.9 only defines an online step for the signer.
+    /// A queued check is for the claim signer's own certificate or, per
+    /// §15.9's "should", for a CA above it; only the signer's gets the
+    /// full §15.9.2 treatment, a CA's being reported only if it is revoked
+    /// (see [`ocsp::evaluate_ca_online`]).
     fn handle_awaiting_ocsp_responses(
         &mut self,
         mut pending: Vec<PendingChainOcsp>,
@@ -867,9 +887,29 @@ impl ReadSession {
         for chain_pending in &mut pending {
             let mut still_outstanding = Vec::with_capacity(chain_pending.checks.len());
 
-            for (request, check) in chain_pending.checks.drain(..) {
+            for (request, check, is_signer) in chain_pending.checks.drain(..) {
                 match self.core.take_reply(request) {
-                    None => still_outstanding.push((request, check)),
+                    None => still_outstanding.push((request, check, is_signer)),
+
+                    Some(ReadHostReply::Ocsp(response_der)) if !is_signer => {
+                        if ocsp::evaluate_ca_online(
+                            &check,
+                            &response_der,
+                            chain_pending.now,
+                            chain_pending.attested,
+                        ) {
+                            self.apply_revocation(
+                                false,
+                                chain_pending.is_active,
+                                &chain_pending.url,
+                                "an OCSP response says a certificate in this credential's chain was revoked",
+                            );
+                        }
+                    }
+
+                    // A CA's responder that cannot be reached is no
+                    // finding at all — see `evaluate_trust`.
+                    Some(ReadHostReply::Failed(_)) if !is_signer => {}
 
                     Some(ReadHostReply::Ocsp(response_der)) => {
                         let outcome = ocsp::evaluate_online(
@@ -2141,11 +2181,10 @@ mod tests {
 
     #[test]
     fn a_ca_certificates_unresolved_staples_are_silently_skipped() {
-        // The CA link (intermediate/root) never gets an online query —
-        // only the signer's own certificate does — so with nothing in the
-        // manifest store to resolve it either, §15.9 has nothing further
-        // to say about it: no status of its own, and it never keeps this
-        // chain's evaluation outstanding.
+        // The CA link (intermediate/root) names no responder here, so
+        // with nothing in the manifest store to resolve it either, §15.9
+        // has nothing further to say about it: no status of its own, and
+        // it never keeps this chain's evaluation outstanding.
         let mut session = ReadSession::new(ReadSettings::default());
         let (certificates, anchors) = three_tier_chain();
         session.anchors = anchors;
@@ -2204,6 +2243,139 @@ mod tests {
                 ..
             }))
         ));
+    }
+
+    /// [`three_tier_chain`] with an OCSP responder named on the CA (the
+    /// intermediate), but not on the signer.
+    fn three_tier_chain_with_ca_responder() -> (Vec<Certificate>, Vec<Certificate>) {
+        let (mut certificates, anchors) = three_tier_chain();
+        certificates[1].ocsp_responder_url = Some("http://ocsp.example/ca".to_string());
+        (certificates, anchors)
+    }
+
+    fn ocsp_status_codes(session: &ReadSession) -> Vec<&str> {
+        session
+            .report
+            .statuses
+            .iter()
+            .filter(|s| s.code.starts_with("signingCredential.ocsp"))
+            .map(|s| s.code.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn a_ca_certificate_naming_a_responder_is_asked_online_too() {
+        let mut session = ReadSession::new(ReadSettings::default());
+        let (certificates, anchors) = three_tier_chain_with_ca_responder();
+        session.anchors = anchors;
+
+        let chains = vec![pending_chain("urn:uuid:one", "self#jumbf=x", certificates)];
+        let pending = session.evaluate_trust(&chains, Some(NOW));
+
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].checks.len(), 1);
+        assert!(!pending[0].checks[0].2, "the check should be for the CA");
+        assert_eq!(
+            pending[0].checks[0].1.responder_url.as_deref(),
+            Some("http://ocsp.example/ca")
+        );
+    }
+
+    #[test]
+    fn a_ca_certificate_is_not_asked_online_when_online_checking_is_disabled() {
+        let mut session = ReadSession::new(ReadSettings {
+            check_ocsp: false,
+            ..ReadSettings::default()
+        });
+        let (certificates, anchors) = three_tier_chain_with_ca_responder();
+        session.anchors = anchors;
+
+        let chains = vec![pending_chain("urn:uuid:one", "self#jumbf=x", certificates)];
+        let pending = session.evaluate_trust(&chains, Some(NOW));
+
+        assert!(pending.is_empty(), "{pending:?}");
+        // Only the signer's own skipped status; a CA has none of its own.
+        assert_eq!(
+            ocsp_status_codes(&session),
+            [status_code::SIGNING_CREDENTIAL_OCSP_SKIPPED]
+        );
+    }
+
+    #[test]
+    fn an_unreachable_or_unconvincing_ca_responder_records_nothing_and_leaves_trust_untouched() {
+        for reply in [
+            ReadHostReply::Failed(HostError::new("no network")),
+            ReadHostReply::Ocsp(vec![0xff, 0xff]),
+        ] {
+            let mut session = ReadSession::new(ReadSettings::default());
+            session.report.active_manifest = Some("urn:uuid:one".to_string());
+            let (certificates, anchors) = three_tier_chain_with_ca_responder();
+            session.anchors = anchors;
+
+            let chains = vec![pending_chain("urn:uuid:one", "self#jumbf=x", certificates)];
+            let pending = session.evaluate_trust(&chains, Some(NOW));
+            let trust = session.trust;
+            session.proceed_after_trust(pending, None);
+
+            resolve_ocsp(&mut session, reply);
+
+            assert_eq!(session.trust, trust);
+            // Only the signer's own skipped status, recorded up front.
+            assert_eq!(
+                ocsp_status_codes(&session),
+                [status_code::SIGNING_CREDENTIAL_OCSP_SKIPPED]
+            );
+        }
+    }
+
+    /// A session parked awaiting one *CA* OCSP check's reply, as
+    /// `evaluate_trust` would leave it, with a response that revokes it at
+    /// 1_200 (the claim being judged at 1_500).
+    fn session_awaiting_a_revoked_ca(is_active: bool) -> (ReadSession, ReadHostReply) {
+        let (check, response) = ocsp::revoked_fixture(1_200);
+
+        let mut session = ReadSession::new(ReadSettings::default());
+        session.report.active_manifest = Some("urn:uuid:active".to_string());
+        session.trust = Some(Trust::Anchored);
+
+        let request = session.core.issue(ReadRequest::Ocsp {
+            url: "http://ocsp.example/ca".to_string(),
+            request_der: check.request_der.clone(),
+        });
+        let pending = vec![PendingChainOcsp {
+            url: "self#jumbf=x".to_string(),
+            is_active,
+            now: Some(1_500),
+            attested: Some(1_500),
+            checks: vec![(request, check, false)],
+        }];
+        session.proceed_after_trust(pending, None);
+
+        (session, ReadHostReply::Ocsp(response))
+    }
+
+    #[test]
+    fn a_revoked_ca_in_a_live_response_rejects_the_active_chain() {
+        let (mut session, reply) = session_awaiting_a_revoked_ca(true);
+
+        resolve_ocsp(&mut session, reply);
+
+        assert_eq!(session.trust, Some(Trust::Rejected));
+        let status = session.report.statuses.last().unwrap();
+        assert_eq!(status.code, status_code::SIGNING_CREDENTIAL_UNTRUSTED);
+        assert!(status.is_failure());
+    }
+
+    #[test]
+    fn a_revoked_ca_in_a_live_response_on_an_ingredient_chain_is_not_a_failure() {
+        let (mut session, reply) = session_awaiting_a_revoked_ca(false);
+
+        resolve_ocsp(&mut session, reply);
+
+        assert_eq!(session.trust, Some(Trust::Anchored));
+        let status = session.report.statuses.last().unwrap();
+        assert_eq!(status.code, status_code::SIGNING_CREDENTIAL_UNTRUSTED);
+        assert!(!status.is_failure());
     }
 
     /// Drives a session already parked in `State::AwaitingOcspResponses`
