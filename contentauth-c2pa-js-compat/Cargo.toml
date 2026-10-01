@@ -1,0 +1,84 @@
+[package]
+name = "contentauth-c2pa-js-compat"
+version = "0.1.0"
+description = "Experimental compatibility shim reproducing a slice of c2pa-js's c2pa-wasm reader API, with the async host driving this workspace's sans-I/O read engine"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["c2pa", "content-credentials", "compatibility", "wasm"]
+categories = ["api-bindings", "wasm"]
+publish = false
+
+[features]
+# The browser adapters in `src/web.rs`: `Blob` for `web_sys::Blob`,
+# `WebPlatform`, and a `#[wasm_bindgen]`-exported `WasmReader` named and
+# shaped exactly like c2pa-wasm's own. Only has an effect when compiling
+# for `wasm32-unknown-unknown` — the dependencies it enables are declared
+# for that target alone below, so the feature is a no-op everywhere else
+# and the rest of this crate stays free of any wasm-bindgen dependency.
+web = [
+    "dep:js-sys",
+    "dep:serde-wasm-bindgen",
+    "dep:wasm-bindgen",
+    "dep:wasm-bindgen-futures",
+    "dep:web-sys",
+]
+
+[dependencies]
+# The sans-I/O session this crate's async host drives (`src/drive.rs`),
+# and its `FileReadRequest`/`FileReadReply` vocabulary.
+contentauth-c2pa-file-reader = { path = "../contentauth-c2pa-file-reader" }
+
+# `ReadReport`, `Manifest`, `ValidationState` — the read-side result types
+# `src/manifest_store.rs` re-serializes into c2pa-wasm's JSON shapes.
+contentauth-c2pa-reader = { path = "../contentauth-c2pa-reader" }
+
+# The only `FormatHandler` wired up today; see `src/format.rs` for where a
+# second one would plug in.
+contentauth-c2pa-format-jpeg = { path = "../contentauth-c2pa-format-jpeg" }
+
+# `ByteRange` and `HostError`: the vocabulary this crate's `Blob` and
+# `Platform` traits speak, shared with every other host in this workspace.
+contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
+
+# The `Session`/`Step` interaction contract `src/drive.rs` drives
+# `FileReadSession` through.
+contentauth-state-machine = { path = "../contentauth-state-machine" }
+
+# Decodes the PEM-armored trust anchors a c2pa-rs-style settings JSON
+# carries (`src/context.rs`); the same `base64` line already in the tree
+# via `contentauth-c2pa-rs-compat`'s `reqwest`.
+base64 = "0.22"
+# `Reader::from_blob`'s `context_json` argument is c2pa-rs's own settings
+# JSON; `Reader::json`/`manifest_store` reproduce c2pa-wasm's JSON-string
+# and serializable-object contracts.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2.0.20"
+
+# See the `web` feature above. Declared for the browser target only, so
+# `cargo check --target wasm32-wasip2` and every native build never see
+# them, feature or no feature.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+js-sys = { version = "0.3", optional = true }
+serde-wasm-bindgen = { version = "0.6", optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+web-sys = { version = "0.3", features = ["Blob"], optional = true }
+
+[dev-dependencies]
+# Builds and signs a manifest to embed in this crate's own round-trip test
+# fixture, exactly as the sibling crates' own tests do.
+contentauth-c2pa-builder = { path = "../contentauth-c2pa-builder" }
+# Test-only: plays the "host does it by hand" role to embed a manifest into
+# a JPEG fixture before handing it to this crate's own `Reader`.
+contentauth-c2pa-format = { path = "../contentauth-c2pa-format", features = [
+    "test-util",
+] }
+# Test-only: plays the "host signer" in the round-trip test.
+c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
+    "rust_native_crypto",
+] }

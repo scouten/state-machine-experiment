@@ -114,6 +114,36 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   can answer a live OCSP check with a real HTTP request — deliberately the
   only crate in this workspace with a network dependency; every other
   read/validation behavior underneath it already existed.
+- **`contentauth-c2pa-js-compat`** — the same experiment for the *other*
+  public surface built on c2pa-rs: the Rust side of the C2PA web SDK,
+  [c2pa-js](https://github.com/contentauth/c2pa-js)'s `c2pa-wasm`
+  package, whose `WasmReader::fromBlob(format, blob, contextJson)` is an
+  `async fn` handed to JavaScript as a `Promise`. `Reader`
+  ([`src/reader.rs`](contentauth-c2pa-js-compat/src/reader.rs)) mirrors
+  `WasmReader` method for method (`from_blob`, `active_label`,
+  `manifest_store`, `active_manifest`, `json`), and `Error` reproduces
+  c2pa-wasm's error-string contract down to the `C2pa(JumbfNotFound)`
+  string c2pa-web maps to `null`. The point of the crate is *where the
+  async lives*: `read_manifest` (`src/drive.rs`) is an async host that
+  drives a `FileReadSession` with an `.await` at every request — asset
+  bytes included, through a `Blob` trait shaped after `Blob.size` and
+  `Blob.slice().arrayBuffer()` — and a `Platform` trait for the clock
+  and OCSP (what c2pa-rs gets from its platform implicitly, and a
+  sans-I/O engine must be handed explicitly). Nothing below this crate
+  is async, and nothing below it changed; the engine it drives is the
+  very one `contentauth-c2pa-rs-compat` drives synchronously, which its
+  tests check by comparing the two hosts' answers. Its `web` feature,
+  compiled only for `wasm32-unknown-unknown` (the dependencies it
+  enables are declared for that target alone), adds `src/web.rs`: `Blob`
+  for `web_sys::Blob`, a `Date.now()`-backed `WebPlatform`, and a
+  `#[wasm_bindgen]`-exported `WasmReader` with c2pa-wasm's own JavaScript
+  names — the one module in the workspace that names a wasm-bindgen type.
+  CI holds it to `cargo check --all-features --target
+  wasm32-unknown-unknown`; there is no browser to run it in. Tests use a
+  hand-rolled executor (no async runtime dependency anywhere) with a
+  `Blob` whose reads genuinely suspend, and show that two reads on one
+  thread interleave at every request boundary — the cooperative yielding
+  c2pa-wasm's `FileReaderSync`-backed, Worker-only stream cannot do.
 - **`c2pa-rs-compat-conformance`** — a differential test harness for the
   crate above, proving the same client code gets the same answer reading
   a file through the real `c2pa` crate as through
