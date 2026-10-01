@@ -92,21 +92,21 @@ pub(crate) fn slice(bytes: &[u8], range: ByteRange) -> Result<&[u8], HostError> 
         .checked_add(range.len)
         .ok_or_else(|| HostError::new("byte range overflows"))?;
 
-    let start = usize::try_from(range.start);
-    let end = usize::try_from(end);
-
-    match (start, end) {
-        (Ok(start), Ok(end)) => bytes.get(start..end),
-        _ => None,
-    }
-    .ok_or_else(|| {
-        HostError::new(format!(
-            "range {}+{} lies past the end of the {}-byte asset",
-            range.start,
-            range.len,
-            bytes.len()
-        ))
-    })
+    // A bound that does not fit a `usize` (only possible on a 32-bit
+    // target) cannot index a slice that does, so it is "past the end" by
+    // the same token as a bound that fits but exceeds the length.
+    usize::try_from(range.start)
+        .ok()
+        .zip(usize::try_from(end).ok())
+        .and_then(|(start, end)| bytes.get(start..end))
+        .ok_or_else(|| {
+            HostError::new(format!(
+                "range {}+{} lies past the end of the {}-byte asset",
+                range.start,
+                range.len,
+                bytes.len()
+            ))
+        })
 }
 
 #[cfg(test)]

@@ -102,9 +102,45 @@ fn unix_seconds(time: std::time::SystemTime) -> i64 {
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use std::time::{Duration, UNIX_EPOCH};
+    use std::{
+        future::Future,
+        pin::pin,
+        task::{Context, Poll, Waker},
+        time::{Duration, SystemTime, UNIX_EPOCH},
+    };
 
     use super::*;
+
+    /// Polls `future` to completion on the current thread. Both of
+    /// `OfflinePlatform`'s futures are ready on their first poll, so a
+    /// no-op waker suffices.
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let mut future = pin!(future);
+        let mut cx = Context::from_waker(Waker::noop());
+        loop {
+            if let Poll::Ready(output) = future.as_mut().poll(&mut cx) {
+                return output;
+            }
+        }
+    }
+
+    #[test]
+    fn the_offline_platform_reports_the_system_clock_as_unix_seconds() {
+        let before = unix_seconds(SystemTime::now());
+        let reported = block_on(OfflinePlatform.current_date_time()).expect("has a clock");
+        let after = unix_seconds(SystemTime::now());
+
+        assert!(
+            (before..=after).contains(&reported),
+            "{reported} is not between {before} and {after}"
+        );
+    }
+
+    #[test]
+    fn the_offline_platform_declines_ocsp_requests() {
+        let result = block_on(OfflinePlatform.ocsp("http://ocsp.example/", &[1, 2, 3]));
+        assert!(result.is_err(), "{result:?}");
+    }
 
     #[test]
     fn unix_seconds_converts_a_time_after_the_epoch() {
