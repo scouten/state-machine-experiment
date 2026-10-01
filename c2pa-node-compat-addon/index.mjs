@@ -160,7 +160,8 @@ export async function answerRequest(request, source, { doFetch, now }) {
   }
 }
 
-async function openSource(asset) {
+/** Exported for tests; not part of the c2pa-node surface. */
+export async function openSource(asset) {
   if (typeof asset?.read === "function") {
     return { size: asset.size, read: asset.read, close: async () => {} };
   }

@@ -161,59 +161,20 @@ impl NodeSession {
             Engine::Complete => Ok(Step::Complete),
             _ => {
                 let mut fresh = Vec::new();
-                let mut refused = Vec::new();
                 for request in self.inner.outstanding_requests() {
                     if self.reported.contains_key(&request.id) {
                         continue;
                     }
                     let handle = self.next_handle;
+                    let pending = describe(handle, &request.kind).ok_or_else(|| {
+                        C2paError::BadParam(format!("unsupported request {:?}", request.kind))
+                    })?;
                     self.next_handle += 1;
                     self.reported.insert(request.id, handle);
                     self.handles.insert(handle, request.id);
-                    fresh.push(match &request.kind {
-                        FileReadRequest::Read { range, .. } => PendingRequest::Read {
-                            id: handle,
-                            start: range.start,
-                            len: range.len,
-                        },
-                        FileReadRequest::Length { .. } => PendingRequest::Length { id: handle },
-                        FileReadRequest::CurrentDateTime => {
-                            PendingRequest::CurrentDateTime { id: handle }
-                        }
-                        FileReadRequest::Ocsp { url, request_der } => PendingRequest::Ocsp {
-                            id: handle,
-                            url: url.clone(),
-                            request_der: request_der.clone(),
-                        },
-                        // `FileReadRequest` is `#[non_exhaustive]`: a request
-                        // this wrapper does not know how to describe is
-                        // refused on the host's behalf, below.
-                        _ => {
-                            refused.push((handle, request.id));
-                            continue;
-                        }
-                    });
+                    fresh.push(pending);
                 }
-
-                if refused.is_empty() {
-                    return Ok(Step::Pending(fresh));
-                }
-                for (handle, id) in refused {
-                    self.handles.remove(&handle);
-                    self.inner
-                        .fulfill(
-                            id,
-                            FileReadReply::Failed(HostError::new("unsupported request")),
-                        )
-                        .map_err(C2paError::from)?;
-                }
-                match self.advance()? {
-                    Step::Pending(more) => {
-                        fresh.extend(more);
-                        Ok(Step::Pending(fresh))
-                    }
-                    Step::Complete => Ok(Step::Complete),
-                }
+                Ok(Step::Pending(fresh))
             }
         }
     }
@@ -228,13 +189,7 @@ impl NodeSession {
             C2paError::BadParam(format!("no outstanding request with handle {id}"))
         })?;
 
-        let reply = match reply {
-            Reply::Bytes(bytes) => FileReadReply::Bytes(bytes),
-            Reply::Length(len) => FileReadReply::Length(len),
-            Reply::Time(secs) => FileReadReply::CurrentDateTime(secs),
-            Reply::Ocsp(bytes) => FileReadReply::OcspResponse(bytes),
-            Reply::Failed(message) => FileReadReply::Failed(HostError::new(message)),
-        };
+        let reply = engine_reply(reply);
 
         self.inner
             .fulfill(engine_id, reply)
@@ -250,5 +205,129 @@ impl NodeSession {
     pub fn finish(self) -> Result<Option<Reader>, Error> {
         let report = self.inner.finish().map_err(C2paError::from)?;
         Ok(report.manifest_store_found.then(|| Reader::new(report)))
+    }
+}
+
+/// Describes `request` to the host as plain data, under `handle`.
+///
+/// `None` for a request this wrapper has no description for:
+/// `FileReadRequest` is `#[non_exhaustive]`, so a future variant must fail
+/// the read loudly rather than be silently misdescribed.
+fn describe(handle: u64, request: &FileReadRequest) -> Option<PendingRequest> {
+    Some(match request {
+        FileReadRequest::Read { range, .. } => PendingRequest::Read {
+            id: handle,
+            start: range.start,
+            len: range.len,
+        },
+        FileReadRequest::Length { .. } => PendingRequest::Length { id: handle },
+        FileReadRequest::CurrentDateTime => PendingRequest::CurrentDateTime { id: handle },
+        FileReadRequest::Ocsp { url, request_der } => PendingRequest::Ocsp {
+            id: handle,
+            url: url.clone(),
+            request_der: request_der.clone(),
+        },
+        _ => return None,
+    })
+}
+
+/// The engine's form of the host's `reply`.
+fn engine_reply(reply: Reply) -> FileReadReply {
+    match reply {
+        Reply::Bytes(bytes) => FileReadReply::Bytes(bytes),
+        Reply::Length(len) => FileReadReply::Length(len),
+        Reply::Time(secs) => FileReadReply::CurrentDateTime(secs),
+        Reply::Ocsp(bytes) => FileReadReply::OcspResponse(bytes),
+        Reply::Failed(message) => FileReadReply::Failed(HostError::new(message)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use contentauth_c2pa_primitives::{ByteRange, StreamId};
+
+    use super::*;
+
+    // No asset in this repository's fixtures is signed by a certificate
+    // with an OCSP responder, so the engine never issues an OCSP request
+    // end to end here; the mapping of that one request and reply is
+    // checked directly instead.
+
+    #[test]
+    fn every_engine_request_is_described_to_the_host() {
+        let stream = StreamId::new(0);
+        let range = ByteRange { start: 5, len: 7 };
+
+        assert_eq!(
+            describe(1, &FileReadRequest::Read { stream, range }),
+            Some(PendingRequest::Read {
+                id: 1,
+                start: 5,
+                len: 7
+            })
+        );
+        assert_eq!(
+            describe(2, &FileReadRequest::Length { stream }),
+            Some(PendingRequest::Length { id: 2 })
+        );
+        assert_eq!(
+            describe(3, &FileReadRequest::CurrentDateTime),
+            Some(PendingRequest::CurrentDateTime { id: 3 })
+        );
+        assert_eq!(
+            describe(
+                4,
+                &FileReadRequest::Ocsp {
+                    url: "http://ocsp.example/".to_string(),
+                    request_der: vec![1, 2, 3],
+                }
+            ),
+            Some(PendingRequest::Ocsp {
+                id: 4,
+                url: "http://ocsp.example/".to_string(),
+                request_der: vec![1, 2, 3],
+            })
+        );
+    }
+
+    #[test]
+    fn every_pending_request_reports_its_own_handle() {
+        let requests = [
+            PendingRequest::Read {
+                id: 7,
+                start: 0,
+                len: 0,
+            },
+            PendingRequest::Length { id: 8 },
+            PendingRequest::CurrentDateTime { id: 9 },
+            PendingRequest::Ocsp {
+                id: 10,
+                url: String::new(),
+                request_der: vec![],
+            },
+        ];
+        let ids: Vec<u64> = requests.iter().map(PendingRequest::id).collect();
+        assert_eq!(ids, [7, 8, 9, 10]);
+    }
+
+    #[test]
+    fn every_host_reply_becomes_the_engines_reply_of_the_same_kind() {
+        assert!(matches!(engine_reply(Reply::Bytes(vec![1])), FileReadReply::Bytes(b) if b == [1]));
+        assert!(matches!(
+            engine_reply(Reply::Length(9)),
+            FileReadReply::Length(9)
+        ));
+        assert!(matches!(
+            engine_reply(Reply::Time(-1)),
+            FileReadReply::CurrentDateTime(-1)
+        ));
+        assert!(matches!(
+            engine_reply(Reply::Ocsp(vec![4, 5])),
+            FileReadReply::OcspResponse(b) if b == [4, 5]
+        ));
+        assert!(matches!(
+            engine_reply(Reply::Failed("no".to_string())),
+            FileReadReply::Failed(e) if e.message == "no"
+        ));
     }
 }

@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import test from "node:test";
 
-import { _native, answerRequest, Reader } from "../index.mjs";
+import { _native, answerRequest, openSource, Reader } from "../index.mjs";
 
 const PATH = new URL("../../contentauth-c2pa-reader/tests/fixtures/C.jpg", import.meta.url)
   .pathname;
@@ -172,4 +174,45 @@ test("a session that is finished, or not finishable yet, says so", () => {
   const session = _native.sessionNew("image/jpeg", "{}");
   assert.throws(() => _native.sessionFinish(session)); // engine not complete
   assert.throws(() => _native.sessionAdvance(session), /already finished/);
+});
+
+test("a file source reads exact ranges, and fails cleanly if the file shrinks underneath it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "c2pa-node-compat-"));
+  const path = join(dir, "a.bin");
+  try {
+    writeFileSync(path, Buffer.from([0, 1, 2, 3, 4, 5, 6, 7]));
+    const source = await openSource({ path });
+    assert.equal(source.size, 8);
+    assert.deepEqual(await source.read(2, 3), Buffer.from([2, 3, 4]));
+
+    truncateSync(path, 4);
+    await assert.rejects(source.read(2, 6), /unexpected end of file at 4/);
+    await source.close();
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
+});
+
+test("a malformed container is an engine error, named as c2pa-rs-style Debug", async () => {
+  await assert.rejects(
+    Reader.fromAsset({ buffer: Buffer.from([0xff, 0xd8, 0xff, 0xe1, 0x00, 0x01]), mimeType: "image/jpeg" }),
+    (err) => err.name.startsWith("C2pa(Read(Format(Malformed("),
+  );
+});
+
+test("a finished session cannot be fulfilled, advanced, or finished again", () => {
+  const session = _native.sessionNew("image/jpeg");
+  for (;;) {
+    const step = _native.sessionAdvance(session);
+    if (step.done) break;
+    for (const r of step.requests) {
+      if (r.kind === "read") _native.sessionFulfill(session, r.id, "bytes", BYTES.subarray(r.start, r.start + r.len));
+      else if (r.kind === "length") _native.sessionFulfill(session, r.id, "length", BYTES.length);
+      else _native.sessionFulfill(session, r.id, "time", 1_800_000_000);
+    }
+  }
+  assert.ok(_native.sessionFinish(session));
+  assert.throws(() => _native.sessionFulfill(session, 0, "length", 1), /already finished/);
+  assert.throws(() => _native.sessionAdvance(session), /already finished/);
+  assert.throws(() => _native.sessionFinish(session), /already finished/);
 });
