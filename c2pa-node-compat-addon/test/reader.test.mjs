@@ -216,3 +216,53 @@ test("a finished session cannot be fulfilled, advanced, or finished again", () =
   assert.throws(() => _native.sessionAdvance(session), /already finished/);
   assert.throws(() => _native.sessionFinish(session), /already finished/);
 });
+
+test("a source that returns the wrong number of bytes cannot corrupt the read", async () => {
+  // The engine, not this driver, enforces the length contract.
+  for (const tamper of [(b) => b.subarray(0, b.length - 1), (b) => Buffer.concat([b, Buffer.from([0])]), () => Buffer.alloc(0)]) {
+    let reads = 0;
+    const asset = {
+      mimeType: "image/jpeg",
+      size: BYTES.length,
+      read: async (start, len) => {
+        const bytes = BYTES.subarray(start, start + len);
+        return ++reads > 3 && len > 1000 ? tamper(bytes) : bytes;
+      },
+    };
+    await assert.rejects(Reader.fromAsset(asset, null, { now }), (err) =>
+      err.name.startsWith("C2pa(Read(Format(ReadLengthMismatch"),
+    );
+  }
+});
+
+test("settings may be given as an object, and are applied", async () => {
+  const asset = () => ({ buffer: BYTES, mimeType: "image/jpeg" });
+  const plain = await Reader.fromAsset(asset(), { verify: { ocsp_fetch: false } }, { now });
+  assert.equal(plain.json().validation_state, "Valid");
+  await assert.rejects(Reader.fromAsset(asset(), { trust: { trust_anchors: "not pem" } }), (err) =>
+    err.name.startsWith("C2pa(BadParam("),
+  );
+});
+
+test("accessors on a store with no active manifest report undefined", () => {
+  assert.equal(new Reader({}).activeLabel(), undefined);
+  assert.equal(new Reader({}).getActive(), undefined);
+  assert.equal(new Reader({ active_manifest: "x" }).getActive(), undefined);
+});
+
+test("a host that allows no requests in flight stalls loudly instead of hanging", async () => {
+  await assert.rejects(Reader.fromAsset({ buffer: BYTES }, null, { now, concurrency: 0 }), /stalled/);
+});
+
+test("a source that throws a non-Error, or replies with the wrong type, fails the read", async () => {
+  const base = { mimeType: "image/jpeg", size: BYTES.length };
+  await assert.rejects(Reader.fromAsset({ ...base, read: async () => { throw "plain string"; } }, null, { now }));
+  // Not a Buffer: the native binding rejects it, and the driver surfaces that.
+  await assert.rejects(Reader.fromAsset({ ...base, read: async () => "oops" }, null, { now }), TypeError);
+});
+
+test("unrecognizable leading bytes are not sniffed as JPEG", async () => {
+  await assert.rejects(Reader.fromAsset({ buffer: Buffer.from([1, 2, 3, 4]) }), {
+    name: "C2pa(UnsupportedType)",
+  });
+});
