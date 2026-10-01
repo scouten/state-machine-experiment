@@ -2328,6 +2328,56 @@ mod tests {
         }
     }
 
+    /// A session parked awaiting one *CA* OCSP check's reply, as
+    /// `evaluate_trust` would leave it, with a response that revokes it at
+    /// 1_200 (the claim being judged at 1_500).
+    fn session_awaiting_a_revoked_ca(is_active: bool) -> (ReadSession, ReadHostReply) {
+        let (check, response) = ocsp::revoked_fixture(1_200);
+
+        let mut session = ReadSession::new(ReadSettings::default());
+        session.report.active_manifest = Some("urn:uuid:active".to_string());
+        session.trust = Some(Trust::Anchored);
+
+        let request = session.core.issue(ReadRequest::Ocsp {
+            url: "http://ocsp.example/ca".to_string(),
+            request_der: check.request_der.clone(),
+        });
+        let pending = vec![PendingChainOcsp {
+            url: "self#jumbf=x".to_string(),
+            is_active,
+            now: Some(1_500),
+            attested: Some(1_500),
+            checks: vec![(request, check, false)],
+        }];
+        session.proceed_after_trust(pending, None);
+
+        (session, ReadHostReply::Ocsp(response))
+    }
+
+    #[test]
+    fn a_revoked_ca_in_a_live_response_rejects_the_active_chain() {
+        let (mut session, reply) = session_awaiting_a_revoked_ca(true);
+
+        resolve_ocsp(&mut session, reply);
+
+        assert_eq!(session.trust, Some(Trust::Rejected));
+        let status = session.report.statuses.last().unwrap();
+        assert_eq!(status.code, status_code::SIGNING_CREDENTIAL_UNTRUSTED);
+        assert!(status.is_failure());
+    }
+
+    #[test]
+    fn a_revoked_ca_in_a_live_response_on_an_ingredient_chain_is_not_a_failure() {
+        let (mut session, reply) = session_awaiting_a_revoked_ca(false);
+
+        resolve_ocsp(&mut session, reply);
+
+        assert_eq!(session.trust, Some(Trust::Anchored));
+        let status = session.report.statuses.last().unwrap();
+        assert_eq!(status.code, status_code::SIGNING_CREDENTIAL_UNTRUSTED);
+        assert!(!status.is_failure());
+    }
+
     /// Drives a session already parked in `State::AwaitingOcspResponses`
     /// (as `evaluate_trust` would leave it) to completion, fulfilling its
     /// one outstanding request with `reply`. Leaves `session` in place so

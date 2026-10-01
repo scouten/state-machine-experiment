@@ -651,6 +651,22 @@ fn generalized_time_seconds(time: &x509_ocsp::OcspGeneralizedTime) -> i64 {
     time.0.to_unix_duration().as_secs() as i64
 }
 
+/// A check and a validly signed response to it saying the certificate was
+/// revoked at `revocation_time` (the response itself covers 1_000..2_000),
+/// for tests elsewhere in this crate that need a real revocation to
+/// evaluate rather than a hand-built outcome.
+#[cfg(test)]
+pub(crate) fn revoked_fixture(revocation_time: i64) -> (PendingOcspCheck, Vec<u8>) {
+    let check = tests::check();
+    let response = tests::response(
+        &check,
+        tests::revoked(revocation_time, None),
+        1_000,
+        Some(2_000),
+    );
+    (check, response)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
@@ -694,7 +710,7 @@ mod tests {
         cert::decode(FIXTURE_LEAF_CERT).expect("the fixture leaf decodes")
     }
 
-    fn check() -> PendingOcspCheck {
+    pub(super) fn check() -> PendingOcspCheck {
         let issuer = issuer();
         PendingOcspCheck {
             responder_url: Some("http://ocsp.example/".to_string()),
@@ -780,7 +796,7 @@ mod tests {
     /// As [`signed_response`], with `producedAt` fixed to `this_update` —
     /// the shape most of these tests want, since only the §15.9.1
     /// no-`nextUpdate` fallback cares about the gap between the two.
-    fn response(
+    pub(super) fn response(
         check: &PendingOcspCheck,
         status: CertStatus,
         this_update: i64,
@@ -789,7 +805,7 @@ mod tests {
         signed_response(check, status, this_update, next_update, this_update, false)
     }
 
-    fn revoked(revocation_time: i64, reason: Option<CrlReason>) -> CertStatus {
+    pub(super) fn revoked(revocation_time: i64, reason: Option<CrlReason>) -> CertStatus {
         CertStatus::revoked(RevokedInfo {
             revocation_time: generalized_time(revocation_time),
             revocation_reason: reason,
