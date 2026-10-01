@@ -144,6 +144,27 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   `Blob` whose reads genuinely suspend, and show that two reads on one
   thread interleave at every request boundary — the cooperative yielding
   c2pa-wasm's `FileReaderSync`-backed, Worker-only stream cannot do.
+- **`contentauth-c2pa-node-compat`** — the same experiment for
+  c2pa-node's Rust side (a Neon addon in
+  [`c2pa-js/packages/c2pa-node`](https://github.com/contentauth/c2pa-js/tree/main/packages/c2pa-node)),
+  made on the opposite premise from `contentauth-c2pa-js-compat`: Rust
+  does *no* async work at all. `NodeSession` (`src/session.rs`) is a
+  purely synchronous `advance`/`fulfill`/`finish` wrapper over
+  `FileReadSession` with the engine's types flattened to plain data
+  (`PendingRequest`, `Reply`); Node, which owns the event loop, the
+  filesystem and `fetch`, runs the loop and every asynchronous operation
+  itself. c2pa-node's own addon instead runs whole reads on a process-wide
+  tokio pool behind a `Mutex<Reader>`. Settings, JSON reporting, and the
+  error-string contract are reused from `contentauth-c2pa-js-compat`
+  (which exports `for_format`, `ManifestStore::from_report` for this).
+  Tests drive it with a plain synchronous loop and compare against the
+  async host's output.
+- **`c2pa-node-compat-addon`** — the Neon `cdylib` (four synchronous
+  functions) and the JavaScript driver (`index.mjs`) for the crate above,
+  with `node:test` tests and a lag demo. Deliberately **not** a workspace
+  member (own `[workspace]`): a Neon `cdylib` cannot link outside Node, so
+  CI builds and tests it in its own `node-addon` job
+  (`npm run build && npm test` in that directory).
 - **`c2pa-rs-compat-conformance`** — a differential test harness for the
   crate above, proving the same client code gets the same answer reading
   a file through the real `c2pa` crate as through

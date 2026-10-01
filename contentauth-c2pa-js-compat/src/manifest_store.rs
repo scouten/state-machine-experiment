@@ -148,7 +148,12 @@ pub struct ValidationStatus {
 }
 
 impl ManifestStore {
-    pub(crate) fn from_report(report: &ReadReport) -> Self {
+    /// Reports `report` in c2pa-rs's manifest-store shape.
+    ///
+    /// Public so that a sibling compatibility layer over another c2pa-rs
+    /// surface (`contentauth-c2pa-node-compat`) can reuse the one
+    /// reporting of the engine's result rather than copy it.
+    pub fn from_report(report: &ReadReport) -> Self {
         Self {
             active_manifest: report.active_manifest.clone(),
             manifests: report
@@ -171,7 +176,8 @@ impl ManifestStore {
 }
 
 impl Manifest {
-    pub(crate) fn from_inner(manifest: &contentauth_c2pa_reader::Manifest) -> Self {
+    /// Reports one of `report`'s manifests; see [`ManifestStore::from_report`].
+    pub fn from_inner(manifest: &contentauth_c2pa_reader::Manifest) -> Self {
         Self {
             label: manifest.label.clone(),
             claim_generator: manifest.claim.claim_generator.clone(),

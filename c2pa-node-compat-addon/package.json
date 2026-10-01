@@ -1,0 +1,14 @@
+{
+  "name": "c2pa-node-compat-addon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Experiment: c2pa-node's Reader API over a purely synchronous Rust session, with all async work driven from JavaScript",
+  "main": "index.mjs",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "cargo build --release && node build.mjs",
+    "test": "node --test \"test/*.test.mjs\"",
+    "demo": "node examples/lag.mjs"
+  }
+}
