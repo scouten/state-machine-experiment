@@ -41,7 +41,7 @@ may come back in any order.
 
 ```sh
 npm run build   # cargo build --release, then copies the cdylib to index.node
-npm test        # 13 tests under node:test
+npm test        # 26 tests under node:test
 ./coverage.sh   # coverage for the JS driver and the Rust addon (needs cargo-llvm-cov)
 npm run demo    # event-loop delay while hashing a large file
 ```
@@ -74,6 +74,19 @@ concurrency 8: 0.33 s, 773 MB/s, event-loop delay p50 1.0 ms, p99 1.6 ms, max 5.
 The JS thread is busy only for the length of one `advance` — hashing a few
 64 KiB chunks — so the loop stays responsive even though the hashing
 itself happens on it.
+
+## OCSP is a request the asset makes of the host
+
+An OCSP responder URL comes from the *asset's* certificate, so it is
+untrusted input, and with `verify.ocsp_fetch` on (it is off by default)
+the driver would POST to wherever it points. The driver therefore asks
+`ocspPolicy(url)` first (default `defaultOcspPolicy`: `http(s)` only, no
+embedded credentials, no literal loopback / private / link-local /
+`localhost` address, including numeric and IPv4-mapped spellings), never
+follows redirects, and bounds the response at 1 MiB. A policy cannot see
+through DNS, so a server reading untrusted assets with OCSP on should also
+pass a `fetch` whose resolver rejects private addresses. That seam exists
+because the host, not the Rust engine, owns the network.
 
 ## Honest trade-offs
 

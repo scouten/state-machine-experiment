@@ -192,7 +192,10 @@ impl NodeSession {
         self.inner
             .fulfill(engine_id, reply)
             .map_err(C2paError::from)?;
+        // Answered, so the engine no longer lists it as outstanding: forget
+        // it, rather than keep an entry per request for the whole read.
         self.handles.remove(&id);
+        self.reported.remove(&engine_id);
         Ok(())
     }
 
@@ -245,6 +248,7 @@ fn engine_reply(reply: Reply) -> FileReadReply {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use contentauth_c2pa_primitives::{ByteRange, StreamId};
 
@@ -291,6 +295,22 @@ mod tests {
                 request_der: vec![1, 2, 3],
             })
         );
+    }
+
+    #[test]
+    fn an_answered_request_is_forgotten_rather_than_kept_for_the_whole_read() {
+        let mut session = NodeSession::new("image/jpeg", None).unwrap();
+        let Step::Pending(requests) = session.advance().unwrap() else {
+            panic!("a fresh session needs the host");
+        };
+        assert_eq!(session.reported.len(), requests.len());
+        assert_eq!(session.handles.len(), requests.len());
+
+        session
+            .fulfill(requests[0].id(), Reply::Failed("no".to_string()))
+            .unwrap();
+        assert_eq!(session.reported.len(), requests.len() - 1);
+        assert_eq!(session.handles.len(), requests.len() - 1);
     }
 
     #[test]

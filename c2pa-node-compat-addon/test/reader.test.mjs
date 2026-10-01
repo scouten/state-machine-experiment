@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import test from "node:test";
 
-import { _native, answerRequest, openSource, Reader } from "../index.mjs";
+import { _native, answerRequest, defaultOcspPolicy, openSource, Reader } from "../index.mjs";
 
 const PATH = new URL("../../contentauth-c2pa-reader/tests/fixtures/C.jpg", import.meta.url)
   .pathname;
@@ -141,9 +141,9 @@ test("whatever the host cannot do becomes a failed reply, never a rejection", as
   const ctx = { doFetch: async () => new Response("", { status: 503 }), now };
 
   assert.deepEqual(await answerRequest({ kind: "read", start: 0, len: 1 }, source, ctx), ["failed", "nope"]);
-  assert.deepEqual(await answerRequest({ kind: "ocsp", url: "u", requestDer: Buffer.alloc(0) }, source, ctx), ["failed", "OCSP responder said 503"]);
+  assert.deepEqual(await answerRequest({ kind: "ocsp", url: "http://ocsp.example/", requestDer: Buffer.alloc(0) }, source, ctx), ["failed", "OCSP responder said 503"]);
   const down = { ...ctx, doFetch: async () => { throw new TypeError("fetch failed"); } };
-  assert.deepEqual(await answerRequest({ kind: "ocsp", url: "u", requestDer: Buffer.alloc(0) }, source, down), ["failed", "fetch failed"]);
+  assert.deepEqual(await answerRequest({ kind: "ocsp", url: "http://ocsp.example/", requestDer: Buffer.alloc(0) }, source, down), ["failed", "fetch failed"]);
   assert.deepEqual(await answerRequest({ kind: "bogus" }, source, ctx), ["failed", "unsupported request bogus"]);
   assert.deepEqual(await answerRequest({ kind: "length" }, { size: 7 }, ctx), ["length", 7]);
   assert.deepEqual(await answerRequest({ kind: "time" }, source, ctx), ["time", 1_800_000_000]);
@@ -265,4 +265,80 @@ test("unrecognizable leading bytes are not sniffed as JPEG", async () => {
   await assert.rejects(Reader.fromAsset({ buffer: Buffer.from([1, 2, 3, 4]) }), {
     name: "C2pa(UnsupportedType)",
   });
+});
+
+test("the default OCSP policy refuses what a certificate must not be able to aim a POST at", () => {
+  for (const url of [
+    "http://127.0.0.1/", "http://localhost/ocsp", "http://foo.localhost/", "http://10.1.2.3/",
+    "http://172.16.0.1/", "http://172.31.255.255/", "http://192.168.1.1/", "http://169.254.169.254/latest/meta-data",
+    "http://100.64.0.1/", "http://0.0.0.0/", "http://[::1]/", "http://[::]/", "http://[fd00::1]/",
+    "http://[fe80::1]/", "http://[::ffff:127.0.0.1]/", "http://[::ffff:10.0.0.1]/",
+    "http://2130706433/", "http://0x7f.1/",           // numeric spellings of 127.0.0.1
+    "file:///etc/passwd", "ftp://ocsp.example/", "gopher://ocsp.example/",
+    "http://user:pw@ocsp.example/", "not a url", "",
+  ]) {
+    assert.equal(defaultOcspPolicy(url), false, url);
+  }
+  for (const url of [
+    "http://ocsp.example/", "https://ocsp.digicert.com/", "http://8.8.8.8/",
+    "http://172.32.0.1/", "http://192.169.0.1/", "http://100.63.0.1/", "http://[2001:db8::1]/",
+  ]) {
+    assert.equal(defaultOcspPolicy(url), true, url);
+  }
+});
+
+test("a refused OCSP responder is never contacted, and redirects are not followed", async () => {
+  let calls = 0;
+  const doFetch = async (_url, init) => {
+    calls++;
+    assert.equal(init.redirect, "error");
+    return new Response(Buffer.from([1]), { status: 200 });
+  };
+  const request = (url) => ({ kind: "ocsp", url, requestDer: Buffer.alloc(0) });
+
+  const refused = await answerRequest(request("http://169.254.169.254/"), { size: 0 }, { doFetch, now });
+  assert.equal(refused[0], "failed");
+  assert.match(refused[1], /refused by policy/);
+  assert.equal(calls, 0);
+
+  assert.equal((await answerRequest(request("http://ocsp.example/"), { size: 0 }, { doFetch, now }))[0], "ocsp");
+  assert.equal(calls, 1);
+
+  // The host may widen or narrow the policy.
+  const allowInternal = { doFetch, now, ocspPolicy: () => true };
+  assert.equal((await answerRequest(request("http://127.0.0.1/"), { size: 0 }, allowInternal))[0], "ocsp");
+  const denyAll = { doFetch, now, ocspPolicy: () => false };
+  assert.equal((await answerRequest(request("http://ocsp.example/"), { size: 0 }, denyAll))[0], "failed");
+});
+
+test("an oversized OCSP response is refused", async () => {
+  const doFetch = async () => new Response(Buffer.alloc((1 << 20) + 1), { status: 200 });
+  const reply = await answerRequest(
+    { kind: "ocsp", url: "http://ocsp.example/", requestDer: Buffer.alloc(0) },
+    { size: 0 },
+    { doFetch, now },
+  );
+  assert.deepEqual(reply, ["failed", "OCSP response too large"]);
+});
+
+test("a JPEG is recognized by its bytes whatever its file is called", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "c2pa-node-compat-"));
+  try {
+    for (const name of ["photo.dat", "photo", "photo.png"]) {
+      const path = join(dir, name);
+      writeFileSync(path, BYTES);
+      const reader = await Reader.fromAsset({ path }, null, { now });
+      assert.ok(reader.activeLabel(), name);
+    }
+    // ...but an explicit mime type is taken at its word.
+    await assert.rejects(Reader.fromAsset({ path: join(dir, "photo.dat"), mimeType: "image/png" }), {
+      name: "C2pa(UnsupportedType)",
+    });
+    // Bytes that are not recognized fall back to the extension.
+    const odd = join(dir, "odd.jpg");
+    writeFileSync(odd, Buffer.from([1, 2, 3, 4]));
+    await assert.rejects(Reader.fromAsset({ path: odd }), (err) => err.name.startsWith("C2pa(Read("));
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
 });

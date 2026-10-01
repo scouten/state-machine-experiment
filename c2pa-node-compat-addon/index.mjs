@@ -18,6 +18,7 @@
 
 import { createRequire } from "node:module";
 import { open } from "node:fs/promises";
+import { isIP } from "node:net";
 import { extname } from "node:path";
 
 const native = createRequire(import.meta.url)("./index.node");
@@ -66,18 +67,22 @@ export class Reader {
    *   - `concurrency`: at most this many requests in flight (default: no limit
    *     beyond what the engine itself asks for, currently 8 chunk reads);
    *   - `fetch`: used for OCSP (default: global `fetch`);
+   *   - `ocspPolicy`: `(url) => boolean`, whether an OCSP responder URL taken from
+   *     the asset's certificate may be contacted (default: `defaultOcspPolicy`);
    *   - `now`: `() => ms since epoch` (default `Date.now`).
    */
   static async fromAsset(asset, settings, options = {}) {
     const source = await openSource(asset);
     try {
+      // An explicit mime type is taken as given. Otherwise the bytes decide
+      // (a JPEG named `photo.dat` is still a JPEG), and only if they are
+      // not recognized does the file extension get a say.
       const format =
         asset.mimeType ??
-        (asset.path && extname(asset.path).slice(1)) ??
-        "";
+        ((await sniff(source)) || (asset.path ? extname(asset.path).slice(1) : ""));
       const store = await readStore(
         source,
-        format || (await sniff(source)),
+        format,
         typeof settings === "object" && settings !== null
           ? JSON.stringify(settings)
           : (settings ?? undefined),
@@ -93,11 +98,11 @@ export class Reader {
 // ---------------------------------------------------------------------------
 
 async function readStore(source, format, settings, options) {
-  const { concurrency = Infinity, now = Date.now } = options;
+  const { concurrency = Infinity, now = Date.now, ocspPolicy } = options;
   const doFetch = options.fetch ?? globalThis.fetch;
   const session = native.sessionNew(format, settings);
 
-  const answer = (request) => answerRequest(request, source, { doFetch, now });
+  const answer = (request) => answerRequest(request, source, { doFetch, now, ocspPolicy });
 
   const queue = [];
   const inFlight = new Set();
@@ -126,6 +131,63 @@ async function readStore(source, format, settings, options) {
   return native.sessionFinish(session);
 }
 
+const MAX_OCSP_RESPONSE = 1 << 20;
+
+/**
+ * The default answer to "may this OCSP responder URL be contacted?":
+ * `http` or `https`, no embedded credentials, and not a literal loopback,
+ * private, link-local, or `localhost` address.
+ *
+ * This stops the obvious case of a certificate naming an internal address.
+ * It cannot stop a *name* that resolves to one: that needs control at the
+ * resolver, which is what the injectable `fetch` option is for (e.g. an
+ * undici dispatcher whose `lookup` rejects private addresses). A server
+ * reading untrusted assets with `verify.ocsp_fetch` on should do that, or
+ * leave `ocsp_fetch` off, its default.
+ */
+export function defaultOcspPolicy(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+  if (parsed.username || parsed.password) return false;
+
+  const host = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (host === "localhost" || host.endsWith(".localhost")) return false;
+
+  switch (isIP(host)) {
+    case 4: {
+      const [a, b] = host.split(".").map(Number);
+      return !(
+        a === 0 || a === 10 || a === 127 ||
+        (a === 100 && b >= 64 && b <= 127) ||
+        (a === 169 && b === 254) ||
+        (a === 172 && b >= 16 && b <= 31) ||
+        (a === 192 && b === 168)
+      );
+    }
+    case 6: {
+      // `new URL` normalizes an IPv4-mapped address to its hex form
+      // (`::ffff:7f00:1`); judge it as the IPv4 address it stands for.
+      const mapped = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+      if (mapped) {
+        const [hi, lo] = [parseInt(mapped[1], 16), parseInt(mapped[2], 16)];
+        return defaultOcspPolicy(`http://${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}/`);
+      }
+      return !(
+        host === "::" || host === "::1" ||
+        /^f[cd]/.test(host) ||      // fc00::/7 unique local
+        /^fe[89ab]/.test(host)      // fe80::/10 link local
+      );
+    }
+    default:
+      return true;
+  }
+}
+
 /**
  * Answers one request from the engine. Never rejects: whatever the host
  * cannot do becomes a `failed` reply, which the engine interprets
@@ -133,7 +195,11 @@ async function readStore(source, format, settings, options) {
  *
  * Exported for tests; not part of the c2pa-node surface.
  */
-export async function answerRequest(request, source, { doFetch, now }) {
+export async function answerRequest(
+  request,
+  source,
+  { doFetch, now, ocspPolicy = defaultOcspPolicy },
+) {
   try {
     switch (request.kind) {
       case "read":
@@ -143,14 +209,24 @@ export async function answerRequest(request, source, { doFetch, now }) {
       case "time":
         return ["time", Math.floor(now() / 1000)];
       case "ocsp": {
+        // The URL comes from the *asset's* certificate, i.e. from whoever
+        // made the asset: it is untrusted input.
+        if (!ocspPolicy(request.url)) {
+          return ["failed", `OCSP responder ${request.url} refused by policy`];
+        }
         const response = await doFetch(request.url, {
           method: "POST",
           headers: { "content-type": "application/ocsp-request" },
           body: request.requestDer,
+          // A permitted responder must not bounce the request somewhere
+          // the policy would not have permitted.
+          redirect: "error",
           signal: AbortSignal.timeout(10_000),
         });
         if (!response.ok) return ["failed", `OCSP responder said ${response.status}`];
-        return ["ocsp", Buffer.from(await response.arrayBuffer())];
+        const body = Buffer.from(await response.arrayBuffer());
+        if (body.length > MAX_OCSP_RESPONSE) return ["failed", "OCSP response too large"];
+        return ["ocsp", body];
       }
       default:
         return ["failed", `unsupported request ${request.kind}`];
