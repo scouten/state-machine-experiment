@@ -251,6 +251,21 @@ fn build_cert_id(subject: &Certificate, issuer: &Certificate) -> Result<CertId, 
     })
 }
 
+/// Whether a response being accepted was fetched live or was already
+/// sitting in the manifest store — which decides what instant its
+/// responder's certificate has to be valid at.
+#[derive(Clone, Copy)]
+enum Provenance {
+    /// Already in the manifest store: old by construction, so its
+    /// responder is judged at the response's own `producedAt` only.
+    Stored,
+
+    /// Fetched live, with the host's current time if it supplied one. The
+    /// responder must be authorized *now* (RFC 6960 §4.2.2.2), so a
+    /// delegated responder cannot be accepted when the time is unknown.
+    Live(Option<i64>),
+}
+
 /// A response accepted per RFC 6960 §3.2's requirements 1 through 4 for
 /// `check`'s own `CertID`: it is signed by an authority entitled to answer
 /// for the certificate, and the signature verifies. What is left is purely
@@ -293,7 +308,7 @@ enum Status {
 fn accept(
     check: &PendingOcspCheck,
     response_der: &[u8],
-    online_now: Option<i64>,
+    provenance: Provenance,
 ) -> Option<Accepted> {
     let response = OcspResponse::from_der(response_der).ok()?;
 
@@ -311,7 +326,7 @@ fn accept(
         .find(|candidate| candidate.cert_id == check.cert_id)?;
 
     let produced_at = generalized_time_seconds(&basic.tbs_response_data.produced_at);
-    let signer = responder_certificate(check, &basic, produced_at, online_now)?;
+    let signer = responder_certificate(check, &basic, produced_at, provenance)?;
     verify_response_signature(&basic, &signer).ok()?;
 
     Some(Accepted {
@@ -362,7 +377,7 @@ fn evaluate_stapled_checked(
     now: Option<i64>,
     attested: Option<i64>,
 ) -> Option<StapledOutcome> {
-    let accepted = accept(check, response_der, None)?;
+    let accepted = accept(check, response_der, Provenance::Stored)?;
     let now = now?;
     let attested = attested?;
 
@@ -419,7 +434,7 @@ fn evaluate_online_checked(
     now: Option<i64>,
     attested: Option<i64>,
 ) -> Option<OnlineOutcome> {
-    let accepted = accept(check, response_der, now)?;
+    let accepted = accept(check, response_der, Provenance::Live(now))?;
 
     let in_validity_window = |instant: i64| {
         accepted
@@ -476,16 +491,27 @@ fn evaluate_online_checked(
 /// fail-closed fallback of its own, treats everything it cannot affirm as
 /// not revoked: an unauthenticated response, a `good` or `unknown` status,
 /// or a `removeFromCRL` revocation. A CA's response is authenticated with
-/// the same §3.2 acceptance test as the signer's.
+/// the same §3.2 acceptance test as the signer's, and must also be
+/// current: its `thisUpdate`/`nextUpdate` window has to cover `now`, so a
+/// stale response — a since-lifted `certificateHold` replayed by anything
+/// on the path, say — cannot reject a claim. With no current time to judge
+/// that against, nothing is affirmed.
 pub(crate) fn evaluate_ca_online(
     check: &PendingOcspCheck,
     response_der: &[u8],
     now: Option<i64>,
     attested: Option<i64>,
 ) -> bool {
-    let Some(accepted) = accept(check, response_der, now) else {
+    let Some(accepted) = accept(check, response_der, Provenance::Live(now)) else {
         return false;
     };
+
+    let current = now.is_some_and(|now| {
+        now >= accepted.this_update && accepted.next_update.is_none_or(|next| now < next)
+    });
+    if !current {
+        return false;
+    }
 
     match accepted.status {
         Status::Revoked {
@@ -524,7 +550,7 @@ fn responder_certificate(
     check: &PendingOcspCheck,
     basic: &BasicOcspResponse,
     produced_at: i64,
-    online_now: Option<i64>,
+    provenance: Provenance,
 ) -> Option<Certificate> {
     match &basic.tbs_response_data.responder_id {
         ResponderId::ByName(name) => {
@@ -534,7 +560,7 @@ fn responder_certificate(
                 return Some(check.issuer.clone());
             }
 
-            find_delegate(check, basic, produced_at, online_now, |candidate| {
+            find_delegate(check, basic, produced_at, provenance, |candidate| {
                 candidate.subject_der == name_der
             })
         }
@@ -546,7 +572,7 @@ fn responder_certificate(
                 return Some(check.issuer.clone());
             }
 
-            find_delegate(check, basic, produced_at, online_now, |candidate| {
+            find_delegate(check, basic, produced_at, provenance, |candidate| {
                 sha1_digest(&candidate.public_key_bitstring).as_slice() == key_hash
             })
         }
@@ -563,7 +589,7 @@ fn find_delegate(
     check: &PendingOcspCheck,
     basic: &BasicOcspResponse,
     produced_at: i64,
-    online_now: Option<i64>,
+    provenance: Provenance,
     matches_id: impl Fn(&Certificate) -> bool,
 ) -> Option<Certificate> {
     for candidate in basic.certs.as_ref()?.iter() {
@@ -587,13 +613,18 @@ fn find_delegate(
         // (RFC 6960 §4.2.2.2: "currently valid"), not merely at whatever
         // instant the response claims to have been produced — a responder
         // key that has since expired must not be able to backdate
-        // `producedAt` into its own validity window. A response already
-        // sitting in the manifest store is old by construction, so only
-        // `produced_at` applies to it (`online_now` is `None`).
-        let inside_validity = [Some(produced_at), online_now]
-            .into_iter()
-            .flatten()
-            .all(|instant| instant >= candidate.not_before && instant <= candidate.not_after);
+        // `producedAt` into its own validity window. Without a current
+        // time that cannot be established, so a delegate is not accepted
+        // (the issuer itself, which needs no such check, still is). A
+        // response already sitting in the manifest store is old by
+        // construction, so only `produced_at` applies to it.
+        let valid_at =
+            |instant: i64| instant >= candidate.not_before && instant <= candidate.not_after;
+        let inside_validity = valid_at(produced_at)
+            && match provenance {
+                Provenance::Stored => true,
+                Provenance::Live(now) => now.is_some_and(valid_at),
+            };
 
         if names_ocsp_signing && inside_validity && chain::verify(&candidate, &check.issuer).is_ok()
         {
@@ -1036,7 +1067,7 @@ mod tests {
         );
 
         assert_eq!(
-            evaluate_online(&check, &response, None, Some(1_500)),
+            evaluate_online(&check, &response, Some(1_500), Some(1_500)),
             OnlineOutcome::NotRevoked
         );
     }
@@ -1120,7 +1151,12 @@ mod tests {
         let check = check();
         let response = response(&check, revoked(1_200, None), 1_000, Some(2_000));
 
-        assert!(evaluate_ca_online(&check, &response, None, Some(1_500)));
+        assert!(evaluate_ca_online(
+            &check,
+            &response,
+            Some(1_600),
+            Some(1_500)
+        ));
     }
 
     #[test]
@@ -1141,9 +1177,65 @@ mod tests {
         assert!(!evaluate_ca_online(
             &check,
             &response,
+            Some(1_600),
+            Some(1_500)
+        ));
+    }
+
+    #[test]
+    fn ca_online_a_stale_or_premature_response_is_never_a_revocation() {
+        // The response covers 1_000..2_000 and says "revoked at 1_200" —
+        // exactly what a replayed, since-lifted certificateHold would say.
+        let check = check();
+        let response = response(&check, revoked(1_200, None), 1_000, Some(2_000));
+
+        // Current: counts.
+        assert!(evaluate_ca_online(&check, &response, Some(1_500), None));
+        // Past `nextUpdate`, or before `thisUpdate`: does not.
+        assert!(!evaluate_ca_online(
+            &check,
+            &response,
             Some(5_000),
             Some(1_500)
         ));
+        assert!(!evaluate_ca_online(
+            &check,
+            &response,
+            Some(900),
+            Some(1_500)
+        ));
+        // No clock to judge freshness against: nothing is affirmed, even
+        // with an attested time that would otherwise condemn it.
+        assert!(!evaluate_ca_online(&check, &response, None, Some(1_500)));
+    }
+
+    #[test]
+    fn online_a_delegated_responder_is_not_accepted_without_a_current_time() {
+        // With no host clock there is no way to establish that the
+        // delegate is authorized *now*, so a delegated response is
+        // inconclusive rather than judged at its own `producedAt` alone…
+        let check = check();
+        let delegate = delegated_responder_cert(0, 1_500);
+        let response = signed_response_via_delegate(
+            &check,
+            CertStatus::good(),
+            1_000,
+            Some(6_000),
+            1_000,
+            &delegate,
+        );
+
+        assert_eq!(
+            evaluate_online(&check, &response, None, Some(1_200)),
+            OnlineOutcome::Inconclusive
+        );
+
+        // …while the issuer answering for itself needs no such check.
+        let from_issuer = self::response(&check, CertStatus::good(), 1_000, Some(2_000));
+        assert_eq!(
+            evaluate_online(&check, &from_issuer, None, Some(1_500)),
+            OnlineOutcome::NotRevoked
+        );
     }
 
     #[test]
