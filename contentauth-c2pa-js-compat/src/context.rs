@@ -22,8 +22,10 @@
 //! ```json
 //! {
 //!   "trust": {
-//!     "trust_anchors": "-----BEGIN CERTIFICATE-----\n...",
-//!     "user_anchors": "-----BEGIN CERTIFICATE-----\n..."
+//!     "anchors": [
+//!       { "trust_anchors": "-----BEGIN CERTIFICATE-----\n...", "trust_kind": "manifest" },
+//!       { "trust_anchors": "-----BEGIN CERTIFICATE-----\n...", "trust_kind": "tsa" }
+//!     ]
 //!   },
 //!   "verify": {
 //!     "ocsp_fetch": false
@@ -31,11 +33,22 @@
 //! }
 //! ```
 //!
-//! Both anchor lists are PEM bundles, as they are in c2pa-rs, and both
-//! feed the same trust evaluation there; here they are decoded to DER and
-//! concatenated into [`ReadSettings::trust_anchors`] and, since c2pa-rs
-//! judges timestamp authorities against the same trust store,
-//! [`ReadSettings::timestamp_trust_anchors`] too. `ocsp_fetch` maps to
+//! `trust.anchors` is the shape c2pa-rs 0.91 introduced: a list of trust
+//! lists, each a PEM bundle tagged with a `trust_kind` of `manifest`
+//! (signing certificates), `tsa` (timestamp authorities) or `cawg`.
+//! They are decoded to DER and routed by kind — `manifest` into
+//! [`ReadSettings::trust_anchors`], `tsa` into
+//! [`ReadSettings::timestamp_trust_anchors`], as c2pa-rs keeps those two
+//! trust stores separate. `cawg` lists are accepted and ignored, there
+//! being no CAWG identity validation in this workspace. The other
+//! per-list fields (`trust_uri`, `trust_config`, `allowed_list`,
+//! `trusted_ica_issuers`) are likewise accepted and ignored.
+//!
+//! The older `trust.trust_anchors` and `trust.user_anchors` strings, which
+//! c2pa-rs 0.91 deprecated (and plans to remove in 0.92), are still
+//! understood, exactly as c2pa-rs still does: it folds each into
+//! `anchors` as a `manifest` list, so they feed
+//! [`ReadSettings::trust_anchors`] only. `ocsp_fetch` maps to
 //! [`ReadSettings::check_ocsp`], and — this being a compatibility layer —
 //! takes c2pa-rs's own default of `false` when absent, not this
 //! workspace's engine default of `true`: the same `contextJson` (or none
@@ -102,17 +115,29 @@ impl Context {
         let doc: SettingsJson = serde_json::from_str(json)
             .map_err(|err| C2paError::BadParam(format!("settings JSON: {err}")))?;
 
-        let mut anchors = Vec::new();
+        let mut signing_anchors = Vec::new();
+        let mut timestamp_anchors = Vec::new();
+
+        let bad =
+            |key: &str, err: String| C2paError::BadParam(format!("settings JSON: {key}: {err}"));
+
         for (key, pem) in [
             ("trust.trust_anchors", doc.trust.trust_anchors),
             ("trust.user_anchors", doc.trust.user_anchors),
         ] {
             if let Some(pem) = pem {
-                anchors.extend(
-                    pem_certificates(&pem).map_err(|err| {
-                        C2paError::BadParam(format!("settings JSON: {key}: {err}"))
-                    })?,
-                );
+                signing_anchors.extend(pem_certificates(&pem).map_err(|err| bad(key, err))?);
+            }
+        }
+
+        for (index, list) in doc.trust.anchors.into_iter().flatten().enumerate() {
+            let key = format!("trust.anchors[{index}].trust_anchors");
+            let certificates =
+                pem_certificates(&list.trust_anchors).map_err(|err| bad(&key, err))?;
+            match list.trust_kind {
+                TrustListKind::Manifest => signing_anchors.extend(certificates),
+                TrustListKind::Tsa => timestamp_anchors.extend(certificates),
+                TrustListKind::Cawg => {}
             }
         }
 
@@ -124,8 +149,8 @@ impl Context {
         // actually act on it.
         let defaults = Self::default().settings;
         let settings = ReadSettings {
-            trust_anchors: anchors.clone(),
-            timestamp_trust_anchors: anchors,
+            trust_anchors: signing_anchors,
+            timestamp_trust_anchors: timestamp_anchors,
             check_ocsp: doc.verify.ocsp_fetch.unwrap_or(defaults.check_ocsp),
             fetch_remote_manifests: defaults.fetch_remote_manifests,
         };
@@ -162,8 +187,25 @@ struct SettingsJson {
 #[derive(Default, Deserialize)]
 #[serde(default)]
 struct TrustJson {
+    anchors: Option<Vec<TrustAnchorJson>>,
     trust_anchors: Option<String>,
     user_anchors: Option<String>,
+}
+
+/// One entry of `trust.anchors`. `trust_kind` is required, as in c2pa-rs.
+#[derive(Deserialize)]
+struct TrustAnchorJson {
+    trust_anchors: String,
+    trust_kind: TrustListKind,
+}
+
+/// c2pa-rs's `TrustListKind`, serialized lowercase.
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum TrustListKind {
+    Manifest,
+    Tsa,
+    Cawg,
 }
 
 #[derive(Default, Deserialize)]
@@ -259,8 +301,10 @@ mod tests {
         );
     }
 
+    /// The deprecated string fields are folded into c2pa-rs's `manifest`
+    /// list, so they reach signing trust only.
     #[test]
-    fn trust_anchors_and_user_anchors_are_decoded_from_pem_into_both_anchor_lists() {
+    fn legacy_trust_anchors_and_user_anchors_feed_signing_trust_only() {
         let other = [0x30u8, 0x03, 0x02, 0x01, 0x02];
         let json = serde_json::json!({
             "trust": {
@@ -275,10 +319,44 @@ mod tests {
             context.settings().trust_anchors,
             vec![DER.to_vec(), other.to_vec()]
         );
+        assert!(context.settings().timestamp_trust_anchors.is_empty());
+    }
+
+    #[test]
+    fn anchors_are_routed_by_trust_kind() {
+        let tsa = [0x30u8, 0x03, 0x02, 0x01, 0x02];
+        let cawg = [0x30u8, 0x03, 0x02, 0x01, 0x03];
+        let json = serde_json::json!({
+            "trust": {
+                "anchors": [
+                    { "trust_anchors": pem_of(DER), "trust_kind": "manifest", "trust_uri": "x" },
+                    { "trust_anchors": pem_of(&tsa), "trust_kind": "tsa" },
+                    { "trust_anchors": pem_of(&cawg), "trust_kind": "cawg",
+                      "trusted_ica_issuers": ["did:web:example.com"] },
+                ]
+            }
+        })
+        .to_string();
+
+        let context = Context::from_json(&json).expect("parses");
+        assert_eq!(context.settings().trust_anchors, vec![DER.to_vec()]);
         assert_eq!(
             context.settings().timestamp_trust_anchors,
-            vec![DER.to_vec(), other.to_vec()]
+            vec![tsa.to_vec()]
         );
+    }
+
+    #[test]
+    fn an_anchor_list_without_a_trust_kind_or_with_an_unknown_one_is_a_bad_param() {
+        for anchor in [
+            serde_json::json!({ "trust_anchors": pem_of(DER) }),
+            serde_json::json!({ "trust_anchors": pem_of(DER), "trust_kind": "bogus" }),
+            serde_json::json!({ "trust_anchors": "not a certificate", "trust_kind": "manifest" }),
+        ] {
+            let json = serde_json::json!({ "trust": { "anchors": [anchor] } }).to_string();
+            let err = Context::from_json(&json).expect_err("rejects");
+            assert!(matches!(err, C2paError::BadParam(_)), "{err:?}");
+        }
     }
 
     #[test]
