@@ -41,7 +41,8 @@ may come back in any order.
 
 ```sh
 npm run build   # cargo build --release, then copies the cdylib to index.node
-npm test        # 8 tests under node:test
+npm test        # 13 tests under node:test
+./coverage.sh   # coverage for the JS driver and the Rust addon (needs cargo-llvm-cov)
 npm run demo    # event-loop delay while hashing a large file
 ```
 
@@ -51,6 +52,16 @@ error names (`C2pa(UnsupportedType)`); the host choosing 1, 2, or N reads
 in flight; timers firing throughout a slow read; eight reads interleaving
 on one thread in well under the serial time; and a failing source
 rejecting the read.
+
+`coverage.sh` produces both halves of the Node side from one instrumented
+run: `lcov.info` for the JavaScript driver (Node's built-in coverage) and
+`lcov.rust.info` for the Rust addon (cargo-llvm-cov, exercised by loading
+the cdylib into Node). Currently about 98% of the driver's lines and 87%
+of the addon's; the uncovered remainder is the OCSP-request marshalling
+(no fixture makes the engine issue one) and a file shrinking mid-read.
+CI's `node-addon` job runs it and uploads both reports to Codecov under
+the `node-addon` flag. The Rust core (`contentauth-c2pa-node-compat`)
+is covered by the workspace's own coverage job.
 
 Measured here (release build, 256 MB file whose every byte is hashed,
 `monitorEventLoopDelay` at 1 ms resolution):

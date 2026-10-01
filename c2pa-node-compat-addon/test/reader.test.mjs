@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import test from "node:test";
 
-import { Reader } from "../index.mjs";
+import { _native, answerRequest, Reader } from "../index.mjs";
 
 const PATH = new URL("../../contentauth-c2pa-reader/tests/fixtures/C.jpg", import.meta.url)
   .pathname;
@@ -13,8 +13,7 @@ const BYTES = readFileSync(PATH);
 const now = () => 1_800_000_000_000;
 
 /** An asset whose reads genuinely take time, and which records concurrency. */
-function slowAsset(delayMs = 5) {
-  const stats = { reads: 0, inFlight: 0, maxInFlight: 0 };
+function slowAsset(delayMs = 5, stats = { reads: 0, inFlight: 0, maxInFlight: 0 }) {
   return {
     stats,
     size: BYTES.length,
@@ -93,17 +92,84 @@ test("the JS thread is never blocked: timers fire throughout a slow read", async
 });
 
 test("many reads interleave on the one thread", async () => {
-  const assets = Array.from({ length: 8 }, () => slowAsset(10));
-  const started = performance.now();
+  // How much overlap does one read achieve by itself?
+  const alone = slowAsset(10);
+  await Reader.fromAsset(alone, null, { now });
+
+  // Eight reads sharing one counter: requests from *different* reads must
+  // be in flight together, beyond anything a single read reaches. (Counted,
+  // not timed: wall-clock bounds are meaningless in an unoptimized build.)
+  const shared = { reads: 0, inFlight: 0, maxInFlight: 0 };
+  const assets = Array.from({ length: 8 }, () => slowAsset(10, shared));
   const readers = await Promise.all(assets.map((a) => Reader.fromAsset(a, null, { now })));
-  const elapsed = performance.now() - started;
 
   for (const reader of readers) assert.equal(reader.json().validation_state, "Valid");
-  const serialMs = assets.reduce((sum, a) => sum + a.stats.reads * 10, 0);
-  assert.ok(elapsed < serialMs / 2, `${elapsed}ms vs ${serialMs}ms if serial`);
+  assert.ok(
+    shared.maxInFlight > alone.stats.maxInFlight,
+    `${shared.maxInFlight} in flight across reads vs ${alone.stats.maxInFlight} for one`,
+  );
 });
 
 test("a source that fails mid-read fails the read, not the process", async () => {
   const asset = { ...slowAsset(), read: async () => { throw new Error("disk on fire"); } };
   await assert.rejects(Reader.fromAsset(asset, null, { now }));
+});
+
+test("OCSP requests are answered with fetch: POSTed DER in, response body out", async () => {
+  const der = Buffer.from([1, 2, 3]);
+  let seen;
+  const doFetch = async (url, init) => {
+    seen = { url, init };
+    return new Response(Buffer.from([4, 5, 6]), { status: 200 });
+  };
+  const reply = await answerRequest(
+    { kind: "ocsp", url: "http://ocsp.example/", requestDer: der },
+    { size: 0 },
+    { doFetch, now },
+  );
+  assert.deepEqual(reply, ["ocsp", Buffer.from([4, 5, 6])]);
+  assert.equal(seen.url, "http://ocsp.example/");
+  assert.equal(seen.init.method, "POST");
+  assert.equal(seen.init.headers["content-type"], "application/ocsp-request");
+  assert.equal(seen.init.body, der);
+});
+
+test("whatever the host cannot do becomes a failed reply, never a rejection", async () => {
+  const source = { size: 0, read: async () => { throw new Error("nope"); } };
+  const ctx = { doFetch: async () => new Response("", { status: 503 }), now };
+
+  assert.deepEqual(await answerRequest({ kind: "read", start: 0, len: 1 }, source, ctx), ["failed", "nope"]);
+  assert.deepEqual(await answerRequest({ kind: "ocsp", url: "u", requestDer: Buffer.alloc(0) }, source, ctx), ["failed", "OCSP responder said 503"]);
+  const down = { ...ctx, doFetch: async () => { throw new TypeError("fetch failed"); } };
+  assert.deepEqual(await answerRequest({ kind: "ocsp", url: "u", requestDer: Buffer.alloc(0) }, source, down), ["failed", "fetch failed"]);
+  assert.deepEqual(await answerRequest({ kind: "bogus" }, source, ctx), ["failed", "unsupported request bogus"]);
+  assert.deepEqual(await answerRequest({ kind: "length" }, { size: 7 }, ctx), ["length", 7]);
+  assert.deepEqual(await answerRequest({ kind: "time" }, source, ctx), ["time", 1_800_000_000]);
+});
+
+test("an unrecognizable asset is rejected up front", async () => {
+  await assert.rejects(Reader.fromAsset({}), TypeError);
+  // Too short to sniff, and no mime type: no format can be chosen.
+  await assert.rejects(Reader.fromAsset({ buffer: Buffer.from([1, 2]) }), {
+    name: "C2pa(UnsupportedType)",
+  });
+});
+
+test("the native binding reports misuse as errors, not crashes", () => {
+  const session = _native.sessionNew("image/jpeg");
+  assert.throws(() => _native.sessionFulfill(session, 12345, "length", 1), /no outstanding request/);
+  assert.throws(() => _native.sessionFulfill(session, 0, "bogus", 1), /unknown reply kind/);
+
+  const first = _native.sessionAdvance(session).requests[0];
+  // A reply of the wrong kind is rejected, and the request stays answerable.
+  assert.throws(() => _native.sessionFulfill(session, first.id, "time", 0));
+  assert.throws(() => _native.sessionFulfill(session, first.id, "ocsp", Buffer.alloc(0)));
+  _native.sessionFulfill(session, first.id, "failed", "no thanks");
+
+});
+
+test("a session that is finished, or not finishable yet, says so", () => {
+  const session = _native.sessionNew("image/jpeg", "{}");
+  assert.throws(() => _native.sessionFinish(session)); // engine not complete
+  assert.throws(() => _native.sessionAdvance(session), /already finished/);
 });

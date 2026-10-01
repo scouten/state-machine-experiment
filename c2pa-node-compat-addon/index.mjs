@@ -97,34 +97,7 @@ async function readStore(source, format, settings, options) {
   const doFetch = options.fetch ?? globalThis.fetch;
   const session = native.sessionNew(format, settings);
 
-  async function answer(request) {
-    try {
-      switch (request.kind) {
-        case "read":
-          return ["bytes", await source.read(request.start, request.len)];
-        case "length":
-          return ["length", source.size];
-        case "time":
-          return ["time", Math.floor(now() / 1000)];
-        case "ocsp": {
-          const response = await doFetch(request.url, {
-            method: "POST",
-            headers: { "content-type": "application/ocsp-request" },
-            body: request.requestDer,
-            signal: AbortSignal.timeout(10_000),
-          });
-          if (!response.ok) return ["failed", `OCSP responder said ${response.status}`];
-          return ["ocsp", Buffer.from(await response.arrayBuffer())];
-        }
-        default:
-          return ["failed", `unsupported request ${request.kind}`];
-      }
-    } catch (error) {
-      // Whatever the host cannot do is the engine's to interpret
-      // (fail-open for OCSP, a hard error for an unreadable asset).
-      return ["failed", String(error?.message ?? error)];
-    }
-  }
+  const answer = (request) => answerRequest(request, source, { doFetch, now });
 
   const queue = [];
   const inFlight = new Set();
@@ -151,6 +124,40 @@ async function readStore(source, format, settings, options) {
   }
 
   return native.sessionFinish(session);
+}
+
+/**
+ * Answers one request from the engine. Never rejects: whatever the host
+ * cannot do becomes a `failed` reply, which the engine interprets
+ * (fail-open for OCSP, a hard error for an unreadable asset).
+ *
+ * Exported for tests; not part of the c2pa-node surface.
+ */
+export async function answerRequest(request, source, { doFetch, now }) {
+  try {
+    switch (request.kind) {
+      case "read":
+        return ["bytes", await source.read(request.start, request.len)];
+      case "length":
+        return ["length", source.size];
+      case "time":
+        return ["time", Math.floor(now() / 1000)];
+      case "ocsp": {
+        const response = await doFetch(request.url, {
+          method: "POST",
+          headers: { "content-type": "application/ocsp-request" },
+          body: request.requestDer,
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!response.ok) return ["failed", `OCSP responder said ${response.status}`];
+        return ["ocsp", Buffer.from(await response.arrayBuffer())];
+      }
+      default:
+        return ["failed", `unsupported request ${request.kind}`];
+    }
+  } catch (error) {
+    return ["failed", String(error?.message ?? error)];
+  }
 }
 
 async function openSource(asset) {
@@ -199,3 +206,6 @@ async function sniff(source) {
   const head = await source.read(0, 3);
   return head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff ? "image/jpeg" : "";
 }
+
+/** The raw synchronous binding, exported for tests; not part of the c2pa-node surface. */
+export { native as _native };

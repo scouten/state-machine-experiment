@@ -9,6 +9,7 @@
   "scripts": {
     "build": "cargo build --release && node build.mjs",
     "test": "node --test \"test/*.test.mjs\"",
+    "coverage": "node --test --experimental-test-coverage --test-coverage-exclude=\"test/**\" --test-coverage-exclude=\"examples/**\" --test-coverage-exclude=build.mjs --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=lcov.info \"test/*.test.mjs\"",
     "demo": "node examples/lag.mjs"
   }
 }
