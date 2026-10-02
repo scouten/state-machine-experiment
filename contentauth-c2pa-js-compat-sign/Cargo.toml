@@ -1,0 +1,63 @@
+[package]
+name = "contentauth-c2pa-js-compat-sign"
+version = "0.1.0"
+description = "Experimental write-side companion to contentauth-c2pa-js-compat: an async Builder whose signer is a JavaScript Promise, driving this workspace's sans-I/O build engine"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["c2pa", "content-credentials", "compatibility", "wasm"]
+categories = ["api-bindings", "wasm"]
+publish = false
+
+[features]
+# The browser adapters in `src/web.rs`: a `#[wasm_bindgen]`-exported
+# `WasmBuilder` whose signer is a JavaScript object with an async `sign`.
+# Enables `contentauth-c2pa-js-compat`'s own `web` feature too, for its
+# `Blob` impl on `web_sys::Blob`. Only has an effect for
+# `wasm32-unknown-unknown`; see that crate's Cargo.toml for why.
+web = [
+    "contentauth-c2pa-js-compat/web",
+    "dep:js-sys",
+    "dep:wasm-bindgen",
+    "dep:wasm-bindgen-futures",
+    "dep:web-sys",
+]
+
+[dependencies]
+# The baseline definition → `BuilderSettings` step, shared by every binding.
+contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline" }
+
+# The sans-I/O build session this crate's async host drives, and its
+# request/reply vocabulary.
+contentauth-c2pa-file-builder = { path = "../contentauth-c2pa-file-builder" }
+
+# The `Blob` trait the source asset is read through — reused, not
+# redefined, so one `Blob` implementation serves reading and signing.
+contentauth-c2pa-js-compat = { path = "../contentauth-c2pa-js-compat" }
+
+contentauth-c2pa-format-jpeg = { path = "../contentauth-c2pa-format-jpeg" }
+contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
+contentauth-state-machine = { path = "../contentauth-state-machine" }
+thiserror = "2.0.20"
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+js-sys = { version = "0.3", optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+web-sys = { version = "0.3", features = ["Blob"], optional = true }
+
+[dev-dependencies]
+# Reads what this crate signs back through the read-side async host.
+base64 = "0.22"
+serde_json = "1"
+contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline", features = [
+    "fixtures",
+] }
+# The synchronous host for the very same session, to compare against.
+contentauth-c2pa-file-builder = { path = "../contentauth-c2pa-file-builder" }
+c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
+    "rust_native_crypto",
+] }

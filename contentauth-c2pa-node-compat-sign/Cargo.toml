@@ -1,0 +1,41 @@
+[package]
+name = "contentauth-c2pa-node-compat-sign"
+version = "0.1.0"
+description = "Experimental Node.js binding of the baseline signing case: a purely synchronous advance/fulfill/finish surface over the build engine, with every asynchronous operation (file I/O, the signing key) left to the host"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["c2pa", "content-credentials", "compatibility", "nodejs"]
+categories = ["api-bindings"]
+publish = false
+
+[dependencies]
+# The baseline definition → `BuilderSettings` step, shared by every binding.
+contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline" }
+
+# The sans-I/O session this crate wraps, and its request/reply vocabulary.
+contentauth-c2pa-file-builder = { path = "../contentauth-c2pa-file-builder" }
+
+# Reused: `for_format` and `C2paError`, so a format the reader would refuse
+# is refused with the same error string here.
+contentauth-c2pa-js-compat = { path = "../contentauth-c2pa-js-compat" }
+
+contentauth-c2pa-format-jpeg = { path = "../contentauth-c2pa-format-jpeg" }
+contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
+contentauth-state-machine = { path = "../contentauth-state-machine" }
+thiserror = "2.0.20"
+
+[dev-dependencies]
+# Reads what this crate signs back, exactly as a c2pa-rs user would.
+contentauth-c2pa-rs-compat = { path = "../contentauth-c2pa-rs-compat" }
+contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline", features = [
+    "fixtures",
+] }
+serde_json = "1"
+# Test-only signer, as every sibling crate's tests use. See deny.toml.
+c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
+    "rust_native_crypto",
+] }
