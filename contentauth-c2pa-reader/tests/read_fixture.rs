@@ -519,6 +519,23 @@ fn a_malformed_anchor_in_a_named_list_names_the_list() {
 }
 
 #[test]
+fn a_malformed_anchor_in_a_named_timestamp_list_names_the_list() {
+    let error = Host {
+        timestamp_trust_lists: vec![TrustList {
+            uri: "https://example.com/bad-tsa".to_string(),
+            anchors: vec![vec![1, 2, 3]],
+        }],
+        ..host()
+    }
+    .read()
+    .expect_err("a malformed anchor is refused");
+
+    let message = error.to_string();
+    assert!(message.contains("timestamp trust"), "{message}");
+    assert!(message.contains("https://example.com/bad-tsa"), "{message}");
+}
+
+#[test]
 fn a_trusted_timestamp_carries_a_host_that_has_no_clock() {
     // A host that cannot tell the time can still validate a timestamped
     // manifest: the token brings its own instant. Before timestamps, this

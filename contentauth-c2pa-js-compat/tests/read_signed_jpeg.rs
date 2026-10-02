@@ -121,6 +121,46 @@ fn without_context_json_the_same_manifest_reads_back_only_as_valid() {
 }
 
 #[test]
+fn a_trust_uri_in_context_json_is_reported_as_the_trust_list_uri() {
+    let (_plan, asset) = build_and_embed(C_JPG);
+
+    let context_json = serde_json::json!({
+        "trust": { "anchors": [{
+            "trust_anchors": pem_of(TEST_SIGNER_CERT),
+            "trust_kind": "manifest",
+            "trust_uri": "https://example.com/signers",
+        }] },
+    })
+    .to_string();
+
+    let reader = block_on(Reader::from_blob(
+        "image/jpeg",
+        &asset,
+        Some(&context_json),
+        &FixedClock,
+    ))
+    .expect("reads cleanly");
+
+    let store = reader.manifest_store();
+    assert_eq!(store.validation_state, ValidationState::Trusted);
+
+    let trusted = store
+        .validation_status
+        .iter()
+        .find(|status| status.code == "signingCredential.trusted")
+        .expect("a trusted status");
+    assert_eq!(
+        trusted.trust_list_uri.as_deref(),
+        Some("https://example.com/signers")
+    );
+    assert!(store
+        .validation_status
+        .iter()
+        .filter(|status| status.code != "signingCredential.trusted")
+        .all(|status| status.trust_list_uri.is_none()));
+}
+
+#[test]
 fn a_context_built_from_this_workspaces_own_settings_is_accepted_too() {
     let (_plan, asset) = build_and_embed(C_JPG);
 
