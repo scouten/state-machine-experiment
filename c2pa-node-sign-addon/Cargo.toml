@@ -1,0 +1,21 @@
+# Deliberately NOT a member of the parent workspace (see its own `[workspace]`
+# below), like `c2pa-node-compat-addon`: a Neon `cdylib` leaves N-API
+# symbols to be resolved by the Node process that loads it, so it cannot be
+# linked by the workspace-wide `cargo test --all-features` / coverage jobs.
+[workspace]
+
+[package]
+name = "c2pa-node-sign-addon"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88.0"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+contentauth-c2pa-node-compat-sign = { path = "../contentauth-c2pa-node-compat-sign" }
+# No `futures` feature, on purpose: nothing in this addon is asynchronous.
+neon = { version = "1", default-features = false, features = ["napi-6"] }

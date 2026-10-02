@@ -165,6 +165,24 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   member (own `[workspace]`): a Neon `cdylib` cannot link outside Node, so
   CI builds and tests it in its own `node-addon` job
   (`npm run build && npm test` in that directory).
+- **`contentauth-c2pa-sign-baseline`** — the *baseline signing case*
+  every binding of the write path is held to: sign a JPEG with ES256 from
+  a c2pa-rs-shaped JSON definition (title, one generator, one
+  `c2pa.actions.v2`/`c2pa.created` assertion) and read it back `Trusted`.
+  Holds only the language-free part (`Definition` → `BuilderSettings`) and
+  shared test fixtures (`fixtures` feature). `instance_id`/`label` are
+  required in the definition: the engine has no RNG.
+- **`contentauth-c2pa-rs-compat-sign`**, **`contentauth-c2pa-js-compat-sign`**,
+  **`contentauth-c2pa-node-compat-sign`** + **`c2pa-node-sign-addon`** —
+  the baseline case through each binding, as new crates beside (not
+  inside) the read-side ones: a blocking c2pa-rs-shaped `Builder`/`Signer`;
+  an async `Builder` with an `AsyncSigner` (a JS `Promise` under the `web`
+  feature's `WasmBuilder`, `wasm32-unknown-unknown` only, unrun in a
+  browser); and a purely synchronous `NodeBuildSession` that Node drives,
+  Node owning the files and the signing key. The addon is, like the reader
+  addon, outside the workspace with its own CI job (`node-sign-addon`),
+  whose tests load the reader addon to read back what was signed. Ordinary
+  member crates all pass the Wasm checks above.
 - **`c2pa-rs-compat-conformance`** — a differential test harness for the
   crate above, proving the same client code gets the same answer reading
   a file through the real `c2pa` crate as through

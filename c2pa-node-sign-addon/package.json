@@ -1,0 +1,15 @@
+{
+  "name": "c2pa-node-sign-addon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Experiment: signing a C2PA manifest from Node over a purely synchronous Rust session; the key lives behind a JavaScript Promise",
+  "main": "index.mjs",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "cargo build --release && node build.mjs",
+    "build:reader": "npm --prefix ../c2pa-node-compat-addon run build",
+    "test": "node --test \"test/*.test.mjs\"",
+    "coverage": "node --test --experimental-test-coverage --test-coverage-exclude=\"test/**\" --test-coverage-exclude=build.mjs --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=lcov.info \"test/*.test.mjs\""
+  }
+}

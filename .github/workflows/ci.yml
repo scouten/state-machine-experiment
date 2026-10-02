@@ -306,3 +306,42 @@ jobs:
           verbose: true
           flags: node-addon
           files: ./c2pa-node-compat-addon/lcov.info,./c2pa-node-compat-addon/lcov.rust.info
+
+  node-sign-addon:
+    name: c2pa-node-sign-addon tests (real Node)
+    runs-on: ubuntu-latest
+
+    # Own Cargo workspace, like the reader addon above, for the same
+    # reason. Its read-back tests load the reader addon, so that is built
+    # first.
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master@2026-06-30
+        with:
+          toolchain: stable
+          components: clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: |
+            c2pa-node-compat-addon -> target
+            c2pa-node-sign-addon -> target
+
+      - name: Clippy
+        run: cargo clippy --manifest-path c2pa-node-sign-addon/Cargo.toml -- -Dwarnings
+
+      - name: Build reader addon (for read-back)
+        working-directory: c2pa-node-compat-addon
+        run: npm run build
+
+      - name: Build addon
+        working-directory: c2pa-node-sign-addon
+        run: npm run build
+
+      - name: Run tests under Node
+        working-directory: c2pa-node-sign-addon
+        run: npm test
