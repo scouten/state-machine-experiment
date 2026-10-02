@@ -319,7 +319,7 @@ fn a_manifest_written_by_the_builder_reads_back_as_trusted_through_the_compat_re
 }
 
 #[test]
-fn a_named_trust_list_is_reported_through_the_accessor_and_the_json() {
+fn a_named_trust_list_is_reported_through_the_accessor_but_not_the_json() {
     let (_plan, asset) = build_and_embed(C_JPG);
     let path = write_temp("named_list.jpg", &asset);
 
@@ -357,10 +357,9 @@ fn a_named_trust_list_is_reported_through_the_accessor_and_the_json() {
         .filter(|status| status["code"] == "signingCredential.trusted")
         .collect();
     assert_eq!(from_json.len(), 1);
-    assert_eq!(
-        from_json[0]["trust_list_uri"],
-        "https://example.com/signers"
-    );
+    // c2pa-rs 0.91 does not serialize it either (`#[serde(skip)]`).
+    assert!(from_json[0].get("trust_list_uri").is_none());
+    assert!(from_json[0].get("trustListUri").is_none());
 }
 
 #[test]

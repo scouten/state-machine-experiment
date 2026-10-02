@@ -158,6 +158,10 @@ fn a_trust_uri_in_context_json_is_reported_as_the_trust_list_uri() {
         .iter()
         .filter(|status| status.code != "signingCredential.trusted")
         .all(|status| status.trust_list_uri.is_none()));
+
+    // As in c2pa-rs, the field is reachable but never serialized.
+    assert!(!reader.json().contains("trust_list_uri"));
+    assert!(!reader.json().contains("https://example.com/signers"));
 }
 
 #[test]
