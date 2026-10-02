@@ -228,21 +228,26 @@ async function openOutput(output) {
 }
 
 function openMemoryOutput() {
+  // Grown geometrically, so writing an N-byte asset in chunks copies O(N)
+  // bytes in total rather than O(N^2); `length` is how much is real.
   let buffer = Buffer.alloc(0);
+  let length = 0;
   return {
     target: {
-      read: async (start, len) => Buffer.from(buffer.subarray(start, start + len)),
-      size: async () => buffer.length,
+      read: async (start, len) => Buffer.from(buffer.subarray(start, Math.min(start + len, length))),
+      size: async () => length,
       async write(offset, bytes) {
-        if (buffer.length < offset + bytes.length) {
-          const grown = Buffer.alloc(offset + bytes.length);
-          buffer.copy(grown);
+        const end = offset + bytes.length;
+        if (buffer.length < end) {
+          const grown = Buffer.alloc(Math.max(end, buffer.length * 2));
+          buffer.copy(grown, 0, 0, length);
           buffer = grown;
         }
         bytes.copy(buffer, offset);
+        length = Math.max(length, end);
       },
     },
-    commit: async () => buffer,
+    commit: async () => buffer.subarray(0, length),
     discard: async () => {},
   };
 }

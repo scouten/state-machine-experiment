@@ -66,10 +66,25 @@ impl JsSigner {
             .and_then(|name| parse_alg(&name))
             .ok_or_else(|| JsString::from("signer.alg must be a supported algorithm name"))?;
 
-        let certs = Array::from(&field("certs")?)
+        let certs = field("certs")?;
+        if !Array::is_array(&certs) {
+            return Err(JsString::from(
+                "signer.certs must be an array of Uint8Array, signer's certificate first",
+            ));
+        }
+        let certs = Array::from(&certs)
             .iter()
-            .map(|cert| Uint8Array::new(&cert).to_vec())
-            .collect();
+            .enumerate()
+            .map(|(index, cert)| match cert.dyn_into::<Uint8Array>() {
+                Ok(cert) if cert.length() > 0 => Ok(cert.to_vec()),
+                _ => Err(JsString::from(format!(
+                    "signer.certs[{index}] must be a non-empty Uint8Array"
+                ))),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if certs.is_empty() {
+            return Err(JsString::from("signer.certs must not be empty"));
+        }
 
         let sign = field("sign")?
             .dyn_into::<Function>()
