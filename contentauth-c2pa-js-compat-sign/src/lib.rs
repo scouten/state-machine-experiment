@@ -24,7 +24,7 @@
 //! between two of them the engine hashes, assembles JUMBF and COSE
 //! synchronously. The engine, the format handler, and the file-level
 //! session ([`contentauth_c2pa_file_builder::FileBuilderSession`]) are
-//! the very ones [`contentauth_c2pa_rs_compat_sign`]'s blocking host
+//! the very ones `contentauth_c2pa_rs_compat_sign`'s blocking host
 //! drives; only the loop differs.
 //!
 //! The signing key never needs to enter this crate's address space. That
@@ -41,7 +41,7 @@
 //! once, not the source.
 //!
 //! With the `web` feature (compiled only for `wasm32-unknown-unknown`),
-//! [`web`] exports a `WasmBuilder` taking a JavaScript signer object.
+//! `web` exports a `WasmBuilder` taking a JavaScript signer object.
 //! Nothing there runs under `cargo test`; it is held to
 //! `cargo check --target wasm32-unknown-unknown --all-features`.
 //!
