@@ -134,6 +134,38 @@ async function readStore(source, format, settings, options) {
 const MAX_OCSP_RESPONSE = 1 << 20;
 
 /**
+ * The body of `response` as a Buffer, or `null` if it exceeds `limit` bytes.
+ *
+ * Bounds memory, not just the result: an honest `Content-Length` over the
+ * limit is refused without reading anything, and otherwise the body is
+ * consumed chunk by chunk and the connection abandoned the moment the limit
+ * is passed, so a permitted responder cannot make the host buffer more than
+ * `limit` plus one chunk.
+ */
+async function readBounded(response, limit) {
+  const declared = Number(response.headers.get("content-length"));
+  if (declared > limit) {
+    await response.body?.cancel();
+    return null;
+  }
+  if (!response.body) return Buffer.alloc(0);
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return Buffer.concat(chunks, total);
+    total += value.length;
+    if (total > limit) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+}
+
+/**
  * The default answer to "may this OCSP responder URL be contacted?":
  * `http` or `https`, no embedded credentials, and not a literal loopback,
  * private, link-local, or `localhost` address.
@@ -224,8 +256,8 @@ export async function answerRequest(
           signal: AbortSignal.timeout(10_000),
         });
         if (!response.ok) return ["failed", `OCSP responder said ${response.status}`];
-        const body = Buffer.from(await response.arrayBuffer());
-        if (body.length > MAX_OCSP_RESPONSE) return ["failed", "OCSP response too large"];
+        const body = await readBounded(response, MAX_OCSP_RESPONSE);
+        if (body === null) return ["failed", "OCSP response too large"];
         return ["ocsp", body];
       }
       default:

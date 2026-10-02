@@ -41,7 +41,7 @@ may come back in any order.
 
 ```sh
 npm run build   # cargo build --release, then copies the cdylib to index.node
-npm test        # 26 tests under node:test
+npm test        # 27 tests under node:test
 ./coverage.sh   # coverage for the JS driver and the Rust addon (needs cargo-llvm-cov)
 npm run demo    # event-loop delay while hashing a large file
 ```
@@ -83,7 +83,7 @@ the driver would POST to wherever it points. The driver therefore asks
 `ocspPolicy(url)` first (default `defaultOcspPolicy`: `http(s)` only, no
 embedded credentials, no literal loopback / private / link-local /
 `localhost` address, including numeric and IPv4-mapped spellings), never
-follows redirects, and bounds the response at 1 MiB. A policy cannot see
+follows redirects, and bounds the response at 1 MiB (declared length checked first, then the body read incrementally and abandoned at the limit, so memory is bounded, not just the result). A policy cannot see
 through DNS, so a server reading untrusted assets with OCSP on should also
 pass a `fetch` whose resolver rejects private addresses. That seam exists
 because the host, not the Rust engine, owns the network.

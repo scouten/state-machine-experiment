@@ -342,3 +342,53 @@ test("a JPEG is recognized by its bytes whatever its file is called", async () =
     rmSync(dir, { recursive: true });
   }
 });
+
+test("the OCSP size cap bounds memory, not just the result", async () => {
+  const request = { kind: "ocsp", url: "http://ocsp.example/", requestDer: Buffer.alloc(0) };
+  const ask = (response) => answerRequest(request, { size: 0 }, { doFetch: async () => response, now });
+  const chunk = Buffer.alloc(256 * 1024, 7);
+
+  // An endless body is abandoned after the limit, not buffered.
+  let pulls = 0;
+  let cancelled = false;
+  const endless = new Response(
+    new ReadableStream({
+      pull(controller) {
+        pulls++;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    }, { highWaterMark: 0 }),
+  );
+  assert.deepEqual(await ask(endless), ["failed", "OCSP response too large"]);
+  assert.ok(cancelled, "the connection was abandoned");
+  assert.ok(pulls <= 8, `${pulls} chunks pulled`);
+
+  // A declared length over the limit is refused without reading the body.
+  let read = false;
+  const declared = new Response(
+    new ReadableStream({
+      pull() {
+        read = true;
+      },
+    }, { highWaterMark: 0 }),
+    { headers: { "content-length": String((1 << 20) + 1) } },
+  );
+  assert.deepEqual(await ask(declared), ["failed", "OCSP response too large"]);
+  assert.equal(read, false);
+
+  // A body within the limit, in several chunks, arrives intact; so does an empty one.
+  const parts = [Buffer.from([1, 2]), Buffer.from([3]), Buffer.from([4, 5, 6])];
+  const chunked = new Response(
+    new ReadableStream({
+      start(controller) {
+        parts.forEach((p) => controller.enqueue(p));
+        controller.close();
+      },
+    }),
+  );
+  assert.deepEqual(await ask(chunked), ["ocsp", Buffer.from([1, 2, 3, 4, 5, 6])]);
+  assert.deepEqual(await ask(new Response(null, { status: 200 })), ["ocsp", Buffer.alloc(0)]);
+});
