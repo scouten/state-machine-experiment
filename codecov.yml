@@ -1,8 +1,9 @@
 codecov:
   notify:
-    # Update this depending on how many independent jobs upload coverage results.
+    # Update this depending on how many independent jobs upload coverage results:
+    # the workspace `tests` job, and the `node-addon` job.
     # https://docs.codecov.com/docs/notifications#section-preventing-notifications-until-after-n-builds
-    after_n_builds: 1
+    after_n_builds: 2
 
 coverage:
   status:

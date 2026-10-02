@@ -242,3 +242,67 @@ jobs:
 
       - name: Run tests
         run: cargo test --manifest-path c2pa-rs-compat-conformance/Cargo.toml
+
+  node-addon:
+    name: c2pa-node-compat-addon tests (real Node)
+    runs-on: ubuntu-latest
+
+    # The Neon addon is its own Cargo workspace, like compat-conformance
+    # above: a `cdylib` leaves N-API symbols for the Node process that
+    # loads it to resolve, so the workspace-wide `--all-features` test and
+    # coverage jobs could not link it. Built here, then exercised by
+    # loading it into Node and driving the synchronous Rust session from
+    # JavaScript.
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master@2026-06-30
+        with:
+          toolchain: stable
+          components: clippy, llvm-tools-preview
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: c2pa-node-compat-addon -> target
+
+      - name: Clippy
+        run: cargo clippy --manifest-path c2pa-node-compat-addon/Cargo.toml -- -Dwarnings
+
+      - name: Build addon
+        working-directory: c2pa-node-compat-addon
+        run: npm run build
+
+      - name: Run tests under Node
+        working-directory: c2pa-node-compat-addon
+        run: npm test
+
+      # Both halves of the Node side from one instrumented run: the
+      # JavaScript driver (Node's built-in coverage) and the Rust addon
+      # (cargo-llvm-cov, exercised by loading it into Node). See
+      # `c2pa-node-compat-addon/coverage.sh`.
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@4684b8405694ae9dd42c9f39ba901a70ae83f4a3 # v2.82.9
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Install llvm-tools
+        run: rustup component add llvm-tools-preview
+
+      - name: Generate code coverage
+        working-directory: c2pa-node-compat-addon
+        run: ./coverage.sh
+
+      # Tokens aren't available for PRs originating from forks,
+      # so we don't attempt to upload code coverage in that case.
+      - name: Upload code coverage results
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: true
+          verbose: true
+          flags: node-addon
+          files: ./c2pa-node-compat-addon/lcov.info,./c2pa-node-compat-addon/lcov.rust.info

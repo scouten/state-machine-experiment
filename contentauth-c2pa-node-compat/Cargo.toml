@@ -1,0 +1,27 @@
+[package]
+name = "contentauth-c2pa-node-compat"
+version = "0.1.0"
+description = "Experimental compatibility shim for c2pa-node's reader: a purely synchronous advance/fulfill/finish surface for Node.js to drive, with every asynchronous operation left to the host"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["c2pa", "content-credentials", "compatibility", "nodejs"]
+categories = ["api-bindings"]
+publish = false
+
+[dependencies]
+# The sans-I/O session this crate wraps, and its request/reply vocabulary.
+contentauth-c2pa-file-reader = { path = "../contentauth-c2pa-file-reader" }
+
+# Reused wholesale: the c2pa-rs-shaped `Context` (settings JSON),
+# `ManifestStore` JSON reporting, and error-string contract are the same
+# for c2pa-wasm and c2pa-node, since both sit on c2pa-rs's `Reader`.
+contentauth-c2pa-js-compat = { path = "../contentauth-c2pa-js-compat" }
+
+contentauth-c2pa-format-jpeg = { path = "../contentauth-c2pa-format-jpeg" }
+contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
+serde_json = "1"
+contentauth-state-machine = { path = "../contentauth-state-machine" }
