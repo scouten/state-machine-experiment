@@ -132,6 +132,7 @@ fn write(output: &mut Vec<u8>, offset: u64, bytes: &[u8]) -> Result<(), HostErro
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -165,5 +166,83 @@ mod tests {
             }
         )
         .is_err());
+    }
+
+    use std::{
+        future::Future,
+        pin::pin,
+        task::{Context, Poll, Waker},
+    };
+
+    use contentauth_c2pa_format_jpeg::JpegFormat;
+    use contentauth_c2pa_sign_baseline::{fixtures::*, Definition, BASELINE_DEFINITION};
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let mut future = pin!(future);
+        let mut cx = Context::from_waker(Waker::noop());
+        loop {
+            if let Poll::Ready(output) = future.as_mut().poll(&mut cx) {
+                return output;
+            }
+        }
+    }
+
+    /// Signs with 64 zero bytes: enough to reach the next request.
+    struct NeverSigns;
+
+    impl AsyncSigner for NeverSigns {
+        fn alg(&self) -> contentauth_c2pa_primitives::SigningAlg {
+            contentauth_c2pa_primitives::SigningAlg::Es256
+        }
+
+        fn certs(&self) -> Vec<Vec<u8>> {
+            vec![TEST_SIGNER_CERT.to_vec()]
+        }
+
+        async fn sign(&self, _data: &[u8]) -> Result<Vec<u8>, HostError> {
+            Ok(vec![0; 64])
+        }
+    }
+
+    fn settings() -> BuilderSettings {
+        Definition::from_json(BASELINE_DEFINITION)
+            .and_then(|d| {
+                d.into_settings(
+                    "image/jpeg",
+                    contentauth_c2pa_primitives::SigningAlg::Es256,
+                    vec![TEST_SIGNER_CERT.to_vec()],
+                )
+            })
+            .unwrap_or_else(|_| unreachable!("the baseline definition is valid"))
+    }
+
+    /// A blob that answers every read one byte short.
+    struct Short;
+
+    impl Blob for Short {
+        fn size(&self) -> u64 {
+            SOURCE_JPEG.len() as u64
+        }
+
+        async fn bytes(&self, range: ByteRange) -> Result<Vec<u8>, HostError> {
+            Ok(vec![0; (range.len as usize).saturating_sub(1)])
+        }
+    }
+
+    #[test]
+    fn a_short_read_from_the_blob_fails_the_build_rather_than_being_hashed() {
+        let err = block_on(build(JpegFormat, &Short, &NeverSigns, settings())).unwrap_err();
+        assert!(err.to_string().contains("blob returned"), "{err}");
+    }
+
+    #[test]
+    fn a_timestamp_request_is_reported_as_unsupported() {
+        let mut settings = settings();
+        settings.timestamp = Some(contentauth_c2pa_file_builder::TimestampSettings::new(
+            10_000,
+        ));
+
+        let err = block_on(build(JpegFormat, SOURCE_JPEG, &NeverSigns, settings)).unwrap_err();
+        assert!(err.to_string().contains("unsupported request"), "{err}");
     }
 }

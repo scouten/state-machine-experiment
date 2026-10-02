@@ -322,7 +322,7 @@ jobs:
         uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master@2026-06-30
         with:
           toolchain: stable
-          components: clippy
+          components: clippy, llvm-tools-preview
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
@@ -345,3 +345,24 @@ jobs:
       - name: Run tests under Node
         working-directory: c2pa-node-sign-addon
         run: npm test
+
+      # Both halves, as for the reader addon: see
+      # `c2pa-node-sign-addon/coverage.sh`.
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@4684b8405694ae9dd42c9f39ba901a70ae83f4a3 # v2.82.9
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Generate code coverage
+        working-directory: c2pa-node-sign-addon
+        run: ./coverage.sh
+
+      - name: Upload code coverage results
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: true
+          verbose: true
+          flags: node-sign-addon
+          files: ./c2pa-node-sign-addon/lcov.info,./c2pa-node-sign-addon/lcov.rust.info

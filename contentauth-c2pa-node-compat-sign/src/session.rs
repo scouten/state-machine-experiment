@@ -435,6 +435,21 @@ mod tests {
     }
 
     #[test]
+    fn every_algorithm_name_round_trips_and_an_unknown_stream_is_unsupported() {
+        for name in [
+            "es256", "es384", "es512", "ps256", "ps384", "ps512", "ed25519",
+        ] {
+            let alg = parse_alg(name).unwrap();
+            assert_eq!(alg_name(alg).unwrap(), name);
+        }
+
+        assert!(matches!(
+            Stream::from_engine(contentauth_c2pa_primitives::StreamId::new(999)),
+            Err(Error::Unsupported(_))
+        ));
+    }
+
+    #[test]
     fn arguments_are_checked_before_any_request() {
         let new = |json: &str, format: &str, alg: &str| {
             NodeBuildSession::new(json, format, alg, vec![])

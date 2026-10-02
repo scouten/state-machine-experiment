@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import test, { after, before } from "node:test";
 
-import { Builder, signAsset } from "../index.mjs";
+import { _native as native, answerRequest, Builder, signAsset } from "../index.mjs";
 
 // The read-back uses the *existing* reader addon. Its native module is a
 // build product (`index.node`, git-ignored): build it here if it is
@@ -224,4 +224,37 @@ test("a signer for the wrong algorithm, or returning junk, fails the build", asy
     TypeError,
   );
   assert.deepEqual(readdirSync(sub), []);
+});
+
+test("a signer whose algorithm differs from the session's is refused before signing", async () => {
+  const stats = { calls: 0 };
+  const signer = testSigner(0, stats);
+  // The session is built for the signer's algorithm, so ask the request
+  // handler directly for a signature in another one.
+  await assert.rejects(
+    answerRequest({ kind: "sign", alg: "ps256", data: Buffer.from("x") }, { signer }),
+    /signer is es256, the session asked for ps256/,
+  );
+  assert.equal(stats.calls, 0);
+});
+
+test("an unknown request kind is an error rather than silently ignored", async () => {
+  await assert.rejects(answerRequest({ kind: "timestamp" }, {}), /unsupported request timestamp/);
+});
+
+test("the native session rejects misuse with errors rather than crashing", () => {
+  const session = native.buildNew(JSON.stringify(BASELINE), "image/jpeg", "es256", [CERT_DER]);
+
+  const step = native.buildAdvance(session);
+  assert.equal(step.done, false);
+  assert.ok(step.requests.length > 0);
+
+  assert.throws(() => native.buildFulfill(session, step.requests[0].id, "nonsense", 0), /unknown reply kind/);
+  assert.throws(() => native.buildFulfill(session, 999999, "length", 0), Error);
+  // Finishing before the build completes is an error, and consumes the session.
+  assert.throws(() => native.buildFinish(session), Error);
+
+  assert.throws(() => native.buildAdvance(session), /already finished/);
+  assert.throws(() => native.buildFulfill(session, 0, "written"), /already finished/);
+  assert.throws(() => native.buildFinish(session), /already finished/);
 });
