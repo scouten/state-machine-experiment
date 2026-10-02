@@ -178,7 +178,8 @@ export async function openSource(asset) {
  * length and writes; `commit()` publishes it (resolving to the bytes when
  * there is no path), `discard()` removes every trace.
  */
-async function openOutput(output) {
+/** Exported for tests; not part of the public surface. */
+export async function openOutput(output) {
   if (!output?.path) return openMemoryOutput();
 
   const dest = output.path;

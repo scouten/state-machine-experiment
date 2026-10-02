@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import test, { after, before } from "node:test";
 
-import { _native as native, answerRequest, Builder, signAsset } from "../index.mjs";
+import { _native as native, answerRequest, Builder, openOutput, openSource, signAsset } from "../index.mjs";
 
 // The read-back uses the *existing* reader addon. Its native module is a
 // build product (`index.node`, git-ignored): build it here if it is
@@ -257,4 +257,63 @@ test("the native session rejects misuse with errors rather than crashing", () =>
   assert.throws(() => native.buildAdvance(session), /already finished/);
   assert.throws(() => native.buildFulfill(session, 0, "written"), /already finished/);
   assert.throws(() => native.buildFinish(session), /already finished/);
+});
+
+test("a source reports a read past its end, and a tiny or unknown file is an unsupported type", async () => {
+  const tiny = join(dir, "tiny.dat");
+  writeFileSync(tiny, Buffer.from([1, 2]));
+
+  const source = await openSource({ path: tiny });
+  try {
+    assert.equal(await source.size(), 2);
+    await assert.rejects(source.read(0, 10), /unexpected end of file/);
+  } finally {
+    await source.close();
+  }
+
+  // Neither sniffable (too short) nor a known extension.
+  await assert.rejects(signAsset({ path: tiny }, BASELINE, testSigner()), /UnsupportedType/);
+
+  const text = join(dir, "text.dat");
+  writeFileSync(text, "not a jpeg at all");
+  await assert.rejects(signAsset({ path: text }, BASELINE, testSigner()), /UnsupportedType/);
+  await assert.rejects(openSource({}), TypeError);
+});
+
+test("a signer without certificates is rejected rather than signing an unverifiable asset", async () => {
+  const { certs, ...noCerts } = testSigner();
+  await assert.rejects(signAsset({ path: SOURCE }, BASELINE, noCerts));
+});
+
+test("a file output answers reads, length and writes, commits by rename, and discards cleanly", async () => {
+  const sub = mkdtempSync(join(dir, "out-"));
+  const dest = join(sub, "out.bin");
+
+  const out = await openOutput({ path: dest });
+  await out.target.write(0, Buffer.from("hello"));
+  await out.target.write(5, Buffer.from(" world"));
+  assert.equal(await out.target.size(), 11);
+  assert.equal((await out.target.read(6, 5)).toString(), "world");
+  await assert.rejects(out.target.read(8, 10), /unexpected end of output/);
+  await out.commit();
+  assert.equal(readFileSync(dest).toString(), "hello world");
+  assert.deepEqual(readdirSync(sub), ["out.bin"]);
+
+  const discarded = await openOutput({ path: join(sub, "never.bin") });
+  await discarded.target.write(0, Buffer.from("x"));
+  await discarded.discard();
+  assert.deepEqual(readdirSync(sub), ["out.bin"]);
+});
+
+test("an in-memory output grows past its capacity, zero-fills gaps and returns exactly what was written", async () => {
+  const out = await openOutput({});
+  await out.target.write(0, Buffer.from([1, 2, 3]));
+  await out.target.write(10, Buffer.from([9]));
+  await out.target.write(1, Buffer.from([7]));
+  assert.equal(await out.target.size(), 11);
+  assert.deepEqual([...(await out.target.read(0, 4))], [1, 7, 3, 0]);
+  // A read past the end is clipped to what was written, not stale capacity.
+  assert.deepEqual([...(await out.target.read(9, 10))], [0, 9]);
+  assert.deepEqual([...(await out.commit())], [1, 7, 3, 0, 0, 0, 0, 0, 0, 0, 9]);
+  await out.discard();
 });
