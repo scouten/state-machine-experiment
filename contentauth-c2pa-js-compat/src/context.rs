@@ -39,10 +39,14 @@
 //! They are decoded to DER and routed by kind — `manifest` into
 //! [`ReadSettings::trust_anchors`], `tsa` into
 //! [`ReadSettings::timestamp_trust_anchors`], as c2pa-rs keeps those two
-//! trust stores separate. `cawg` lists are accepted and ignored, there
-//! being no CAWG identity validation in this workspace. The other
-//! per-list fields (`trust_uri`, `trust_config`, `allowed_list`,
-//! `trusted_ica_issuers`) are likewise accepted and ignored.
+//! trust stores separate. A list that carries a `trust_uri` instead
+//! becomes a named [`TrustList`] ([`ReadSettings::trust_lists`] /
+//! [`ReadSettings::timestamp_trust_lists`]), so the URI is reported as
+//! `trust_list_uri` on the trusted statuses, as c2pa-rs does. `cawg`
+//! lists are accepted and ignored, there being no CAWG identity
+//! validation in this workspace. The other per-list fields
+//! (`trust_config`, `allowed_list`, `trusted_ica_issuers`) are likewise
+//! accepted and ignored.
 //!
 //! The older `trust.trust_anchors` and `trust.user_anchors` strings, which
 //! c2pa-rs 0.91 deprecated (and plans to remove in 0.92), are still
@@ -80,7 +84,7 @@
 //! engine grows the request.
 
 use base64::Engine as _;
-use contentauth_c2pa_file_reader::ReadSettings;
+use contentauth_c2pa_file_reader::{ReadSettings, TrustList};
 use serde::Deserialize;
 
 use crate::error::C2paError;
@@ -117,6 +121,8 @@ impl Context {
 
         let mut signing_anchors = Vec::new();
         let mut timestamp_anchors = Vec::new();
+        let mut signing_lists = Vec::new();
+        let mut timestamp_lists = Vec::new();
 
         let bad =
             |key: &str, err: String| C2paError::BadParam(format!("settings JSON: {key}: {err}"));
@@ -134,10 +140,17 @@ impl Context {
             let key = format!("trust.anchors[{index}].trust_anchors");
             let certificates =
                 pem_certificates(&list.trust_anchors).map_err(|err| bad(&key, err))?;
-            match list.trust_kind {
-                TrustListKind::Manifest => signing_anchors.extend(certificates),
-                TrustListKind::Tsa => timestamp_anchors.extend(certificates),
-                TrustListKind::Cawg => {}
+            let (anonymous, named) = match list.trust_kind {
+                TrustListKind::Manifest => (&mut signing_anchors, &mut signing_lists),
+                TrustListKind::Tsa => (&mut timestamp_anchors, &mut timestamp_lists),
+                TrustListKind::Cawg => continue,
+            };
+            match list.trust_uri {
+                Some(uri) => named.push(TrustList {
+                    uri,
+                    anchors: certificates,
+                }),
+                None => anonymous.extend(certificates),
             }
         }
 
@@ -151,6 +164,8 @@ impl Context {
         let settings = ReadSettings {
             trust_anchors: signing_anchors,
             timestamp_trust_anchors: timestamp_anchors,
+            trust_lists: signing_lists,
+            timestamp_trust_lists: timestamp_lists,
             check_ocsp: doc.verify.ocsp_fetch.unwrap_or(defaults.check_ocsp),
             fetch_remote_manifests: defaults.fetch_remote_manifests,
         };
@@ -197,6 +212,7 @@ struct TrustJson {
 struct TrustAnchorJson {
     trust_anchors: String,
     trust_kind: TrustListKind,
+    trust_uri: Option<String>,
 }
 
 /// c2pa-rs's `TrustListKind`, serialized lowercase.
@@ -329,7 +345,7 @@ mod tests {
         let json = serde_json::json!({
             "trust": {
                 "anchors": [
-                    { "trust_anchors": pem_of(DER), "trust_kind": "manifest", "trust_uri": "x" },
+                    { "trust_anchors": pem_of(DER), "trust_kind": "manifest" },
                     { "trust_anchors": pem_of(&tsa), "trust_kind": "tsa" },
                     { "trust_anchors": pem_of(&cawg), "trust_kind": "cawg",
                       "trusted_ica_issuers": ["did:web:example.com"] },
@@ -343,6 +359,41 @@ mod tests {
         assert_eq!(
             context.settings().timestamp_trust_anchors,
             vec![tsa.to_vec()]
+        );
+    }
+
+    #[test]
+    fn a_list_with_a_trust_uri_becomes_a_named_trust_list() {
+        let tsa = [0x30u8, 0x03, 0x02, 0x01, 0x02];
+        let json = serde_json::json!({
+            "trust": {
+                "anchors": [
+                    { "trust_anchors": pem_of(DER), "trust_kind": "manifest",
+                      "trust_uri": "https://example.com/signers" },
+                    { "trust_anchors": pem_of(&tsa), "trust_kind": "tsa",
+                      "trust_uri": "https://example.com/tsa" },
+                ]
+            }
+        })
+        .to_string();
+
+        let context = Context::from_json(&json).expect("parses");
+        let settings = context.settings();
+        assert!(settings.trust_anchors.is_empty());
+        assert!(settings.timestamp_trust_anchors.is_empty());
+        assert_eq!(
+            settings.trust_lists,
+            vec![TrustList {
+                uri: "https://example.com/signers".to_string(),
+                anchors: vec![DER.to_vec()],
+            }]
+        );
+        assert_eq!(
+            settings.timestamp_trust_lists,
+            vec![TrustList {
+                uri: "https://example.com/tsa".to_string(),
+                anchors: vec![tsa.to_vec()],
+            }]
         );
     }
 

@@ -77,10 +77,16 @@ pub enum Error {
     /// error: an anchor that cannot be decoded cannot be consulted, and
     /// skipping it would silently downgrade every manifest that should have
     /// chained to it.
-    #[error("{list} anchor {index} is not a valid certificate: {source}", list = if *timestamp { "timestamp trust" } else { "trust" })]
+    #[error("{list} anchor {index}{named} is not a valid certificate: {source}", list = if *timestamp { "timestamp trust" } else { "trust" }, named = trust_list.as_ref().map(|uri| format!(" of list {uri:?}")).unwrap_or_default())]
     MalformedTrustAnchor {
         /// Position of the offending anchor within its list.
         index: usize,
+
+        /// The [`TrustList::uri`] of the named list it came from, or
+        /// `None` if it was a plain entry of one of the anonymous lists.
+        ///
+        /// [`TrustList::uri`]: crate::read::TrustList::uri
+        trust_list: Option<String>,
 
         /// True if it came from
         /// [`ReadSettings::timestamp_trust_anchors`] rather than

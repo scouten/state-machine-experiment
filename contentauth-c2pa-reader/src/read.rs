@@ -25,8 +25,8 @@ use contentauth_state_machine::{
 };
 
 use crate::{
-    cert::{self, Certificate},
-    chain::{self, PendingChain, Trust},
+    cert,
+    chain::{self, Anchor, PendingChain, Trust},
     data_hash,
     error::Error,
     hash_stream::{self, HashStream},
@@ -88,6 +88,21 @@ pub struct ReadSettings {
     /// reads as outside its validity window, however good its timestamp.
     pub timestamp_trust_anchors: Vec<Vec<u8>>,
 
+    /// Named lists of trust anchors, consulted before
+    /// [`Self::trust_anchors`] and treated the same way.
+    ///
+    /// Each list carries a URI identifying it; when a claim signature
+    /// chains to one of its anchors, that URI is reported as
+    /// [`ValidationStatus::trust_list_uri`] on the
+    /// [`status_code::SIGNING_CREDENTIAL_TRUSTED`] status. If an anchor
+    /// appears in more than one list, the earliest list wins.
+    pub trust_lists: Vec<TrustList>,
+
+    /// As [`Self::trust_lists`], for RFC 3161 timestamping authorities
+    /// (see [`Self::timestamp_trust_anchors`]); the URI is reported on the
+    /// [`status_code::TIMESTAMP_TRUSTED`] status.
+    pub timestamp_trust_lists: Vec<TrustList>,
+
     /// Whether the session *desires to verify* a certificate's revocation
     /// status by querying an OCSP responder online (C2PA spec §15.9.2),
     /// when nothing already in the C2PA Manifest Store settled the
@@ -125,12 +140,26 @@ pub struct ReadSettings {
     pub check_ocsp: bool,
 }
 
+/// A named list of trust anchors; see [`ReadSettings::trust_lists`].
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TrustList {
+    /// Identifies the list, typically the URI it was published at. Reported
+    /// as [`ValidationStatus::trust_list_uri`] when one of its anchors
+    /// establishes trust.
+    pub uri: String,
+
+    /// DER-encoded certificates, as for [`ReadSettings::trust_anchors`].
+    pub anchors: Vec<Vec<u8>>,
+}
+
 impl Default for ReadSettings {
     fn default() -> Self {
         Self {
             fetch_remote_manifests: false,
             trust_anchors: vec![],
             timestamp_trust_anchors: vec![],
+            trust_lists: vec![],
+            timestamp_trust_lists: vec![],
             check_ocsp: true,
         }
     }
@@ -189,10 +218,10 @@ pub struct ReadSession {
 
     /// The decoded form of [`ReadSettings::trust_anchors`], decoded once at
     /// the start of the workflow.
-    anchors: Vec<Certificate>,
+    anchors: Vec<Anchor>,
 
     /// The same for [`ReadSettings::timestamp_trust_anchors`].
-    timestamp_anchors: Vec<Certificate>,
+    timestamp_anchors: Vec<Anchor>,
 
     /// How far trust was established for the *active* manifest, which is
     /// what [`ValidationState`] describes. `None` until the evaluation
@@ -253,18 +282,39 @@ enum State {
 /// should have chained to it from [`ValidationState::Trusted`] to
 /// [`ValidationState::Valid`], which is exactly the kind of wrong answer
 /// nobody would think to look for.
-fn decode_anchors(anchors: &[Vec<u8>], timestamp: bool) -> Result<Vec<Certificate>, Error> {
-    anchors
-        .iter()
-        .enumerate()
-        .map(|(index, der)| {
-            cert::decode(der).map_err(|source| Error::MalformedTrustAnchor {
-                index,
-                timestamp,
-                source,
+///
+/// Named lists come first, so an anchor present both in one and in the
+/// anonymous list is reported under the name.
+fn decode_anchors(
+    lists: &[TrustList],
+    anonymous: &[Vec<u8>],
+    timestamp: bool,
+) -> Result<Vec<Anchor>, Error> {
+    let decode_all = |ders: &[Vec<u8>], uri: Option<&str>| {
+        ders.iter()
+            .enumerate()
+            .map(|(index, der)| {
+                cert::decode(der)
+                    .map(|certificate| Anchor {
+                        certificate,
+                        trust_list_uri: uri.map(str::to_string),
+                    })
+                    .map_err(|source| Error::MalformedTrustAnchor {
+                        index,
+                        trust_list: uri.map(str::to_string),
+                        timestamp,
+                        source,
+                    })
             })
-        })
-        .collect()
+            .collect::<Result<Vec<_>, _>>()
+    };
+
+    let mut decoded = Vec::new();
+    for list in lists {
+        decoded.extend(decode_all(&list.anchors, Some(&list.uri))?);
+    }
+    decoded.extend(decode_all(anonymous, None)?);
+    Ok(decoded)
 }
 
 /// Plans verification of a manifest's hard binding, if it has one this
@@ -449,8 +499,16 @@ impl ReadSession {
         // mistake, and it should surface the same way every
         // time rather than only when a store happens to carry
         // a chain that would have consulted it.
-        self.anchors = decode_anchors(&self.settings.trust_anchors, false)?;
-        self.timestamp_anchors = decode_anchors(&self.settings.timestamp_trust_anchors, true)?;
+        self.anchors = decode_anchors(
+            &self.settings.trust_lists,
+            &self.settings.trust_anchors,
+            false,
+        )?;
+        self.timestamp_anchors = decode_anchors(
+            &self.settings.timestamp_trust_lists,
+            &self.settings.timestamp_trust_anchors,
+            true,
+        )?;
 
         let request = self.core.issue(ReadRequest::ManifestStore {
             stream: Self::PRIMARY_STREAM,
@@ -1232,7 +1290,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
-    use crate::{error::HostError, test_support};
+    use crate::{cert::Certificate, error::HostError, test_support};
 
     /// 2027-01-15T08:00:00Z — inside the validity window of every
     /// certificate fixture in this repository.
@@ -2040,13 +2098,13 @@ mod tests {
     /// The chain (leaf, intermediate) and the anchor (root) that extends it
     /// to a second link, per [`TRUST_LEAF`]/[`TRUST_INTERMEDIATE`]/
     /// [`TRUST_ROOT`].
-    fn three_tier_chain() -> (Vec<Certificate>, Vec<Certificate>) {
+    fn three_tier_chain() -> (Vec<Certificate>, Vec<Anchor>) {
         (
             vec![
                 cert::decode(TRUST_LEAF).unwrap(),
                 cert::decode(TRUST_INTERMEDIATE).unwrap(),
             ],
-            vec![cert::decode(TRUST_ROOT).unwrap()],
+            vec![Anchor::anonymous(cert::decode(TRUST_ROOT).unwrap())],
         )
     }
 
@@ -2247,7 +2305,7 @@ mod tests {
 
     /// [`three_tier_chain`] with an OCSP responder named on the CA (the
     /// intermediate), but not on the signer.
-    fn three_tier_chain_with_ca_responder() -> (Vec<Certificate>, Vec<Certificate>) {
+    fn three_tier_chain_with_ca_responder() -> (Vec<Certificate>, Vec<Anchor>) {
         let (mut certificates, anchors) = three_tier_chain();
         certificates[1].ocsp_responder_url = Some("http://ocsp.example/ca".to_string());
         (certificates, anchors)

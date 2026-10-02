@@ -61,6 +61,8 @@ struct ValidationStatusJson<'a> {
     url: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     explanation: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    trust_list_uri: Option<&'a str>,
 }
 
 fn state_name(state: ValidationState) -> &'static str {
@@ -103,6 +105,7 @@ pub(crate) fn value(report: &ReadReport) -> Result<serde_json::Value, serde_json
                 code: &status.code,
                 url: status.url.as_deref(),
                 explanation: status.explanation.as_deref(),
+                trust_list_uri: status.trust_list_uri.as_deref(),
             })
             .collect(),
     };

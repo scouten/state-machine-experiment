@@ -80,7 +80,7 @@ use std::{
 };
 
 pub use contentauth_c2pa_format::FormatHandler;
-pub use contentauth_c2pa_reader::{ReadReport, ReadSettings};
+pub use contentauth_c2pa_reader::{ReadReport, ReadSettings, TrustList};
 pub use error::Error;
 pub use session::{FileReadReply, FileReadRequest, FileReadSession};
 
