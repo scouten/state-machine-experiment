@@ -34,7 +34,7 @@ use crate::error::C2paError;
 pub const FORMATS: &[&str] = &["image/jpeg", "jpeg", "jpg"];
 
 /// Picks a handler for `format`.
-pub(crate) fn for_format(format: &str) -> Result<JpegFormat, C2paError> {
+pub fn for_format(format: &str) -> Result<JpegFormat, C2paError> {
     if FORMATS
         .iter()
         .any(|candidate| format.eq_ignore_ascii_case(candidate))

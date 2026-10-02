@@ -1,0 +1,394 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+import test from "node:test";
+
+import { _native, answerRequest, defaultOcspPolicy, openSource, Reader } from "../index.mjs";
+
+const PATH = new URL("../../contentauth-c2pa-reader/tests/fixtures/C.jpg", import.meta.url)
+  .pathname;
+const BYTES = readFileSync(PATH);
+// Inside every certificate's validity window, and not the wall clock, so a
+// pass proves the *host's* clock was the one the engine used.
+const now = () => 1_800_000_000_000;
+
+/** An asset whose reads genuinely take time, and which records concurrency. */
+function slowAsset(delayMs = 5, stats = { reads: 0, inFlight: 0, maxInFlight: 0 }) {
+  return {
+    stats,
+    size: BYTES.length,
+    async read(start, len) {
+      stats.reads++;
+      stats.maxInFlight = Math.max(stats.maxInFlight, ++stats.inFlight);
+      await sleep(delayMs);
+      stats.inFlight--;
+      return BYTES.subarray(start, start + len);
+    },
+  };
+}
+
+test("reads a signed JPEG from a path, a buffer, and an async source alike", async () => {
+  const fromPath = await Reader.fromAsset({ path: PATH }, null, { now });
+  const fromBuffer = await Reader.fromAsset({ buffer: BYTES, mimeType: "image/jpeg" }, null, { now });
+  const fromSource = await Reader.fromAsset(slowAsset(), null, { now });
+
+  assert.ok(fromPath.activeLabel());
+  assert.equal(fromPath.json().validation_state, "Valid");
+  assert.deepEqual(fromBuffer.json(), fromPath.json());
+  assert.deepEqual(fromSource.json(), fromPath.json());
+  assert.equal(fromPath.getActive().label, fromPath.activeLabel());
+  assert.equal(fromPath.isEmbedded(), true);
+  assert.equal(fromPath.remoteUrl(), "");
+});
+
+test("the format is sniffed from the bytes when no mime type or extension is given", async () => {
+  const reader = await Reader.fromAsset({ buffer: BYTES }, null, { now });
+  assert.ok(reader.activeLabel());
+});
+
+test("an asset with no manifest store resolves to null, as in c2pa-node", async () => {
+  const bare = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+  assert.equal(await Reader.fromAsset({ buffer: bare, mimeType: "image/jpeg" }), null);
+});
+
+test("errors carry c2pa-rs's Debug string as their name", async () => {
+  await assert.rejects(
+    Reader.fromAsset({ buffer: BYTES, mimeType: "image/png" }),
+    { name: "C2pa(UnsupportedType)" },
+  );
+  await assert.rejects(
+    Reader.fromAsset({ buffer: BYTES, mimeType: "image/jpeg" }, "{not json"),
+    (err) => err.name.startsWith("C2pa(BadParam("),
+  );
+  await assert.rejects(Reader.fromAsset({ path: "/no/such/file.jpg" }), { code: "ENOENT" });
+});
+
+test("the host decides how many requests run at once", async () => {
+  const unlimited = slowAsset();
+  await Reader.fromAsset(unlimited, null, { now });
+  assert.ok(unlimited.stats.maxInFlight > 1, JSON.stringify(unlimited.stats));
+
+  const serial = slowAsset();
+  await Reader.fromAsset(serial, null, { now, concurrency: 1 });
+  assert.equal(serial.stats.maxInFlight, 1);
+  assert.equal(serial.stats.reads, unlimited.stats.reads);
+
+  const two = slowAsset();
+  await Reader.fromAsset(two, null, { now, concurrency: 2 });
+  assert.equal(two.stats.maxInFlight, 2);
+});
+
+test("the JS thread is never blocked: timers fire throughout a slow read", async () => {
+  const asset = slowAsset(20);
+  let ticks = 0;
+  const timer = setInterval(() => ticks++, 1);
+  const started = performance.now();
+  await Reader.fromAsset(asset, null, { now, concurrency: 1 });
+  clearInterval(timer);
+
+  const elapsed = performance.now() - started;
+  assert.ok(elapsed >= 20 * asset.stats.reads * 0.9, `${elapsed}ms`);
+  assert.ok(ticks > asset.stats.reads, `${ticks} ticks over ${asset.stats.reads} reads`);
+});
+
+test("many reads interleave on the one thread", async () => {
+  // How much overlap does one read achieve by itself?
+  const alone = slowAsset(10);
+  await Reader.fromAsset(alone, null, { now });
+
+  // Eight reads sharing one counter: requests from *different* reads must
+  // be in flight together, beyond anything a single read reaches. (Counted,
+  // not timed: wall-clock bounds are meaningless in an unoptimized build.)
+  const shared = { reads: 0, inFlight: 0, maxInFlight: 0 };
+  const assets = Array.from({ length: 8 }, () => slowAsset(10, shared));
+  const readers = await Promise.all(assets.map((a) => Reader.fromAsset(a, null, { now })));
+
+  for (const reader of readers) assert.equal(reader.json().validation_state, "Valid");
+  assert.ok(
+    shared.maxInFlight > alone.stats.maxInFlight,
+    `${shared.maxInFlight} in flight across reads vs ${alone.stats.maxInFlight} for one`,
+  );
+});
+
+test("a source that fails mid-read fails the read, not the process", async () => {
+  const asset = { ...slowAsset(), read: async () => { throw new Error("disk on fire"); } };
+  await assert.rejects(Reader.fromAsset(asset, null, { now }));
+});
+
+test("OCSP requests are answered with fetch: POSTed DER in, response body out", async () => {
+  const der = Buffer.from([1, 2, 3]);
+  let seen;
+  const doFetch = async (url, init) => {
+    seen = { url, init };
+    return new Response(Buffer.from([4, 5, 6]), { status: 200 });
+  };
+  const reply = await answerRequest(
+    { kind: "ocsp", url: "http://ocsp.example/", requestDer: der },
+    { size: 0 },
+    { doFetch, now },
+  );
+  assert.deepEqual(reply, ["ocsp", Buffer.from([4, 5, 6])]);
+  assert.equal(seen.url, "http://ocsp.example/");
+  assert.equal(seen.init.method, "POST");
+  assert.equal(seen.init.headers["content-type"], "application/ocsp-request");
+  assert.equal(seen.init.body, der);
+});
+
+test("whatever the host cannot do becomes a failed reply, never a rejection", async () => {
+  const source = { size: 0, read: async () => { throw new Error("nope"); } };
+  const ctx = { doFetch: async () => new Response("", { status: 503 }), now };
+
+  assert.deepEqual(await answerRequest({ kind: "read", start: 0, len: 1 }, source, ctx), ["failed", "nope"]);
+  assert.deepEqual(await answerRequest({ kind: "ocsp", url: "http://ocsp.example/", requestDer: Buffer.alloc(0) }, source, ctx), ["failed", "OCSP responder said 503"]);
+  const down = { ...ctx, doFetch: async () => { throw new TypeError("fetch failed"); } };
+  assert.deepEqual(await answerRequest({ kind: "ocsp", url: "http://ocsp.example/", requestDer: Buffer.alloc(0) }, source, down), ["failed", "fetch failed"]);
+  assert.deepEqual(await answerRequest({ kind: "bogus" }, source, ctx), ["failed", "unsupported request bogus"]);
+  assert.deepEqual(await answerRequest({ kind: "length" }, { size: 7 }, ctx), ["length", 7]);
+  assert.deepEqual(await answerRequest({ kind: "time" }, source, ctx), ["time", 1_800_000_000]);
+});
+
+test("an unrecognizable asset is rejected up front", async () => {
+  await assert.rejects(Reader.fromAsset({}), TypeError);
+  // Too short to sniff, and no mime type: no format can be chosen.
+  await assert.rejects(Reader.fromAsset({ buffer: Buffer.from([1, 2]) }), {
+    name: "C2pa(UnsupportedType)",
+  });
+});
+
+test("the native binding reports misuse as errors, not crashes", () => {
+  const session = _native.sessionNew("image/jpeg");
+  assert.throws(() => _native.sessionFulfill(session, 12345, "length", 1), /no outstanding request/);
+  assert.throws(() => _native.sessionFulfill(session, 0, "bogus", 1), /unknown reply kind/);
+
+  const first = _native.sessionAdvance(session).requests[0];
+  // A reply of the wrong kind is rejected, and the request stays answerable.
+  assert.throws(() => _native.sessionFulfill(session, first.id, "time", 0));
+  assert.throws(() => _native.sessionFulfill(session, first.id, "ocsp", Buffer.alloc(0)));
+  _native.sessionFulfill(session, first.id, "failed", "no thanks");
+
+});
+
+test("a session that is finished, or not finishable yet, says so", () => {
+  const session = _native.sessionNew("image/jpeg", "{}");
+  assert.throws(() => _native.sessionFinish(session)); // engine not complete
+  assert.throws(() => _native.sessionAdvance(session), /already finished/);
+});
+
+test("a file source reads exact ranges, and fails cleanly if the file shrinks underneath it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "c2pa-node-compat-"));
+  const path = join(dir, "a.bin");
+  try {
+    writeFileSync(path, Buffer.from([0, 1, 2, 3, 4, 5, 6, 7]));
+    const source = await openSource({ path });
+    assert.equal(source.size, 8);
+    assert.deepEqual(await source.read(2, 3), Buffer.from([2, 3, 4]));
+
+    truncateSync(path, 4);
+    await assert.rejects(source.read(2, 6), /unexpected end of file at 4/);
+    await source.close();
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
+});
+
+test("a malformed container is an engine error, named as c2pa-rs-style Debug", async () => {
+  await assert.rejects(
+    Reader.fromAsset({ buffer: Buffer.from([0xff, 0xd8, 0xff, 0xe1, 0x00, 0x01]), mimeType: "image/jpeg" }),
+    (err) => err.name.startsWith("C2pa(Read(Format(Malformed("),
+  );
+});
+
+test("a finished session cannot be fulfilled, advanced, or finished again", () => {
+  const session = _native.sessionNew("image/jpeg");
+  for (;;) {
+    const step = _native.sessionAdvance(session);
+    if (step.done) break;
+    for (const r of step.requests) {
+      if (r.kind === "read") _native.sessionFulfill(session, r.id, "bytes", BYTES.subarray(r.start, r.start + r.len));
+      else if (r.kind === "length") _native.sessionFulfill(session, r.id, "length", BYTES.length);
+      else _native.sessionFulfill(session, r.id, "time", 1_800_000_000);
+    }
+  }
+  assert.ok(_native.sessionFinish(session));
+  assert.throws(() => _native.sessionFulfill(session, 0, "length", 1), /already finished/);
+  assert.throws(() => _native.sessionAdvance(session), /already finished/);
+  assert.throws(() => _native.sessionFinish(session), /already finished/);
+});
+
+test("a source that returns the wrong number of bytes cannot corrupt the read", async () => {
+  // The engine, not this driver, enforces the length contract.
+  for (const tamper of [(b) => b.subarray(0, b.length - 1), (b) => Buffer.concat([b, Buffer.from([0])]), () => Buffer.alloc(0)]) {
+    let reads = 0;
+    const asset = {
+      mimeType: "image/jpeg",
+      size: BYTES.length,
+      read: async (start, len) => {
+        const bytes = BYTES.subarray(start, start + len);
+        return ++reads > 3 && len > 1000 ? tamper(bytes) : bytes;
+      },
+    };
+    await assert.rejects(Reader.fromAsset(asset, null, { now }), (err) =>
+      err.name.startsWith("C2pa(Read(Format(ReadLengthMismatch"),
+    );
+  }
+});
+
+test("settings may be given as an object, and are applied", async () => {
+  const asset = () => ({ buffer: BYTES, mimeType: "image/jpeg" });
+  const plain = await Reader.fromAsset(asset(), { verify: { ocsp_fetch: false } }, { now });
+  assert.equal(plain.json().validation_state, "Valid");
+  await assert.rejects(Reader.fromAsset(asset(), { trust: { trust_anchors: "not pem" } }), (err) =>
+    err.name.startsWith("C2pa(BadParam("),
+  );
+});
+
+test("accessors on a store with no active manifest report undefined", () => {
+  assert.equal(new Reader({}).activeLabel(), undefined);
+  assert.equal(new Reader({}).getActive(), undefined);
+  assert.equal(new Reader({ active_manifest: "x" }).getActive(), undefined);
+});
+
+test("a host that allows no requests in flight stalls loudly instead of hanging", async () => {
+  await assert.rejects(Reader.fromAsset({ buffer: BYTES }, null, { now, concurrency: 0 }), /stalled/);
+});
+
+test("a source that throws a non-Error, or replies with the wrong type, fails the read", async () => {
+  const base = { mimeType: "image/jpeg", size: BYTES.length };
+  await assert.rejects(Reader.fromAsset({ ...base, read: async () => { throw "plain string"; } }, null, { now }));
+  // Not a Buffer: the native binding rejects it, and the driver surfaces that.
+  await assert.rejects(Reader.fromAsset({ ...base, read: async () => "oops" }, null, { now }), TypeError);
+});
+
+test("unrecognizable leading bytes are not sniffed as JPEG", async () => {
+  await assert.rejects(Reader.fromAsset({ buffer: Buffer.from([1, 2, 3, 4]) }), {
+    name: "C2pa(UnsupportedType)",
+  });
+});
+
+test("the default OCSP policy refuses what a certificate must not be able to aim a POST at", () => {
+  for (const url of [
+    "http://127.0.0.1/", "http://localhost/ocsp", "http://foo.localhost/", "http://10.1.2.3/",
+    "http://172.16.0.1/", "http://172.31.255.255/", "http://192.168.1.1/", "http://169.254.169.254/latest/meta-data",
+    "http://100.64.0.1/", "http://0.0.0.0/", "http://[::1]/", "http://[::]/", "http://[fd00::1]/",
+    "http://[fe80::1]/", "http://[::ffff:127.0.0.1]/", "http://[::ffff:10.0.0.1]/",
+    "http://2130706433/", "http://0x7f.1/",           // numeric spellings of 127.0.0.1
+    "file:///etc/passwd", "ftp://ocsp.example/", "gopher://ocsp.example/",
+    "http://user:pw@ocsp.example/", "not a url", "",
+  ]) {
+    assert.equal(defaultOcspPolicy(url), false, url);
+  }
+  for (const url of [
+    "http://ocsp.example/", "https://ocsp.digicert.com/", "http://8.8.8.8/",
+    "http://172.32.0.1/", "http://192.169.0.1/", "http://100.63.0.1/", "http://[2001:db8::1]/",
+  ]) {
+    assert.equal(defaultOcspPolicy(url), true, url);
+  }
+});
+
+test("a refused OCSP responder is never contacted, and redirects are not followed", async () => {
+  let calls = 0;
+  const doFetch = async (_url, init) => {
+    calls++;
+    assert.equal(init.redirect, "error");
+    return new Response(Buffer.from([1]), { status: 200 });
+  };
+  const request = (url) => ({ kind: "ocsp", url, requestDer: Buffer.alloc(0) });
+
+  const refused = await answerRequest(request("http://169.254.169.254/"), { size: 0 }, { doFetch, now });
+  assert.equal(refused[0], "failed");
+  assert.match(refused[1], /refused by policy/);
+  assert.equal(calls, 0);
+
+  assert.equal((await answerRequest(request("http://ocsp.example/"), { size: 0 }, { doFetch, now }))[0], "ocsp");
+  assert.equal(calls, 1);
+
+  // The host may widen or narrow the policy.
+  const allowInternal = { doFetch, now, ocspPolicy: () => true };
+  assert.equal((await answerRequest(request("http://127.0.0.1/"), { size: 0 }, allowInternal))[0], "ocsp");
+  const denyAll = { doFetch, now, ocspPolicy: () => false };
+  assert.equal((await answerRequest(request("http://ocsp.example/"), { size: 0 }, denyAll))[0], "failed");
+});
+
+test("an oversized OCSP response is refused", async () => {
+  const doFetch = async () => new Response(Buffer.alloc((1 << 20) + 1), { status: 200 });
+  const reply = await answerRequest(
+    { kind: "ocsp", url: "http://ocsp.example/", requestDer: Buffer.alloc(0) },
+    { size: 0 },
+    { doFetch, now },
+  );
+  assert.deepEqual(reply, ["failed", "OCSP response too large"]);
+});
+
+test("a JPEG is recognized by its bytes whatever its file is called", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "c2pa-node-compat-"));
+  try {
+    for (const name of ["photo.dat", "photo", "photo.png"]) {
+      const path = join(dir, name);
+      writeFileSync(path, BYTES);
+      const reader = await Reader.fromAsset({ path }, null, { now });
+      assert.ok(reader.activeLabel(), name);
+    }
+    // ...but an explicit mime type is taken at its word.
+    await assert.rejects(Reader.fromAsset({ path: join(dir, "photo.dat"), mimeType: "image/png" }), {
+      name: "C2pa(UnsupportedType)",
+    });
+    // Bytes that are not recognized fall back to the extension.
+    const odd = join(dir, "odd.jpg");
+    writeFileSync(odd, Buffer.from([1, 2, 3, 4]));
+    await assert.rejects(Reader.fromAsset({ path: odd }), (err) => err.name.startsWith("C2pa(Read("));
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
+});
+
+test("the OCSP size cap bounds memory, not just the result", async () => {
+  const request = { kind: "ocsp", url: "http://ocsp.example/", requestDer: Buffer.alloc(0) };
+  const ask = (response) => answerRequest(request, { size: 0 }, { doFetch: async () => response, now });
+  const chunk = Buffer.alloc(256 * 1024, 7);
+
+  // An endless body is abandoned after the limit, not buffered.
+  let pulls = 0;
+  let cancelled = false;
+  const endless = new Response(
+    new ReadableStream({
+      pull(controller) {
+        pulls++;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    }, { highWaterMark: 0 }),
+  );
+  assert.deepEqual(await ask(endless), ["failed", "OCSP response too large"]);
+  assert.ok(cancelled, "the connection was abandoned");
+  assert.ok(pulls <= 8, `${pulls} chunks pulled`);
+
+  // A declared length over the limit is refused without reading the body.
+  let read = false;
+  const declared = new Response(
+    new ReadableStream({
+      pull() {
+        read = true;
+      },
+    }, { highWaterMark: 0 }),
+    { headers: { "content-length": String((1 << 20) + 1) } },
+  );
+  assert.deepEqual(await ask(declared), ["failed", "OCSP response too large"]);
+  assert.equal(read, false);
+
+  // A body within the limit, in several chunks, arrives intact; so does an empty one.
+  const parts = [Buffer.from([1, 2]), Buffer.from([3]), Buffer.from([4, 5, 6])];
+  const chunked = new Response(
+    new ReadableStream({
+      start(controller) {
+        parts.forEach((p) => controller.enqueue(p));
+        controller.close();
+      },
+    }),
+  );
+  assert.deepEqual(await ask(chunked), ["ocsp", Buffer.from([1, 2, 3, 4, 5, 6])]);
+  assert.deepEqual(await ask(new Response(null, { status: 200 })), ["ocsp", Buffer.alloc(0)]);
+});
