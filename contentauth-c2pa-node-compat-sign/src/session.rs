@@ -1,0 +1,525 @@
+// Copyright 2026 Adobe. All rights reserved.
+// This file is licensed to you under the Apache License,
+// Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
+// or the MIT license (http://opensource.org/licenses/MIT),
+// at your option.
+
+// Unless required by applicable law or agreed to in writing,
+// this software is distributed on an "AS IS" BASIS, WITHOUT
+// WARRANTIES OR REPRESENTATIONS OF ANY KIND, either express or
+// implied. See the LICENSE-MIT and LICENSE-APACHE files for the
+// specific language governing permissions and limitations under
+// each license.
+
+//! [`NodeBuildSession`]: the synchronous surface Node drives.
+
+use std::collections::HashMap;
+
+use contentauth_c2pa_file_builder::{FileBuilderReply, FileBuilderRequest, FileBuilderSession};
+use contentauth_c2pa_format_jpeg::JpegFormat;
+use contentauth_c2pa_js_compat::{for_format, C2paError};
+use contentauth_c2pa_primitives::{HostError, SigningAlg};
+use contentauth_c2pa_sign_baseline::Definition;
+use contentauth_state_machine::{RequestId, Session};
+
+use crate::Error;
+
+type Engine = FileBuilderSession<JpegFormat>;
+
+/// Which of the two assets a request concerns.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Stream {
+    /// The asset being signed. Read-only.
+    Source,
+    /// The asset being assembled. Written, then read back for hashing.
+    Output,
+}
+
+impl Stream {
+    /// The name JavaScript sees: `"source"` or `"output"`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Source => "source",
+            Self::Output => "output",
+        }
+    }
+
+    fn from_engine(stream: contentauth_c2pa_primitives::StreamId) -> Result<Self, Error> {
+        if stream == Engine::SOURCE_STREAM {
+            Ok(Self::Source)
+        } else if stream == Engine::OUTPUT_STREAM {
+            Ok(Self::Output)
+        } else {
+            Err(Error::Unsupported(format!("unknown stream {stream:?}")))
+        }
+    }
+}
+
+/// One thing the session needs its host to do, as plain data.
+///
+/// `id` is what to quote back to [`NodeBuildSession::fulfill`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum PendingRequest {
+    /// Read exactly `len` bytes of `stream` starting at `start`.
+    /// Answer with [`Reply::Bytes`].
+    Read {
+        /// The handle to pass to [`NodeBuildSession::fulfill`].
+        id: u64,
+        /// Which asset.
+        stream: Stream,
+        /// Offset of the first byte.
+        start: u64,
+        /// Number of bytes.
+        len: u64,
+    },
+
+    /// Report the total length of `stream`. Answer with [`Reply::Length`].
+    Length {
+        /// The handle to pass to [`NodeBuildSession::fulfill`].
+        id: u64,
+        /// Which asset.
+        stream: Stream,
+    },
+
+    /// Write `bytes` at `offset` of `stream` (always the output today).
+    /// Answer with [`Reply::Written`] once a later read would see them.
+    Write {
+        /// The handle to pass to [`NodeBuildSession::fulfill`].
+        id: u64,
+        /// Which asset.
+        stream: Stream,
+        /// Offset to write at.
+        offset: u64,
+        /// The bytes.
+        bytes: Vec<u8>,
+    },
+
+    /// Sign `data` (a COSE `Sig_structure`) with `alg` and answer with
+    /// [`Reply::Signature`]: for ECDSA the raw fixed-width `r || s`, not DER.
+    Sign {
+        /// The handle to pass to [`NodeBuildSession::fulfill`].
+        id: u64,
+        /// The algorithm, lower-case: `"es256"`, `"ps256"`, `"ed25519"`...
+        alg: &'static str,
+        /// The bytes to sign.
+        data: Vec<u8>,
+    },
+}
+
+impl PendingRequest {
+    /// The handle to pass to [`NodeBuildSession::fulfill`].
+    pub fn id(&self) -> u64 {
+        match self {
+            Self::Read { id, .. }
+            | Self::Length { id, .. }
+            | Self::Write { id, .. }
+            | Self::Sign { id, .. } => *id,
+        }
+    }
+}
+
+/// The host's answer to one [`PendingRequest`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Reply {
+    /// The bytes a [`PendingRequest::Read`] asked for.
+    Bytes(Vec<u8>),
+    /// A stream's length in bytes.
+    Length(u64),
+    /// A [`PendingRequest::Write`] is done.
+    Written,
+    /// The signature a [`PendingRequest::Sign`] asked for.
+    Signature(Vec<u8>),
+    /// The host could not do it (a rejected signer, an I/O error). Valid
+    /// for any request; the build fails.
+    Failed(String),
+}
+
+/// What [`NodeBuildSession::advance`] reports.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Step {
+    /// Not finished. The vector holds the requests that are *new* since
+    /// the last call — possibly none, if the session is still waiting on
+    /// requests already reported.
+    Pending(Vec<PendingRequest>),
+
+    /// Finished; call [`NodeBuildSession::finish`].
+    Complete,
+}
+
+/// What a finished build reports. The signed asset itself is not here:
+/// every byte of it already went to the host as a [`PendingRequest::Write`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SignReport {
+    /// The manifest store's bytes, as embedded.
+    pub manifest: Vec<u8>,
+    /// Offset in the output of the container structure carrying the
+    /// manifest, framing included (the hard binding's exclusion).
+    pub manifest_start: u64,
+    /// Length of that structure.
+    pub manifest_len: u64,
+}
+
+/// A signing of one asset, driven entirely by its caller.
+///
+/// A thin, FFI-shaped wrapper over [`FileBuilderSession`]: it never
+/// blocks, never spawns, holds no lock, and never sees a key.
+pub struct NodeBuildSession {
+    inner: Engine,
+
+    /// Numbers handed to the host, mapped to the engine's own ids.
+    handles: HashMap<u64, RequestId>,
+    next_handle: u64,
+
+    /// Engine ids already reported by a previous `advance`, so each
+    /// request is surfaced to the host exactly once.
+    reported: HashMap<RequestId, u64>,
+}
+
+impl NodeBuildSession {
+    /// Starts signing an asset of type `format` (a MIME type or bare
+    /// extension) per `definition_json` (see [`Definition`]), with
+    /// algorithm `alg` (`"es256"`, ...) and the DER certificate chain
+    /// `certs`, signer's own first.
+    ///
+    /// Fails before any request is made.
+    pub fn new(
+        definition_json: &str,
+        format: &str,
+        alg: &str,
+        certs: Vec<Vec<u8>>,
+    ) -> Result<Self, Error> {
+        for_format(format)?;
+        let alg = parse_alg(alg)?;
+        let settings =
+            Definition::from_json(definition_json)?.into_settings("image/jpeg", alg, certs)?;
+
+        Ok(Self {
+            inner: FileBuilderSession::new(JpegFormat, settings),
+            handles: HashMap::new(),
+            next_handle: 0,
+            reported: HashMap::new(),
+        })
+    }
+
+    /// Runs the engine as far as it can go without the host.
+    pub fn advance(&mut self) -> Result<Step, Error> {
+        use contentauth_state_machine::Step as Engine;
+
+        match self.inner.advance().map_err(Error::from)? {
+            Engine::Complete => Ok(Step::Complete),
+            _ => {
+                let mut fresh = Vec::new();
+                for request in self.inner.outstanding_requests() {
+                    if self.reported.contains_key(&request.id) {
+                        continue;
+                    }
+                    let handle = self.next_handle;
+                    let pending = describe(handle, &request.kind)?;
+                    self.next_handle += 1;
+                    self.reported.insert(request.id, handle);
+                    self.handles.insert(handle, request.id);
+                    fresh.push(pending);
+                }
+                Ok(Step::Pending(fresh))
+            }
+        }
+    }
+
+    /// Reports the outcome of one pending request. Replies may arrive in
+    /// any order and any subset between calls to [`Self::advance`].
+    ///
+    /// Fails if `id` was never issued, was already answered, or `reply`
+    /// is the wrong kind for it.
+    pub fn fulfill(&mut self, id: u64, reply: Reply) -> Result<(), Error> {
+        let engine_id = *self.handles.get(&id).ok_or_else(|| {
+            C2paError::BadParam(format!("no outstanding request with handle {id}"))
+        })?;
+
+        self.inner
+            .fulfill(engine_id, engine_reply(reply))
+            .map_err(Error::from)?;
+        // Answered: forget it rather than keep an entry per request.
+        self.handles.remove(&id);
+        self.reported.remove(&engine_id);
+        Ok(())
+    }
+
+    /// Consumes the finished session.
+    pub fn finish(self) -> Result<SignReport, Error> {
+        let report = self.inner.finish().map_err(Error::from)?;
+        Ok(SignReport {
+            manifest: report.manifest,
+            manifest_start: report.manifest_range.start,
+            manifest_len: report.manifest_range.len,
+        })
+    }
+}
+
+/// Parses a signing algorithm name, case-insensitively, as c2pa-rs's JSON
+/// spells it (`"es256"`).
+fn parse_alg(alg: &str) -> Result<SigningAlg, C2paError> {
+    Ok(match alg.to_ascii_lowercase().as_str() {
+        "es256" => SigningAlg::Es256,
+        "es384" => SigningAlg::Es384,
+        "es512" => SigningAlg::Es512,
+        "ps256" => SigningAlg::Ps256,
+        "ps384" => SigningAlg::Ps384,
+        "ps512" => SigningAlg::Ps512,
+        "ed25519" => SigningAlg::Ed25519,
+        other => return Err(C2paError::BadParam(format!("unknown algorithm {other:?}"))),
+    })
+}
+
+fn alg_name(alg: SigningAlg) -> Result<&'static str, Error> {
+    Ok(match alg {
+        SigningAlg::Es256 => "es256",
+        SigningAlg::Es384 => "es384",
+        SigningAlg::Es512 => "es512",
+        SigningAlg::Ps256 => "ps256",
+        SigningAlg::Ps384 => "ps384",
+        SigningAlg::Ps512 => "ps512",
+        SigningAlg::Ed25519 => "ed25519",
+        #[allow(unreachable_patterns)]
+        other => return Err(Error::Unsupported(format!("algorithm {other:?}"))),
+    })
+}
+
+/// Describes `request` to the host as plain data, under `handle`.
+///
+/// Fails for a request this wrapper has no description for
+/// (`FileBuilderRequest` is `#[non_exhaustive]`; a timestamp is one).
+fn describe(handle: u64, request: &FileBuilderRequest) -> Result<PendingRequest, Error> {
+    Ok(match request {
+        FileBuilderRequest::Read { stream, range } => PendingRequest::Read {
+            id: handle,
+            stream: Stream::from_engine(*stream)?,
+            start: range.start,
+            len: range.len,
+        },
+        FileBuilderRequest::Length { stream } => PendingRequest::Length {
+            id: handle,
+            stream: Stream::from_engine(*stream)?,
+        },
+        FileBuilderRequest::Write {
+            stream,
+            offset,
+            bytes,
+        } => PendingRequest::Write {
+            id: handle,
+            stream: Stream::from_engine(*stream)?,
+            offset: *offset,
+            bytes: bytes.clone(),
+        },
+        FileBuilderRequest::Sign { alg, data } => PendingRequest::Sign {
+            id: handle,
+            alg: alg_name(*alg)?,
+            data: data.clone(),
+        },
+        other => return Err(Error::Unsupported(format!("{other:?}"))),
+    })
+}
+
+/// The engine's form of the host's `reply`.
+fn engine_reply(reply: Reply) -> FileBuilderReply {
+    match reply {
+        Reply::Bytes(bytes) => FileBuilderReply::Bytes(bytes),
+        Reply::Length(len) => FileBuilderReply::Length(len),
+        Reply::Written => FileBuilderReply::Written,
+        Reply::Signature(bytes) => FileBuilderReply::Signature(bytes),
+        Reply::Failed(message) => FileBuilderReply::Failed(HostError::new(message)),
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod tests {
+    use contentauth_c2pa_primitives::{ByteRange, HashAlgorithm};
+    use contentauth_c2pa_sign_baseline::BASELINE_DEFINITION;
+
+    use super::*;
+
+    fn session() -> NodeBuildSession {
+        NodeBuildSession::new(BASELINE_DEFINITION, "image/jpeg", "es256", vec![vec![1]]).unwrap()
+    }
+
+    #[test]
+    fn every_engine_request_is_described_to_the_host() {
+        let range = ByteRange { start: 5, len: 7 };
+        let (src, out) = (Engine::SOURCE_STREAM, Engine::OUTPUT_STREAM);
+
+        assert_eq!(
+            describe(1, &FileBuilderRequest::Read { stream: src, range }).unwrap(),
+            PendingRequest::Read {
+                id: 1,
+                stream: Stream::Source,
+                start: 5,
+                len: 7
+            }
+        );
+        assert_eq!(
+            describe(2, &FileBuilderRequest::Length { stream: out }).unwrap(),
+            PendingRequest::Length {
+                id: 2,
+                stream: Stream::Output
+            }
+        );
+        assert_eq!(
+            describe(
+                3,
+                &FileBuilderRequest::Write {
+                    stream: out,
+                    offset: 9,
+                    bytes: vec![1, 2]
+                }
+            )
+            .unwrap(),
+            PendingRequest::Write {
+                id: 3,
+                stream: Stream::Output,
+                offset: 9,
+                bytes: vec![1, 2]
+            }
+        );
+        assert_eq!(
+            describe(
+                4,
+                &FileBuilderRequest::Sign {
+                    alg: SigningAlg::Ps384,
+                    data: vec![3]
+                }
+            )
+            .unwrap(),
+            PendingRequest::Sign {
+                id: 4,
+                alg: "ps384",
+                data: vec![3]
+            }
+        );
+    }
+
+    #[test]
+    fn a_timestamp_request_is_reported_as_unsupported() {
+        let err = describe(
+            1,
+            &FileBuilderRequest::Timestamp {
+                digest: vec![],
+                hash_alg: HashAlgorithm::Sha256,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::Unsupported(_)), "{err:?}");
+    }
+
+    #[test]
+    fn replies_map_to_the_engines_kind() {
+        assert!(
+            matches!(engine_reply(Reply::Bytes(vec![1])), FileBuilderReply::Bytes(b) if b == [1])
+        );
+        assert!(matches!(
+            engine_reply(Reply::Length(3)),
+            FileBuilderReply::Length(3)
+        ));
+        assert!(matches!(
+            engine_reply(Reply::Written),
+            FileBuilderReply::Written
+        ));
+        assert!(matches!(
+            engine_reply(Reply::Signature(vec![2])),
+            FileBuilderReply::Signature(b) if b == [2]
+        ));
+        assert!(matches!(
+            engine_reply(Reply::Failed("no".to_string())),
+            FileBuilderReply::Failed(e) if e.message == "no"
+        ));
+    }
+
+    #[test]
+    fn arguments_are_checked_before_any_request() {
+        let new = |json: &str, format: &str, alg: &str| {
+            NodeBuildSession::new(json, format, alg, vec![])
+                .err()
+                .unwrap()
+        };
+        assert!(matches!(
+            new(BASELINE_DEFINITION, "image/png", "es256"),
+            Error::C2pa(C2paError::UnsupportedType)
+        ));
+        assert!(matches!(
+            new(BASELINE_DEFINITION, "jpg", "rot13"),
+            Error::C2pa(C2paError::BadParam(_))
+        ));
+        assert!(matches!(new("{", "jpg", "ES256"), Error::Definition(_)));
+    }
+
+    #[test]
+    fn a_fresh_session_asks_for_the_source_length_and_forgets_answered_requests() {
+        let mut session = session();
+        let Step::Pending(requests) = session.advance().unwrap() else {
+            panic!("a fresh session needs the host");
+        };
+        assert!(!requests.is_empty());
+        assert_eq!(session.reported.len(), requests.len());
+        assert_eq!(session.handles.len(), requests.len());
+
+        // Reported once only.
+        let Step::Pending(again) = session.advance().unwrap() else {
+            panic!("still waiting");
+        };
+        assert!(again.is_empty());
+
+        session
+            .fulfill(requests[0].id(), Reply::Failed("no".to_string()))
+            .unwrap();
+        assert_eq!(session.reported.len(), requests.len() - 1);
+        assert_eq!(session.handles.len(), requests.len() - 1);
+
+        // Answered twice, or never issued, is refused.
+        assert!(session.fulfill(requests[0].id(), Reply::Written).is_err());
+        assert!(session.fulfill(9999, Reply::Written).is_err());
+    }
+
+    #[test]
+    fn a_failed_reply_fails_the_build() {
+        let mut session = session();
+        let Step::Pending(requests) = session.advance().unwrap() else {
+            panic!("needs host");
+        };
+        for request in &requests {
+            session
+                .fulfill(request.id(), Reply::Failed("disk on fire".to_string()))
+                .unwrap();
+        }
+        let err = session.advance().unwrap_err();
+        assert!(err.to_string().contains("disk on fire"), "{err}");
+    }
+
+    #[test]
+    fn every_pending_request_reports_its_own_handle() {
+        let s = Stream::Source;
+        let requests = [
+            PendingRequest::Read {
+                id: 7,
+                stream: s,
+                start: 0,
+                len: 0,
+            },
+            PendingRequest::Length { id: 8, stream: s },
+            PendingRequest::Write {
+                id: 9,
+                stream: s,
+                offset: 0,
+                bytes: vec![],
+            },
+            PendingRequest::Sign {
+                id: 10,
+                alg: "es256",
+                data: vec![],
+            },
+        ];
+        let ids: Vec<u64> = requests.iter().map(PendingRequest::id).collect();
+        assert_eq!(ids, [7, 8, 9, 10]);
+        assert_eq!(Stream::Source.as_str(), "source");
+        assert_eq!(Stream::Output.as_str(), "output");
+    }
+}

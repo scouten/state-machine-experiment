@@ -1,0 +1,42 @@
+[package]
+name = "contentauth-c2pa-rs-compat-sign"
+version = "0.1.0"
+description = "Experimental compatibility shim reproducing a slice of c2pa-rs's Builder/Signer API (from_json, sign, sign_file) over this workspace's sans-I/O build engine"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["c2pa", "content-credentials", "compatibility", "signing"]
+categories = ["api-bindings"]
+publish = false
+
+[dependencies]
+# The baseline definition → `BuilderSettings` step, shared by every binding.
+contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline" }
+
+# The sans-I/O build engine's file-level host (`build_and_sign`,
+# `build_and_sign_file`) this crate wraps in a c2pa-rs-shaped surface.
+contentauth-c2pa-file-builder = { path = "../contentauth-c2pa-file-builder" }
+
+# The only `FormatHandler` wired up today.
+contentauth-c2pa-format-jpeg = { path = "../contentauth-c2pa-format-jpeg" }
+
+# `HostError`, what a `Signer` reports a failed signature with.
+contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
+
+thiserror = "2.0.20"
+
+[dev-dependencies]
+# Reads what this crate signs back through the sibling read-side compat
+# layer, exactly as a c2pa-rs user would: `Reader::from_context(..)`.
+contentauth-c2pa-rs-compat = { path = "../contentauth-c2pa-rs-compat" }
+contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline", features = [
+    "fixtures",
+] }
+serde_json = "1"
+# Test-only signer, as every sibling crate's tests use. See deny.toml.
+c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
+    "rust_native_crypto",
+] }

@@ -1,0 +1,30 @@
+[package]
+name = "contentauth-c2pa-sign-baseline"
+version = "0.1.0"
+description = "The baseline signing case shared by every binding experiment: a c2pa-rs-shaped manifest definition, turned into BuilderSettings, plus test fixtures"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["c2pa", "content-credentials", "signing"]
+categories = ["api-bindings"]
+publish = false
+
+[features]
+# `include_bytes!` of the repository's existing test signer and test JPEG,
+# so every binding's tests start from byte-identical inputs. Test material
+# only: the signer's key protects nothing.
+fixtures = []
+
+[dependencies]
+contentauth-c2pa-builder = { path = "../contentauth-c2pa-builder" }
+contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
+
+# The same CBOR crate the reader already uses (and c2pa-rs itself), here to
+# encode an assertion's JSON `data` as the CBOR the builder embeds opaquely.
+c2pa_cbor = "0.77.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2.0.20"

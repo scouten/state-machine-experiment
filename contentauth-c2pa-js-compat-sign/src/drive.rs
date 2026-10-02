@@ -1,0 +1,169 @@
+// Copyright 2026 Adobe. All rights reserved.
+// This file is licensed to you under the Apache License,
+// Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
+// or the MIT license (http://opensource.org/licenses/MIT),
+// at your option.
+
+// Unless required by applicable law or agreed to in writing,
+// this software is distributed on an "AS IS" BASIS, WITHOUT
+// WARRANTIES OR REPRESENTATIONS OF ANY KIND, either express or
+// implied. See the LICENSE-MIT and LICENSE-APACHE files for the
+// specific language governing permissions and limitations under
+// each license.
+//! The asynchronous host for [`FileBuilderSession`]: the only place in
+//! this crate anything is awaited. Compare
+//! `contentauth_c2pa_file_builder::build_and_sign`, the blocking host
+//! for the same session — line for line the same loop.
+
+use contentauth_c2pa_file_builder::{
+    BuilderSettings, FileBuilderReply, FileBuilderRequest, FileBuilderSession, FormatHandler,
+};
+use contentauth_c2pa_js_compat::Blob;
+use contentauth_c2pa_primitives::{ByteRange, HostError};
+use contentauth_state_machine::{Session, Step};
+
+use crate::{builder::SignedAsset, error::Error, signer::AsyncSigner};
+
+pub(crate) async fn build<H, B, S>(
+    handler: H,
+    source: &B,
+    signer: &S,
+    settings: BuilderSettings,
+) -> Result<SignedAsset, Error>
+where
+    H: FormatHandler + Send,
+    B: Blob + ?Sized,
+    S: AsyncSigner + ?Sized,
+{
+    let source_stream = FileBuilderSession::<H>::SOURCE_STREAM;
+    let output_stream = FileBuilderSession::<H>::OUTPUT_STREAM;
+
+    let mut session = FileBuilderSession::new(handler, settings);
+    // Always starts empty, so no stale bytes from a reused buffer can ever
+    // sit after the asset (see `build_and_sign`'s docs).
+    let mut output: Vec<u8> = Vec::new();
+
+    loop {
+        if session.advance()? == Step::Complete {
+            let report = session.finish()?;
+            return Ok(SignedAsset {
+                asset: output,
+                manifest: report.manifest,
+            });
+        }
+
+        for request in session.outstanding_requests().to_vec() {
+            let reply = match &request.kind {
+                FileBuilderRequest::Read { stream, range } if *stream == source_stream => {
+                    match source.bytes(*range).await {
+                        Ok(bytes) if bytes.len() as u64 == range.len => {
+                            FileBuilderReply::Bytes(bytes)
+                        }
+                        Ok(bytes) => FileBuilderReply::Failed(HostError::new(format!(
+                            "asked for {} bytes at {}, but the blob returned {}",
+                            range.len,
+                            range.start,
+                            bytes.len()
+                        ))),
+                        Err(err) => FileBuilderReply::Failed(err),
+                    }
+                }
+
+                FileBuilderRequest::Read { stream, range } if *stream == output_stream => {
+                    match slice(&output, *range) {
+                        Ok(bytes) => FileBuilderReply::Bytes(bytes.to_vec()),
+                        Err(err) => FileBuilderReply::Failed(err),
+                    }
+                }
+
+                FileBuilderRequest::Length { stream } if *stream == source_stream => {
+                    FileBuilderReply::Length(source.size())
+                }
+
+                FileBuilderRequest::Length { stream } if *stream == output_stream => {
+                    FileBuilderReply::Length(output.len() as u64)
+                }
+
+                FileBuilderRequest::Write { offset, bytes, .. } => {
+                    match write(&mut output, *offset, bytes) {
+                        Ok(()) => FileBuilderReply::Written,
+                        Err(err) => FileBuilderReply::Failed(err),
+                    }
+                }
+
+                FileBuilderRequest::Sign { data, .. } => match signer.sign(data).await {
+                    Ok(signature) => FileBuilderReply::Signature(signature),
+                    Err(err) => FileBuilderReply::Failed(err),
+                },
+
+                // `Timestamp` (an RFC 3161 round trip) is not part of the
+                // baseline, and `FileBuilderRequest` is non-exhaustive.
+                _ => FileBuilderReply::Failed(HostError::new("unsupported request")),
+            };
+            session.fulfill(request.id, reply)?;
+        }
+    }
+}
+
+fn slice(bytes: &[u8], range: ByteRange) -> Result<&[u8], HostError> {
+    let end = range
+        .start
+        .checked_add(range.len)
+        .ok_or_else(|| HostError::new("byte range overflows"))?;
+    usize::try_from(range.start)
+        .ok()
+        .zip(usize::try_from(end).ok())
+        .and_then(|(start, end)| bytes.get(start..end))
+        .ok_or_else(|| HostError::new("read past the end of the output"))
+}
+
+/// Writes `bytes` at `offset`, zero-filling any gap — what seeking past
+/// the end of a file and writing does.
+fn write(output: &mut Vec<u8>, offset: u64, bytes: &[u8]) -> Result<(), HostError> {
+    let start = usize::try_from(offset).map_err(|_| HostError::new("offset too large"))?;
+    let end = start
+        .checked_add(bytes.len())
+        .ok_or_else(|| HostError::new("write overflows"))?;
+    if output.len() < end {
+        output.resize(end, 0);
+    }
+    output[start..end].copy_from_slice(bytes);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn writes_extend_overwrite_and_zero_fill() {
+        let mut out = Vec::new();
+        write(&mut out, 0, &[1, 2, 3]).ok();
+        write(&mut out, 1, &[9]).ok();
+        write(&mut out, 5, &[7]).ok();
+        assert_eq!(out, [1, 9, 3, 0, 0, 7]);
+    }
+
+    #[test]
+    fn a_write_that_cannot_be_addressed_is_an_error() {
+        assert!(write(&mut Vec::new(), u64::MAX, &[1]).is_err());
+    }
+
+    #[test]
+    fn reads_past_the_end_or_overflowing_are_errors() {
+        let bytes = [1u8, 2, 3];
+        assert_eq!(
+            slice(&bytes, ByteRange { start: 1, len: 2 }).ok(),
+            Some(&bytes[1..])
+        );
+        assert!(slice(&bytes, ByteRange { start: 2, len: 2 }).is_err());
+        assert!(slice(
+            &bytes,
+            ByteRange {
+                start: u64::MAX,
+                len: 1
+            }
+        )
+        .is_err());
+    }
+}
