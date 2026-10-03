@@ -202,7 +202,7 @@ fn a_refusing_authority_fails_the_build() {
 
 /// A one-shot HTTP server: answers the first request with `reply`, and
 /// returns what it received (headers and body).
-fn serve_once(reply: Vec<u8>) -> (String, thread::JoinHandle<Vec<u8>>) {
+fn serve_once(status: &'static str, reply: Vec<u8>) -> (String, thread::JoinHandle<Vec<u8>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/tsa", listener.local_addr().unwrap());
     let handle = thread::spawn(move || {
@@ -231,7 +231,7 @@ fn serve_once(reply: Vec<u8>) -> (String, thread::JoinHandle<Vec<u8>>) {
 
         write!(
             stream,
-            "HTTP/1.1 200 OK\r\nContent-Type: application/timestamp-reply\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 {status}\r\nContent-Type: application/timestamp-reply\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             reply.len()
         )
         .unwrap();
@@ -259,7 +259,7 @@ impl Signer for HttpSigner {
 
 #[test]
 fn the_default_transport_posts_the_request_over_http() {
-    let (url, server) = serve_once(response(0));
+    let (url, server) = serve_once("200 OK", response(0));
     let builder = definition_with_tsa_url(&url);
 
     let manifest = sign_to_memory(&builder, &HttpSigner).unwrap();
@@ -287,4 +287,41 @@ fn an_unreachable_authority_fails_the_build_rather_than_going_untimestamped() {
     let err = sign_to_memory(&builder, &HttpSigner).unwrap_err();
 
     assert!(err.to_string().contains("timestamp request"), "{err}");
+}
+
+#[test]
+fn an_authority_answering_with_an_http_error_fails_the_build() {
+    let (url, server) = serve_once("503 Service Unavailable", b"busy".to_vec());
+    let builder = definition_with_tsa_url(&url);
+
+    let err = sign_to_memory(&builder, &HttpSigner).unwrap_err();
+
+    server.join().unwrap();
+    assert!(err.to_string().contains("answered 503"), "{err}");
+}
+
+#[test]
+fn an_implausibly_large_response_fails_the_build() {
+    let (url, server) = serve_once("200 OK", vec![0x30; 1024 * 1024 + 1]);
+    let builder = definition_with_tsa_url(&url);
+
+    let err = sign_to_memory(&builder, &HttpSigner).unwrap_err();
+
+    server.join().unwrap();
+    assert!(err.to_string().contains("implausibly large"), "{err}");
+}
+
+#[test]
+fn sign_file_timestamps_too() {
+    let source = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("ts-source.jpg");
+    let dest = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("ts-dest.jpg");
+    std::fs::write(&source, SOURCE_JPEG).unwrap();
+    let signer = FakeAuthority::new(0, Some("http://tsa.example/"));
+    let builder = Builder::from_json(BASELINE_DEFINITION).unwrap();
+
+    let manifest = builder.sign_file(&signer, &source, &dest).unwrap();
+
+    assert_eq!(signer.seen.lock().unwrap().len(), 1);
+    let token = token_der();
+    assert!(manifest.windows(token.len()).any(|w| w == token));
 }

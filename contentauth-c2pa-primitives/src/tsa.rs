@@ -37,20 +37,18 @@ const NULL: u8 = 0x05;
 const OID: u8 = 0x06;
 const BOOLEAN: u8 = 0x01;
 
-/// `id-sha256`, `id-sha384`, `id-sha512` (NIST arc 2.16.840.1.101.3.4.2),
-/// as DER OID content bytes.
-fn hash_oid(alg: HashAlgorithm) -> Result<&'static [u8], HostError> {
-    Ok(match alg {
-        HashAlgorithm::Sha256 => &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01],
-        HashAlgorithm::Sha384 => &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02],
-        HashAlgorithm::Sha512 => &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03],
-        #[allow(unreachable_patterns)]
-        other => {
-            return Err(HostError::new(format!(
-                "no RFC 3161 object identifier for {other:?}"
-            )))
-        }
-    })
+/// The DER OID content bytes (`id-sha256`, `id-sha384`, `id-sha512`, in
+/// the NIST arc 2.16.840.1.101.3.4.2) and the digest length of `alg`.
+fn hash_params(alg: HashAlgorithm) -> Result<(&'static [u8], usize), HostError> {
+    match alg {
+        HashAlgorithm::Sha256 => Ok((&[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01], 32)),
+        HashAlgorithm::Sha384 => Ok((&[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02], 48)),
+        HashAlgorithm::Sha512 => Ok((&[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03], 64)),
+        // `HashAlgorithm` is non-exhaustive.
+        other => Err(HostError::new(format!(
+            "no RFC 3161 object identifier for {other:?}"
+        ))),
+    }
 }
 
 /// Encodes a DER `TimeStampReq` asking for a timestamp over `digest`
@@ -65,13 +63,7 @@ pub fn timestamp_request(
     hash_alg: HashAlgorithm,
     nonce: Option<u64>,
 ) -> Result<Vec<u8>, HostError> {
-    let expected = match hash_alg {
-        HashAlgorithm::Sha256 => 32,
-        HashAlgorithm::Sha384 => 48,
-        HashAlgorithm::Sha512 => 64,
-        #[allow(unreachable_patterns)]
-        _ => return Err(HostError::new("unsupported timestamp hash algorithm")),
-    };
+    let (oid, expected) = hash_params(hash_alg)?;
     if digest.len() != expected {
         return Err(HostError::new(format!(
             "a {hash_alg:?} digest is {expected} bytes, not {}",
@@ -79,10 +71,7 @@ pub fn timestamp_request(
         )));
     }
 
-    let algorithm = tlv(
-        SEQUENCE,
-        &[tlv(OID, hash_oid(hash_alg)?), tlv(NULL, &[])].concat(),
-    );
+    let algorithm = tlv(SEQUENCE, &[tlv(OID, oid), tlv(NULL, &[])].concat());
     let imprint = tlv(SEQUENCE, &[algorithm, tlv(OCTET_STRING, digest)].concat());
 
     let mut body = tlv(INTEGER, &[1]); // version v1
@@ -213,6 +202,21 @@ mod tests {
     }
 
     #[test]
+    fn every_supported_algorithm_encodes_its_own_oid_and_length() {
+        for (alg, len, last) in [
+            (HashAlgorithm::Sha256, 32, 0x01),
+            (HashAlgorithm::Sha384, 48, 0x02),
+            (HashAlgorithm::Sha512, 64, 0x03),
+        ] {
+            let request = timestamp_request(&vec![7; len], alg, None).unwrap();
+            let oid = [
+                0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, last, 0x05, 0x00,
+            ];
+            assert!(request.windows(oid.len()).any(|w| w == oid), "{alg:?}");
+        }
+    }
+
+    #[test]
     fn a_nonce_is_a_minimal_positive_integer() {
         assert_eq!(unsigned_integer(0), [0]);
         assert_eq!(unsigned_integer(0x7f), [0x7f]);
@@ -259,6 +263,24 @@ mod tests {
         let err = timestamp_token(&response(2, None)).unwrap_err();
         assert!(err.message.contains("refused"), "{err}");
         assert!(timestamp_token(&response(0, None)).is_err());
+    }
+
+    #[test]
+    fn a_response_of_the_wrong_shape_is_an_error() {
+        // PKIStatusInfo is not a SEQUENCE.
+        let mut not_sequence = tlv(OCTET_STRING, &[0]);
+        not_sequence.extend(tlv(SEQUENCE, &[1]));
+        assert!(timestamp_token(&tlv(SEQUENCE, &not_sequence)).is_err());
+
+        // PKIStatus is not an INTEGER.
+        let status_info = tlv(SEQUENCE, &tlv(OCTET_STRING, &[0]));
+        assert!(timestamp_token(&tlv(SEQUENCE, &status_info)).is_err());
+
+        // Granted, but what follows is not a token SEQUENCE.
+        let mut body = tlv(SEQUENCE, &tlv(INTEGER, &[0]));
+        body.extend(tlv(OCTET_STRING, &[1]));
+        let err = timestamp_token(&tlv(SEQUENCE, &body)).unwrap_err();
+        assert!(err.message.contains("no TimeStampToken"), "{err}");
     }
 
     #[test]

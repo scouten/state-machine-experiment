@@ -346,3 +346,60 @@ fn unsupported_formats_and_bad_definitions_are_rejected_with_js_strings() {
         err.js_message()
     );
 }
+
+/// A signer that names its own time-stamp authority (the definition does
+/// not) and answers the request in-process.
+struct TimestampingSigner {
+    seen: std::cell::RefCell<Vec<String>>,
+}
+
+impl AsyncSigner for TimestampingSigner {
+    fn alg(&self) -> SigningAlg {
+        SigningAlg::Es256
+    }
+
+    fn certs(&self) -> Vec<Vec<u8>> {
+        vec![TEST_SIGNER_CERT.to_vec()]
+    }
+
+    async fn sign(&self, data: &[u8]) -> Result<Vec<u8>, HostError> {
+        sign_with_test_key(data)
+    }
+
+    fn time_authority_url(&self) -> Option<String> {
+        Some("https://tsa.example/from-signer".to_string())
+    }
+
+    async fn send_timestamp_request(
+        &self,
+        url: &str,
+        _request: &[u8],
+    ) -> Result<Vec<u8>, HostError> {
+        YieldOnce(false).await;
+        self.seen.borrow_mut().push(url.to_string());
+        // Granted, with an opaque 300-byte token.
+        let mut body = vec![0x30, 0x03, 0x02, 0x01, 0x00, 0x30, 0x82, 0x01, 0x2c];
+        body.extend([0x42; 300]);
+        let mut response = vec![0x30, 0x82];
+        response.extend((body.len() as u16).to_be_bytes());
+        response.extend(body);
+        Ok(response)
+    }
+}
+
+#[test]
+fn a_signers_time_authority_url_turns_timestamping_on() {
+    let signer = TimestampingSigner {
+        seen: Default::default(),
+    };
+
+    let signed = block_on(Builder::from_json(BASELINE_DEFINITION).unwrap().sign(
+        &signer,
+        "image/jpeg",
+        SOURCE_JPEG,
+    ))
+    .unwrap();
+
+    assert_eq!(*signer.seen.borrow(), ["https://tsa.example/from-signer"]);
+    assert!(signed.manifest.windows(300).any(|w| w == [0x42; 300]));
+}

@@ -444,3 +444,23 @@ test("a signer whose sendTimestampRequest returns junk is a type error", async (
   const signer = { ...testSigner(), timeAuthorityUrl: "https://tsa.example/", sendTimestampRequest: async () => "nope" };
   await assert.rejects(signAsset({ path: SOURCE }, BASELINE, signer), TypeError);
 });
+
+test("a definition that is not JSON still reports Rust's error when the signer names an authority", async () => {
+  const signer = { ...testSigner(), timeAuthorityUrl: "https://tsa.example/" };
+  await assert.rejects(
+    signAsset({ path: SOURCE }, "{ not json", signer),
+    (error) => error.name.startsWith("Definition(BadDefinition("),
+  );
+});
+
+test("an implausibly large timestamp response fails the build", async () => {
+  const authority = await fakeAuthority(() => [200, Buffer.alloc(1024 * 1024 + 1, 0x30)]);
+  try {
+    await assert.rejects(
+      signAsset({ path: SOURCE }, { ...BASELINE, tsa_url: authority.url }, testSigner()),
+      /implausibly large/,
+    );
+  } finally {
+    await authority.close();
+  }
+});
