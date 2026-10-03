@@ -126,7 +126,7 @@ pub(crate) enum Timestamped {
 /// authorities that vouch for signers.
 pub(crate) fn validate(
     pending: &PendingTimestamp,
-    anchors: &[Certificate],
+    anchors: &[chain::Anchor],
     url: &str,
     statuses: &mut Vec<ValidationStatus>,
 ) -> Timestamped {
@@ -626,7 +626,7 @@ mod tests {
     /// recorded and the last explanation.
     fn run(
         pending: &PendingTimestamp,
-        anchors: &[Certificate],
+        anchors: &[chain::Anchor],
     ) -> (Timestamped, Vec<String>, String) {
         let mut statuses = Vec::new();
         let outcome = validate(pending, anchors, "self#jumbf=x", &mut statuses);
@@ -642,8 +642,10 @@ mod tests {
         )
     }
 
-    fn anchors() -> Vec<Certificate> {
-        vec![cert::decode(ANCHOR).expect("the anchor decodes")]
+    fn anchors() -> Vec<chain::Anchor> {
+        vec![chain::Anchor::anonymous(
+            cert::decode(ANCHOR).expect("the anchor decodes"),
+        )]
     }
 
     /// A token that is intact but stamps something other than what it is

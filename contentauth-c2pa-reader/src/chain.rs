@@ -154,6 +154,26 @@ pub(crate) const TIMESTAMP_AUTHORITY: Vocabulary = Vocabulary {
     untrusted: status_code::TIMESTAMP_UNTRUSTED,
 };
 
+/// A decoded trust anchor, remembering which configured list it came from.
+#[derive(Clone, Debug)]
+pub(crate) struct Anchor {
+    pub(crate) certificate: Certificate,
+
+    /// The URI of the named list this anchor was configured in, if any.
+    pub(crate) trust_list_uri: Option<String>,
+}
+
+impl Anchor {
+    /// An anchor that belongs to no named list.
+    #[cfg(test)]
+    pub(crate) fn anonymous(certificate: Certificate) -> Self {
+        Self {
+            certificate,
+            trust_list_uri: None,
+        }
+    }
+}
+
 /// How far trust could be established for one claim signature.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Trust {
@@ -179,7 +199,7 @@ pub(crate) enum Trust {
 /// findings that would follow describe a path that does not exist.
 pub(crate) fn validate(
     chain: &[Certificate],
-    anchors: &[Certificate],
+    anchors: &[Anchor],
     now: i64,
     url: &str,
     status_code_vocabulary: Vocabulary,
@@ -201,7 +221,7 @@ pub(crate) fn validate(
         return Trust::Rejected;
     }
 
-    let (path, anchored) = build_path(leaf, rest, anchors);
+    let (path, anchor) = build_path(leaf, rest, anchors);
 
     // Each certificate must name the next one as its issuer, that issuer
     // must be allowed to issue it, and the signature must actually verify.
@@ -269,12 +289,14 @@ pub(crate) fn validate(
         "every certificate in the path was inside its validity window",
     ));
 
-    if anchored {
-        statuses.push(ValidationStatus::for_url(
+    if let Some(anchor) = anchor {
+        let mut status = ValidationStatus::for_url(
             status_code_vocabulary.trusted,
             url,
             "the credential chains to a configured trust anchor",
-        ));
+        );
+        status.trust_list_uri = anchor.trust_list_uri.clone();
+        statuses.push(status);
         Trust::Anchored
     } else {
         statuses.push(ValidationStatus::for_url(
@@ -321,12 +343,12 @@ pub(crate) struct OcspCheckPlan {
 /// rejected is still included; whether to bother asking online is
 /// [`crate::read::ReadSession`]'s call; this only reports what could be
 /// asked.
-pub(crate) fn ocsp_checks(chain: &[Certificate], anchors: &[Certificate]) -> Vec<OcspCheckPlan> {
+pub(crate) fn ocsp_checks(chain: &[Certificate], anchors: &[Anchor]) -> Vec<OcspCheckPlan> {
     let Some((leaf, rest)) = chain.split_first() else {
         return vec![];
     };
 
-    let (path, _anchored) = build_path(leaf, rest, anchors);
+    let (path, _anchor) = build_path(leaf, rest, anchors);
 
     path.windows(2)
         .enumerate()
@@ -339,7 +361,7 @@ pub(crate) fn ocsp_checks(chain: &[Certificate], anchors: &[Certificate]) -> Vec
         .collect()
 }
 
-/// Builds the path to validate, and reports whether it reaches an anchor.
+/// Builds the path to validate, and reports the anchor it reaches, if any.
 ///
 /// Two ways a path can terminate at an anchor, and both are ordinary: the
 /// chain may *contain* the anchor (a signature that ships its root), or the
@@ -352,21 +374,25 @@ pub(crate) fn ocsp_checks(chain: &[Certificate], anchors: &[Certificate]) -> Vec
 fn build_path<'a>(
     leaf: &'a Certificate,
     rest: &'a [Certificate],
-    anchors: &'a [Certificate],
-) -> (Vec<&'a Certificate>, bool) {
+    anchors: &'a [Anchor],
+) -> (Vec<&'a Certificate>, Option<&'a Anchor>) {
     let mut path: Vec<&Certificate> = once(leaf).chain(rest).collect();
 
     // An anchor inside the chain ends the path there. Anything the chain
     // carries above an anchor is irrelevant, and the anchor's own signature
     // is deliberately not checked: trusting a certificate a priori is what
     // makes it an anchor.
-    if let Some(at) = path.iter().position(|candidate| {
-        anchors
+    //
+    // When several anchors stand for the same credential (one in two
+    // named lists), the earliest configured wins.
+    for (at, candidate) in path.iter().enumerate() {
+        if let Some(anchor) = anchors
             .iter()
-            .any(|anchor| same_credential(candidate, anchor))
-    }) {
-        path.truncate(at + 1);
-        return (path, true);
+            .find(|anchor| same_credential(candidate, &anchor.certificate))
+        {
+            path.truncate(at + 1);
+            return (path, Some(anchor));
+        }
     }
 
     // Otherwise an anchor may still have issued the chain's topmost
@@ -375,15 +401,14 @@ fn build_path<'a>(
     // the one that counts, not the first whose name matches.
     let top = rest.last().unwrap_or(leaf);
 
-    if let Some(anchor) = anchors
-        .iter()
-        .find(|anchor| anchor.subject == top.issuer && verify(top, anchor).is_ok())
-    {
-        path.push(anchor);
-        return (path, true);
+    if let Some(anchor) = anchors.iter().find(|anchor| {
+        anchor.certificate.subject == top.issuer && verify(top, &anchor.certificate).is_ok()
+    }) {
+        path.push(&anchor.certificate);
+        return (path, Some(anchor));
     }
 
-    (path, false)
+    (path, None)
 }
 
 /// True if two certificates stand for the same credential.
@@ -614,11 +639,15 @@ mod tests {
 
     /// Runs a validation and returns the outcome alongside the codes it
     /// recorded.
+    fn anonymous(anchors: &[Certificate]) -> Vec<Anchor> {
+        anchors.iter().cloned().map(Anchor::anonymous).collect()
+    }
+
     fn run(chain: &[Certificate], anchors: &[Certificate], now: i64) -> (Trust, Vec<String>) {
         let mut statuses = Vec::new();
         let trust = validate(
             chain,
-            anchors,
+            &anonymous(anchors),
             now,
             "self#jumbf=x",
             CLAIM_SIGNER,
@@ -636,7 +665,7 @@ mod tests {
         assert_eq!(
             validate(
                 chain,
-                anchors,
+                &anonymous(anchors),
                 now,
                 "self#jumbf=x",
                 CLAIM_SIGNER,
@@ -974,7 +1003,7 @@ mod tests {
             assert_eq!(
                 validate(
                     &chain,
-                    &[decode(ROOT)],
+                    &anonymous(&[decode(ROOT)]),
                     now,
                     "self#jumbf=x",
                     CLAIM_SIGNER,
@@ -1031,7 +1060,7 @@ mod tests {
         assert_eq!(
             validate(
                 &chain(),
-                &[anchor],
+                &anonymous(&[anchor]),
                 NOW,
                 "self#jumbf=x",
                 CLAIM_SIGNER,
@@ -1045,6 +1074,45 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("Test Root CA"));
+    }
+
+    #[test]
+    fn the_trusted_status_names_the_list_of_the_anchor_that_matched() {
+        let anchors = [
+            Anchor {
+                certificate: decode(INTERMEDIATE),
+                trust_list_uri: Some("https://example.com/first".to_string()),
+            },
+            Anchor {
+                certificate: decode(ROOT),
+                trust_list_uri: Some("https://example.com/second".to_string()),
+            },
+        ];
+
+        let mut statuses = Vec::new();
+        let trust = validate(
+            &chain(),
+            &anchors,
+            NOW,
+            "self#jumbf=x",
+            CLAIM_SIGNER,
+            &mut statuses,
+        );
+
+        // The chain carries the intermediate, so the first list matches.
+        assert_eq!(trust, Trust::Anchored);
+        let trusted = statuses
+            .iter()
+            .find(|status| status.code == status_code::SIGNING_CREDENTIAL_TRUSTED)
+            .expect("a trusted status");
+        assert_eq!(
+            trusted.trust_list_uri.as_deref(),
+            Some("https://example.com/first")
+        );
+        assert!(statuses
+            .iter()
+            .filter(|status| status.code != status_code::SIGNING_CREDENTIAL_TRUSTED)
+            .all(|status| status.trust_list_uri.is_none()));
     }
 
     #[test]
@@ -1101,7 +1169,7 @@ mod tests {
         let mut intermediate = decode(INTERMEDIATE);
         intermediate.ocsp_responder_url = Some("http://ocsp.example/intermediate".to_string());
 
-        let checks = ocsp_checks(&[leaf, intermediate], &[decode(ROOT)]);
+        let checks = ocsp_checks(&[leaf, intermediate], &anonymous(&[decode(ROOT)]));
 
         // leaf/intermediate and intermediate/root: two links, both named.
         assert_eq!(checks.len(), 2);

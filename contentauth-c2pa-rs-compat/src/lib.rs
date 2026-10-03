@@ -111,7 +111,7 @@ mod validation;
 
 // Re-exported so a caller configuring trust anchors does not also need a
 // direct dependency on `contentauth-c2pa-file-reader` just for this type.
-pub use contentauth_c2pa_file_reader::ReadSettings;
+pub use contentauth_c2pa_file_reader::{ReadSettings, TrustList};
 pub use context::Context;
 pub use error::Error;
 pub use manifest::Manifest;

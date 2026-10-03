@@ -145,6 +145,15 @@ pub struct ValidationStatus {
     /// A human-readable explanation of the check performed, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub explanation: Option<String>,
+
+    /// On a trusted status, the URI of the trust list that matched, when
+    /// the list was configured with a `trust_uri`.
+    ///
+    /// Never serialized: c2pa-rs 0.91 keeps this on its `ValidationStatus`
+    /// behind an accessor and marks it `#[serde(skip)]`, so the JSON
+    /// reported here stays identical to c2pa-rs's.
+    #[serde(skip)]
+    pub trust_list_uri: Option<String>,
 }
 
 impl ManifestStore {
@@ -169,6 +178,7 @@ impl ManifestStore {
                     code: status.code.clone(),
                     url: status.url.clone(),
                     explanation: status.explanation.clone(),
+                    trust_list_uri: status.trust_list_uri.clone(),
                 })
                 .collect(),
         }

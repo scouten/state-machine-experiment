@@ -21,7 +21,7 @@
 
 use contentauth_c2pa_reader::{
     validation::status_code, ByteRange, Error, HostError, ReadHostReply, ReadReport, ReadRequest,
-    ReadSession, ReadSettings, ReadStep, RequestId, ValidationState,
+    ReadSession, ReadSettings, ReadStep, RequestId, TrustList, ValidationState,
 };
 use contentauth_state_machine::Session;
 
@@ -77,6 +77,12 @@ struct Host<'a> {
     /// DER-encoded timestamp trust anchors.
     timestamp_anchors: Vec<Vec<u8>>,
 
+    /// Named trust lists to configure the session with.
+    trust_lists: Vec<TrustList>,
+
+    /// Named timestamp trust lists.
+    timestamp_trust_lists: Vec<TrustList>,
+
     /// Fulfil each round's requests in reverse order, to prove the session
     /// does not depend on arrival order.
     reverse: bool,
@@ -97,6 +103,8 @@ impl Host<'_> {
         let mut session = ReadSession::new(ReadSettings {
             trust_anchors: self.anchors.clone(),
             timestamp_trust_anchors: self.timestamp_anchors.clone(),
+            trust_lists: self.trust_lists.clone(),
+            timestamp_trust_lists: self.timestamp_trust_lists.clone(),
             ..ReadSettings::default()
         });
 
@@ -163,6 +171,8 @@ fn host() -> Host<'static> {
         now: NOW,
         anchors: vec![],
         timestamp_anchors: vec![],
+        trust_lists: vec![],
+        timestamp_trust_lists: vec![],
         reverse: false,
     }
 }
@@ -434,6 +444,95 @@ fn an_untrusted_timestamp_does_not_get_to_choose_the_time() {
     assert!(codes(&report).contains(&status_code::TIMESTAMP_UNTRUSTED));
     assert!(codes(&report).contains(&status_code::CLAIM_SIGNATURE_OUTSIDE_VALIDITY));
     assert_eq!(report.validation_state, Some(ValidationState::Invalid));
+}
+
+#[test]
+fn a_named_trust_list_is_reported_on_the_trusted_statuses() {
+    let named = |uri: &str, anchor: &[u8]| TrustList {
+        uri: uri.to_string(),
+        anchors: vec![anchor.to_vec()],
+    };
+
+    let report = Host {
+        trust_lists: vec![named("https://example.com/signers", FIXTURE_ISSUER)],
+        timestamp_trust_lists: vec![named("https://example.com/tsa", TIMESTAMP_ANCHOR)],
+        ..host()
+    }
+    .read()
+    .expect("reads cleanly");
+
+    let uri_of = |code: &str| {
+        let mut found = report.statuses.iter().filter(|status| status.code == code);
+        let status = found.next().expect("status present");
+        assert!(found.next().is_none(), "exactly one {code}");
+        status.trust_list_uri.clone()
+    };
+
+    assert_eq!(report.validation_state, Some(ValidationState::Trusted));
+    assert_eq!(
+        uri_of(status_code::SIGNING_CREDENTIAL_TRUSTED).as_deref(),
+        Some("https://example.com/signers")
+    );
+    assert_eq!(
+        uri_of(status_code::TIMESTAMP_TRUSTED).as_deref(),
+        Some("https://example.com/tsa")
+    );
+    assert!(report
+        .statuses
+        .iter()
+        .filter(|status| {
+            status.code != status_code::SIGNING_CREDENTIAL_TRUSTED
+                && status.code != status_code::TIMESTAMP_TRUSTED
+        })
+        .all(|status| status.trust_list_uri.is_none()));
+
+    // A plain anchor trusts just the same, but has no identity to report.
+    let anonymous = Host {
+        anchors: vec![FIXTURE_ISSUER.to_vec()],
+        ..host()
+    }
+    .read()
+    .expect("reads cleanly");
+    assert_eq!(anonymous.validation_state, Some(ValidationState::Trusted));
+    assert!(anonymous
+        .statuses
+        .iter()
+        .all(|status| status.trust_list_uri.is_none()));
+}
+
+#[test]
+fn a_malformed_anchor_in_a_named_list_names_the_list() {
+    let error = Host {
+        trust_lists: vec![TrustList {
+            uri: "https://example.com/bad".to_string(),
+            anchors: vec![vec![1, 2, 3]],
+        }],
+        ..host()
+    }
+    .read()
+    .expect_err("a malformed anchor is refused");
+
+    assert!(
+        error.to_string().contains("https://example.com/bad"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_malformed_anchor_in_a_named_timestamp_list_names_the_list() {
+    let error = Host {
+        timestamp_trust_lists: vec![TrustList {
+            uri: "https://example.com/bad-tsa".to_string(),
+            anchors: vec![vec![1, 2, 3]],
+        }],
+        ..host()
+    }
+    .read()
+    .expect_err("a malformed anchor is refused");
+
+    let message = error.to_string();
+    assert!(message.contains("timestamp trust"), "{message}");
+    assert!(message.contains("https://example.com/bad-tsa"), "{message}");
 }
 
 #[test]
