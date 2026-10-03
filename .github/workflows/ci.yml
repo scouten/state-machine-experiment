@@ -154,10 +154,12 @@ jobs:
     # or clock dependencies, so it should build for Wasm targets unmodified.
     # Enforced from day one.
     #
-    # `contentauth-c2pa-rs-compat` is excluded: it is deliberately the one
-    # crate in this workspace that owns a concrete network dependency (its
-    # default OCSP host, built on `reqwest`), so it is not held to the
-    # portable-core constraint the rest of the workspace is.
+    # `contentauth-c2pa-rs-compat` and `contentauth-c2pa-rs-compat-sign` are
+    # excluded: they are deliberately the only crates in this workspace that
+    # own a concrete network dependency (the former's default OCSP host, the
+    # latter's default RFC 3161 timestamp transport, both built on
+    # `reqwest`), so they are not held to the portable-core constraint the
+    # rest of the workspace is.
     #
     # `contentauth-c2pa-js-compat` is *included*, and `--all-features`
     # matters for it: its `web` feature (the wasm-bindgen end of the
@@ -178,10 +180,10 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: "`cargo check` for wasm32-unknown-unknown"
-        run: cargo check --all-features --target wasm32-unknown-unknown --workspace --exclude contentauth-c2pa-rs-compat
+        run: cargo check --all-features --target wasm32-unknown-unknown --workspace --exclude contentauth-c2pa-rs-compat --exclude contentauth-c2pa-rs-compat-sign
 
       - name: "`cargo check` for wasm32-wasip2"
-        run: cargo check --all-features --target wasm32-wasip2 --workspace --exclude contentauth-c2pa-rs-compat
+        run: cargo check --all-features --target wasm32-wasip2 --workspace --exclude contentauth-c2pa-rs-compat --exclude contentauth-c2pa-rs-compat-sign
 
   msrv:
     name: MSRV build check

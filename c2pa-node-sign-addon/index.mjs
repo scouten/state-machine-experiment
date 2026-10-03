@@ -11,6 +11,10 @@
 //   * how the source is read and the output written (here: FileHandle,
 //     i.e. libuv's thread pool; but the loop does not care);
 //   * how many requests are in flight at once (`concurrency`);
+//   * how a timestamp is fetched: when the definition has `tsa_url` (or the
+//     signer a `timeAuthorityUrl`), Rust hands over a ready-made RFC 3161
+//     request and takes the response body back — Node only does the POST,
+//     with `fetch` unless `signer.sendTimestampRequest` says otherwise;
 //   * above all, WHO HOLDS THE KEY. `signer.sign(data)` returns a Promise,
 //     so the key can sit in a KMS, an HSM, or behind WebCrypto; the Rust
 //     side never sees it, and the event loop keeps running while it signs.
@@ -38,6 +42,14 @@ export class Builder {
    * raw signature COSE wants: for ECDSA, fixed-width `r || s` (in Node,
    * `crypto.sign(..., { dsaEncoding: "ieee-p1363" })`), not DER.
    *
+   * To countersign the claim with an RFC 3161 timestamp, give the
+   * definition a `tsa_url` or the signer a `timeAuthorityUrl` (the
+   * definition's wins). The request goes out by `fetch`, or by
+   * `signer.sendTimestampRequest(url, request: Buffer) => Promise<Buffer>`
+   * if present, which must resolve to the authority's response body. An
+   * authority that cannot be reached or that refuses fails the build; it
+   * never silently yields an untimestamped manifest.
+   *
    * With `options.output = { path }` the signed asset is built in a
    * temporary file beside it and renamed into place only on success; on
    * any failure the temporary file is removed and an existing output is
@@ -60,7 +72,7 @@ export class Builder {
         options.format ??
         asset.mimeType ??
         ((await sniff(source)) || (asset.path ? extname(asset.path).slice(1) : ""));
-      const session = native.buildNew(this.#definition, format, signer.alg, signer.certs ?? []);
+      const session = native.buildNew(definitionFor(this.#definition, signer), format, signer.alg, signer.certs ?? []);
       out = await openOutput(options.output);
       const report = await drive(session, { source, out: out.target, signer }, options);
       const buffer = await out.commit();
@@ -77,6 +89,53 @@ export class Builder {
 /** `new Builder(definition).sign(asset, signer, options)`. */
 export function signAsset(asset, definition, signer, options) {
   return new Builder(definition).sign(asset, signer, options);
+}
+
+/**
+ * The definition to start a session with: `signer.timeAuthorityUrl`, if
+ * any, becomes `tsa_url` unless the definition already names one. A
+ * definition that is not even JSON is passed through untouched, so Rust
+ * reports it with its own error string.
+ */
+function definitionFor(definition, signer) {
+  if (typeof signer.timeAuthorityUrl !== "string") return definition;
+  try {
+    const parsed = JSON.parse(definition);
+    parsed.tsa_url ??= signer.timeAuthorityUrl;
+    return JSON.stringify(parsed);
+  } catch {
+    return definition;
+  }
+}
+
+// More than any real token plus its certificate chain.
+const MAX_TIMESTAMP_RESPONSE = 1024 * 1024;
+
+/** POSTs a DER TimeStampReq to `url` (RFC 3161 §3.4) and resolves to the response body. */
+async function postTimestampRequest(url, request) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/timestamp-query", Accept: "application/timestamp-reply" },
+    body: request,
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok) throw new Error(`the timestamp authority at ${url} answered ${response.status}`);
+
+  // Bound what is buffered *as it arrives*: a declared length is checked
+  // up front, and a body that is longer than declared (or chunked, with no
+  // length at all) is abandoned the moment it passes the limit, so a
+  // hostile or broken authority cannot make this hold its whole reply.
+  const tooLarge = () => new Error("the timestamp response is implausibly large");
+  if (Number(response.headers.get("content-length")) > MAX_TIMESTAMP_RESPONSE) throw tooLarge();
+  const chunks = [];
+  let total = 0;
+  // Leaving the loop early cancels the underlying stream.
+  for await (const chunk of response.body ?? []) {
+    total += chunk.length;
+    if (total > MAX_TIMESTAMP_RESPONSE) throw tooLarge();
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
 }
 
 // ---------------------------------------------------------------------------
@@ -142,6 +201,14 @@ export async function answerRequest(request, { source, out, signer }) {
         throw new TypeError("signer.sign must resolve to a Buffer or Uint8Array");
       }
       return ["signature", Buffer.from(signature.buffer, signature.byteOffset, signature.byteLength)];
+    }
+    case "timestamp": {
+      const send = signer.sendTimestampRequest?.bind(signer) ?? postTimestampRequest;
+      const body = await send(request.url, Buffer.from(request.request));
+      if (!(body instanceof Uint8Array)) {
+        throw new TypeError("signer.sendTimestampRequest must resolve to a Buffer or Uint8Array");
+      }
+      return ["timestampResponse", Buffer.from(body.buffer, body.byteOffset, body.byteLength)];
     }
     default:
       throw new Error(`unsupported request ${request.kind}`);

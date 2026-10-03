@@ -66,6 +66,17 @@ loop is simply free. The tests show the observable part of that: a 300 ms
 signer while a 5 ms timer keeps ticking, and two signings overlapping on one
 thread in about the time of one.
 
+## Timestamps
+
+Give the definition a `tsa_url` or the signer a
+`timeAuthorityUrl`, and the claim signature is countersigned with an RFC 3161
+timestamp. Rust builds the `TimeStampReq` and unwraps the token from the
+response; the session just parks on a `timestamp` request carrying the URL
+and the DER request, and Node `POST`s it — with `fetch`, or with
+`signer.sendTimestampRequest(url, request)` (a proxy, a client certificate)
+if you provide one — and replies with the response body. A refusal or an
+unreachable authority fails the build.
+
 ## Try it
 
 ```sh
@@ -87,8 +98,7 @@ a non-buffer.
 
 ## Limits
 
-* JPEG only; no timestamping (a `Timestamp` request is reported as an
-  `Unsupported(...)` error); no ingredients or thumbnails (the baseline has
+* JPEG only; no ingredients or thumbnails (the baseline has
   none); RSASSA-PSS needs a signature length this surface does not yet set.
 * Hashing the output runs on the JS thread in small slices, as the reader's
   does. Every request crosses the N-API boundary with a `Buffer` copy.

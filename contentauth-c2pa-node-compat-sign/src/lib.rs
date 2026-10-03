@@ -24,9 +24,12 @@
 //! the key: a [`PendingRequest::Sign`] is just another request, answered
 //! whenever a `Promise` (a KMS call, an HSM, WebCrypto) settles.
 //!
-//! Only JPEG is supported, and no timestamping: the engine would issue a
-//! `Timestamp` request, but the baseline never asks for one, and this
-//! wrapper reports it as [`Error::Unsupported`] rather than guess.
+//! Only JPEG is supported. A definition with `tsa_url` asks for an RFC 3161
+//! timestamp, which is one more request Node answers:
+//! [`PendingRequest::Timestamp`] hands over the URL and a ready-made DER
+//! request to `POST`, and [`Reply::TimestampResponse`] takes the body back
+//! — Rust encodes the request and unwraps the token, Node only does the
+//! `fetch`.
 //!
 //! The driving loop is exactly the reader's:
 //!

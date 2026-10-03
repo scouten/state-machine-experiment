@@ -36,7 +36,7 @@ pub enum Error {
     Build(#[from] contentauth_c2pa_file_builder::Error),
 
     /// The engine asked for something this wrapper has no description
-    /// for (today: an RFC 3161 timestamp).
+    /// for (a request kind newer than this wrapper).
     #[error("unsupported request: {0}")]
     Unsupported(String),
 }

@@ -24,4 +24,26 @@ pub trait Signer {
     /// signature, in the form COSE wants for `alg` (for ECDSA, the
     /// fixed-width `r || s`, not DER).
     fn sign(&self, data: &[u8]) -> Result<Vec<u8>, HostError>;
+
+    /// The URL of an RFC 3161 time-stamp authority to countersign claim
+    /// signatures with, as c2pa-rs's `Signer::time_authority_url`. `None`
+    /// (the default) means no timestamp, unless the definition's `tsa_url`
+    /// asks for one — which then takes precedence.
+    fn time_authority_url(&self) -> Option<String> {
+        None
+    }
+
+    /// Sends one RFC 3161 request to the authority at `url`: `request` is a
+    /// DER `TimeStampReq`, and the result must be the DER `TimeStampResp`
+    /// it answers with.
+    ///
+    /// The default POSTs it over HTTP (`application/timestamp-query`);
+    /// override it to reach an authority some other way — a proxy, a
+    /// client certificate, an in-process fake. Unlike c2pa-rs's
+    /// `send_timestamp_request`, which receives the bytes to timestamp and
+    /// builds the request itself, this receives the request already built
+    /// and unwraps the token afterwards, so an override is only transport.
+    fn send_timestamp_request(&self, url: &str, request: &[u8]) -> Result<Vec<u8>, HostError> {
+        crate::tsa::post(url, request)
+    }
 }

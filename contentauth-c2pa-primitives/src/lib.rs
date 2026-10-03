@@ -34,6 +34,9 @@
 //!   bytes to produce one. A disagreement between two independent
 //!   implementations of this one function would be a serious bug, so it
 //!   lives here instead.
+//! * [`tsa`] — the RFC 3161 request encoder and response unwrapper, the
+//!   deterministic halves of a timestamp authority round trip whose
+//!   network half is always the host's.
 //! * [`error::HostError`] — the "the host couldn't do it" wrapper every
 //!   sans-I/O session's reply vocabulary needs, regardless of what kind of
 //!   work the session does.
@@ -52,6 +55,7 @@
 pub mod cbor;
 pub mod error;
 pub mod hash;
+pub mod tsa;
 pub mod types;
 
 pub use error::HostError;

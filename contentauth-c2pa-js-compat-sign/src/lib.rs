@@ -27,6 +27,11 @@
 //! the very ones `contentauth_c2pa_rs_compat_sign`'s blocking host
 //! drives; only the loop differs.
 //!
+//! Timestamping follows the same shape: [`AsyncSigner::send_timestamp_request`]
+//! is awaited like `sign` — there is no default, since nothing here has a
+//! network — and the `web` feature's JavaScript signer takes an optional
+//! `sendTimestampRequest` (typically a `fetch`) and `timeAuthorityUrl`.
+//!
 //! The signing key never needs to enter this crate's address space. That
 //! matters most for Wasm: c2pa-rs's own Wasm build has no good answer to
 //! "sign with a key held by the browser, or by a server", because its

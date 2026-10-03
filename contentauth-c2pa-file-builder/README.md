@@ -43,7 +43,13 @@ things this crate, or any format handler, can stand in for.
 session, for the common case: a caller with plain, synchronous
 `Read + Seek` access to the source asset, `Read + Write + Seek` access to
 write the output (read-back is needed for the hashing above), and a plain
-signing function — no timestamping. `build_and_sign` never touches
+signing function. Both also take an optional function answering each RFC 3161
+`Timestamp` request — digest in, bare `TimeStampToken` out; with `None`, a
+timestamp request fails the build, so a manifest is never silently left
+untimestamped.
+`contentauth_c2pa_primitives::tsa` encodes the `TimeStampReq` and unwraps the
+`TimeStampResp`, leaving only the network exchange to the caller.
+`build_and_sign` never touches
 `output`'s physical length — it writes exactly the planned bytes and
 nothing else, so reusing a stream with old content past that point never
 gets signed as part of the asset, but the old bytes are still physically
@@ -78,6 +84,7 @@ let report = build_and_sign_file(
     "photo-signed.jpg",
     settings,
     |_alg, data| todo!("sign `data` with this host's private key"),
+    None, // or `Some(&mut |alg, digest| ..)` to answer RFC 3161 requests
 )?;
 println!("manifest store is {} bytes", report.manifest.len());
 # Ok::<(), contentauth_c2pa_file_builder::Error>(())
