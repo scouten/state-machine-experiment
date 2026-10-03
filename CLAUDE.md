@@ -82,10 +82,9 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   `Read + Write + Seek` output access (read-back is needed for the
   hashing above), and a plain signing function; a host with async or
   network-backed access drives `FileBuilderSession` directly.
-  `build_and_sign_with_timestamp`/`build_and_sign_file_with_timestamp`
-  additionally take a function answering each `Timestamp` request (digest
-  in, bare `TimeStampToken` out), while the plain entry points refuse one
-  rather than silently produce an untimestamped manifest. The shared
+  Both also take an optional function answering each `Timestamp` request
+  (digest in, bare `TimeStampToken` out); with `None`, a request fails the
+  build rather than silently produce an untimestamped manifest. The shared
   `contentauth_c2pa_primitives::tsa` module encodes the RFC 3161
   `TimeStampReq` and unwraps the `TimeStampResp`, so every binding below
   leaves only the HTTP `POST` to its host. `build_and_sign_file` builds into a
@@ -231,7 +230,9 @@ here has a compatibility guarantee. Feel free to revise, rename, or break
 existing public APIs when it genuinely improves the design — do not
 contort a change to preserve backward compatibility or add deprecation
 shims for its own sake. Update call sites, tests, and docs to match
-rather than layering on compatibility scaffolding.
+rather than layering on compatibility scaffolding. In particular, prefer
+extending an existing entry point (an added or optional parameter) over
+adding a parallel `_with_x` variant beside it, and update every caller.
 
 ## The core architectural pattern (sans-I/O sessions)
 

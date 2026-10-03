@@ -202,6 +202,7 @@ fn the_async_host_agrees_with_the_blocking_host() {
         &mut sync_out,
         settings,
         |_, data| sign_with_test_key(data),
+        None,
     )
     .unwrap();
 

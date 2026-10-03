@@ -23,8 +23,8 @@
 use std::path::PathBuf;
 
 use contentauth_c2pa_file_builder::{
-    build_and_sign_file, build_and_sign_file_with_timestamp, BuilderSettings, GeneratorInfo,
-    HashAlgorithm, HostError, SigningAlg, TimestampSettings,
+    build_and_sign_file, BuilderSettings, GeneratorInfo, HashAlgorithm, HostError, SigningAlg,
+    TimestampSettings,
 };
 use contentauth_c2pa_file_reader::read_manifest_from_file;
 use contentauth_c2pa_format_jpeg::JpegFormat;
@@ -73,7 +73,7 @@ fn sign(alg: SigningAlg, data: &[u8]) -> Result<Vec<u8>, HostError> {
 fn a_jpeg_built_and_signed_reads_back_as_trusted() {
     let output: PathBuf = [env!("CARGO_TARGET_TMPDIR"), "signed.jpg"].iter().collect();
 
-    let report = build_and_sign_file(JpegFormat, C_JPG_PATH, &output, settings(), sign)
+    let report = build_and_sign_file(JpegFormat, C_JPG_PATH, &output, settings(), sign, None)
         .expect("building and signing should succeed");
 
     // Replaces the existing c2pa-rs store at the same offset, per
@@ -113,6 +113,7 @@ fn a_missing_source_file_is_reported_as_an_io_error() {
         &output,
         settings(),
         sign,
+        None,
     )
     .expect_err("a missing source file cannot be read");
 
@@ -132,7 +133,7 @@ fn an_unwritable_output_path_is_reported_as_an_io_error() {
     .iter()
     .collect();
 
-    let err = build_and_sign_file(JpegFormat, C_JPG_PATH, &output, settings(), sign)
+    let err = build_and_sign_file(JpegFormat, C_JPG_PATH, &output, settings(), sign, None)
         .expect_err("a nonexistent output directory cannot be written to");
 
     assert!(matches!(
@@ -157,8 +158,15 @@ fn a_failed_build_removes_the_temporary_file_and_leaves_the_output_untouched() {
         Err(HostError::new("this test never signs anything"))
     }
 
-    let err = build_and_sign_file(JpegFormat, C_JPG_PATH, &output, settings(), never_signs)
-        .expect_err("a build whose signer always refuses cannot succeed");
+    let err = build_and_sign_file(
+        JpegFormat,
+        C_JPG_PATH,
+        &output,
+        settings(),
+        never_signs,
+        None,
+    )
+    .expect_err("a build whose signer always refuses cannot succeed");
 
     assert!(matches!(
         err,
@@ -183,7 +191,7 @@ fn a_rename_failure_is_reported_as_an_io_error_and_cleans_up_the_temporary_file(
     std::fs::create_dir_all(&output).unwrap();
     remove_temp_files_for(&output);
 
-    let err = build_and_sign_file(JpegFormat, C_JPG_PATH, &output, settings(), sign)
+    let err = build_and_sign_file(JpegFormat, C_JPG_PATH, &output, settings(), sign, None)
         .expect_err("renaming onto an existing directory cannot succeed");
 
     assert!(matches!(
@@ -252,16 +260,16 @@ fn a_timestamp_function_supplies_the_token_embedded_in_the_manifest() {
         .collect();
     let mut asked = Vec::new();
 
-    let report = build_and_sign_file_with_timestamp(
+    let report = build_and_sign_file(
         JpegFormat,
         C_JPG_PATH,
         &output,
         timestamped_settings(),
         sign,
-        |alg, digest| {
+        Some(&mut |alg, digest| {
             asked.push((alg, digest.len()));
             Ok(FAKE_TOKEN.to_vec())
-        },
+        }),
     )
     .expect("building with a timestamp should succeed");
 
@@ -289,13 +297,13 @@ fn a_failed_timestamp_fails_the_build_and_leaves_the_output_untouched() {
         .collect();
     std::fs::write(&output, b"existing").unwrap();
 
-    let err = build_and_sign_file_with_timestamp(
+    let err = build_and_sign_file(
         JpegFormat,
         C_JPG_PATH,
         &output,
         timestamped_settings(),
         sign,
-        |_, _| Err(HostError::new("the authority is down")),
+        Some(&mut |_, _| Err(HostError::new("the authority is down"))),
     )
     .unwrap_err();
 
@@ -304,7 +312,7 @@ fn a_failed_timestamp_fails_the_build_and_leaves_the_output_untouched() {
 }
 
 #[test]
-fn the_plain_entry_point_still_refuses_a_timestamp() {
+fn no_timestamp_function_means_a_timestamp_request_fails_the_build() {
     let output: PathBuf = [env!("CARGO_TARGET_TMPDIR"), "timestamp-refused.jpg"]
         .iter()
         .collect();
@@ -314,6 +322,7 @@ fn the_plain_entry_point_still_refuses_a_timestamp() {
         &output,
         timestamped_settings(),
         sign,
+        None,
     )
     .unwrap_err();
     assert!(err.to_string().contains("timestamp"), "{err}");

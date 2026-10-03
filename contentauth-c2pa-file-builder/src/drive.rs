@@ -35,18 +35,19 @@ use contentauth_state_machine::{Session, Step};
 use crate::{
     error::Error,
     session::{FileBuilderReply, FileBuilderReport, FileBuilderRequest, FileBuilderSession},
+    TimestampFn,
 };
 
 /// Builds and signs a manifest for `source`, per `settings`, writing the
 /// result to `output`, calling `sign` for every claim signature the build
-/// needs and `timestamp` for every RFC 3161 token.
+/// needs and `timestamp` (if any) for every RFC 3161 token.
 pub(crate) fn build<H, S, O>(
     handler: H,
     mut source: S,
     mut output: O,
     settings: BuilderSettings,
     mut sign: impl FnMut(SigningAlg, &[u8]) -> Result<Vec<u8>, HostError>,
-    mut timestamp: impl FnMut(HashAlgorithm, &[u8]) -> Result<Vec<u8>, HostError>,
+    mut timestamp: Option<&mut TimestampFn<'_>>,
 ) -> Result<FileBuilderReport, Error>
 where
     H: FormatHandler + Send,
@@ -57,6 +58,16 @@ where
     let output_stream = FileBuilderSession::<H>::OUTPUT_STREAM;
 
     let mut session = FileBuilderSession::new(handler, settings);
+
+    // With no timestamp function, a `Timestamp` request fails the build
+    // rather than silently leaving the manifest untimestamped.
+    let mut answer_timestamp = |alg: HashAlgorithm, digest: &[u8]| match timestamp.as_mut() {
+        Some(timestamp) => timestamp(alg, digest),
+        None => Err(HostError::new(
+            "this build has no way to obtain an RFC 3161 timestamp; \
+             pass a timestamp function, or drive FileBuilderSession directly",
+        )),
+    };
 
     loop {
         if session.advance()? == Step::Complete {
@@ -70,7 +81,7 @@ where
                 &mut source,
                 &mut output,
                 &mut sign,
-                &mut timestamp,
+                &mut answer_timestamp,
                 &request.kind,
             );
             session.fulfill(request.id, reply)?;

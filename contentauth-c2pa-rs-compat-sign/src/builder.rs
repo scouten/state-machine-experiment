@@ -16,8 +16,8 @@ use std::{
 };
 
 use contentauth_c2pa_file_builder::{
-    build_and_sign_file_with_timestamp, build_and_sign_with_timestamp, FileBuilderReport,
-    HashAlgorithm, HostError, TimestampSettings,
+    build_and_sign, build_and_sign_file, FileBuilderReport, HashAlgorithm, HostError,
+    TimestampSettings,
 };
 use contentauth_c2pa_format_jpeg::JpegFormat;
 use contentauth_c2pa_primitives::tsa::{timestamp_request, timestamp_token};
@@ -61,13 +61,13 @@ impl Builder {
         D: Read + Write + Seek,
     {
         let (settings, tsa_url) = self.settings(signer, format)?;
-        let report = build_and_sign_with_timestamp(
+        let report = build_and_sign(
             JpegFormat,
             source,
             dest,
             settings,
             |_, data| signer.sign(data),
-            |alg, digest| timestamp(signer, tsa_url.as_deref(), alg, digest),
+            Some(&mut |alg, digest| timestamp(signer, tsa_url.as_deref(), alg, digest)),
         )?;
         Ok(report.manifest)
     }
@@ -94,13 +94,13 @@ impl Builder {
         }
 
         let (settings, tsa_url) = self.settings(signer, JPEG)?;
-        let FileBuilderReport { manifest, .. } = build_and_sign_file_with_timestamp(
+        let FileBuilderReport { manifest, .. } = build_and_sign_file(
             JpegFormat,
             source,
             dest,
             settings,
             |_, data| signer.sign(data),
-            |alg, digest| timestamp(signer, tsa_url.as_deref(), alg, digest),
+            Some(&mut |alg, digest| timestamp(signer, tsa_url.as_deref(), alg, digest)),
         )?;
         Ok(manifest)
     }
