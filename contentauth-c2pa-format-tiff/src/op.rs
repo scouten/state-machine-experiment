@@ -85,12 +85,9 @@ impl<G: Goal> ScanOp<G> {
                 }
             },
 
-            State::Done(output) => {
-                self.state = State::Done(output);
-                Ok(Step::Complete)
-            }
-
-            State::Poisoned => Err(ProtocolError::SessionFailed.into()),
+            // `advance` answers a finished operation before getting here,
+            // so `Done` is only ever seen by mistake: spent, like an error.
+            State::Done(_) | State::Poisoned => Err(ProtocolError::SessionFailed.into()),
         }
     }
 }

@@ -50,12 +50,10 @@ impl Signature {
     /// True if `header` — the asset's leading bytes — carries this
     /// signature. A header too short to reach it does not.
     pub fn matches(&self, header: &[u8]) -> bool {
-        let Ok(start) = usize::try_from(self.offset) else {
-            return false;
-        };
-        start
-            .checked_add(self.bytes.len())
-            .and_then(|end| header.get(start..end))
+        usize::try_from(self.offset)
+            .ok()
+            .and_then(|start| Some(start..start.checked_add(self.bytes.len())?))
+            .and_then(|range| header.get(range))
             .is_some_and(|found| found == self.bytes)
     }
 }
