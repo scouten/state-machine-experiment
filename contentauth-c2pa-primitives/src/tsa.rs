@@ -39,15 +39,11 @@ const BOOLEAN: u8 = 0x01;
 
 /// The DER OID content bytes (`id-sha256`, `id-sha384`, `id-sha512`, in
 /// the NIST arc 2.16.840.1.101.3.4.2) and the digest length of `alg`.
-fn hash_params(alg: HashAlgorithm) -> Result<(&'static [u8], usize), HostError> {
+fn hash_params(alg: HashAlgorithm) -> (&'static [u8], usize) {
     match alg {
-        HashAlgorithm::Sha256 => Ok((&[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01], 32)),
-        HashAlgorithm::Sha384 => Ok((&[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02], 48)),
-        HashAlgorithm::Sha512 => Ok((&[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03], 64)),
-        // `HashAlgorithm` is non-exhaustive.
-        other => Err(HostError::new(format!(
-            "no RFC 3161 object identifier for {other:?}"
-        ))),
+        HashAlgorithm::Sha256 => (&[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01], 32),
+        HashAlgorithm::Sha384 => (&[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02], 48),
+        HashAlgorithm::Sha512 => (&[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03], 64),
     }
 }
 
@@ -63,7 +59,7 @@ pub fn timestamp_request(
     hash_alg: HashAlgorithm,
     nonce: Option<u64>,
 ) -> Result<Vec<u8>, HostError> {
-    let (oid, expected) = hash_params(hash_alg)?;
+    let (oid, expected) = hash_params(hash_alg);
     if digest.len() != expected {
         return Err(HostError::new(format!(
             "a {hash_alg:?} digest is {expected} bytes, not {}",
