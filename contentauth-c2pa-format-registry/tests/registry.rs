@@ -175,3 +175,20 @@ fn earlier_registrations_win() {
     assert_eq!(name_of(registry.by_extension("tif")), Some("tiff"));
     assert_eq!(registry.formats().len(), 3);
 }
+
+#[test]
+fn an_any_format_is_a_format_handler_that_names_itself() {
+    let any = AnyFormat::new(TiffFormat);
+
+    assert_eq!(FormatHandler::descriptor(&any).name, "tiff");
+    assert_eq!(format!("{any:?}"), "AnyFormat(\"tiff\")");
+    assert!(format!("{:?}", Registry::standard()).contains("jpeg"));
+}
+
+#[test]
+fn lists_the_media_types_it_can_handle() {
+    assert_eq!(
+        Registry::standard().mime_types().collect::<Vec<_>>(),
+        ["image/jpeg", "image/tiff", "image/dng", "image/x-adobe-dng"]
+    );
+}

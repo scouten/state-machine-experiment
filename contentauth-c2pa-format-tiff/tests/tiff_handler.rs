@@ -332,3 +332,79 @@ fn a_host_failure_surfaces_rather_than_hanging() {
         Err(FormatError::Protocol(ProtocolError::SessionFailed))
     ));
 }
+
+/// Answers one request from `asset`.
+fn answer(asset: &[u8], request: &contentauth_c2pa_format::IoRequest) -> IoReply {
+    use contentauth_c2pa_format::IoRequest;
+    match request {
+        IoRequest::Length { .. } => IoReply::Length(asset.len() as u64),
+        IoRequest::Read { range, .. } => {
+            IoReply::Bytes(asset[range.start as usize..][..range.len as usize].to_vec())
+        }
+        other => panic!("unexpected request: {other:?}"),
+    }
+}
+
+#[test]
+fn an_operation_that_is_advanced_before_its_reply_arrives_just_waits() {
+    // A foreign-layout store, so every phase (length, header, IFD count,
+    // IFD entries, manifest) is passed through.
+    let asset = foreign(ALL_KINDS[0], &store(64));
+    let mut op = TiffFormat.locate(STREAM);
+
+    loop {
+        // Advancing again with the request still outstanding parks again.
+        let first = op.advance().unwrap();
+        if first == Step::Complete {
+            break;
+        }
+        assert_eq!(op.advance().unwrap(), Step::AwaitHost);
+
+        for request in op.outstanding_requests().to_vec() {
+            op.fulfill(request.id, answer(&asset, &request.kind))
+                .unwrap();
+        }
+    }
+
+    // A finished operation stays finished, and yields its result.
+    assert_eq!(op.advance().unwrap(), Step::Complete);
+    assert!(op.finish().unwrap().embedded.is_some());
+}
+
+#[test]
+fn finishing_an_operation_that_failed_reports_it() {
+    let mut op = TiffFormat.locate(STREAM);
+    op.advance().unwrap();
+    let id = op.outstanding_requests()[0].id;
+    op.fulfill(id, IoReply::Length(3)).unwrap(); // too short to be a TIFF
+
+    assert!(matches!(op.advance(), Err(FormatError::Malformed(_))));
+    assert!(op.finish().is_err());
+}
+
+#[test]
+fn a_first_ifd_pointer_of_zero_means_no_ifd() {
+    let kind = ALL_KINDS[0];
+    let mut asset = kind.header(0);
+    asset.extend([0u8; 16]);
+    assert!(matches!(locate_err(asset), FormatError::Malformed(m) if m.contains("no IFD")));
+}
+
+#[test]
+fn an_implausibly_long_ifd_chain_is_refused() {
+    let kind = ALL_KINDS[0];
+    let block = kind.ifd_len(1);
+    let count = (1usize << 16) + 2;
+
+    let mut asset = kind.header(kind.header_len() as u64);
+    for n in 0..count {
+        let next = if n + 1 < count {
+            (kind.header_len() + (n + 1) * block) as u64
+        } else {
+            0
+        };
+        asset.extend(kind.ifd(&[kind.entry(256, 3, 1, 1)], next));
+    }
+
+    assert!(matches!(locate_err(asset), FormatError::Malformed(m) if m.contains("implausibly")));
+}

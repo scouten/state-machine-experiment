@@ -25,6 +25,7 @@
 //! that wants its bytes.
 
 use core::mem::{replace, take};
+use std::collections::HashSet;
 
 use contentauth_c2pa_format::{
     take_bytes, take_length, ByteRange, FormatError, IoRequest, ProtocolError, RequestId, StreamId,
@@ -165,6 +166,7 @@ pub(crate) struct Scanner {
     source_len: u64,
     header: Option<Header>,
     ifds: Vec<Ifd>,
+    seen: HashSet<u64>,
     found: Option<(usize, u64, ByteRange)>,
 }
 
@@ -177,6 +179,7 @@ impl Scanner {
             source_len: 0,
             header: None,
             ifds: Vec::new(),
+            seen: HashSet::new(),
             found: None,
         }
     }
@@ -332,7 +335,7 @@ impl Scanner {
         if offset == 0 {
             return Err(malformed("the file has no IFD"));
         }
-        if self.ifds.iter().any(|ifd| ifd.offset == offset) {
+        if !self.seen.insert(offset) {
             return Err(malformed(format!(
                 "the IFD chain loops back to offset {offset}"
             )));

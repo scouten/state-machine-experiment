@@ -194,3 +194,13 @@ fn a_broken_file_with_a_telling_extension_reports_what_is_wrong_with_it() {
         .unwrap_err();
     assert!(matches!(err, Error::Read(_)), "{err:?}");
 }
+
+#[test]
+fn a_file_that_cannot_be_read_while_sniffing_is_an_io_error() {
+    // A directory opens but cannot be read, which first shows up when the
+    // host reads the leading bytes to detect the format.
+    let err = Reader::from_context(trusting())
+        .with_file(env!("CARGO_TARGET_TMPDIR"))
+        .unwrap_err();
+    assert!(matches!(err, Error::Io { .. }), "{err:?}");
+}
