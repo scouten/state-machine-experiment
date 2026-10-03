@@ -116,9 +116,7 @@ where
 }
 
 /// One RFC 3161 round trip: encode the `TimeStampReq`, await the signer
-/// sending it, unwrap the token from the response. No nonce: this crate
-/// has no source of randomness, and the clock a nonce would come from is
-/// not one every JavaScript host trusts.
+/// sending it, unwrap the token from the response.
 async fn timestamp<S: AsyncSigner + ?Sized>(
     signer: &S,
     tsa_url: Option<&str>,
@@ -126,7 +124,7 @@ async fn timestamp<S: AsyncSigner + ?Sized>(
     digest: &[u8],
 ) -> Result<Vec<u8>, HostError> {
     let url = tsa_url.ok_or_else(|| HostError::new("no time-stamp authority URL is configured"))?;
-    let request = timestamp_request(digest, hash_alg, None)?;
+    let request = timestamp_request(digest, hash_alg)?;
     let response = signer.send_timestamp_request(url, &request).await?;
     timestamp_token(&response)
 }

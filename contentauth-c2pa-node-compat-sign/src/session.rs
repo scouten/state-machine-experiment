@@ -356,7 +356,7 @@ fn describe(
             url: tsa_url
                 .ok_or_else(|| Error::Unsupported("a timestamp with no tsa_url".to_string()))?
                 .to_string(),
-            request: timestamp_request(digest, *hash_alg, None)
+            request: timestamp_request(digest, *hash_alg)
                 .map_err(|err| Error::Unsupported(err.to_string()))?,
         },
         other => return Err(Error::Unsupported(format!("{other:?}"))),

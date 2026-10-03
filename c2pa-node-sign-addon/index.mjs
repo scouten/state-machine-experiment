@@ -120,9 +120,22 @@ async function postTimestampRequest(url, request) {
     signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) throw new Error(`the timestamp authority at ${url} answered ${response.status}`);
-  const body = Buffer.from(await response.arrayBuffer());
-  if (body.length > MAX_TIMESTAMP_RESPONSE) throw new Error("the timestamp response is implausibly large");
-  return body;
+
+  // Bound what is buffered *as it arrives*: a declared length is checked
+  // up front, and a body that is longer than declared (or chunked, with no
+  // length at all) is abandoned the moment it passes the limit, so a
+  // hostile or broken authority cannot make this hold its whole reply.
+  const tooLarge = () => new Error("the timestamp response is implausibly large");
+  if (Number(response.headers.get("content-length")) > MAX_TIMESTAMP_RESPONSE) throw tooLarge();
+  const chunks = [];
+  let total = 0;
+  // Leaving the loop early cancels the underlying stream.
+  for await (const chunk of response.body ?? []) {
+    total += chunk.length;
+    if (total > MAX_TIMESTAMP_RESPONSE) throw tooLarge();
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
 }
 
 // ---------------------------------------------------------------------------

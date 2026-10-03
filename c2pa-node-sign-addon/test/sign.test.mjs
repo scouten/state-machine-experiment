@@ -464,3 +464,34 @@ test("an implausibly large timestamp response fails the build", async () => {
     await authority.close();
   }
 });
+
+test("a chunked timestamp response with no declared length is abandoned once it passes the limit", async () => {
+  let sent = 0;
+  const server = createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(200); // no Content-Length: chunked
+      const chunk = Buffer.alloc(256 * 1024, 0x30);
+      const timer = setInterval(() => {
+        if (res.destroyed) return clearInterval(timer);
+        sent += chunk.length;
+        res.write(chunk);
+      }, 1);
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    await assert.rejects(
+      signAsset({ path: SOURCE }, { ...BASELINE, tsa_url: `http://127.0.0.1:${server.address().port}/` }, testSigner()),
+      /implausibly large/,
+    );
+    // It stopped reading shortly after the 1 MiB limit rather than draining a long stream.
+    await sleep(50);
+    const afterAbort = sent;
+    await sleep(50);
+    assert.equal(sent, afterAbort, "the server should have seen the connection close");
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

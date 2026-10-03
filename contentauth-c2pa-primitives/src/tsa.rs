@@ -50,15 +50,12 @@ fn hash_params(alg: HashAlgorithm) -> (&'static [u8], usize) {
 /// Encodes a DER `TimeStampReq` asking for a timestamp over `digest`
 /// (already computed with `hash_alg`), with `certReq` set.
 ///
-/// `nonce`, if given, is echoed back by the authority; this crate has no
-/// source of randomness, so a host that wants one supplies it.
+/// The request carries no nonce: this crate has no randomness, and
+/// checking one would mean decoding the returned token, which is the
+/// reader's job (the token is bound to `digest` either way).
 ///
 /// Fails if `digest` is not the length `hash_alg` produces.
-pub fn timestamp_request(
-    digest: &[u8],
-    hash_alg: HashAlgorithm,
-    nonce: Option<u64>,
-) -> Result<Vec<u8>, HostError> {
+pub fn timestamp_request(digest: &[u8], hash_alg: HashAlgorithm) -> Result<Vec<u8>, HostError> {
     let (oid, expected) = hash_params(hash_alg);
     if digest.len() != expected {
         return Err(HostError::new(format!(
@@ -72,9 +69,6 @@ pub fn timestamp_request(
 
     let mut body = tlv(INTEGER, &[1]); // version v1
     body.extend(imprint);
-    if let Some(nonce) = nonce {
-        body.extend(tlv(INTEGER, &unsigned_integer(nonce)));
-    }
     body.extend(tlv(BOOLEAN, &[0xff])); // certReq TRUE
     Ok(tlv(SEQUENCE, &body))
 }
@@ -118,19 +112,6 @@ pub fn timestamp_token(response: &[u8]) -> Result<Vec<u8>, HostError> {
     }
     let header = after_status.len() - read_tlv(after_status)?.2.len() - content.len();
     Ok(after_status[..header + content.len()].to_vec())
-}
-
-/// The shortest big-endian two's-complement encoding of a non-negative
-/// integer: no redundant leading zeros, one added if the top bit is set.
-fn unsigned_integer(value: u64) -> Vec<u8> {
-    let bytes = value.to_be_bytes();
-    let first = bytes.iter().position(|b| *b != 0).unwrap_or(7);
-    let mut out = Vec::with_capacity(9);
-    if bytes[first] & 0x80 != 0 {
-        out.push(0);
-    }
-    out.extend_from_slice(&bytes[first..]);
-    out
 }
 
 fn tlv(tag: u8, content: &[u8]) -> Vec<u8> {
@@ -182,7 +163,7 @@ mod tests {
 
     #[test]
     fn a_sha256_request_has_the_canonical_encoding() {
-        let request = timestamp_request(&[0xab; 32], HashAlgorithm::Sha256, None).unwrap();
+        let request = timestamp_request(&[0xab; 32], HashAlgorithm::Sha256).unwrap();
 
         let mut expected = vec![
             0x30, 0x39, // TimeStampReq
@@ -204,7 +185,7 @@ mod tests {
             (HashAlgorithm::Sha384, 48, 0x02),
             (HashAlgorithm::Sha512, 64, 0x03),
         ] {
-            let request = timestamp_request(&vec![7; len], alg, None).unwrap();
+            let request = timestamp_request(&vec![7; len], alg).unwrap();
             let oid = [
                 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, last, 0x05, 0x00,
             ];
@@ -213,23 +194,9 @@ mod tests {
     }
 
     #[test]
-    fn a_nonce_is_a_minimal_positive_integer() {
-        assert_eq!(unsigned_integer(0), [0]);
-        assert_eq!(unsigned_integer(0x7f), [0x7f]);
-        assert_eq!(unsigned_integer(0x80), [0, 0x80]);
-        assert_eq!(
-            unsigned_integer(u64::MAX),
-            [0, 255, 255, 255, 255, 255, 255, 255, 255]
-        );
-
-        let with = timestamp_request(&[0; 48], HashAlgorithm::Sha384, Some(0x1234)).unwrap();
-        assert!(with.windows(4).any(|w| w == [0x02, 0x02, 0x12, 0x34]));
-    }
-
-    #[test]
     fn a_digest_of_the_wrong_length_is_refused() {
-        assert!(timestamp_request(&[0; 31], HashAlgorithm::Sha256, None).is_err());
-        assert!(timestamp_request(&[0; 32], HashAlgorithm::Sha512, None).is_err());
+        assert!(timestamp_request(&[0; 31], HashAlgorithm::Sha256).is_err());
+        assert!(timestamp_request(&[0; 32], HashAlgorithm::Sha512).is_err());
     }
 
     fn response(status: u8, token: Option<&[u8]>) -> Vec<u8> {

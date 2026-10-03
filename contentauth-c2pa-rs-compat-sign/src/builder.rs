@@ -146,17 +146,7 @@ fn timestamp(
     digest: &[u8],
 ) -> Result<Vec<u8>, HostError> {
     let url = tsa_url.ok_or_else(|| HostError::new("no time-stamp authority URL is configured"))?;
-    let request = timestamp_request(digest, alg, Some(nonce()))?;
+    let request = timestamp_request(digest, alg)?;
     let response = signer.send_timestamp_request(url, &request)?;
     timestamp_token(&response)
-}
-
-/// A nonce for a timestamp request. The engine has no RNG; the clock is
-/// unpredictable enough for what a nonce here is for (telling an
-/// authority's answer to this request from a replayed one).
-fn nonce() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_nanos() as u64)
-        .unwrap_or(0)
 }
