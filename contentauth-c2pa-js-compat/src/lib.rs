@@ -123,7 +123,9 @@ pub use context::Context;
 pub use drive::read_manifest;
 pub use error::{C2paError, Error};
 pub use format::{for_format, FORMATS};
-pub use manifest_store::{Manifest, ManifestStore, ValidationState, ValidationStatus};
+pub use manifest_store::{
+    ClaimGeneratorInfo, Manifest, ManifestStore, ValidationState, ValidationStatus,
+};
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 pub use platform::OfflinePlatform;
 pub use platform::Platform;

@@ -1432,7 +1432,6 @@ mod tests {
 
     fn test_settings() -> BuilderSettings {
         BuilderSettings::new(
-            "image/jpeg",
             "xmp:iid:test",
             "urn:uuid:test",
             contentauth_c2pa_builder::GeneratorInfo::new("test", "0.0"),

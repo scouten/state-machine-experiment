@@ -117,7 +117,6 @@ impl Platform for FixedClock {
 /// and the plan used to place them.
 pub fn build_and_embed(source: &[u8]) -> (EmbedPlan, Vec<u8>) {
     let mut settings = BuilderSettings::new(
-        "image/jpeg",
         "xmp:iid:test-instance",
         "urn:uuid:test-manifest",
         GeneratorInfo::new("contentauth-c2pa-js-compat-tests", "0.1"),

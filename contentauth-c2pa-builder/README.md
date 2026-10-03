@@ -67,7 +67,14 @@ reads back as trusted — that round trip, through an independently-written
 reader, is this crate's primary correctness proof.
 
 This crate never builds a v1 claim: v1 is a read-only concern, for
-interoperating with manifests this crate did not write.
+interoperating with manifests this crate did not write (the specification
+forbids a claim generator producing one). The v2 claim it writes follows
+the specification's `claim-map-v2`: `claim_generator_info` is a single map
+carrying `specVersion` (the specification snapshot this repository pins),
+and there is no `dc:format` or `claim_generator` — so
+`BuilderSettings` takes no MIME type, and a reader reports no `format` for
+what this crate builds. Not yet written: `redacted_assertions` (which
+has no use without ingredients) and a generator `icon`.
 
 Each caller-supplied assertion carries an `AssertionKind` — `Created` or
 `Gathered` — that the host sets: the host supplies the assertion's

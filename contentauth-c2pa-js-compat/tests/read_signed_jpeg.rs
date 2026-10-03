@@ -75,7 +75,14 @@ fn a_manifest_written_by_the_builder_reads_back_as_trusted_with_anchors_from_con
     let active = reader.active_manifest().expect("has an active manifest");
     assert_eq!(active.label, "urn:uuid:test-manifest");
     assert_eq!(active.title.as_deref(), Some("test.jpg"));
-    assert_eq!(active.format.as_deref(), Some("image/jpeg"));
+    // A v2 claim, which has no `dc:format`: its generator is one map.
+    assert_eq!(active.format, None);
+    assert_eq!(active.claim_version, 2);
+    assert_eq!(active.claim_generator_info.len(), 1);
+    assert_eq!(
+        active.claim_generator_info[0].spec_version.as_deref(),
+        Some("2.4.0")
+    );
     assert_eq!(active.instance_id, "xmp:iid:test-instance");
     assert_eq!(active.assertions, ["c2pa.hash.data"]);
     // The builder writes structured `claim_generator_info`, not the legacy

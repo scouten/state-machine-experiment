@@ -226,6 +226,7 @@ fn read_manifest(
         source,
     })?;
 
+    validation::check_claim_fields(&label, &claim, statuses);
     validation::check_assertion_hashes(manifest, &claim, statuses);
 
     // The claim signature commits to the claim box's CBOR, which is why
@@ -304,9 +305,9 @@ mod tests {
     use super::*;
     use crate::{
         test_support::{
-            assertion_box, boxed, claim_box, claim_box_v2, claim_box_with_alg,
-            claim_box_with_assertions, hashed_uri, hashed_uri_with_hash, manifest, manifest_store,
-            manifest_with_claim, superbox,
+            assertion_box, boxed, claim_box, claim_box_v2, claim_box_v2_from_fields,
+            claim_box_with_alg, claim_box_with_assertions, hashed_uri, hashed_uri_with_hash,
+            manifest, manifest_store, manifest_with_claim, superbox, v2_required_fields,
         },
         validation::status_code,
     };
@@ -590,6 +591,111 @@ mod tests {
             "both the created and gathered assertion references should be hash-checked"
         );
         assert!(parsed.statuses.iter().all(|s| !s.is_failure()));
+    }
+
+    /// Parses a store holding one v2 manifest labelled `urn:uuid:v2`
+    /// whose claim has `fields`, returning the statuses.
+    fn statuses_for_v2_claim(
+        fields: std::collections::BTreeMap<c2pa_cbor::Value, c2pa_cbor::Value>,
+    ) -> Vec<crate::validation::ValidationStatus> {
+        let claim = claim_box_v2_from_fields(fields);
+        let bytes = manifest_store(&[manifest_with_claim("urn:uuid:v2", &[], claim)]);
+        parse(&bytes).unwrap().statuses
+    }
+
+    fn created_only() -> std::collections::BTreeMap<c2pa_cbor::Value, c2pa_cbor::Value> {
+        let mut fields = v2_required_fields();
+        fields.insert(
+            c2pa_cbor::Value::Text("created_assertions".to_string()),
+            c2pa_cbor::Value::Array(vec![]),
+        );
+        fields
+    }
+
+    #[test]
+    fn a_conformant_v2_claim_raises_no_claim_malformed() {
+        let statuses = statuses_for_v2_claim(created_only());
+        assert!(statuses
+            .iter()
+            .all(|s| s.code != status_code::CLAIM_MALFORMED));
+    }
+
+    #[test]
+    fn a_v2_claim_missing_required_fields_is_malformed() {
+        let mut fields = created_only();
+        fields.remove(&c2pa_cbor::Value::Text("instanceID".to_string()));
+        fields.remove(&c2pa_cbor::Value::Text("created_assertions".to_string()));
+
+        let statuses = statuses_for_v2_claim(fields);
+        let malformed: Vec<_> = statuses
+            .iter()
+            .filter(|s| s.code == status_code::CLAIM_MALFORMED)
+            .collect();
+
+        assert_eq!(malformed.len(), 1);
+        assert!(malformed[0].is_failure());
+        assert_eq!(
+            malformed[0].url.as_deref(),
+            Some("self#jumbf=/c2pa/urn:uuid:v2/c2pa.claim.v2")
+        );
+        let why = malformed[0].explanation.as_deref().unwrap();
+        assert!(why.contains("instanceID") && why.contains("created_assertions"));
+    }
+
+    #[test]
+    fn a_v1_claim_is_not_held_to_the_v2_field_requirements() {
+        let bytes = manifest_store(&[manifest_with_claim(
+            "urn:uuid:v1",
+            &[],
+            claim_box("bare.jpg"),
+        )]);
+
+        let statuses = parse(&bytes).unwrap().statuses;
+        assert!(statuses
+            .iter()
+            .all(|s| s.code != status_code::CLAIM_MALFORMED));
+    }
+
+    #[test]
+    fn redacting_an_assertion_in_ones_own_manifest_is_rejected() {
+        for uri in [
+            // Relative: resolves inside the claim's own manifest.
+            "self#jumbf=c2pa.assertions/c2pa.thumbnail",
+            // Absolute, naming this manifest.
+            "self#jumbf=/c2pa/urn:uuid:v2/c2pa.assertions/c2pa.thumbnail",
+        ] {
+            let mut fields = created_only();
+            fields.insert(
+                c2pa_cbor::Value::Text("redacted_assertions".to_string()),
+                c2pa_cbor::Value::Array(vec![c2pa_cbor::Value::Text(uri.to_string())]),
+            );
+
+            let statuses = statuses_for_v2_claim(fields);
+            let self_redacted: Vec<_> = statuses
+                .iter()
+                .filter(|s| s.code == status_code::ASSERTION_SELF_REDACTED)
+                .collect();
+
+            assert_eq!(self_redacted.len(), 1, "{uri}");
+            assert!(self_redacted[0].is_failure());
+            assert_eq!(self_redacted[0].url.as_deref(), Some(uri));
+        }
+    }
+
+    #[test]
+    fn redacting_an_ingredients_assertion_is_allowed() {
+        let mut fields = created_only();
+        fields.insert(
+            c2pa_cbor::Value::Text("redacted_assertions".to_string()),
+            c2pa_cbor::Value::Array(vec![c2pa_cbor::Value::Text(
+                "self#jumbf=/c2pa/urn:uuid:ingredient/c2pa.assertions/c2pa.thumbnail".to_string(),
+            )]),
+        );
+
+        let statuses = statuses_for_v2_claim(fields);
+        assert!(statuses
+            .iter()
+            .all(|s| s.code != status_code::ASSERTION_SELF_REDACTED));
     }
 
     #[test]

@@ -58,6 +58,25 @@ pub struct ManifestStore {
     pub validation_status: Vec<ValidationStatus>,
 }
 
+/// One entry of a manifest's `claim_generator_info`.
+///
+/// `icon` is not reported: it is a hashed reference to an embedded-data
+/// assertion this reader does not resolve.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ClaimGeneratorInfo {
+    /// Name of the generating product.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// Version of the generating product.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+
+    /// The C2PA specification version the generator followed (v2 only).
+    #[serde(rename = "specVersion", skip_serializing_if = "Option::is_none")]
+    pub spec_version: Option<String>,
+}
+
 /// One manifest: what c2pa-wasm's `activeManifest()` returns, and the
 /// values of [`ManifestStore::manifests`].
 ///
@@ -75,11 +94,22 @@ pub struct Manifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claim_generator: Option<String>,
 
+    /// Structured descriptions of the software that produced the claim:
+    /// a v1 claim's `claim_generator_info` array, or a v2 claim's single
+    /// `generator-info-map` as a one-entry list.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub claim_generator_info: Vec<ClaimGeneratorInfo>,
+
+    /// The version of the claim this manifest carries: `1` for a
+    /// `c2pa.claim`, `2` for a `c2pa.claim.v2`.
+    pub claim_version: u8,
+
     /// A user-displayable title for the asset, if the claim carries one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 
-    /// The asset's MIME type, if the claim carries one.
+    /// The asset's MIME type, if the claim carries one — a v1 claim
+    /// only; the v2 claim has no `dc:format` field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
 
@@ -191,6 +221,20 @@ impl Manifest {
         Self {
             label: manifest.label.clone(),
             claim_generator: manifest.claim.claim_generator.clone(),
+            claim_generator_info: manifest
+                .claim
+                .claim_generator_info
+                .iter()
+                .map(|info| ClaimGeneratorInfo {
+                    name: info.name.clone(),
+                    version: info.version.clone(),
+                    spec_version: info.spec_version.clone(),
+                })
+                .collect(),
+            claim_version: match manifest.claim.version {
+                contentauth_c2pa_reader::ClaimVersion::V1 => 1,
+                _ => 2,
+            },
             title: manifest.claim.title.clone(),
             format: manifest.claim.format.clone(),
             instance_id: manifest.claim.instance_id.clone().unwrap_or_default(),
@@ -256,6 +300,8 @@ mod tests {
         let manifest = Manifest {
             label: "urn:uuid:x".to_string(),
             claim_generator: None,
+            claim_generator_info: vec![],
+            claim_version: 1,
             title: None,
             format: Some("image/jpeg".to_string()),
             instance_id: String::new(),
@@ -267,6 +313,7 @@ mod tests {
             json,
             serde_json::json!({
                 "label": "urn:uuid:x",
+                "claim_version": 1,
                 "format": "image/jpeg",
                 "instance_id": "",
                 "assertions": ["c2pa.hash.data"],

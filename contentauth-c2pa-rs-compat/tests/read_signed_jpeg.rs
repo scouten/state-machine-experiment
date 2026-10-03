@@ -57,7 +57,6 @@ const C_JPG: &[u8] = include_bytes!("../../contentauth-c2pa-reader/tests/fixture
 /// and returns the resulting bytes and the plan used to place them.
 fn build_and_embed(source: &[u8]) -> (EmbedPlan, Vec<u8>) {
     let mut settings = BuilderSettings::new(
-        "image/jpeg",
         "xmp:iid:test-instance",
         "urn:uuid:test-manifest",
         GeneratorInfo::new("contentauth-c2pa-rs-compat-tests", "0.1"),
@@ -260,7 +259,14 @@ fn a_manifest_written_by_the_builder_reads_back_as_trusted_through_the_compat_re
     let active = reader.active_manifest().unwrap();
     assert_eq!(active.label(), "urn:uuid:test-manifest");
     assert_eq!(active.title(), Some("test.jpg"));
-    assert_eq!(active.format(), Some("image/jpeg"));
+    // The builder writes a v2 claim, which has no `dc:format` field.
+    assert_eq!(active.format(), None);
+    assert_eq!(active.claim_version(), 2);
+    assert_eq!(active.claim_generator_info().len(), 1);
+    assert_eq!(
+        active.claim_generator_info()[0].spec_version.as_deref(),
+        Some("2.4.0")
+    );
     assert_eq!(active.instance_id(), "xmp:iid:test-instance");
     // The builder writes structured `claim_generator_info`, not the legacy
     // free-form `claim_generator` string, so this crate's own fixture has
@@ -286,7 +292,12 @@ fn a_manifest_written_by_the_builder_reads_back_as_trusted_through_the_compat_re
     let manifest_json = &json["manifests"]["urn:uuid:test-manifest"];
     assert_eq!(manifest_json["label"], "urn:uuid:test-manifest");
     assert_eq!(manifest_json["title"], "test.jpg");
-    assert_eq!(manifest_json["format"], "image/jpeg");
+    assert!(manifest_json.get("format").is_none());
+    assert_eq!(manifest_json["claim_version"], 2);
+    assert_eq!(
+        manifest_json["claim_generator_info"][0]["specVersion"],
+        "2.4.0"
+    );
     assert_eq!(manifest_json["instance_id"], "xmp:iid:test-instance");
     assert_eq!(
         manifest_json["assertions"],
@@ -398,6 +409,16 @@ fn a_real_c2pa_rs_signed_fixture_reports_its_claim_generator() {
         active.claim_generator(),
         Some("make_test_images/0.33.1 c2pa-rs/0.33.1")
     );
+
+    // The same fixture is a v1 claim, the contrast to what this crate's
+    // own builder writes: it has a `dc:format` and a legacy generator
+    // string, and says so in both the accessor and the JSON.
+    assert_eq!(active.claim_version(), 1);
+    assert_eq!(active.format(), Some("image/jpeg"));
+    let json: serde_json::Value = serde_json::from_str(&reader.json()).unwrap();
+    let manifest_json = &json["manifests"][active.label()];
+    assert_eq!(manifest_json["claim_version"], 1);
+    assert_eq!(manifest_json["format"], "image/jpeg");
 }
 
 #[test]
