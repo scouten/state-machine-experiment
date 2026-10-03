@@ -26,6 +26,11 @@ contentauth-c2pa-format-jpeg = { path = "../contentauth-c2pa-format-jpeg" }
 # `HostError`, what a `Signer` reports a failed signature with.
 contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
 
+# Blocking HTTP, only for `Signer::send_timestamp_request`'s default: the
+# RFC 3161 POST. The same version and feature as
+# `contentauth-c2pa-rs-compat`, so no second copy enters the tree.
+reqwest = { version = "0.13.5", features = ["blocking"] }
+
 thiserror = "2.0.20"
 
 [dev-dependencies]

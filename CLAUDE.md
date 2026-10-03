@@ -80,9 +80,14 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   `build_and_sign`/`build_and_sign_file` (`src/drive.rs`) are one such
   host, for a caller with plain synchronous `Read + Seek` source access,
   `Read + Write + Seek` output access (read-back is needed for the
-  hashing above), and a plain signing function (no timestamping); a host
-  that needs timestamping, or async/network access, drives
-  `FileBuilderSession` directly. `build_and_sign_file` builds into a
+  hashing above), and a plain signing function; a host with async or
+  network-backed access drives `FileBuilderSession` directly.
+  Both also take an optional function answering each `Timestamp` request
+  (digest in, bare `TimeStampToken` out); with `None`, a request fails the
+  build rather than silently produce an untimestamped manifest. The shared
+  `contentauth_c2pa_primitives::tsa` module encodes the RFC 3161
+  `TimeStampReq` and unwraps the `TimeStampResp`, so every binding below
+  leaves only the HTTP `POST` to its host. `build_and_sign_file` builds into a
   freshly, exclusively created (`create_new`, never `create` +
   `truncate`) temporary file with an unpredictable name beside the
   requested output path — never a symlink-followable, guessable one — and
@@ -171,7 +176,13 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   `c2pa.actions.v2`/`c2pa.created` assertion) and read it back `Trusted`.
   Holds only the language-free part (`Definition` → `BuilderSettings`) and
   shared test fixtures (`fixtures` feature). `instance_id`/`label` are
-  required in the definition: the engine has no RNG.
+  required in the definition: the engine has no RNG. An optional `tsa_url`
+  (c2pa-rs's own spelling is `ta_url`) opts in to an RFC 3161 timestamp — the one extension
+  every binding offers, outside the baseline bar. Each binding leaves only
+  the HTTP `POST` to its host (a blocking `Signer` method with a `reqwest`
+  default in `-rs-compat-sign`; an awaited `AsyncSigner` method, or a JS
+  `sendTimestampRequest`, in `-js-compat-sign`; a `timestamp` request
+  Node answers with `fetch` in `-node-compat-sign`).
 - **`contentauth-c2pa-rs-compat-sign`**, **`contentauth-c2pa-js-compat-sign`**,
   **`contentauth-c2pa-node-compat-sign`** + **`c2pa-node-sign-addon`** —
   the baseline case through each binding, as new crates beside (not
@@ -182,7 +193,8 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   Node owning the files and the signing key. The addon is, like the reader
   addon, outside the workspace with its own CI job (`node-sign-addon`),
   whose tests load the reader addon to read back what was signed. Ordinary
-  member crates all pass the Wasm checks above.
+  member crates pass the Wasm checks above, except `-rs-compat-sign`, whose
+  default timestamp transport is a network dependency.
 - **`c2pa-rs-compat-conformance`** — a differential test harness for the
   crate above, proving the same client code gets the same answer reading
   a file through the real `c2pa` crate as through
@@ -218,7 +230,9 @@ here has a compatibility guarantee. Feel free to revise, rename, or break
 existing public APIs when it genuinely improves the design — do not
 contort a change to preserve backward compatibility or add deprecation
 shims for its own sake. Update call sites, tests, and docs to match
-rather than layering on compatibility scaffolding.
+rather than layering on compatibility scaffolding. In particular, prefer
+extending an existing entry point (an added or optional parameter) over
+adding a parallel `_with_x` variant beside it, and update every caller.
 
 ## The core architectural pattern (sans-I/O sessions)
 
@@ -299,13 +313,15 @@ cargo deny check advisories bans licenses sources
 
 Wasm target checks — the engine and reader are meant to build for Wasm
 unmodified, enforced in CI over the whole workspace except
-`contentauth-c2pa-rs-compat`, which is exempt: it deliberately owns this
-workspace's one real network dependency (its default `reqwest`-backed OCSP
-host), which is neither sans-I/O nor Wasm-portable:
+`contentauth-c2pa-rs-compat` and `contentauth-c2pa-rs-compat-sign`, which
+are exempt: they deliberately own this workspace's only real network
+dependencies (the former's default `reqwest`-backed OCSP host, the latter's
+default `reqwest`-backed RFC 3161 timestamp transport), neither sans-I/O nor
+Wasm-portable:
 
 ```sh
-cargo check --all-features --target wasm32-unknown-unknown --workspace --exclude contentauth-c2pa-rs-compat
-cargo check --all-features --target wasm32-wasip2 --workspace --exclude contentauth-c2pa-rs-compat
+cargo check --all-features --target wasm32-unknown-unknown --workspace --exclude contentauth-c2pa-rs-compat --exclude contentauth-c2pa-rs-compat-sign
+cargo check --all-features --target wasm32-wasip2 --workspace --exclude contentauth-c2pa-rs-compat --exclude contentauth-c2pa-rs-compat-sign
 ```
 
 MSRV is 1.88.0 (kept in sync between `Cargo.toml`'s `rust-version` and the

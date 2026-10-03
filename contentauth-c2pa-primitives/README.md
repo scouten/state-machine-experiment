@@ -27,5 +27,9 @@ reimplement on its own:
   signature that verifies against the wrong bytes, or a correct signature
   that appears broken — so it lives here once instead of twice.
 
+- `tsa` — the RFC 3161 `TimeStampReq` encoder and `TimeStampResp`
+  unwrapper: the deterministic halves of a timestamp authority round trip,
+  whose network half is always the host's.
+
 See the crate's rustdoc (`cargo doc -p contentauth-c2pa-primitives --open`)
 for the full API.

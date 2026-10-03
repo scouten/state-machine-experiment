@@ -21,11 +21,24 @@
 //!     certs: [certDerUint8Array],            // signer first
 //!     sign: async (data) => new Uint8Array(  // data: Uint8Array
 //!       await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, data)),
+//!     // Optional: countersign the claim with an RFC 3161 timestamp.
+//!     // `request` is a DER TimeStampReq; resolve to the DER TimeStampResp.
+//!     timeAuthorityUrl: "https://tsa.example/",
+//!     sendTimestampRequest: async (url, request) => new Uint8Array(
+//!       await (await fetch(url, {
+//!         method: "POST",
+//!         headers: { "Content-Type": "application/timestamp-query" },
+//!         body: request,
+//!       })).arrayBuffer()),
 //!   },
 //!   "image/jpeg",
 //!   blob,
 //! );
 //! ```
+//!
+//! `timeAuthorityUrl` may instead be the definition's `tsa_url`, which wins
+//! if both are given. A timestamp with no `sendTimestampRequest` fails the
+//! build: nothing in Wasm reaches a network on its own.
 //!
 //! WebCrypto's ECDSA output is already the fixed-width `r || s` COSE
 //! wants, so a non-extractable `CryptoKey` works as-is: the key never
@@ -51,6 +64,8 @@ struct JsSigner {
     alg: SigningAlg,
     certs: Vec<Vec<u8>>,
     sign: Function,
+    time_authority_url: Option<String>,
+    send_timestamp_request: Option<Function>,
     this: JsValue,
 }
 
@@ -90,10 +105,29 @@ impl JsSigner {
             .dyn_into::<Function>()
             .map_err(|_| JsString::from("signer.sign must be a function"))?;
 
+        let time_authority_url = match field("timeAuthorityUrl")? {
+            value if value.is_undefined() || value.is_null() => None,
+            value => Some(
+                value
+                    .as_string()
+                    .ok_or_else(|| JsString::from("signer.timeAuthorityUrl must be a string"))?,
+            ),
+        };
+
+        let send_timestamp_request =
+            match field("sendTimestampRequest")? {
+                value if value.is_undefined() || value.is_null() => None,
+                value => Some(value.dyn_into::<Function>().map_err(|_| {
+                    JsString::from("signer.sendTimestampRequest must be a function")
+                })?),
+            };
+
         Ok(Self {
             alg,
             certs,
             sign,
+            time_authority_url,
+            send_timestamp_request,
             this: signer.clone(),
         })
     }
@@ -121,6 +155,47 @@ impl AsyncSigner for JsSigner {
             .map_err(|err| HostError::new(format!("signer.sign rejected: {}", describe(&err))))?;
 
         Ok(Uint8Array::new(&signature).to_vec())
+    }
+
+    fn time_authority_url(&self) -> Option<String> {
+        self.time_authority_url.clone()
+    }
+
+    async fn send_timestamp_request(
+        &self,
+        url: &str,
+        request: &[u8],
+    ) -> Result<Vec<u8>, HostError> {
+        let send = self.send_timestamp_request.as_ref().ok_or_else(|| {
+            HostError::new(format!(
+                "a timestamp from {url} was requested, but signer.sendTimestampRequest \
+                 is not a function"
+            ))
+        })?;
+
+        let returned = send
+            .call2(
+                &self.this,
+                &JsValue::from_str(url),
+                &Uint8Array::from(request),
+            )
+            .map_err(|err| {
+                HostError::new(format!(
+                    "signer.sendTimestampRequest threw: {}",
+                    describe(&err)
+                ))
+            })?;
+
+        let response = JsFuture::from(Promise::resolve(&returned))
+            .await
+            .map_err(|err| {
+                HostError::new(format!(
+                    "signer.sendTimestampRequest rejected: {}",
+                    describe(&err)
+                ))
+            })?;
+
+        Ok(Uint8Array::new(&response).to_vec())
     }
 }
 

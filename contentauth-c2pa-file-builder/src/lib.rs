@@ -49,8 +49,10 @@
 //! that session, for the common case: a caller with plain, synchronous
 //! `Read + Seek` access to the source asset, `Read + Write + Seek` access
 //! to write the output (read-back is needed for the hashing above), and a
-//! plain signing function (no timestamping). Reach for [`FileBuilderSession`]
-//! directly once any of that stops being true.
+//! plain signing function, and optionally a function that answers each
+//! RFC 3161 timestamp request (without one, a request fails the build).
+//! Reach for [`FileBuilderSession`] directly once any of
+//! that stops being true — async or network-backed asset access, say.
 //!
 //! [`build_and_sign_file`] additionally never leaves a partial or corrupt
 //! file at the requested output path: it builds into a freshly, exclusively
@@ -92,12 +94,18 @@ use std::{
 };
 
 pub use contentauth_c2pa_builder::{
-    Assertion, AssertionKind, BuilderSettings, GeneratorInfo, SigningAlg, TimestampSettings,
+    Assertion, AssertionKind, BuilderSettings, GeneratorInfo, HashAlgorithm, SigningAlg,
+    TimestampSettings,
 };
 pub use contentauth_c2pa_format::FormatHandler;
 pub use contentauth_c2pa_primitives::HostError;
 pub use error::Error;
 pub use session::{FileBuilderReply, FileBuilderReport, FileBuilderRequest, FileBuilderSession};
+
+/// A function answering one RFC 3161 timestamp request, as
+/// [`build_and_sign`] takes: the digest and the algorithm it was computed
+/// with in, the bare `TimeStampToken` out.
+pub type TimestampFn<'a> = dyn FnMut(HashAlgorithm, &[u8]) -> Result<Vec<u8>, HostError> + 'a;
 
 /// Builds and signs a C2PA manifest store for `source`, per `settings`,
 /// writing the result to `output` and calling `sign` whenever the claim
@@ -113,11 +121,19 @@ pub use session::{FileBuilderReply, FileBuilderReport, FileBuilderRequest, FileB
 /// sign the exact bytes handed to it with the given algorithm and return
 /// the raw signature.
 ///
-/// Does not support [`BuilderSettings::timestamp`]: a
-/// [`FileBuilderRequest::Timestamp`] request fails outright, since
-/// answering it needs a real RFC 3161 authority round trip this function
-/// has no way to perform. Reach for [`FileBuilderSession`] directly for
-/// that, or for source/output access that cannot be driven synchronously.
+/// `timestamp` answers every [`FileBuilderRequest::Timestamp`] — which the
+/// build issues only if [`BuilderSettings::timestamp`] is set. Mirroring
+/// [`contentauth_c2pa_builder::BuilderRequest::Timestamp`], it receives a
+/// digest and the algorithm it was computed with, performs the whole
+/// timestamp authority round trip, and returns the bare `TimeStampToken`
+/// (not the `TimeStampResp` it arrived in).
+/// [`contentauth_c2pa_primitives::tsa`] encodes the request to send and
+/// unwraps the response; only the network exchange in between is the
+/// caller's. Pass `None` to build without one: a timestamp request then
+/// fails the build rather than silently producing an untimestamped
+/// manifest, as does a `timestamp` that fails. Reach for
+/// [`FileBuilderSession`] directly for source/output access that cannot be
+/// driven synchronously.
 ///
 /// This function never touches `output`'s physical length: it writes
 /// exactly the bytes the plan calls for and nothing else, so anything
@@ -140,13 +156,14 @@ pub fn build_and_sign<H, S, O>(
     output: O,
     settings: BuilderSettings,
     sign: impl FnMut(SigningAlg, &[u8]) -> Result<Vec<u8>, HostError>,
+    timestamp: Option<&mut TimestampFn<'_>>,
 ) -> Result<FileBuilderReport, Error>
 where
     H: FormatHandler + Send,
     S: Read + Seek,
     O: Read + Write + Seek,
 {
-    drive::build(handler, source, output, settings, sign)
+    drive::build(handler, source, output, settings, sign, timestamp)
 }
 
 /// Opens `source_path`, builds and signs a manifest for it as
@@ -165,6 +182,7 @@ pub fn build_and_sign_file<H>(
     output_path: impl AsRef<Path>,
     settings: BuilderSettings,
     sign: impl FnMut(SigningAlg, &[u8]) -> Result<Vec<u8>, HostError>,
+    timestamp: Option<&mut TimestampFn<'_>>,
 ) -> Result<FileBuilderReport, Error>
 where
     H: FormatHandler + Send,
@@ -193,7 +211,7 @@ where
             source,
         })?;
 
-    let report = match build_and_sign(handler, source, temp_file, settings, sign) {
+    let report = match build_and_sign(handler, source, temp_file, settings, sign, timestamp) {
         Ok(report) => report,
         Err(err) => {
             // Best effort: an inability to clean up the temporary file

@@ -10,6 +10,7 @@
 // implied. See the LICENSE-MIT and LICENSE-APACHE files for the
 // specific language governing permissions and limitations under
 // each license.
+use contentauth_c2pa_file_builder::TimestampSettings;
 use contentauth_c2pa_js_compat::{for_format, Blob};
 use contentauth_c2pa_sign_baseline::Definition;
 
@@ -59,10 +60,18 @@ impl Builder {
         S: AsyncSigner + ?Sized,
     {
         let handler = for_format(format).map_err(|_| Error::UnsupportedType)?;
-        let settings =
+        let tsa_url = self
+            .definition
+            .tsa_url
+            .clone()
+            .or_else(|| signer.time_authority_url());
+        let mut settings =
             self.definition
                 .clone()
                 .into_settings("image/jpeg", signer.alg(), signer.certs())?;
-        build(handler, source, signer, settings).await
+        if tsa_url.is_some() && settings.timestamp.is_none() {
+            settings.timestamp = Some(TimestampSettings::default());
+        }
+        build(handler, source, signer, settings, tsa_url.as_deref()).await
     }
 }

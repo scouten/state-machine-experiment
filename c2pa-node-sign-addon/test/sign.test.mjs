@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createServer } from "node:http";
 import { createPrivateKey, sign as cryptoSign, X509Certificate } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -239,7 +240,7 @@ test("a signer whose algorithm differs from the session's is refused before sign
 });
 
 test("an unknown request kind is an error rather than silently ignored", async () => {
-  await assert.rejects(answerRequest({ kind: "timestamp" }, {}), /unsupported request timestamp/);
+  await assert.rejects(answerRequest({ kind: "mystery" }, {}), /unsupported request mystery/);
 });
 
 test("the native session rejects misuse with errors rather than crashing", () => {
@@ -316,4 +317,181 @@ test("an in-memory output grows past its capacity, zero-fills gaps and returns e
   assert.deepEqual([...(await out.target.read(9, 10))], [0, 9]);
   assert.deepEqual([...(await out.commit())], [1, 7, 3, 0, 0, 0, 0, 0, 0, 0, 9]);
   await out.discard();
+});
+
+// ---------------------------------------------------------------------------
+// Timestamps. The "authority" is a local HTTP server returning a canned
+// TimeStampResp whose token is an opaque stand-in: the session embeds it
+// without decoding it, and whether a real token is trusted is the
+// reader's business, covered by its own suite.
+
+const TOKEN = Buffer.alloc(300, 0x42);
+
+/** A DER TimeStampResp: `status`, then (if granted) a token whose content is TOKEN. */
+function tsResponse(status = 0) {
+  const token = status === 0 ? Buffer.concat([Buffer.from([0x30, 0x82, 0x01, 0x2c]), TOKEN]) : Buffer.alloc(0);
+  const body = Buffer.concat([Buffer.from([0x30, 0x03, 0x02, 0x01, status]), token]);
+  const header = Buffer.from([0x30, 0x82, body.length >> 8, body.length & 0xff]);
+  return Buffer.concat([header, body]);
+}
+
+/** Starts a fake authority; `seen` collects what it was POSTed. */
+async function fakeAuthority(respond) {
+  const seen = [];
+  const server = createServer((req, res) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      seen.push({ method: req.method, type: req.headers["content-type"], body: Buffer.concat(chunks) });
+      const [code, body] = respond();
+      res.writeHead(code, { "Content-Type": "application/timestamp-reply" });
+      res.end(body);
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return {
+    seen,
+    url: `http://127.0.0.1:${server.address().port}/tsa`,
+    close: () => new Promise((resolve) => server.close(resolve)),
+  };
+}
+
+test("a tsa_url timestamps the claim: Node POSTs the request and the token lands in the manifest", async () => {
+  const authority = await fakeAuthority(() => [200, tsResponse(0)]);
+  try {
+    const output = join(dir, "timestamped.jpg");
+    const result = await signAsset({ path: SOURCE }, { ...BASELINE, tsa_url: authority.url }, testSigner(), {
+      output: { path: output },
+    });
+
+    assert.equal(authority.seen.length, 1);
+    assert.equal(authority.seen[0].method, "POST");
+    assert.equal(authority.seen[0].type, "application/timestamp-query");
+    // A DER TimeStampReq (SEQUENCE) with certReq set.
+    assert.equal(authority.seen[0].body[0], 0x30);
+    assert.deepEqual([...authority.seen[0].body.subarray(-3)], [0x01, 0x01, 0xff]);
+
+    assert.ok(result.manifest.includes(TOKEN), "the token must be in the manifest store");
+    // The signed asset still reads back, signature and hard binding intact.
+    const reader = await Reader.fromAsset({ path: output }, trustSettings);
+    assert.ok(reader.getActive().assertions.includes("c2pa.hash.data"));
+  } finally {
+    await authority.close();
+  }
+});
+
+test("a signer's timeAuthorityUrl and sendTimestampRequest replace the definition and fetch", async () => {
+  const sent = [];
+  const signer = {
+    ...testSigner(),
+    timeAuthorityUrl: "https://tsa.example/from-signer",
+    async sendTimestampRequest(url, request) {
+      sent.push({ url, request });
+      return tsResponse(0);
+    },
+  };
+  const result = await signAsset({ path: SOURCE }, BASELINE, signer);
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].url, "https://tsa.example/from-signer");
+  assert.ok(Buffer.isBuffer(sent[0].request));
+  assert.ok(result.manifest.includes(TOKEN));
+
+  // The definition's own tsa_url wins over the signer's.
+  sent.length = 0;
+  await signAsset({ path: SOURCE }, { ...BASELINE, tsa_url: "https://tsa.example/from-definition" }, signer);
+  assert.equal(sent[0].url, "https://tsa.example/from-definition");
+});
+
+test("a refusing, failing or malformed authority fails the build and leaves nothing behind", async () => {
+  const cases = [
+    [() => [200, tsResponse(2)], /refused/],
+    [() => [503, "busy"], /answered 503/],
+    [() => [200, Buffer.from([1, 2, 3])], /malformed|TimeStampResp/],
+  ];
+  for (const [respond, expected] of cases) {
+    const authority = await fakeAuthority(respond);
+    try {
+      const sub = mkdtempSync(join(dir, "ts-fail-"));
+      await assert.rejects(
+        signAsset({ path: SOURCE }, { ...BASELINE, tsa_url: authority.url }, testSigner(), {
+          output: { path: join(sub, "out.jpg") },
+        }),
+        expected,
+      );
+      assert.deepEqual(readdirSync(sub), []);
+    } finally {
+      await authority.close();
+    }
+  }
+});
+
+test("an unreachable authority fails the build rather than going untimestamped", async () => {
+  const authority = await fakeAuthority(() => [200, tsResponse(0)]);
+  const { url } = authority;
+  await authority.close();
+  await assert.rejects(signAsset({ path: SOURCE }, { ...BASELINE, tsa_url: url }, testSigner()));
+});
+
+test("a tsa_url that is not http(s) is rejected as a bad definition", async () => {
+  await assert.rejects(
+    signAsset({ path: SOURCE }, { ...BASELINE, tsa_url: "file:///etc/passwd" }, testSigner()),
+    (error) => error.name.startsWith("Definition(BadDefinition("),
+  );
+});
+
+test("a signer whose sendTimestampRequest returns junk is a type error", async () => {
+  const signer = { ...testSigner(), timeAuthorityUrl: "https://tsa.example/", sendTimestampRequest: async () => "nope" };
+  await assert.rejects(signAsset({ path: SOURCE }, BASELINE, signer), TypeError);
+});
+
+test("a definition that is not JSON still reports Rust's error when the signer names an authority", async () => {
+  const signer = { ...testSigner(), timeAuthorityUrl: "https://tsa.example/" };
+  await assert.rejects(
+    signAsset({ path: SOURCE }, "{ not json", signer),
+    (error) => error.name.startsWith("Definition(BadDefinition("),
+  );
+});
+
+test("an implausibly large timestamp response fails the build", async () => {
+  const authority = await fakeAuthority(() => [200, Buffer.alloc(1024 * 1024 + 1, 0x30)]);
+  try {
+    await assert.rejects(
+      signAsset({ path: SOURCE }, { ...BASELINE, tsa_url: authority.url }, testSigner()),
+      /implausibly large/,
+    );
+  } finally {
+    await authority.close();
+  }
+});
+
+test("a chunked timestamp response with no declared length is abandoned once it passes the limit", async () => {
+  let sent = 0;
+  const server = createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(200); // no Content-Length: chunked
+      const chunk = Buffer.alloc(256 * 1024, 0x30);
+      const timer = setInterval(() => {
+        if (res.destroyed) return clearInterval(timer);
+        sent += chunk.length;
+        res.write(chunk);
+      }, 1);
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    await assert.rejects(
+      signAsset({ path: SOURCE }, { ...BASELINE, tsa_url: `http://127.0.0.1:${server.address().port}/` }, testSigner()),
+      /implausibly large/,
+    );
+    // It stopped reading shortly after the 1 MiB limit rather than draining a long stream.
+    await sleep(50);
+    const afterAbort = sent;
+    await sleep(50);
+    assert.equal(sent, afterAbort, "the server should have seen the connection close");
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
 });

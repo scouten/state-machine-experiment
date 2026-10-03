@@ -18,7 +18,10 @@ use std::collections::HashMap;
 use contentauth_c2pa_file_builder::{FileBuilderReply, FileBuilderRequest, FileBuilderSession};
 use contentauth_c2pa_format_jpeg::JpegFormat;
 use contentauth_c2pa_js_compat::{for_format, C2paError};
-use contentauth_c2pa_primitives::{HostError, SigningAlg};
+use contentauth_c2pa_primitives::{
+    tsa::{timestamp_request, timestamp_token},
+    HostError, SigningAlg,
+};
 use contentauth_c2pa_sign_baseline::Definition;
 use contentauth_state_machine::{RequestId, Session};
 
@@ -105,6 +108,23 @@ pub enum PendingRequest {
         /// The bytes to sign.
         data: Vec<u8>,
     },
+
+    /// `POST` `request` to the time-stamp authority at `url`, with
+    /// `Content-Type: application/timestamp-query`, and answer with the
+    /// response body, unread, as [`Reply::TimestampResponse`].
+    ///
+    /// `request` is a complete DER `TimeStampReq`; Rust has already built
+    /// it and will unwrap the token from the response, so the host needs
+    /// no RFC 3161 knowledge — only an HTTP client. `url` is the
+    /// definition's `tsa_url`.
+    Timestamp {
+        /// The handle to pass to [`NodeBuildSession::fulfill`].
+        id: u64,
+        /// The authority's URL (`http` or `https`).
+        url: String,
+        /// The DER `TimeStampReq` to send as the body.
+        request: Vec<u8>,
+    },
 }
 
 impl PendingRequest {
@@ -114,7 +134,8 @@ impl PendingRequest {
             Self::Read { id, .. }
             | Self::Length { id, .. }
             | Self::Write { id, .. }
-            | Self::Sign { id, .. } => *id,
+            | Self::Sign { id, .. }
+            | Self::Timestamp { id, .. } => *id,
         }
     }
 }
@@ -130,6 +151,10 @@ pub enum Reply {
     Written,
     /// The signature a [`PendingRequest::Sign`] asked for.
     Signature(Vec<u8>),
+    /// The body the time-stamp authority answered a
+    /// [`PendingRequest::Timestamp`] with: a DER `TimeStampResp`, exactly
+    /// as received. A refusal in it fails the build.
+    TimestampResponse(Vec<u8>),
     /// The host could not do it (a rejected signer, an I/O error). Valid
     /// for any request; the build fails.
     Failed(String),
@@ -167,6 +192,9 @@ pub struct SignReport {
 pub struct NodeBuildSession {
     inner: Engine,
 
+    /// The definition's `tsa_url`: where a timestamp request goes.
+    tsa_url: Option<String>,
+
     /// Numbers handed to the host, mapped to the engine's own ids.
     handles: HashMap<u64, RequestId>,
     next_handle: u64,
@@ -191,11 +219,13 @@ impl NodeBuildSession {
     ) -> Result<Self, Error> {
         for_format(format)?;
         let alg = parse_alg(alg)?;
-        let settings =
-            Definition::from_json(definition_json)?.into_settings("image/jpeg", alg, certs)?;
+        let definition = Definition::from_json(definition_json)?;
+        let tsa_url = definition.tsa_url.clone();
+        let settings = definition.into_settings("image/jpeg", alg, certs)?;
 
         Ok(Self {
             inner: FileBuilderSession::new(JpegFormat, settings),
+            tsa_url,
             handles: HashMap::new(),
             next_handle: 0,
             reported: HashMap::new(),
@@ -215,7 +245,7 @@ impl NodeBuildSession {
                         continue;
                     }
                     let handle = self.next_handle;
-                    let pending = describe(handle, &request.kind)?;
+                    let pending = describe(handle, &request.kind, self.tsa_url.as_deref())?;
                     self.next_handle += 1;
                     self.reported.insert(request.id, handle);
                     self.handles.insert(handle, request.id);
@@ -237,7 +267,7 @@ impl NodeBuildSession {
         })?;
 
         self.inner
-            .fulfill(engine_id, engine_reply(reply))
+            .fulfill(engine_id, engine_reply(reply)?)
             .map_err(Error::from)?;
         // Answered: forget it rather than keep an entry per request.
         self.handles.remove(&id);
@@ -288,8 +318,13 @@ fn alg_name(alg: SigningAlg) -> Result<&'static str, Error> {
 /// Describes `request` to the host as plain data, under `handle`.
 ///
 /// Fails for a request this wrapper has no description for
-/// (`FileBuilderRequest` is `#[non_exhaustive]`; a timestamp is one).
-fn describe(handle: u64, request: &FileBuilderRequest) -> Result<PendingRequest, Error> {
+/// (`FileBuilderRequest` is `#[non_exhaustive]`), and for a timestamp
+/// when no `tsa_url` says where it goes.
+fn describe(
+    handle: u64,
+    request: &FileBuilderRequest,
+    tsa_url: Option<&str>,
+) -> Result<PendingRequest, Error> {
     Ok(match request {
         FileBuilderRequest::Read { stream, range } => PendingRequest::Read {
             id: handle,
@@ -316,19 +351,35 @@ fn describe(handle: u64, request: &FileBuilderRequest) -> Result<PendingRequest,
             alg: alg_name(*alg)?,
             data: data.clone(),
         },
+        FileBuilderRequest::Timestamp { digest, hash_alg } => PendingRequest::Timestamp {
+            id: handle,
+            url: tsa_url
+                .ok_or_else(|| Error::Unsupported("a timestamp with no tsa_url".to_string()))?
+                .to_string(),
+            request: timestamp_request(digest, *hash_alg)
+                .map_err(|err| Error::Unsupported(err.to_string()))?,
+        },
         other => return Err(Error::Unsupported(format!("{other:?}"))),
     })
 }
 
 /// The engine's form of the host's `reply`.
-fn engine_reply(reply: Reply) -> FileBuilderReply {
-    match reply {
+///
+/// A timestamp response is unwrapped to its bare token here; one the
+/// authority refused, or that is not a `TimeStampResp` at all, becomes a
+/// failed reply, which fails the build like any other host failure.
+fn engine_reply(reply: Reply) -> Result<FileBuilderReply, Error> {
+    Ok(match reply {
+        Reply::TimestampResponse(response) => match timestamp_token(&response) {
+            Ok(token) => FileBuilderReply::Timestamp(token),
+            Err(err) => FileBuilderReply::Failed(err),
+        },
         Reply::Bytes(bytes) => FileBuilderReply::Bytes(bytes),
         Reply::Length(len) => FileBuilderReply::Length(len),
         Reply::Written => FileBuilderReply::Written,
         Reply::Signature(bytes) => FileBuilderReply::Signature(bytes),
         Reply::Failed(message) => FileBuilderReply::Failed(HostError::new(message)),
-    }
+    })
 }
 
 #[cfg(test)]
@@ -349,7 +400,7 @@ mod tests {
         let (src, out) = (Engine::SOURCE_STREAM, Engine::OUTPUT_STREAM);
 
         assert_eq!(
-            describe(1, &FileBuilderRequest::Read { stream: src, range }).unwrap(),
+            describe(1, &FileBuilderRequest::Read { stream: src, range }, None).unwrap(),
             PendingRequest::Read {
                 id: 1,
                 stream: Stream::Source,
@@ -358,7 +409,7 @@ mod tests {
             }
         );
         assert_eq!(
-            describe(2, &FileBuilderRequest::Length { stream: out }).unwrap(),
+            describe(2, &FileBuilderRequest::Length { stream: out }, None).unwrap(),
             PendingRequest::Length {
                 id: 2,
                 stream: Stream::Output
@@ -371,7 +422,8 @@ mod tests {
                     stream: out,
                     offset: 9,
                     bytes: vec![1, 2]
-                }
+                },
+                None
             )
             .unwrap(),
             PendingRequest::Write {
@@ -387,7 +439,8 @@ mod tests {
                 &FileBuilderRequest::Sign {
                     alg: SigningAlg::Ps384,
                     data: vec![3]
-                }
+                },
+                None
             )
             .unwrap(),
             PendingRequest::Sign {
@@ -398,38 +451,91 @@ mod tests {
         );
     }
 
+    fn timestamp_engine_request() -> FileBuilderRequest {
+        FileBuilderRequest::Timestamp {
+            digest: vec![0xab; 32],
+            hash_alg: HashAlgorithm::Sha256,
+        }
+    }
+
     #[test]
-    fn a_timestamp_request_is_reported_as_unsupported() {
-        let err = describe(
-            1,
-            &FileBuilderRequest::Timestamp {
-                digest: vec![],
-                hash_alg: HashAlgorithm::Sha256,
-            },
-        )
-        .unwrap_err();
+    fn a_timestamp_request_is_described_with_its_url_and_encoded_request() {
+        let pending =
+            describe(5, &timestamp_engine_request(), Some("https://tsa.example/")).unwrap();
+
+        let PendingRequest::Timestamp { id, url, request } = pending else {
+            panic!("expected a timestamp request");
+        };
+        assert_eq!(id, 5);
+        assert_eq!(url, "https://tsa.example/");
+        // A DER SEQUENCE carrying the digest, with certReq set.
+        assert_eq!(request[0], 0x30);
+        assert!(request.windows(32).any(|w| w == [0xab; 32]));
+        assert!(request.ends_with(&[0x01, 0x01, 0xff]));
+    }
+
+    #[test]
+    fn a_timestamp_request_with_no_tsa_url_is_unsupported() {
+        let err = describe(1, &timestamp_engine_request(), None).unwrap_err();
         assert!(matches!(err, Error::Unsupported(_)), "{err:?}");
+    }
+
+    #[test]
+    fn a_timestamp_response_is_unwrapped_to_its_token() {
+        // PKIStatusInfo { granted }, then a token SEQUENCE { OID 1.2 }.
+        let granted = vec![
+            0x30, 0x0a, 0x30, 0x03, 0x02, 0x01, 0x00, 0x30, 0x03, 0x06, 0x01, 0x2a,
+        ];
+        assert!(matches!(
+            engine_reply(Reply::TimestampResponse(granted)).unwrap(),
+            FileBuilderReply::Timestamp(token) if token == [0x30, 0x03, 0x06, 0x01, 0x2a]
+        ));
+
+        // A refusal, and garbage, both fail the build rather than panic.
+        let refused = vec![0x30, 0x05, 0x30, 0x03, 0x02, 0x01, 0x02];
+        for bad in [refused, vec![1, 2, 3]] {
+            assert!(matches!(
+                engine_reply(Reply::TimestampResponse(bad)).unwrap(),
+                FileBuilderReply::Failed(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn a_tsa_url_in_the_definition_makes_the_session_ask_for_a_timestamp() {
+        let json = BASELINE_DEFINITION.replace(
+            "\"title\"",
+            "\"tsa_url\": \"https://tsa.example/\", \"title\"",
+        );
+        let session = NodeBuildSession::new(&json, "image/jpeg", "es256", vec![vec![1]]).unwrap();
+        assert_eq!(session.tsa_url.as_deref(), Some("https://tsa.example/"));
+
+        let bad = BASELINE_DEFINITION.replace("\"title\"", "\"tsa_url\": \"ftp://x/\", \"title\"");
+        assert!(matches!(
+            NodeBuildSession::new(&bad, "image/jpeg", "es256", vec![]),
+            Err(Error::Definition(_))
+        ));
     }
 
     #[test]
     fn replies_map_to_the_engines_kind() {
         assert!(
-            matches!(engine_reply(Reply::Bytes(vec![1])), FileBuilderReply::Bytes(b) if b == [1])
+            matches!(engine_reply(Reply::Bytes(vec![1])).unwrap(), FileBuilderReply::Bytes(b) if b == [1])
         );
         assert!(matches!(
-            engine_reply(Reply::Length(3)),
+            engine_reply(Reply::Length(3)).unwrap(),
             FileBuilderReply::Length(3)
         ));
         assert!(matches!(
-            engine_reply(Reply::Written),
+            engine_reply(Reply::Written).unwrap(),
             FileBuilderReply::Written
         ));
         assert!(matches!(
-            engine_reply(Reply::Signature(vec![2])),
+            engine_reply(Reply::Signature(vec![2])).unwrap(),
             FileBuilderReply::Signature(b) if b == [2]
         ));
         assert!(matches!(
-            engine_reply(Reply::Failed("no".to_string())),
+            engine_reply(Reply::Failed("no".to_string())).unwrap(),
             FileBuilderReply::Failed(e) if e.message == "no"
         ));
     }
@@ -531,9 +637,14 @@ mod tests {
                 alg: "es256",
                 data: vec![],
             },
+            PendingRequest::Timestamp {
+                id: 11,
+                url: String::new(),
+                request: vec![],
+            },
         ];
         let ids: Vec<u64> = requests.iter().map(PendingRequest::id).collect();
-        assert_eq!(ids, [7, 8, 9, 10]);
+        assert_eq!(ids, [7, 8, 9, 10, 11]);
         assert_eq!(Stream::Source.as_str(), "source");
         assert_eq!(Stream::Output.as_str(), "output");
     }

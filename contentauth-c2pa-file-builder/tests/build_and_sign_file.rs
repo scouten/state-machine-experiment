@@ -23,7 +23,8 @@
 use std::path::PathBuf;
 
 use contentauth_c2pa_file_builder::{
-    build_and_sign_file, BuilderSettings, GeneratorInfo, HostError, SigningAlg,
+    build_and_sign_file, BuilderSettings, GeneratorInfo, HashAlgorithm, HostError, SigningAlg,
+    TimestampSettings,
 };
 use contentauth_c2pa_file_reader::read_manifest_from_file;
 use contentauth_c2pa_format_jpeg::JpegFormat;
@@ -72,7 +73,7 @@ fn sign(alg: SigningAlg, data: &[u8]) -> Result<Vec<u8>, HostError> {
 fn a_jpeg_built_and_signed_reads_back_as_trusted() {
     let output: PathBuf = [env!("CARGO_TARGET_TMPDIR"), "signed.jpg"].iter().collect();
 
-    let report = build_and_sign_file(JpegFormat, C_JPG_PATH, &output, settings(), sign)
+    let report = build_and_sign_file(JpegFormat, C_JPG_PATH, &output, settings(), sign, None)
         .expect("building and signing should succeed");
 
     // Replaces the existing c2pa-rs store at the same offset, per
@@ -112,6 +113,7 @@ fn a_missing_source_file_is_reported_as_an_io_error() {
         &output,
         settings(),
         sign,
+        None,
     )
     .expect_err("a missing source file cannot be read");
 
@@ -131,7 +133,7 @@ fn an_unwritable_output_path_is_reported_as_an_io_error() {
     .iter()
     .collect();
 
-    let err = build_and_sign_file(JpegFormat, C_JPG_PATH, &output, settings(), sign)
+    let err = build_and_sign_file(JpegFormat, C_JPG_PATH, &output, settings(), sign, None)
         .expect_err("a nonexistent output directory cannot be written to");
 
     assert!(matches!(
@@ -156,8 +158,15 @@ fn a_failed_build_removes_the_temporary_file_and_leaves_the_output_untouched() {
         Err(HostError::new("this test never signs anything"))
     }
 
-    let err = build_and_sign_file(JpegFormat, C_JPG_PATH, &output, settings(), never_signs)
-        .expect_err("a build whose signer always refuses cannot succeed");
+    let err = build_and_sign_file(
+        JpegFormat,
+        C_JPG_PATH,
+        &output,
+        settings(),
+        never_signs,
+        None,
+    )
+    .expect_err("a build whose signer always refuses cannot succeed");
 
     assert!(matches!(
         err,
@@ -182,7 +191,7 @@ fn a_rename_failure_is_reported_as_an_io_error_and_cleans_up_the_temporary_file(
     std::fs::create_dir_all(&output).unwrap();
     remove_temp_files_for(&output);
 
-    let err = build_and_sign_file(JpegFormat, C_JPG_PATH, &output, settings(), sign)
+    let err = build_and_sign_file(JpegFormat, C_JPG_PATH, &output, settings(), sign, None)
         .expect_err("renaming onto an existing directory cannot succeed");
 
     assert!(matches!(
@@ -230,4 +239,91 @@ fn remove_temp_files_for(output_path: &std::path::Path) {
             let _ = std::fs::remove_file(entry.path());
         }
     }
+}
+
+/// An opaque stand-in for a TSA's token: the builder embeds whatever bytes
+/// the host returns, at the reserved size, without decoding them (whether
+/// a real token is trusted is the reader's business, covered by its own
+/// suite).
+const FAKE_TOKEN: [u8; 300] = [0x42; 300];
+
+fn timestamped_settings() -> BuilderSettings {
+    let mut settings = settings();
+    settings.timestamp = Some(TimestampSettings::new(1000));
+    settings
+}
+
+#[test]
+fn a_timestamp_function_supplies_the_token_embedded_in_the_manifest() {
+    let output: PathBuf = [env!("CARGO_TARGET_TMPDIR"), "timestamped.jpg"]
+        .iter()
+        .collect();
+    let mut asked = Vec::new();
+
+    let report = build_and_sign_file(
+        JpegFormat,
+        C_JPG_PATH,
+        &output,
+        timestamped_settings(),
+        sign,
+        Some(&mut |alg, digest| {
+            asked.push((alg, digest.len()));
+            Ok(FAKE_TOKEN.to_vec())
+        }),
+    )
+    .expect("building with a timestamp should succeed");
+
+    // Asked exactly once, for a SHA-256 digest.
+    assert_eq!(asked, [(HashAlgorithm::Sha256, 32)]);
+    assert!(
+        report
+            .manifest
+            .windows(FAKE_TOKEN.len())
+            .any(|window| window == FAKE_TOKEN),
+        "the token must appear in the manifest store"
+    );
+
+    // And the result is still a manifest the reader can read and verify.
+    let parsed = read_manifest_from_file(&JpegFormat, &output, ReadSettings::default()).unwrap();
+    let active = parsed.active().unwrap();
+    assert!(active.has_signature);
+    assert!(active.data_hash.is_some());
+}
+
+#[test]
+fn a_failed_timestamp_fails_the_build_and_leaves_the_output_untouched() {
+    let output: PathBuf = [env!("CARGO_TARGET_TMPDIR"), "timestamp-failed.jpg"]
+        .iter()
+        .collect();
+    std::fs::write(&output, b"existing").unwrap();
+
+    let err = build_and_sign_file(
+        JpegFormat,
+        C_JPG_PATH,
+        &output,
+        timestamped_settings(),
+        sign,
+        Some(&mut |_, _| Err(HostError::new("the authority is down"))),
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("the authority is down"), "{err}");
+    assert_eq!(std::fs::read(&output).unwrap(), b"existing");
+}
+
+#[test]
+fn no_timestamp_function_means_a_timestamp_request_fails_the_build() {
+    let output: PathBuf = [env!("CARGO_TARGET_TMPDIR"), "timestamp-refused.jpg"]
+        .iter()
+        .collect();
+    let err = build_and_sign_file(
+        JpegFormat,
+        C_JPG_PATH,
+        &output,
+        timestamped_settings(),
+        sign,
+        None,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("timestamp"), "{err}");
 }
