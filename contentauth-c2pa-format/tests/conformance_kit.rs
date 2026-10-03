@@ -29,8 +29,9 @@ use core::mem::replace;
 use contentauth_c2pa_format::{
     take_bytes, take_length,
     test_util::{conformance, MemoryHost, STREAM},
-    ByteRange, Edit, EmbedPlan, FormatError, FormatHandler, HostRequest, IoRequest,
-    ManifestLocation, Patch, ProtocolError, RequestId, Session, Step, StreamId,
+    ByteRange, Edit, EmbedPlan, FormatDescriptor, FormatError, FormatHandler, HostRequest,
+    IoRequest, ManifestLocation, Patch, ProtocolError, RequestId, Session, Signature, Step,
+    StreamId,
 };
 use contentauth_state_machine::SessionCore;
 
@@ -286,11 +287,22 @@ impl Session for PlanEmbed {
     }
 }
 
+const DESCRIPTOR: FormatDescriptor = FormatDescriptor::new(
+    "trailer",
+    &["application/x-trailer"],
+    &["trl"],
+    &[Signature::new(0, b"TRLR")],
+);
+
 struct TrailerFormat;
 
 impl FormatHandler for TrailerFormat {
     type Locate = Locate;
     type PlanEmbed = PlanEmbed;
+
+    fn descriptor(&self) -> &FormatDescriptor {
+        &DESCRIPTOR
+    }
 
     fn locate(&self, stream: StreamId) -> Locate {
         Locate(Scan::new(stream))

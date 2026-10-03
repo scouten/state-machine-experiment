@@ -32,15 +32,34 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   (`StreamId`, `ByteRange`, hash and signing algorithms, `HostError`) and
   deterministic encoders the reader and builder genuinely share.
 - **`contentauth-c2pa-format`** — the contract between those sessions
-  and container formats: the `FormatHandler` trait (`locate`,
-  `plan_embed`, `commit`), the single `IoRequest` vocabulary every
-  handler operation speaks, the `EmbedPlan`/`Patch` model, and (behind
-  the `test-util` feature) an in-memory host plus a conformance suite.
-  Format-specific knowledge never lives here.
+  and container formats: the `FormatHandler` trait (`descriptor`,
+  `locate`, `plan_embed`, `commit`), the plain-data `FormatDescriptor`
+  (name, MIME types, extensions, byte signatures — no code, so a host can
+  detect a format without running a handler), the single `IoRequest`
+  vocabulary every handler operation speaks, the `EmbedPlan`/`Patch`
+  model, and (behind the `test-util` feature) an in-memory host plus a
+  conformance suite. Format-specific knowledge never lives here.
 - **`contentauth-c2pa-format-jpeg`** — the first format handler: locating
   and embedding manifest stores in a JPEG's `APP11` segments, following
   c2pa-rs's conventions byte for byte. The template for further
   `contentauth-c2pa-format-*` crates.
+- **`contentauth-c2pa-format-tiff`** — the second handler, chosen for what
+  JPEG does not exercise: TIFF/BigTIFF/DNG, where the store is the data of
+  IFD tag `0xCD41` in a graph of offsets (pointer-chasing reads, either
+  byte order, two offset widths), nothing already in the file may move
+  (the store goes in a new trailing IFD and one next-IFD pointer is
+  rewritten), and the specification's hash exclusion includes the entry's
+  `count` field (made contiguous with the store by the layout, to fit
+  `EmbedPlan`'s single exclusion range — see its README for the finding).
+- **`contentauth-c2pa-format-registry`** — the *host's* half of choosing a
+  format: a `Registry` (detect by content via descriptors' signatures, or
+  by extension / MIME type) and `AnyFormat`, a type-erased handler that
+  is itself a `FormatHandler`, so the file sessions take it unchanged.
+  Detection is a pure function of leading bytes the host reads itself
+  (`Registry::window`); policy for combining content with hints is the
+  host's. The only crate that names more than one format, behind
+  features. Nothing below a host depends on it. Its README sketches how
+  handlers in other languages would plug in (`DynFormatHandler`).
 - **`contentauth-c2pa-file-reader`** — the missing glue between the two:
   `FileReadSession` (`src/session.rs`) is itself a sans-I/O session that
   composes a `FormatHandler`'s `locate` operation with a `ReadSession`,
@@ -103,16 +122,19 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   own public `Reader` API — same method names and signatures where
   Rust's ownership rules allow it, same `Error::JumbfNotFound`/JSON
   contracts — on top of `contentauth-c2pa-file-reader` and
-  `contentauth-c2pa-format-jpeg`, instead of this workspace's own
+  `contentauth-c2pa-format-registry` (JPEG and TIFF), instead of this workspace's own
   `Session` interaction contract. One use case only: `Context` (trust
   anchors) and `Reader::from_context(context).with_file(path)` on a local
-  JPEG — the preferred shape, mirroring what c2pa-rs's own docs now
+  JPEG or TIFF — the preferred shape, mirroring what c2pa-rs's own docs now
   recommend over its deprecated standalone `Reader::from_file` (kept here
   too, for the same reason) — through to `.json()`, `.validation_state()`,
   and the borrowed `Manifest` accessors it reports (see
   [`src/lib.rs`](contentauth-c2pa-rs-compat/src/lib.rs) for how a
-  `Builder` counterpart or additional format handlers would extend this).
-  Its own work is entirely that compatibility surface, plus one piece of
+  `Builder` counterpart would extend this). It is the reference *host*
+  for format choice: `src/format.rs` is the whole of its policy (read the
+  registry's window of leading bytes and detect by content; else go by
+  extension; else `UnsupportedType`), so a file's name does not decide
+  what it is. Its own work is entirely that compatibility surface, plus one piece of
   genuinely new plumbing: `src/host.rs`, a [`reqwest`](https://docs.rs/reqwest)-backed
   host that `with_file` drives `FileReadSession` through directly (rather
   than `contentauth-c2pa-file-reader`'s own convenience function) so it
@@ -200,7 +222,11 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   a file through the real `c2pa` crate as through
   `contentauth-c2pa-rs-compat`'s `Reader`, and generalizing that to a
   whole directory of assets (`examples/compare_corpus.rs`) as the seam for
-  running the comparison at the scale of a real corpus. Deliberately
+  running the comparison at the scale of a real corpus. It also holds the
+  second container format to the real thing: a TIFF signed by c2pa-rs is
+  read by this workspace's TIFF handler to the same answer, and c2pa-rs
+  finds the store in a TIFF signed here (but cannot yet validate it; see
+  `contentauth-c2pa-format-tiff`'s README). Deliberately
   **not** a member of this workspace (it has its own `[workspace]` in its
   `Cargo.toml`) — see its own README: the real `c2pa` crate is heavy and
   under no obligation to satisfy this workspace's Wasm/MSRV/`cargo-deny`

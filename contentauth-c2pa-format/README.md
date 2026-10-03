@@ -11,13 +11,17 @@ me where it landed". This crate is where that knowledge plugs in — one
 crate per format, each implementing `FormatHandler`, none of which the
 reader, the builder, or this crate ever depend on. Third parties can ship a
 handler for a format this workspace has never heard of, and a host that
-knows what it is reading or writing picks the handler itself. (A registry
-that sniffs a format at run time is a separate, later concern; nothing
-here depends on one.)
+knows what it is reading or writing picks the handler itself. (Sniffing a
+format at run time is host-side work, in
+[`contentauth-c2pa-format-registry`](../contentauth-c2pa-format-registry);
+nothing here depends on it.)
 
 ## What a handler is
 
-Three operations, all format-specific, all pure:
+A `FormatDescriptor` — the format's name, media types, file extensions
+and byte signatures, as plain data with no code behind it, so a host can
+decide *which* handler an asset wants without running any of them — and
+three operations, all format-specific, all pure:
 
 | Operation | Produces | Purpose |
 |---|---|---|

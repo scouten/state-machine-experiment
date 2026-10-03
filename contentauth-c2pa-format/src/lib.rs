@@ -28,7 +28,9 @@
 //!
 //! # What a handler is
 //!
-//! Three operations, all format-specific, all pure:
+//! A description of the format as plain data ([`FormatDescriptor`]: names,
+//! media types, extensions, byte signatures) and three operations, all
+//! format-specific, all pure:
 //!
 //! * [`FormatHandler::locate`] — find the manifest store in an asset and
 //!   return its exact bytes and the byte range of the container structure
@@ -82,6 +84,7 @@
 #![deny(missing_docs)]
 #![deny(unsafe_code)]
 
+mod descriptor;
 mod error;
 mod handler;
 mod location;
@@ -93,6 +96,7 @@ pub mod test_util;
 
 pub use contentauth_c2pa_primitives::{ByteRange, HostError, StreamId};
 pub use contentauth_state_machine::{HostRequest, ProtocolError, RequestId, Session, Step};
+pub use descriptor::{FormatDescriptor, Signature};
 pub use error::FormatError;
 pub use handler::{FormatHandler, FormatOp};
 pub use location::{EmbeddedManifest, ManifestLocation};

@@ -29,3 +29,24 @@ c2pa = { version = "0.91", default-features = false, features = [
     "file_io",
     "rust_native_crypto",
 ] }
+
+[dev-dependencies]
+# Builds and signs a TIFF with this workspace's own write path, so the real
+# c2pa-rs can be asked to read what a second container format's handler
+# wrote — the interoperability question `contentauth-c2pa-format-tiff`
+# cannot answer for itself.
+contentauth-c2pa-builder = { path = "../contentauth-c2pa-builder" }
+contentauth-c2pa-format = { path = "../contentauth-c2pa-format", features = [
+    "test-util",
+] }
+contentauth-c2pa-format-tiff = { path = "../contentauth-c2pa-format-tiff" }
+contentauth-state-machine = { path = "../contentauth-state-machine" }
+c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
+    "rust_native_crypto",
+] }
+# The c2pa-rs-shaped manifest definition every write binding is held to,
+# so the claim itself is one c2pa-rs accepts and only the container is
+# under test.
+contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline", features = [
+    "fixtures",
+] }

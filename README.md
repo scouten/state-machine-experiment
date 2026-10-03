@@ -44,6 +44,16 @@ experiment grows.
 * [`contentauth-c2pa-format-jpeg`](contentauth-c2pa-format-jpeg) — the
   first such handler: locating and embedding manifest stores in a JPEG's
   `APP11` segments, byte-compatible with c2pa-rs.
+* [`contentauth-c2pa-format-tiff`](contentauth-c2pa-format-tiff) — the
+  second handler, for a format JPEG's segment model says nothing about:
+  TIFF and BigTIFF (either byte order; DNG too), where the store is a tag
+  in a graph of offsets, nothing already in the file may move, and the
+  specification's hash exclusion is wider than a segment run.
+* [`contentauth-c2pa-format-registry`](contentauth-c2pa-format-registry) —
+  the *host's* side of choosing a format: detection by content, extension
+  or media type from the plain-data descriptors handlers publish, and a
+  type-erased `AnyFormat` that the file sessions take unchanged. Nothing
+  below a host depends on it.
 * [`contentauth-c2pa-file-reader`](contentauth-c2pa-file-reader) — a
   sans-I/O session gluing a `contentauth-c2pa-format` handler to the
   reader above, plus a `Read + Seek`-based host for it for the common

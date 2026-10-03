@@ -379,8 +379,11 @@ fn without_a_trust_anchor_the_same_manifest_reads_back_only_as_valid() {
 }
 
 #[test]
-fn supported_extensions_lists_jpeg_and_jpg() {
-    assert_eq!(Reader::supported_extensions(), ["jpg", "jpeg"]);
+fn supported_extensions_lists_every_registered_format() {
+    assert_eq!(
+        Reader::supported_extensions(),
+        ["jpg", "jpeg", "tif", "tiff", "dng"]
+    );
 }
 
 #[test]
@@ -505,11 +508,12 @@ fn a_jpg_extension_with_unparseable_content_surfaces_as_a_read_error() {
 
 #[test]
 fn an_unrecognized_extension_is_reported_as_unsupported() {
-    let path = write_temp("asset.png", C_JPG);
+    // Neither the content (a PNG signature) nor the name matches a format.
+    let path = write_temp("asset.png", b"\x89PNG\r\n\x1a\n and then some");
 
     let err = Reader::from_context(Context::new())
         .with_file(&path)
-        .expect_err("no handler recognizes .png yet");
+        .expect_err("no handler recognizes PNG");
     assert!(matches!(err, Error::UnsupportedType { .. }), "{err:?}");
 }
 

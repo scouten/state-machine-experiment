@@ -31,6 +31,14 @@ the sibling crate it depends on via a plain path dependency.
   real, third-party-signed fixture (`C.jpg`, already in this repository,
   signed by an actual c2pa-rs release) through both backends and asserts
   the two `Summary` values are equal.
+* `tests/compare_tiff_signed_by_c2pa_rs.rs` — a second container format:
+  the real c2pa-rs signs a TIFF (its own layout, which differs from
+  `contentauth-c2pa-format-tiff`'s), and this workspace's TIFF handler
+  reads it to the same answer c2pa-rs gives, `Valid` included.
+* `tests/compare_tiff.rs` — the other direction: c2pa-rs must at least
+  *find* the store in a TIFF signed here. It stops at the claim, because
+  this workspace's builder emits a claim c2pa-rs 0.91 rejects (for JPEG
+  too); the test starts comparing outright once that is fixed.
 * `examples/compare_corpus.rs` — the same comparison, generalized to a
   whole directory tree:
 

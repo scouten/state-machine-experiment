@@ -34,14 +34,14 @@
 //! # What this covers
 //!
 //! One use case, worked through end to end: **read and validate a C2PA
-//! manifest store embedded in a local JPEG file, and report the result as
+//! manifest store embedded in a local JPEG or TIFF file, and report the result as
 //! JSON** — [`Context::new`] configuring trust anchors,
 //! [`Reader::from_context`] and [`Reader::with_file`], then
 //! [`Reader::json`], [`Reader::validation_state`], or the borrowed
 //! [`Manifest`] accessors. That case was chosen because it is the one most
 //! c2pa-rs integrations reach for first, and because every piece it needs
 //! — a [`contentauth_c2pa_file_reader::FileReadSession`], a
-//! [`contentauth_c2pa_format_jpeg::JpegFormat`] handler, and
+//! `FormatHandler` chosen from a format registry, and
 //! [`contentauth_c2pa_reader`]'s validation — already exists in this
 //! workspace; this crate's own work is entirely the compatibility surface
 //! ([`Context`], `Reader`, [`Manifest`], [`ValidationState`],
@@ -65,13 +65,15 @@
 //!   alongside [`Reader::with_file`]: swap
 //!   [`contentauth_c2pa_file_reader::read_manifest_from_file`] for
 //!   [`contentauth_c2pa_file_reader::read_manifest`], which already takes
-//!   any `Read + Seek`, and drop the file-extension-based format lookup in
-//!   `src/format.rs` for a caller-supplied format hint instead.
-//! * **More container formats** — `src/format.rs` is the seam: it is the
-//!   only place this crate names [`contentauth_c2pa_format_jpeg::JpegFormat`]
-//!   specifically. A second `contentauth-c2pa-format-*` handler crate (see
-//!   the root `CLAUDE.md`) plugs in there, same as it would for any other
-//!   host in this workspace.
+//!   any `Read + Seek`, and use `src/format.rs`'s registry with a
+//!   caller-supplied format hint instead of a path.
+//! * **More container formats** — `src/format.rs` is the seam: it holds
+//!   this host's policy for choosing a handler (by content, then by
+//!   extension) over a `contentauth-c2pa-format-registry` `Registry`, and
+//!   is the only place this crate decides anything about formats. A new
+//!   `contentauth-c2pa-format-*` handler crate (see the root `CLAUDE.md`)
+//!   is one more registration (in `Registry::standard`, or a `register`
+//!   call in this host) — as TIFF was — and touches nothing else.
 //! * **A `Builder` counterpart** — the write-side use case (build, sign,
 //!   and embed a manifest into a file) would follow the same shape,
 //!   wrapping `contentauth_c2pa_file_builder::build_and_sign_file` behind
