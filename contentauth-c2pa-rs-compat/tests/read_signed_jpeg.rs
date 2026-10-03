@@ -37,7 +37,9 @@ use contentauth_c2pa_format::{
     EmbedPlan, FormatHandler,
 };
 use contentauth_c2pa_format_jpeg::JpegFormat;
-use contentauth_c2pa_rs_compat::{Context, Error, ReadSettings, Reader, ValidationState};
+use contentauth_c2pa_rs_compat::{
+    Context, Error, ReadSettings, Reader, TrustList, ValidationState,
+};
 use contentauth_state_machine::Session;
 use jumbf::{
     builder::{DataBoxBuilder, SuperBoxBuilder},
@@ -314,6 +316,50 @@ fn a_manifest_written_by_the_builder_reads_back_as_trusted_through_the_compat_re
         Some("self#jumbf=/c2pa/urn:uuid:test-manifest/c2pa.signature")
     );
     assert!(signature_status.explanation().is_some());
+}
+
+#[test]
+fn a_named_trust_list_is_reported_through_the_accessor_but_not_the_json() {
+    let (_plan, asset) = build_and_embed(C_JPG);
+    let path = write_temp("named_list.jpg", &asset);
+
+    let context = Context::new().with_settings(ReadSettings {
+        trust_lists: vec![TrustList {
+            uri: "https://example.com/signers".to_string(),
+            anchors: vec![TEST_SIGNER_CERT.to_vec()],
+        }],
+        ..ReadSettings::default()
+    });
+    let reader = Reader::from_context(context)
+        .with_file(&path)
+        .expect("reads cleanly");
+    assert_eq!(reader.validation_state(), ValidationState::Trusted);
+
+    let statuses = reader.validation_status().expect("checks were recorded");
+    let trusted = statuses
+        .iter()
+        .find(|status| status.code() == "signingCredential.trusted")
+        .expect("a trusted status");
+    assert_eq!(
+        trusted.trust_list_uri(),
+        Some("https://example.com/signers")
+    );
+    assert!(statuses
+        .iter()
+        .filter(|status| status.code() != "signingCredential.trusted")
+        .all(|status| status.trust_list_uri().is_none()));
+
+    let json: serde_json::Value = serde_json::from_str(&reader.json()).unwrap();
+    let from_json: Vec<&serde_json::Value> = json["validation_status"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|status| status["code"] == "signingCredential.trusted")
+        .collect();
+    assert_eq!(from_json.len(), 1);
+    // c2pa-rs 0.91 does not serialize it either (`#[serde(skip)]`).
+    assert!(from_json[0].get("trust_list_uri").is_none());
+    assert!(from_json[0].get("trustListUri").is_none());
 }
 
 #[test]

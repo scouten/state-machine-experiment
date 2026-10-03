@@ -92,6 +92,12 @@ impl ValidationStatus {
     pub fn explanation(&self) -> Option<&str> {
         self.0.explanation.as_deref()
     }
+
+    /// On a `signingCredential.trusted` or `timeStamp.trusted` status, the
+    /// URI of the named trust list whose anchor matched, if it had one.
+    pub fn trust_list_uri(&self) -> Option<&str> {
+        self.0.trust_list_uri.as_deref()
+    }
 }
 
 impl From<contentauth_c2pa_reader::ValidationStatus> for ValidationStatus {

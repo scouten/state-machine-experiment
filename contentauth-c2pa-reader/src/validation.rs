@@ -271,6 +271,21 @@ pub struct ValidationStatus {
     /// Human-readable explanation.
     pub explanation: Option<String>,
 
+    /// On [`status_code::SIGNING_CREDENTIAL_TRUSTED`] and
+    /// [`status_code::TIMESTAMP_TRUSTED`], the URI of the named trust list
+    /// ([`TrustList::uri`]) whose anchor the credential chained to.
+    ///
+    /// `None` on every other status, and on a trusted one whose anchor was
+    /// configured as a plain DER entry in
+    /// [`ReadSettings::trust_anchors`] or
+    /// [`ReadSettings::timestamp_trust_anchors`], which carry no identity.
+    /// Mirrors c2pa-rs's `ValidationStatus::trust_list_uri`.
+    ///
+    /// [`TrustList::uri`]: crate::read::TrustList::uri
+    /// [`ReadSettings::trust_anchors`]: crate::read::ReadSettings::trust_anchors
+    /// [`ReadSettings::timestamp_trust_anchors`]: crate::read::ReadSettings::timestamp_trust_anchors
+    pub trust_list_uri: Option<String>,
+
     /// Overrides [`Self::is_failure`] to this value, regardless of
     /// [`Self::code`], when set.
     ///
@@ -300,6 +315,7 @@ impl ValidationStatus {
             code: code.to_string(),
             url: Some(url.to_string()),
             explanation: Some(explanation.into()),
+            trust_list_uri: None,
             is_failure_override: None,
         }
     }
