@@ -28,7 +28,7 @@
 //!
 //! That is deliberately *all*: no ingredients, thumbnails, timestamp, or
 //! second assertion. (A definition may opt in to a timestamp with c2pa-rs's
-//! `ta_url`; that is the one extension every binding offers, and it is
+//! `tsa_url`; that is the one extension every binding offers, and it is
 //! not part of the baseline bar.) What it exercises is every seam a signing binding
 //! has — definition in, a host-held signing key reached through whatever
 //! asynchrony the binding's language imposes, an asset in, an asset out —

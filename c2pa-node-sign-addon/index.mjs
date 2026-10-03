@@ -11,7 +11,7 @@
 //   * how the source is read and the output written (here: FileHandle,
 //     i.e. libuv's thread pool; but the loop does not care);
 //   * how many requests are in flight at once (`concurrency`);
-//   * how a timestamp is fetched: when the definition has `ta_url` (or the
+//   * how a timestamp is fetched: when the definition has `tsa_url` (or the
 //     signer a `timeAuthorityUrl`), Rust hands over a ready-made RFC 3161
 //     request and takes the response body back — Node only does the POST,
 //     with `fetch` unless `signer.sendTimestampRequest` says otherwise;
@@ -43,7 +43,7 @@ export class Builder {
    * `crypto.sign(..., { dsaEncoding: "ieee-p1363" })`), not DER.
    *
    * To countersign the claim with an RFC 3161 timestamp, give the
-   * definition a `ta_url` or the signer a `timeAuthorityUrl` (the
+   * definition a `tsa_url` or the signer a `timeAuthorityUrl` (the
    * definition's wins). The request goes out by `fetch`, or by
    * `signer.sendTimestampRequest(url, request: Buffer) => Promise<Buffer>`
    * if present, which must resolve to the authority's response body. An
@@ -93,7 +93,7 @@ export function signAsset(asset, definition, signer, options) {
 
 /**
  * The definition to start a session with: `signer.timeAuthorityUrl`, if
- * any, becomes `ta_url` unless the definition already names one. A
+ * any, becomes `tsa_url` unless the definition already names one. A
  * definition that is not even JSON is passed through untouched, so Rust
  * reports it with its own error string.
  */
@@ -101,7 +101,7 @@ function definitionFor(definition, signer) {
   if (typeof signer.timeAuthorityUrl !== "string") return definition;
   try {
     const parsed = JSON.parse(definition);
-    parsed.ta_url ??= signer.timeAuthorityUrl;
+    parsed.tsa_url ??= signer.timeAuthorityUrl;
     return JSON.stringify(parsed);
   } catch {
     return definition;

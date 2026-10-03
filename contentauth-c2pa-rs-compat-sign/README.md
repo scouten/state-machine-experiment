@@ -17,7 +17,7 @@ the destination untouched). `sign` takes any `Read + Seek` source and
 Differences from c2pa-rs: `instance_id`/`label` are required in the
 definition (no RNG in the engine); no async signer; JPEG only.
 
-Timestamping: a definition's `ta_url`, or `Signer::time_authority_url`,
+Timestamping: a definition's `tsa_url`, or `Signer::time_authority_url`,
 countersigns the claim with an RFC 3161 timestamp. The request goes out
 through `Signer::send_timestamp_request(url, der_request)`, whose default is
 a blocking HTTP `POST` (`application/timestamp-query`) — so this crate, like

@@ -173,7 +173,7 @@ fn a_bad_definition_is_rejected_before_any_request() {
 fn timestamping_session() -> NodeBuildSession {
     let json = BASELINE_DEFINITION.replace(
         "\"title\"",
-        "\"ta_url\": \"https://tsa.example/\", \"title\"",
+        "\"tsa_url\": \"https://tsa.example/\", \"title\"",
     );
     NodeBuildSession::new(
         &json,
@@ -196,7 +196,7 @@ fn granted_response() -> Vec<u8> {
 }
 
 #[test]
-fn a_ta_url_makes_the_loop_answer_a_timestamp_request_and_embed_the_token() {
+fn a_tsa_url_makes_the_loop_answer_a_timestamp_request_and_embed_the_token() {
     let asked = std::cell::RefCell::new(Vec::new());
     let (output, report, _) =
         sign_and_timestamp_with(timestamping_session(), &test_sign, &|url, request| {

@@ -60,14 +60,14 @@ impl Builder {
         S: Read + Seek,
         D: Read + Write + Seek,
     {
-        let (settings, ta_url) = self.settings(signer, format)?;
+        let (settings, tsa_url) = self.settings(signer, format)?;
         let report = build_and_sign_with_timestamp(
             JpegFormat,
             source,
             dest,
             settings,
             |_, data| signer.sign(data),
-            |alg, digest| timestamp(signer, ta_url.as_deref(), alg, digest),
+            |alg, digest| timestamp(signer, tsa_url.as_deref(), alg, digest),
         )?;
         Ok(report.manifest)
     }
@@ -93,14 +93,14 @@ impl Builder {
             });
         }
 
-        let (settings, ta_url) = self.settings(signer, JPEG)?;
+        let (settings, tsa_url) = self.settings(signer, JPEG)?;
         let FileBuilderReport { manifest, .. } = build_and_sign_file_with_timestamp(
             JpegFormat,
             source,
             dest,
             settings,
             |_, data| signer.sign(data),
-            |alg, digest| timestamp(signer, ta_url.as_deref(), alg, digest),
+            |alg, digest| timestamp(signer, tsa_url.as_deref(), alg, digest),
         )?;
         Ok(manifest)
     }
@@ -121,19 +121,19 @@ impl Builder {
         if !format.eq_ignore_ascii_case(JPEG) {
             return Err(Error::UnsupportedType(format.to_string()));
         }
-        let ta_url = self
+        let tsa_url = self
             .definition
-            .ta_url
+            .tsa_url
             .clone()
             .or_else(|| signer.time_authority_url());
         let mut settings =
             self.definition
                 .clone()
                 .into_settings(JPEG, signer.alg(), signer.certs())?;
-        if ta_url.is_some() && settings.timestamp.is_none() {
+        if tsa_url.is_some() && settings.timestamp.is_none() {
             settings.timestamp = Some(TimestampSettings::default());
         }
-        Ok((settings, ta_url))
+        Ok((settings, tsa_url))
     }
 }
 
@@ -141,11 +141,11 @@ impl Builder {
 /// signer send it, unwrap the token from the response.
 fn timestamp(
     signer: &dyn Signer,
-    ta_url: Option<&str>,
+    tsa_url: Option<&str>,
     alg: HashAlgorithm,
     digest: &[u8],
 ) -> Result<Vec<u8>, HostError> {
-    let url = ta_url.ok_or_else(|| HostError::new("no time-stamp authority URL is configured"))?;
+    let url = tsa_url.ok_or_else(|| HostError::new("no time-stamp authority URL is configured"))?;
     let request = timestamp_request(digest, alg, Some(nonce()))?;
     let response = signer.send_timestamp_request(url, &request)?;
     timestamp_token(&response)

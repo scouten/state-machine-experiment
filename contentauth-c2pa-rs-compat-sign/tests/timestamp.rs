@@ -119,9 +119,9 @@ thread_local! {
     static LAST_ASSET: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-fn definition_with_ta_url(url: &str) -> Builder {
+fn definition_with_tsa_url(url: &str) -> Builder {
     Builder::from_json(
-        &BASELINE_DEFINITION.replace("\"title\"", &format!("\"ta_url\": \"{url}\", \"title\"")),
+        &BASELINE_DEFINITION.replace("\"title\"", &format!("\"tsa_url\": \"{url}\", \"title\"")),
     )
     .unwrap()
 }
@@ -166,9 +166,9 @@ fn a_signer_supplied_authority_timestamps_the_claim() {
 }
 
 #[test]
-fn the_definitions_ta_url_wins_over_the_signers() {
+fn the_definitions_tsa_url_wins_over_the_signers() {
     let signer = FakeAuthority::new(0, Some("http://tsa.example/from-signer"));
-    let builder = definition_with_ta_url("https://tsa.example/from-definition");
+    let builder = definition_with_tsa_url("https://tsa.example/from-definition");
 
     sign_to_memory(&builder, &signer).unwrap();
 
@@ -260,7 +260,7 @@ impl Signer for HttpSigner {
 #[test]
 fn the_default_transport_posts_the_request_over_http() {
     let (url, server) = serve_once(response(0));
-    let builder = definition_with_ta_url(&url);
+    let builder = definition_with_tsa_url(&url);
 
     let manifest = sign_to_memory(&builder, &HttpSigner).unwrap();
 
@@ -282,7 +282,7 @@ fn an_unreachable_authority_fails_the_build_rather_than_going_untimestamped() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         format!("http://{}/", listener.local_addr().unwrap())
     };
-    let builder = definition_with_ta_url(&url);
+    let builder = definition_with_tsa_url(&url);
 
     let err = sign_to_memory(&builder, &HttpSigner).unwrap_err();
 

@@ -60,18 +60,18 @@ impl Builder {
         S: AsyncSigner + ?Sized,
     {
         let handler = for_format(format).map_err(|_| Error::UnsupportedType)?;
-        let ta_url = self
+        let tsa_url = self
             .definition
-            .ta_url
+            .tsa_url
             .clone()
             .or_else(|| signer.time_authority_url());
         let mut settings =
             self.definition
                 .clone()
                 .into_settings("image/jpeg", signer.alg(), signer.certs())?;
-        if ta_url.is_some() && settings.timestamp.is_none() {
+        if tsa_url.is_some() && settings.timestamp.is_none() {
             settings.timestamp = Some(TimestampSettings::default());
         }
-        build(handler, source, signer, settings, ta_url.as_deref()).await
+        build(handler, source, signer, settings, tsa_url.as_deref()).await
     }
 }

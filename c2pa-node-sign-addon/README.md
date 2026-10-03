@@ -68,7 +68,7 @@ thread in about the time of one.
 
 ## Timestamps
 
-Give the definition a `ta_url` (c2pa-rs's name) or the signer a
+Give the definition a `tsa_url` or the signer a
 `timeAuthorityUrl`, and the claim signature is countersigned with an RFC 3161
 timestamp. Rust builds the `TimeStampReq` and unwraps the token from the
 response; the session just parks on a `timestamp` request carrying the URL

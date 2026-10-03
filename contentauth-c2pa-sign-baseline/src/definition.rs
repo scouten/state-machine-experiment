@@ -68,15 +68,15 @@ pub struct Definition {
     #[serde(default)]
     pub assertions: Vec<AssertionDefinition>,
 
-    /// The URL of an RFC 3161 time-stamp authority, as c2pa-rs's
-    /// `ta_url`. Present means the claim signature is countersigned with
+    /// The URL of an RFC 3161 time-stamp authority (c2pa-rs
+    /// spells the field `ta_url`). Present means the claim signature is countersigned with
     /// a timestamp: [`Definition::into_settings`] then sets
     /// `BuilderSettings::timestamp`, and the host must answer the
     /// resulting timestamp request by POSTing to this URL (the engine
     /// never touches the network). Absent (the baseline case) means no
     /// timestamp. Must be an `http://` or `https://` URL.
     #[serde(default)]
-    pub ta_url: Option<String>,
+    pub tsa_url: Option<String>,
 }
 
 /// A `claim_generator_info` entry.
@@ -116,11 +116,11 @@ impl Definition {
         let definition: Self =
             serde_json::from_str(json).map_err(|err| Error::BadDefinition(err.to_string()))?;
 
-        if let Some(url) = &definition.ta_url {
+        if let Some(url) = &definition.tsa_url {
             let lower = url.to_ascii_lowercase();
             if !(lower.starts_with("http://") || lower.starts_with("https://")) {
                 return Err(Error::BadDefinition(format!(
-                    "ta_url must be an http or https URL, not {url:?}"
+                    "tsa_url must be an http or https URL, not {url:?}"
                 )));
             }
         }
@@ -151,7 +151,7 @@ impl Definition {
             certificates,
         );
         settings.title = self.title;
-        if self.ta_url.is_some() {
+        if self.tsa_url.is_some() {
             settings.timestamp = Some(TimestampSettings::default());
         }
 
@@ -207,14 +207,14 @@ mod tests {
     }
 
     #[test]
-    fn ta_url_requests_a_timestamp() {
+    fn tsa_url_requests_a_timestamp() {
         let json = BASELINE_DEFINITION.replace(
             "\"title\"",
-            "\"ta_url\": \"http://timestamp.example/tsa\", \"title\"",
+            "\"tsa_url\": \"http://timestamp.example/tsa\", \"title\"",
         );
         let definition = Definition::from_json(&json).unwrap();
         assert_eq!(
-            definition.ta_url.as_deref(),
+            definition.tsa_url.as_deref(),
             Some("http://timestamp.example/tsa")
         );
 
@@ -228,10 +228,10 @@ mod tests {
     }
 
     #[test]
-    fn ta_url_must_be_http_or_https() {
+    fn tsa_url_must_be_http_or_https() {
         for url in ["file:///etc/passwd", "ftp://x/", "timestamp.example"] {
             let json = BASELINE_DEFINITION
-                .replace("\"title\"", &format!("\"ta_url\": \"{url}\", \"title\""));
+                .replace("\"title\"", &format!("\"tsa_url\": \"{url}\", \"title\""));
             assert!(
                 matches!(Definition::from_json(&json), Err(Error::BadDefinition(_))),
                 "{url}"

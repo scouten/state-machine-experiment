@@ -32,7 +32,7 @@ pub(crate) async fn build<H, B, S>(
     source: &B,
     signer: &S,
     settings: BuilderSettings,
-    ta_url: Option<&str>,
+    tsa_url: Option<&str>,
 ) -> Result<SignedAsset, Error>
 where
     H: FormatHandler + Send,
@@ -101,7 +101,7 @@ where
                 },
 
                 FileBuilderRequest::Timestamp { digest, hash_alg } => {
-                    match timestamp(signer, ta_url, *hash_alg, digest).await {
+                    match timestamp(signer, tsa_url, *hash_alg, digest).await {
                         Ok(token) => FileBuilderReply::Timestamp(token),
                         Err(err) => FileBuilderReply::Failed(err),
                     }
@@ -121,11 +121,11 @@ where
 /// not one every JavaScript host trusts.
 async fn timestamp<S: AsyncSigner + ?Sized>(
     signer: &S,
-    ta_url: Option<&str>,
+    tsa_url: Option<&str>,
     hash_alg: HashAlgorithm,
     digest: &[u8],
 ) -> Result<Vec<u8>, HostError> {
-    let url = ta_url.ok_or_else(|| HostError::new("no time-stamp authority URL is configured"))?;
+    let url = tsa_url.ok_or_else(|| HostError::new("no time-stamp authority URL is configured"))?;
     let request = timestamp_request(digest, hash_alg, None)?;
     let response = signer.send_timestamp_request(url, &request).await?;
     timestamp_token(&response)

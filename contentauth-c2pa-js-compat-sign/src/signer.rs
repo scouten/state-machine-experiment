@@ -35,7 +35,7 @@ pub trait AsyncSigner {
 
     /// The URL of an RFC 3161 time-stamp authority to countersign claim
     /// signatures with. `None` (the default) means no timestamp, unless
-    /// the definition's `ta_url` asks for one — which then takes
+    /// the definition's `tsa_url` asks for one — which then takes
     /// precedence.
     fn time_authority_url(&self) -> Option<String> {
         None

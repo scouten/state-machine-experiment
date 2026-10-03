@@ -116,7 +116,7 @@ pub enum PendingRequest {
     /// `request` is a complete DER `TimeStampReq`; Rust has already built
     /// it and will unwrap the token from the response, so the host needs
     /// no RFC 3161 knowledge — only an HTTP client. `url` is the
-    /// definition's `ta_url`.
+    /// definition's `tsa_url`.
     Timestamp {
         /// The handle to pass to [`NodeBuildSession::fulfill`].
         id: u64,
@@ -192,8 +192,8 @@ pub struct SignReport {
 pub struct NodeBuildSession {
     inner: Engine,
 
-    /// The definition's `ta_url`: where a timestamp request goes.
-    ta_url: Option<String>,
+    /// The definition's `tsa_url`: where a timestamp request goes.
+    tsa_url: Option<String>,
 
     /// Numbers handed to the host, mapped to the engine's own ids.
     handles: HashMap<u64, RequestId>,
@@ -220,12 +220,12 @@ impl NodeBuildSession {
         for_format(format)?;
         let alg = parse_alg(alg)?;
         let definition = Definition::from_json(definition_json)?;
-        let ta_url = definition.ta_url.clone();
+        let tsa_url = definition.tsa_url.clone();
         let settings = definition.into_settings("image/jpeg", alg, certs)?;
 
         Ok(Self {
             inner: FileBuilderSession::new(JpegFormat, settings),
-            ta_url,
+            tsa_url,
             handles: HashMap::new(),
             next_handle: 0,
             reported: HashMap::new(),
@@ -245,7 +245,7 @@ impl NodeBuildSession {
                         continue;
                     }
                     let handle = self.next_handle;
-                    let pending = describe(handle, &request.kind, self.ta_url.as_deref())?;
+                    let pending = describe(handle, &request.kind, self.tsa_url.as_deref())?;
                     self.next_handle += 1;
                     self.reported.insert(request.id, handle);
                     self.handles.insert(handle, request.id);
@@ -319,11 +319,11 @@ fn alg_name(alg: SigningAlg) -> Result<&'static str, Error> {
 ///
 /// Fails for a request this wrapper has no description for
 /// (`FileBuilderRequest` is `#[non_exhaustive]`), and for a timestamp
-/// when no `ta_url` says where it goes.
+/// when no `tsa_url` says where it goes.
 fn describe(
     handle: u64,
     request: &FileBuilderRequest,
-    ta_url: Option<&str>,
+    tsa_url: Option<&str>,
 ) -> Result<PendingRequest, Error> {
     Ok(match request {
         FileBuilderRequest::Read { stream, range } => PendingRequest::Read {
@@ -353,8 +353,8 @@ fn describe(
         },
         FileBuilderRequest::Timestamp { digest, hash_alg } => PendingRequest::Timestamp {
             id: handle,
-            url: ta_url
-                .ok_or_else(|| Error::Unsupported("a timestamp with no ta_url".to_string()))?
+            url: tsa_url
+                .ok_or_else(|| Error::Unsupported("a timestamp with no tsa_url".to_string()))?
                 .to_string(),
             request: timestamp_request(digest, *hash_alg, None)
                 .map_err(|err| Error::Unsupported(err.to_string()))?,
@@ -475,7 +475,7 @@ mod tests {
     }
 
     #[test]
-    fn a_timestamp_request_with_no_ta_url_is_unsupported() {
+    fn a_timestamp_request_with_no_tsa_url_is_unsupported() {
         let err = describe(1, &timestamp_engine_request(), None).unwrap_err();
         assert!(matches!(err, Error::Unsupported(_)), "{err:?}");
     }
@@ -502,15 +502,15 @@ mod tests {
     }
 
     #[test]
-    fn a_ta_url_in_the_definition_makes_the_session_ask_for_a_timestamp() {
+    fn a_tsa_url_in_the_definition_makes_the_session_ask_for_a_timestamp() {
         let json = BASELINE_DEFINITION.replace(
             "\"title\"",
-            "\"ta_url\": \"https://tsa.example/\", \"title\"",
+            "\"tsa_url\": \"https://tsa.example/\", \"title\"",
         );
         let session = NodeBuildSession::new(&json, "image/jpeg", "es256", vec![vec![1]]).unwrap();
-        assert_eq!(session.ta_url.as_deref(), Some("https://tsa.example/"));
+        assert_eq!(session.tsa_url.as_deref(), Some("https://tsa.example/"));
 
-        let bad = BASELINE_DEFINITION.replace("\"title\"", "\"ta_url\": \"ftp://x/\", \"title\"");
+        let bad = BASELINE_DEFINITION.replace("\"title\"", "\"tsa_url\": \"ftp://x/\", \"title\"");
         assert!(matches!(
             NodeBuildSession::new(&bad, "image/jpeg", "es256", vec![]),
             Err(Error::Definition(_))

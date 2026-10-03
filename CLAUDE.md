@@ -177,8 +177,8 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   `c2pa.actions.v2`/`c2pa.created` assertion) and read it back `Trusted`.
   Holds only the language-free part (`Definition` → `BuilderSettings`) and
   shared test fixtures (`fixtures` feature). `instance_id`/`label` are
-  required in the definition: the engine has no RNG. An optional `ta_url`
-  (c2pa-rs's name) opts in to an RFC 3161 timestamp — the one extension
+  required in the definition: the engine has no RNG. An optional `tsa_url`
+  (c2pa-rs's own spelling is `ta_url`) opts in to an RFC 3161 timestamp — the one extension
   every binding offers, outside the baseline bar. Each binding leaves only
   the HTTP `POST` to its host (a blocking `Signer` method with a `reqwest`
   default in `-rs-compat-sign`; an awaited `AsyncSigner` method, or a JS

@@ -17,7 +17,7 @@
 //! which is why it lives in the one signing crate that may have a network
 //! dependency (compare `contentauth-c2pa-rs-compat`'s OCSP host).
 //!
-//! The URL comes from the signing party — the definition's `ta_url` or the
+//! The URL comes from the signing party — the definition's `tsa_url` or the
 //! signer — never from an untrusted asset, so unlike an OCSP responder URL
 //! (which a certificate in the asset chooses) it needs no SSRF safeguard
 //! beyond being restricted to `http`/`https` when the definition is parsed.

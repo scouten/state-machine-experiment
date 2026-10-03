@@ -36,7 +36,7 @@
 //! );
 //! ```
 //!
-//! `timeAuthorityUrl` may instead be the definition's `ta_url`, which wins
+//! `timeAuthorityUrl` may instead be the definition's `tsa_url`, which wins
 //! if both are given. A timestamp with no `sendTimestampRequest` fails the
 //! build: nothing in Wasm reaches a network on its own.
 //!

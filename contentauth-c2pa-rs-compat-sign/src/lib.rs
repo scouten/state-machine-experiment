@@ -45,7 +45,7 @@
 //! * [`Signer::certs`] is infallible and [`Signer::sign`] reports a
 //!   [`HostError`]; no `reserve_size`, no async signer — the engine can do
 //!   some of that, but this baseline deliberately does not.
-//! * Timestamping is on when the definition has `ta_url` or the signer
+//! * Timestamping is on when the definition has `tsa_url` or the signer
 //!   reports [`Signer::time_authority_url`]. The request is sent by
 //!   [`Signer::send_timestamp_request`], whose default is a blocking HTTP
 //!   `POST` — which makes this crate, like `contentauth-c2pa-rs-compat`,

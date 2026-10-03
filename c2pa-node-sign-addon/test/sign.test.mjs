@@ -356,11 +356,11 @@ async function fakeAuthority(respond) {
   };
 }
 
-test("a ta_url timestamps the claim: Node POSTs the request and the token lands in the manifest", async () => {
+test("a tsa_url timestamps the claim: Node POSTs the request and the token lands in the manifest", async () => {
   const authority = await fakeAuthority(() => [200, tsResponse(0)]);
   try {
     const output = join(dir, "timestamped.jpg");
-    const result = await signAsset({ path: SOURCE }, { ...BASELINE, ta_url: authority.url }, testSigner(), {
+    const result = await signAsset({ path: SOURCE }, { ...BASELINE, tsa_url: authority.url }, testSigner(), {
       output: { path: output },
     });
 
@@ -397,9 +397,9 @@ test("a signer's timeAuthorityUrl and sendTimestampRequest replace the definitio
   assert.ok(Buffer.isBuffer(sent[0].request));
   assert.ok(result.manifest.includes(TOKEN));
 
-  // The definition's own ta_url wins over the signer's.
+  // The definition's own tsa_url wins over the signer's.
   sent.length = 0;
-  await signAsset({ path: SOURCE }, { ...BASELINE, ta_url: "https://tsa.example/from-definition" }, signer);
+  await signAsset({ path: SOURCE }, { ...BASELINE, tsa_url: "https://tsa.example/from-definition" }, signer);
   assert.equal(sent[0].url, "https://tsa.example/from-definition");
 });
 
@@ -414,7 +414,7 @@ test("a refusing, failing or malformed authority fails the build and leaves noth
     try {
       const sub = mkdtempSync(join(dir, "ts-fail-"));
       await assert.rejects(
-        signAsset({ path: SOURCE }, { ...BASELINE, ta_url: authority.url }, testSigner(), {
+        signAsset({ path: SOURCE }, { ...BASELINE, tsa_url: authority.url }, testSigner(), {
           output: { path: join(sub, "out.jpg") },
         }),
         expected,
@@ -430,12 +430,12 @@ test("an unreachable authority fails the build rather than going untimestamped",
   const authority = await fakeAuthority(() => [200, tsResponse(0)]);
   const { url } = authority;
   await authority.close();
-  await assert.rejects(signAsset({ path: SOURCE }, { ...BASELINE, ta_url: url }, testSigner()));
+  await assert.rejects(signAsset({ path: SOURCE }, { ...BASELINE, tsa_url: url }, testSigner()));
 });
 
-test("a ta_url that is not http(s) is rejected as a bad definition", async () => {
+test("a tsa_url that is not http(s) is rejected as a bad definition", async () => {
   await assert.rejects(
-    signAsset({ path: SOURCE }, { ...BASELINE, ta_url: "file:///etc/passwd" }, testSigner()),
+    signAsset({ path: SOURCE }, { ...BASELINE, tsa_url: "file:///etc/passwd" }, testSigner()),
     (error) => error.name.startsWith("Definition(BadDefinition("),
   );
 });

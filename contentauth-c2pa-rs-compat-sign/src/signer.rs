@@ -27,7 +27,7 @@ pub trait Signer {
 
     /// The URL of an RFC 3161 time-stamp authority to countersign claim
     /// signatures with, as c2pa-rs's `Signer::time_authority_url`. `None`
-    /// (the default) means no timestamp, unless the definition's `ta_url`
+    /// (the default) means no timestamp, unless the definition's `tsa_url`
     /// asks for one — which then takes precedence.
     fn time_authority_url(&self) -> Option<String> {
         None

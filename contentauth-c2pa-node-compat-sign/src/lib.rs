@@ -24,7 +24,7 @@
 //! the key: a [`PendingRequest::Sign`] is just another request, answered
 //! whenever a `Promise` (a KMS call, an HSM, WebCrypto) settles.
 //!
-//! Only JPEG is supported. A definition with `ta_url` asks for an RFC 3161
+//! Only JPEG is supported. A definition with `tsa_url` asks for an RFC 3161
 //! timestamp, which is one more request Node answers:
 //! [`PendingRequest::Timestamp`] hands over the URL and a ready-made DER
 //! request to `POST`, and [`Reply::TimestampResponse`] takes the body back
