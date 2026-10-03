@@ -49,8 +49,11 @@
 //! that session, for the common case: a caller with plain, synchronous
 //! `Read + Seek` access to the source asset, `Read + Write + Seek` access
 //! to write the output (read-back is needed for the hashing above), and a
-//! plain signing function (no timestamping). Reach for [`FileBuilderSession`]
-//! directly once any of that stops being true.
+//! plain signing function. Timestamping is opt-in:
+//! [`build_and_sign_with_timestamp`] and [`build_and_sign_file_with_timestamp`]
+//! also take a function that answers each RFC 3161 request (the plain entry
+//! points refuse one). Reach for [`FileBuilderSession`] directly once any of
+//! that stops being true — async or network-backed asset access, say.
 //!
 //! [`build_and_sign_file`] additionally never leaves a partial or corrupt
 //! file at the requested output path: it builds into a freshly, exclusively
@@ -92,7 +95,8 @@ use std::{
 };
 
 pub use contentauth_c2pa_builder::{
-    Assertion, AssertionKind, BuilderSettings, GeneratorInfo, SigningAlg, TimestampSettings,
+    Assertion, AssertionKind, BuilderSettings, GeneratorInfo, HashAlgorithm, SigningAlg,
+    TimestampSettings,
 };
 pub use contentauth_c2pa_format::FormatHandler;
 pub use contentauth_c2pa_primitives::HostError;
@@ -116,8 +120,9 @@ pub use session::{FileBuilderReply, FileBuilderReport, FileBuilderRequest, FileB
 /// Does not support [`BuilderSettings::timestamp`]: a
 /// [`FileBuilderRequest::Timestamp`] request fails outright, since
 /// answering it needs a real RFC 3161 authority round trip this function
-/// has no way to perform. Reach for [`FileBuilderSession`] directly for
-/// that, or for source/output access that cannot be driven synchronously.
+/// has no way to perform. Use [`build_and_sign_with_timestamp`] to supply
+/// one, or [`FileBuilderSession`] directly for source/output access that
+/// cannot be driven synchronously.
 ///
 /// This function never touches `output`'s physical length: it writes
 /// exactly the bytes the plan calls for and nothing else, so anything
@@ -146,7 +151,42 @@ where
     S: Read + Seek,
     O: Read + Write + Seek,
 {
-    drive::build(handler, source, output, settings, sign)
+    build_and_sign_with_timestamp(handler, source, output, settings, sign, no_timestamps)
+}
+
+/// [`build_and_sign`], additionally answering every
+/// [`FileBuilderRequest::Timestamp`] by calling `timestamp`.
+///
+/// Mirroring [`contentauth_c2pa_builder::BuilderRequest::Timestamp`],
+/// `timestamp` receives a digest and the algorithm it was computed with,
+/// performs the whole timestamp authority round trip, and returns the bare
+/// `TimeStampToken` — not the `TimeStampResp` it arrived in.
+/// [`contentauth_c2pa_primitives::tsa`] encodes the request to send and
+/// unwraps the response; only the network exchange in between is the
+/// caller's. `timestamp` is called only if
+/// [`BuilderSettings::timestamp`] is set, and a failure fails the build
+/// rather than silently producing an untimestamped manifest.
+pub fn build_and_sign_with_timestamp<H, S, O>(
+    handler: H,
+    source: S,
+    output: O,
+    settings: BuilderSettings,
+    sign: impl FnMut(SigningAlg, &[u8]) -> Result<Vec<u8>, HostError>,
+    timestamp: impl FnMut(HashAlgorithm, &[u8]) -> Result<Vec<u8>, HostError>,
+) -> Result<FileBuilderReport, Error>
+where
+    H: FormatHandler + Send,
+    S: Read + Seek,
+    O: Read + Write + Seek,
+{
+    drive::build(handler, source, output, settings, sign, timestamp)
+}
+
+fn no_timestamps(_alg: HashAlgorithm, _digest: &[u8]) -> Result<Vec<u8>, HostError> {
+    Err(HostError::new(
+        "this host does not support RFC 3161 timestamping; \
+         use build_and_sign_with_timestamp, or drive FileBuilderSession directly",
+    ))
 }
 
 /// Opens `source_path`, builds and signs a manifest for it as
@@ -165,6 +205,30 @@ pub fn build_and_sign_file<H>(
     output_path: impl AsRef<Path>,
     settings: BuilderSettings,
     sign: impl FnMut(SigningAlg, &[u8]) -> Result<Vec<u8>, HostError>,
+) -> Result<FileBuilderReport, Error>
+where
+    H: FormatHandler + Send,
+{
+    build_and_sign_file_with_timestamp(
+        handler,
+        source_path,
+        output_path,
+        settings,
+        sign,
+        no_timestamps,
+    )
+}
+
+/// [`build_and_sign_file`], additionally answering every timestamp request
+/// with `timestamp`, as [`build_and_sign_with_timestamp`] does. A failed
+/// timestamp leaves `output_path` untouched like any other failure.
+pub fn build_and_sign_file_with_timestamp<H>(
+    handler: H,
+    source_path: impl AsRef<Path>,
+    output_path: impl AsRef<Path>,
+    settings: BuilderSettings,
+    sign: impl FnMut(SigningAlg, &[u8]) -> Result<Vec<u8>, HostError>,
+    timestamp: impl FnMut(HashAlgorithm, &[u8]) -> Result<Vec<u8>, HostError>,
 ) -> Result<FileBuilderReport, Error>
 where
     H: FormatHandler + Send,
@@ -193,7 +257,9 @@ where
             source,
         })?;
 
-    let report = match build_and_sign(handler, source, temp_file, settings, sign) {
+    let report = match build_and_sign_with_timestamp(
+        handler, source, temp_file, settings, sign, timestamp,
+    ) {
         Ok(report) => report,
         Err(err) => {
             // Best effort: an inability to clean up the temporary file

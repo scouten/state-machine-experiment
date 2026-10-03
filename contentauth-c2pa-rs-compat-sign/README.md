@@ -15,8 +15,15 @@ the destination untouched). `sign` takes any `Read + Seek` source and
 `Read + Write + Seek` destination.
 
 Differences from c2pa-rs: `instance_id`/`label` are required in the
-definition (no RNG in the engine); no timestamping, no async signer;
-JPEG only.
+definition (no RNG in the engine); no async signer; JPEG only.
+
+Timestamping: a definition's `ta_url`, or `Signer::time_authority_url`,
+countersigns the claim with an RFC 3161 timestamp. The request goes out
+through `Signer::send_timestamp_request(url, der_request)`, whose default is
+a blocking HTTP `POST` (`application/timestamp-query`) — so this crate, like
+`contentauth-c2pa-rs-compat`, has a network dependency and is exempt from the
+Wasm checks. Override the method to reach an authority another way. An
+authority that refuses or cannot be reached fails the build.
 
 Tests (`tests/baseline.rs`) sign the baseline JPEG and read it back through
 `contentauth-c2pa-rs-compat`'s `Reader::from_context(..).with_file(..)`:

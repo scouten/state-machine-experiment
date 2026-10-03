@@ -11,7 +11,7 @@
 // specific language governing permissions and limitations under
 // each license.
 
-use contentauth_c2pa_builder::{Assertion, BuilderSettings, GeneratorInfo};
+use contentauth_c2pa_builder::{Assertion, BuilderSettings, GeneratorInfo, TimestampSettings};
 use contentauth_c2pa_primitives::SigningAlg;
 use serde::Deserialize;
 
@@ -67,6 +67,16 @@ pub struct Definition {
     /// Assertions beyond the hard binding the engine adds itself.
     #[serde(default)]
     pub assertions: Vec<AssertionDefinition>,
+
+    /// The URL of an RFC 3161 time-stamp authority, as c2pa-rs's
+    /// `ta_url`. Present means the claim signature is countersigned with
+    /// a timestamp: [`Definition::into_settings`] then sets
+    /// `BuilderSettings::timestamp`, and the host must answer the
+    /// resulting timestamp request by POSTing to this URL (the engine
+    /// never touches the network). Absent (the baseline case) means no
+    /// timestamp. Must be an `http://` or `https://` URL.
+    #[serde(default)]
+    pub ta_url: Option<String>,
 }
 
 /// A `claim_generator_info` entry.
@@ -103,7 +113,18 @@ fn created_by_default() -> bool {
 impl Definition {
     /// Parses a definition from JSON.
     pub fn from_json(json: &str) -> Result<Self, Error> {
-        serde_json::from_str(json).map_err(|err| Error::BadDefinition(err.to_string()))
+        let definition: Self =
+            serde_json::from_str(json).map_err(|err| Error::BadDefinition(err.to_string()))?;
+
+        if let Some(url) = &definition.ta_url {
+            let lower = url.to_ascii_lowercase();
+            if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+                return Err(Error::BadDefinition(format!(
+                    "ta_url must be an http or https URL, not {url:?}"
+                )));
+            }
+        }
+        Ok(definition)
     }
 
     /// Builds the engine's settings for `format` (a MIME type), signed
@@ -130,6 +151,9 @@ impl Definition {
             certificates,
         );
         settings.title = self.title;
+        if self.ta_url.is_some() {
+            settings.timestamp = Some(TimestampSettings::default());
+        }
 
         for assertion in self.assertions {
             let cbor = c2pa_cbor::to_vec(&assertion.data).map_err(|err| Error::Assertion {
@@ -180,6 +204,39 @@ mod tests {
             decoded["actions"][0]["action"],
             serde_json::json!("c2pa.created")
         );
+    }
+
+    #[test]
+    fn ta_url_requests_a_timestamp() {
+        let json = BASELINE_DEFINITION.replace(
+            "\"title\"",
+            "\"ta_url\": \"http://timestamp.example/tsa\", \"title\"",
+        );
+        let definition = Definition::from_json(&json).unwrap();
+        assert_eq!(
+            definition.ta_url.as_deref(),
+            Some("http://timestamp.example/tsa")
+        );
+
+        let settings = definition
+            .into_settings("image/jpeg", SigningAlg::Es256, vec![vec![1]])
+            .unwrap();
+        assert_eq!(
+            settings.timestamp.map(|t| t.reserve_size),
+            Some(TimestampSettings::default().reserve_size)
+        );
+    }
+
+    #[test]
+    fn ta_url_must_be_http_or_https() {
+        for url in ["file:///etc/passwd", "ftp://x/", "timestamp.example"] {
+            let json = BASELINE_DEFINITION
+                .replace("\"title\"", &format!("\"ta_url\": \"{url}\", \"title\""));
+            assert!(
+                matches!(Definition::from_json(&json), Err(Error::BadDefinition(_))),
+                "{url}"
+            );
+        }
     }
 
     #[test]

@@ -16,9 +16,11 @@
 //!
 //! This is one possible host, not the only one: [`FileBuilderSession`]
 //! itself performs no I/O and never signs anything itself, so a host with
-//! asynchronous or network-backed access, or that needs to answer
-//! [`FileBuilderRequest::Timestamp`] as well, drives it directly instead
-//! of going through this module. The output bound is `Read + Write + Seek`
+//! asynchronous or network-backed access drives it directly instead of
+//! going through this module. A [`FileBuilderRequest::Timestamp`] is
+//! answered by a caller-supplied function (the network round trip is the
+//! caller's; `contentauth_c2pa_primitives::tsa` encodes the request and
+//! unwraps the response), or refused if there is none. The output bound is `Read + Write + Seek`
 //! rather than `Write` alone because this session reads back whatever it
 //! has already written — to hash the asset for the hard binding, and
 //! again once the final manifest replaces the placeholder.
@@ -27,7 +29,7 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 
 use contentauth_c2pa_builder::BuilderSettings;
 use contentauth_c2pa_format::FormatHandler;
-use contentauth_c2pa_primitives::{ByteRange, HostError, SigningAlg, StreamId};
+use contentauth_c2pa_primitives::{ByteRange, HashAlgorithm, HostError, SigningAlg, StreamId};
 use contentauth_state_machine::{Session, Step};
 
 use crate::{
@@ -36,14 +38,15 @@ use crate::{
 };
 
 /// Builds and signs a manifest for `source`, per `settings`, writing the
-/// result to `output` and calling `sign` for every claim signature the
-/// build needs.
+/// result to `output`, calling `sign` for every claim signature the build
+/// needs and `timestamp` for every RFC 3161 token.
 pub(crate) fn build<H, S, O>(
     handler: H,
     mut source: S,
     mut output: O,
     settings: BuilderSettings,
     mut sign: impl FnMut(SigningAlg, &[u8]) -> Result<Vec<u8>, HostError>,
+    mut timestamp: impl FnMut(HashAlgorithm, &[u8]) -> Result<Vec<u8>, HostError>,
 ) -> Result<FileBuilderReport, Error>
 where
     H: FormatHandler + Send,
@@ -67,6 +70,7 @@ where
                 &mut source,
                 &mut output,
                 &mut sign,
+                &mut timestamp,
                 &request.kind,
             );
             session.fulfill(request.id, reply)?;
@@ -80,6 +84,7 @@ fn answer<S: Read + Seek, O: Read + Write + Seek>(
     source: &mut S,
     output: &mut O,
     sign: &mut impl FnMut(SigningAlg, &[u8]) -> Result<Vec<u8>, HostError>,
+    timestamp: &mut impl FnMut(HashAlgorithm, &[u8]) -> Result<Vec<u8>, HostError>,
     request: &FileBuilderRequest,
 ) -> FileBuilderReply {
     match request {
@@ -123,10 +128,10 @@ fn answer<S: Read + Seek, O: Read + Write + Seek>(
             Err(err) => FileBuilderReply::Failed(err),
         },
 
-        FileBuilderRequest::Timestamp { .. } => FileBuilderReply::Failed(HostError::new(
-            "this host does not support RFC 3161 timestamping; \
-             drive FileBuilderSession directly to add it",
-        )),
+        FileBuilderRequest::Timestamp { digest, hash_alg } => match timestamp(*hash_alg, digest) {
+            Ok(token) => FileBuilderReply::Timestamp(token),
+            Err(err) => FileBuilderReply::Failed(err),
+        },
     }
 }
 
@@ -240,6 +245,12 @@ mod tests {
         FileBuilderSession::<JpegFormat>::OUTPUT_STREAM
     }
 
+    fn never_timestamps(_alg: HashAlgorithm, _digest: &[u8]) -> Result<Vec<u8>, HostError> {
+        Err(HostError::new(
+            "should not be asked for a timestamp in this test",
+        ))
+    }
+
     fn never_signs(_alg: SigningAlg, _data: &[u8]) -> Result<Vec<u8>, HostError> {
         Err(HostError::new("should not be asked to sign in this test"))
     }
@@ -256,6 +267,7 @@ mod tests {
             &mut source,
             &mut output,
             &mut never_signs,
+            &mut never_timestamps,
             &FileBuilderRequest::Sign {
                 alg: SigningAlg::Es256,
                 data: vec![1, 2, 3],
@@ -275,6 +287,7 @@ mod tests {
             &mut source,
             &mut output,
             &mut never_signs,
+            &mut never_timestamps,
             &FileBuilderRequest::Read {
                 stream: source_stream(),
                 range: ByteRange { start: 0, len: 10 },
@@ -294,6 +307,7 @@ mod tests {
             &mut source,
             &mut output,
             &mut never_signs,
+            &mut never_timestamps,
             &FileBuilderRequest::Read {
                 stream: output_stream(),
                 range: ByteRange { start: 0, len: 10 },
@@ -312,6 +326,7 @@ mod tests {
             &mut AlwaysFails,
             &mut output,
             &mut never_signs,
+            &mut never_timestamps,
             &FileBuilderRequest::Length {
                 stream: source_stream(),
             },
@@ -329,6 +344,7 @@ mod tests {
             &mut AlwaysFails,
             &mut output,
             &mut never_signs,
+            &mut never_timestamps,
             &FileBuilderRequest::Read {
                 stream: source_stream(),
                 range: ByteRange { start: 0, len: 1 },
@@ -347,6 +363,7 @@ mod tests {
             &mut source,
             &mut AlwaysFails,
             &mut never_signs,
+            &mut never_timestamps,
             &FileBuilderRequest::Write {
                 stream: output_stream(),
                 offset: 0,
@@ -368,6 +385,7 @@ mod tests {
             &mut source,
             &mut output,
             &mut never_signs,
+            &mut never_timestamps,
             &FileBuilderRequest::Write {
                 stream: output_stream(),
                 offset: 1,
@@ -390,6 +408,7 @@ mod tests {
             &mut FailsAfterSeek,
             &mut output,
             &mut never_signs,
+            &mut never_timestamps,
             &FileBuilderRequest::Read {
                 stream: source_stream(),
                 range: ByteRange { start: 0, len: 1 },
@@ -409,6 +428,7 @@ mod tests {
             &mut source,
             &mut FailsAfterSeek,
             &mut never_signs,
+            &mut never_timestamps,
             &FileBuilderRequest::Write {
                 stream: output_stream(),
                 offset: 0,
@@ -433,6 +453,7 @@ mod tests {
             &mut source,
             &mut output,
             &mut never_signs,
+            &mut never_timestamps,
             &FileBuilderRequest::Read {
                 stream: unknown,
                 range: ByteRange { start: 0, len: 1 },
@@ -446,6 +467,7 @@ mod tests {
             &mut source,
             &mut output,
             &mut never_signs,
+            &mut never_timestamps,
             &FileBuilderRequest::Length { stream: unknown },
         );
         assert!(matches!(length, FileBuilderReply::Failed(_)), "{length:?}");
@@ -465,6 +487,7 @@ mod tests {
             &mut source,
             &mut output,
             &mut sign,
+            &mut never_timestamps,
             &FileBuilderRequest::Sign {
                 alg: SigningAlg::Es256,
                 data: vec![1, 2, 3],
@@ -487,6 +510,7 @@ mod tests {
             &mut source,
             &mut output,
             &mut sign,
+            &mut never_timestamps,
             &FileBuilderRequest::Sign {
                 alg: SigningAlg::Es256,
                 data: vec![1, 2, 3],
@@ -496,8 +520,39 @@ mod tests {
         assert!(matches!(reply, FileBuilderReply::Signature(bytes) if bytes == [1, 2, 3]));
     }
 
+    fn timestamp_request() -> FileBuilderRequest {
+        FileBuilderRequest::Timestamp {
+            digest: vec![1, 2, 3],
+            hash_alg: HashAlgorithm::Sha256,
+        }
+    }
+
     #[test]
-    fn timestamp_requests_are_always_reported_as_unsupported() {
+    fn a_timestamp_request_is_answered_by_the_timestamp_function() {
+        let mut source = Cursor::new(Vec::<u8>::new());
+        let mut output = Cursor::new(Vec::<u8>::new());
+        let mut seen = None;
+        let mut timestamp = |alg: HashAlgorithm, digest: &[u8]| {
+            seen = Some((alg, digest.to_vec()));
+            Ok(vec![9, 9])
+        };
+
+        let reply = answer(
+            source_stream(),
+            output_stream(),
+            &mut source,
+            &mut output,
+            &mut never_signs,
+            &mut timestamp,
+            &timestamp_request(),
+        );
+
+        assert!(matches!(reply, FileBuilderReply::Timestamp(token) if token == [9, 9]));
+        assert_eq!(seen, Some((HashAlgorithm::Sha256, vec![1, 2, 3])));
+    }
+
+    #[test]
+    fn a_failed_timestamp_is_reported_as_failed() {
         let mut source = Cursor::new(Vec::<u8>::new());
         let mut output = Cursor::new(Vec::<u8>::new());
 
@@ -507,10 +562,8 @@ mod tests {
             &mut source,
             &mut output,
             &mut never_signs,
-            &FileBuilderRequest::Timestamp {
-                digest: vec![1, 2, 3],
-                hash_alg: contentauth_c2pa_primitives::HashAlgorithm::Sha256,
-            },
+            &mut never_timestamps,
+            &timestamp_request(),
         );
 
         assert!(matches!(reply, FileBuilderReply::Failed(_)), "{reply:?}");

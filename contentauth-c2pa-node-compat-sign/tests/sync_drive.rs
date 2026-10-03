@@ -29,8 +29,20 @@ use contentauth_c2pa_sign_baseline::{fixtures::*, BASELINE_DEFINITION};
 type Signed = Result<Vec<u8>, String>;
 
 fn sign_with(
+    session: NodeBuildSession,
+    sign: &dyn Fn(&[u8]) -> Signed,
+) -> Result<(Vec<u8>, SignReport, usize), Error> {
+    sign_and_timestamp_with(session, sign, &|_, _| {
+        Err("this test does not expect a timestamp request".to_string())
+    })
+}
+
+/// `tsa` plays the time-stamp authority: given the URL and the DER
+/// request, it returns the DER response body.
+fn sign_and_timestamp_with(
     mut session: NodeBuildSession,
     sign: &dyn Fn(&[u8]) -> Signed,
+    tsa: &dyn Fn(&str, &[u8]) -> Signed,
 ) -> Result<(Vec<u8>, SignReport, usize), Error> {
     let mut output: Vec<u8> = Vec::new();
     let mut signatures = 0;
@@ -69,6 +81,10 @@ fn sign_with(
                         Err(message) => Reply::Failed(message),
                     }
                 }
+                PendingRequest::Timestamp { url, request, .. } => match tsa(&url, &request) {
+                    Ok(body) => Reply::TimestampResponse(body),
+                    Err(message) => Reply::Failed(message),
+                },
                 other => panic!("unexpected {other:?}"),
             };
             session.fulfill(id, reply)?;
@@ -152,4 +168,67 @@ fn a_bad_definition_is_rejected_before_any_request() {
         "{}",
         err.js_message()
     );
+}
+
+fn timestamping_session() -> NodeBuildSession {
+    let json = BASELINE_DEFINITION.replace(
+        "\"title\"",
+        "\"ta_url\": \"https://tsa.example/\", \"title\"",
+    );
+    NodeBuildSession::new(
+        &json,
+        "image/jpeg",
+        "es256",
+        vec![TEST_SIGNER_CERT.to_vec()],
+    )
+    .unwrap()
+}
+
+/// A canned `TimeStampResp`: granted, with an opaque 300-byte token (the
+/// session embeds it without decoding it).
+fn granted_response() -> Vec<u8> {
+    let mut body = vec![0x30, 0x03, 0x02, 0x01, 0x00, 0x30, 0x82, 0x01, 0x2c];
+    body.extend([0x42; 300]);
+    let mut out = vec![0x30, 0x82];
+    out.extend((body.len() as u16).to_be_bytes());
+    out.extend(body);
+    out
+}
+
+#[test]
+fn a_ta_url_makes_the_loop_answer_a_timestamp_request_and_embed_the_token() {
+    let asked = std::cell::RefCell::new(Vec::new());
+    let (output, report, _) =
+        sign_and_timestamp_with(timestamping_session(), &test_sign, &|url, request| {
+            asked.borrow_mut().push((url.to_string(), request.to_vec()));
+            Ok(granted_response())
+        })
+        .unwrap();
+
+    let asked = asked.borrow();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].0, "https://tsa.example/");
+    assert_eq!(asked[0].1[0], 0x30);
+
+    assert!(report.manifest.windows(300).any(|w| w == [0x42; 300]));
+    assert!(output.len() as u64 >= report.manifest_start + report.manifest_len);
+}
+
+#[test]
+fn a_refusing_authority_fails_the_build() {
+    let refused = vec![0x30, 0x05, 0x30, 0x03, 0x02, 0x01, 0x02];
+    let err = sign_and_timestamp_with(timestamping_session(), &test_sign, &|_, _| {
+        Ok(refused.clone())
+    })
+    .unwrap_err();
+    assert!(err.to_string().contains("refused"), "{err}");
+}
+
+#[test]
+fn an_unreachable_authority_fails_the_build() {
+    let err = sign_and_timestamp_with(timestamping_session(), &test_sign, &|_, _| {
+        Err("connection refused".to_string())
+    })
+    .unwrap_err();
+    assert!(err.to_string().contains("connection refused"), "{err}");
 }

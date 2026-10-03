@@ -23,7 +23,8 @@
 use std::path::PathBuf;
 
 use contentauth_c2pa_file_builder::{
-    build_and_sign_file, BuilderSettings, GeneratorInfo, HostError, SigningAlg,
+    build_and_sign_file, build_and_sign_file_with_timestamp, BuilderSettings, GeneratorInfo,
+    HashAlgorithm, HostError, SigningAlg, TimestampSettings,
 };
 use contentauth_c2pa_file_reader::read_manifest_from_file;
 use contentauth_c2pa_format_jpeg::JpegFormat;
@@ -230,4 +231,90 @@ fn remove_temp_files_for(output_path: &std::path::Path) {
             let _ = std::fs::remove_file(entry.path());
         }
     }
+}
+
+/// An opaque stand-in for a TSA's token: the builder embeds whatever bytes
+/// the host returns, at the reserved size, without decoding them (whether
+/// a real token is trusted is the reader's business, covered by its own
+/// suite).
+const FAKE_TOKEN: [u8; 300] = [0x42; 300];
+
+fn timestamped_settings() -> BuilderSettings {
+    let mut settings = settings();
+    settings.timestamp = Some(TimestampSettings::new(1000));
+    settings
+}
+
+#[test]
+fn a_timestamp_function_supplies_the_token_embedded_in_the_manifest() {
+    let output: PathBuf = [env!("CARGO_TARGET_TMPDIR"), "timestamped.jpg"]
+        .iter()
+        .collect();
+    let mut asked = Vec::new();
+
+    let report = build_and_sign_file_with_timestamp(
+        JpegFormat,
+        C_JPG_PATH,
+        &output,
+        timestamped_settings(),
+        sign,
+        |alg, digest| {
+            asked.push((alg, digest.len()));
+            Ok(FAKE_TOKEN.to_vec())
+        },
+    )
+    .expect("building with a timestamp should succeed");
+
+    // Asked exactly once, for a SHA-256 digest.
+    assert_eq!(asked, [(HashAlgorithm::Sha256, 32)]);
+    assert!(
+        report
+            .manifest
+            .windows(FAKE_TOKEN.len())
+            .any(|window| window == FAKE_TOKEN),
+        "the token must appear in the manifest store"
+    );
+
+    // And the result is still a manifest the reader can read and verify.
+    let parsed = read_manifest_from_file(&JpegFormat, &output, ReadSettings::default()).unwrap();
+    let active = parsed.active().unwrap();
+    assert!(active.has_signature);
+    assert!(active.data_hash.is_some());
+}
+
+#[test]
+fn a_failed_timestamp_fails_the_build_and_leaves_the_output_untouched() {
+    let output: PathBuf = [env!("CARGO_TARGET_TMPDIR"), "timestamp-failed.jpg"]
+        .iter()
+        .collect();
+    std::fs::write(&output, b"existing").unwrap();
+
+    let err = build_and_sign_file_with_timestamp(
+        JpegFormat,
+        C_JPG_PATH,
+        &output,
+        timestamped_settings(),
+        sign,
+        |_, _| Err(HostError::new("the authority is down")),
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("the authority is down"), "{err}");
+    assert_eq!(std::fs::read(&output).unwrap(), b"existing");
+}
+
+#[test]
+fn the_plain_entry_point_still_refuses_a_timestamp() {
+    let output: PathBuf = [env!("CARGO_TARGET_TMPDIR"), "timestamp-refused.jpg"]
+        .iter()
+        .collect();
+    let err = build_and_sign_file(
+        JpegFormat,
+        C_JPG_PATH,
+        &output,
+        timestamped_settings(),
+        sign,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("timestamp"), "{err}");
 }

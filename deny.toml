@@ -71,7 +71,8 @@ skip = [
     { crate = "digest" },
     { crate = "sha2" },
 
-    # `reqwest` (contentauth-c2pa-rs-compat's default OCSP transport) wants
+    # `reqwest` (contentauth-c2pa-rs-compat's default OCSP transport, and
+    # contentauth-c2pa-rs-compat-sign's timestamp transport) wants
     # `base64` 0.23 directly, while `hyper-util` — one of its own
     # dependencies — is still on 0.22. Both live entirely inside
     # `reqwest`'s own dependency graph; this workspace has no `base64`

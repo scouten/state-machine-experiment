@@ -115,6 +115,14 @@ fn build_advance(mut cx: FunctionContext) -> JsResult<JsObject> {
                         obj.set(&mut cx, "alg", alg)?;
                         obj.set(&mut cx, "data", data)?;
                     }
+                    PendingRequest::Timestamp { url, request, .. } => {
+                        let kind = cx.string("timestamp");
+                        let url = cx.string(url);
+                        let request = JsBuffer::from_slice(&mut cx, request)?;
+                        obj.set(&mut cx, "kind", kind)?;
+                        obj.set(&mut cx, "url", url)?;
+                        obj.set(&mut cx, "request", request)?;
+                    }
                     _ => {}
                 }
                 list.set(&mut cx, i as u32, obj)?;
@@ -135,6 +143,9 @@ fn build_fulfill(mut cx: FunctionContext) -> JsResult<JsUndefined> {
     let reply = match kind.as_str() {
         "bytes" => Reply::Bytes(cx.argument::<JsBuffer>(3)?.as_slice(&cx).to_vec()),
         "signature" => Reply::Signature(cx.argument::<JsBuffer>(3)?.as_slice(&cx).to_vec()),
+        "timestampResponse" => {
+            Reply::TimestampResponse(cx.argument::<JsBuffer>(3)?.as_slice(&cx).to_vec())
+        }
         "length" => Reply::Length(cx.argument::<JsNumber>(3)?.value(&mut cx) as u64),
         "written" => Reply::Written,
         "failed" => Reply::Failed(cx.argument::<JsString>(3)?.value(&mut cx)),

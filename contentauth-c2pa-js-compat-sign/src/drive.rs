@@ -19,7 +19,10 @@ use contentauth_c2pa_file_builder::{
     BuilderSettings, FileBuilderReply, FileBuilderRequest, FileBuilderSession, FormatHandler,
 };
 use contentauth_c2pa_js_compat::Blob;
-use contentauth_c2pa_primitives::{ByteRange, HostError};
+use contentauth_c2pa_primitives::{
+    tsa::{timestamp_request, timestamp_token},
+    ByteRange, HashAlgorithm, HostError,
+};
 use contentauth_state_machine::{Session, Step};
 
 use crate::{builder::SignedAsset, error::Error, signer::AsyncSigner};
@@ -29,6 +32,7 @@ pub(crate) async fn build<H, B, S>(
     source: &B,
     signer: &S,
     settings: BuilderSettings,
+    ta_url: Option<&str>,
 ) -> Result<SignedAsset, Error>
 where
     H: FormatHandler + Send,
@@ -96,13 +100,35 @@ where
                     Err(err) => FileBuilderReply::Failed(err),
                 },
 
-                // `Timestamp` (an RFC 3161 round trip) is not part of the
-                // baseline, and `FileBuilderRequest` is non-exhaustive.
+                FileBuilderRequest::Timestamp { digest, hash_alg } => {
+                    match timestamp(signer, ta_url, *hash_alg, digest).await {
+                        Ok(token) => FileBuilderReply::Timestamp(token),
+                        Err(err) => FileBuilderReply::Failed(err),
+                    }
+                }
+
+                // `FileBuilderRequest` is non-exhaustive.
                 _ => FileBuilderReply::Failed(HostError::new("unsupported request")),
             };
             session.fulfill(request.id, reply)?;
         }
     }
+}
+
+/// One RFC 3161 round trip: encode the `TimeStampReq`, await the signer
+/// sending it, unwrap the token from the response. No nonce: this crate
+/// has no source of randomness, and the clock a nonce would come from is
+/// not one every JavaScript host trusts.
+async fn timestamp<S: AsyncSigner + ?Sized>(
+    signer: &S,
+    ta_url: Option<&str>,
+    hash_alg: HashAlgorithm,
+    digest: &[u8],
+) -> Result<Vec<u8>, HostError> {
+    let url = ta_url.ok_or_else(|| HostError::new("no time-stamp authority URL is configured"))?;
+    let request = timestamp_request(digest, hash_alg, None)?;
+    let response = signer.send_timestamp_request(url, &request).await?;
+    timestamp_token(&response)
 }
 
 fn slice(bytes: &[u8], range: ByteRange) -> Result<&[u8], HostError> {
@@ -231,18 +257,125 @@ mod tests {
 
     #[test]
     fn a_short_read_from_the_blob_fails_the_build_rather_than_being_hashed() {
-        let err = block_on(build(JpegFormat, &Short, &NeverSigns, settings())).unwrap_err();
+        let err = block_on(build(JpegFormat, &Short, &NeverSigns, settings(), None)).unwrap_err();
         assert!(err.to_string().contains("blob returned"), "{err}");
     }
 
-    #[test]
-    fn a_timestamp_request_is_reported_as_unsupported() {
+    /// A signer with an authority that answers with a canned response and
+    /// records what it was sent.
+    struct Timestamping {
+        response: Vec<u8>,
+        seen: std::cell::RefCell<Vec<(String, Vec<u8>)>>,
+    }
+
+    impl AsyncSigner for Timestamping {
+        fn alg(&self) -> contentauth_c2pa_primitives::SigningAlg {
+            contentauth_c2pa_primitives::SigningAlg::Es256
+        }
+
+        fn certs(&self) -> Vec<Vec<u8>> {
+            vec![TEST_SIGNER_CERT.to_vec()]
+        }
+
+        async fn sign(&self, _data: &[u8]) -> Result<Vec<u8>, HostError> {
+            Ok(vec![0; 64])
+        }
+
+        async fn send_timestamp_request(
+            &self,
+            url: &str,
+            request: &[u8],
+        ) -> Result<Vec<u8>, HostError> {
+            self.seen
+                .borrow_mut()
+                .push((url.to_string(), request.to_vec()));
+            Ok(self.response.clone())
+        }
+    }
+
+    fn timestamped_settings() -> BuilderSettings {
         let mut settings = settings();
         settings.timestamp = Some(contentauth_c2pa_file_builder::TimestampSettings::new(
             10_000,
         ));
+        settings
+    }
 
-        let err = block_on(build(JpegFormat, SOURCE_JPEG, &NeverSigns, settings)).unwrap_err();
-        assert!(err.to_string().contains("unsupported request"), "{err}");
+    #[test]
+    fn a_timestamp_request_is_answered_by_the_signer_and_the_token_embedded() {
+        // PKIStatusInfo { granted }, then a token whose content is 300 x 0x42.
+        let mut body = vec![0x30, 0x03, 0x02, 0x01, 0x00, 0x30, 0x82, 0x01, 0x2c];
+        body.extend([0x42; 300]);
+        let mut response = vec![0x30, 0x82];
+        response.extend((body.len() as u16).to_be_bytes());
+        response.extend(body);
+        let signer = Timestamping {
+            response,
+            seen: Default::default(),
+        };
+
+        let signed = block_on(build(
+            JpegFormat,
+            SOURCE_JPEG,
+            &signer,
+            timestamped_settings(),
+            Some("https://tsa.example/"),
+        ))
+        .unwrap();
+
+        let seen = signer.seen.borrow();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0, "https://tsa.example/");
+        assert_eq!(seen[0].1[0], 0x30);
+        assert!(signed
+            .manifest
+            .windows(300)
+            .any(|window| window == [0x42; 300]));
+    }
+
+    #[test]
+    fn a_signer_with_no_way_to_reach_an_authority_fails_the_build() {
+        let err = block_on(build(
+            JpegFormat,
+            SOURCE_JPEG,
+            &NeverSigns,
+            timestamped_settings(),
+            Some("https://tsa.example/"),
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("send_timestamp_request"), "{err}");
+    }
+
+    #[test]
+    fn a_refusing_authority_fails_the_build() {
+        let signer = Timestamping {
+            response: vec![0x30, 0x05, 0x30, 0x03, 0x02, 0x01, 0x02],
+            seen: Default::default(),
+        };
+        let err = block_on(build(
+            JpegFormat,
+            SOURCE_JPEG,
+            &signer,
+            timestamped_settings(),
+            Some("https://tsa.example/"),
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("refused"), "{err}");
+    }
+
+    #[test]
+    fn a_timestamp_with_no_url_configured_fails_the_build() {
+        let err = block_on(build(
+            JpegFormat,
+            SOURCE_JPEG,
+            &NeverSigns,
+            timestamped_settings(),
+            None,
+        ))
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("no time-stamp authority URL"),
+            "{err}"
+        );
     }
 }

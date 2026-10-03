@@ -32,4 +32,31 @@ pub trait AsyncSigner {
     /// `r || s` — which is what WebCrypto's `crypto.subtle.sign` returns,
     /// unlike Node's default DER).
     async fn sign(&self, data: &[u8]) -> Result<Vec<u8>, HostError>;
+
+    /// The URL of an RFC 3161 time-stamp authority to countersign claim
+    /// signatures with. `None` (the default) means no timestamp, unless
+    /// the definition's `ta_url` asks for one — which then takes
+    /// precedence.
+    fn time_authority_url(&self) -> Option<String> {
+        None
+    }
+
+    /// Sends one RFC 3161 request to the authority at `url`: `request` is
+    /// a DER `TimeStampReq`, and the result must be the DER
+    /// `TimeStampResp` it answers with — in a browser, a `fetch` `POST`
+    /// with `Content-Type: application/timestamp-query`.
+    ///
+    /// Unlike the blocking sibling crate's, there is no default: nothing
+    /// below this crate touches a network, so a signer that is asked for a
+    /// timestamp must say how to get one. The default fails the build.
+    async fn send_timestamp_request(
+        &self,
+        url: &str,
+        _request: &[u8],
+    ) -> Result<Vec<u8>, HostError> {
+        Err(HostError::new(format!(
+            "this signer cannot reach the time-stamp authority at {url}; \
+             implement send_timestamp_request"
+        )))
+    }
 }
