@@ -1506,6 +1506,13 @@ mod tests {
         );
         let manifest = [1u8, 2, 3, 4, 5];
 
+        // The stub is a JPEG in every other respect.
+        let stub = Patching(Vec::new());
+        assert_eq!(stub.descriptor().name, "jpeg");
+        let stream = contentauth_c2pa_format::StreamId::new(0);
+        drop(stub.locate(stream));
+        drop(stub.plan_embed(stream, 8));
+
         let inside = Patching(vec![contentauth_c2pa_format::Patch::new(5, vec![9])]);
         let tasks = tasks_for_commit(&inside, &plan, &manifest).unwrap();
         assert!(matches!(
