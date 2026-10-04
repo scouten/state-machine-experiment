@@ -46,6 +46,20 @@ TEST(a_coroutine_reads_with_a_pool_and_resumes_on_a_pool_thread) {
     CHECK(slow.max_in_flight() > 1);
 }
 
+TEST(get_may_free_the_frame_the_instant_the_task_completes_on_another_thread) {
+    // The task finishes on a pool thread while the caller is parked in
+    // get(); the caller then destroys the frame immediately. Many quick
+    // rounds, so a completer that touched the frame after signalling would
+    // be caught by ASan/TSan.
+    MemoryHost backing = fixture_host();
+    ThreadPool pool(4);
+    PooledHost host(backing, pool);
+    const std::string expected = reference_json();
+    for (int i = 0; i < 100; ++i) {
+        CHECK_EQ(json_of(co_read(Session("image/jpeg"), host).get()), expected);
+    }
+}
+
 TEST(coroutines_compose_and_propagate_exceptions) {
     MemoryHost backing = fixture_host();
     ThreadPool pool(4);

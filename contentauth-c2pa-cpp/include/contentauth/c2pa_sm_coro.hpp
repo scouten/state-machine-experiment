@@ -36,6 +36,7 @@
 
 #include <coroutine>
 #include <exception>
+#include <memory>
 #include <variant>
 
 #include "c2pa_sm_async.hpp"
@@ -56,10 +57,16 @@ public:
         std::coroutine_handle<> continuation;
 
         // Used only by get(): signalled when the task completes with no
-        // coroutine awaiting it.
-        std::mutex mutex;
-        std::condition_variable cv;
-        bool finished = false;
+        // coroutine awaiting it. Held by shared pointer, *not* inline in the
+        // frame, so that the completing thread never touches frame memory
+        // after it has signalled: the waiter may destroy the frame the
+        // instant it wakes.
+        struct Sync {
+            std::mutex mutex;
+            std::condition_variable cv;
+            bool finished = false;
+        };
+        std::shared_ptr<Sync> sync = std::make_shared<Sync>();
 
         Task get_return_object() { return Task(Handle::from_promise(*this)); }
         std::suspend_always initial_suspend() noexcept { return {}; }
@@ -70,11 +77,14 @@ public:
                 if (p.continuation) {
                     return p.continuation;  // symmetric transfer to the awaiter
                 }
-                // Signal while holding the lock, so get() cannot destroy
-                // the frame until we are done touching it.
-                std::lock_guard<std::mutex> lock(p.mutex);
-                p.finished = true;
-                p.cv.notify_all();
+                // From here on, only this local copy is touched — never `p`
+                // or `this`, which live in a frame get() may now free.
+                std::shared_ptr<Sync> sync = p.sync;
+                {
+                    std::lock_guard<std::mutex> lock(sync->mutex);
+                    sync->finished = true;
+                    sync->cv.notify_all();
+                }
                 return std::noop_coroutine();
             }
         };
@@ -106,11 +116,14 @@ public:
     /// @brief Runs the task and blocks the calling thread until it ends —
     ///        for `main()` and tests; inside a coroutine, `co_await` instead.
     T get() && {
+        // Take our own reference before resuming: once the task completes
+        // on another thread, the frame (and its promise) may not be touched
+        // except through what we hold.
+        std::shared_ptr<typename promise_type::Sync> sync = handle_.promise().sync;
         handle_.resume();
         {
-            promise_type &p = handle_.promise();
-            std::unique_lock<std::mutex> lock(p.mutex);
-            p.cv.wait(lock, [&p] { return p.finished; });
+            std::unique_lock<std::mutex> lock(sync->mutex);
+            sync->cv.wait(lock, [&sync] { return sync->finished; });
         }
         return take();
     }

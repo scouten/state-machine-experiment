@@ -96,6 +96,27 @@ TEST(a_stream_shorter_than_asked_is_a_host_failure) {
     CHECK(threw);
 }
 
+TEST(a_stream_that_cannot_seek_has_no_length_rather_than_a_huge_one) {
+    // A stream buffer that refuses every seek: tellg() then reports -1,
+    // which must not become a length of 2^64 - 1.
+    struct NoSeek : std::streambuf {
+        pos_type seekoff(off_type, std::ios_base::seekdir, std::ios_base::openmode) override {
+            return pos_type(off_type(-1));
+        }
+    } buffer;
+    std::istream in(&buffer);
+    IStreamHost host(in);
+    bool threw = false;
+    try {
+        host.length();
+    } catch (const std::runtime_error &) {
+        threw = true;
+    }
+    CHECK(threw);
+    // ...and a whole read against it fails as a host failure, not a hang.
+    CHECK_THROWS_CODE(read(Session("image/jpeg"), host), ErrorCode::Read);
+}
+
 TEST(a_failed_clock_and_a_missing_file_are_host_failures_too) {
     struct NoClock : MemoryHost {
         NoClock() : MemoryHost(fixture_bytes()) {}
@@ -343,6 +364,13 @@ TEST(cancelling_a_read_with_requests_in_flight_is_safe) {
 TEST(a_host_whose_start_throws_fails_that_request_not_the_driver) {
     struct Throwing : AsyncHost {
         void start(const Request &, Completion) override { throw std::runtime_error("no"); }
+    } host;
+    CHECK_THROWS_CODE(read_parallel(Session("image/jpeg"), host), ErrorCode::Read);
+}
+
+TEST(a_host_that_throws_something_that_is_not_an_exception_fails_the_request_too) {
+    struct Throwing : AsyncHost {
+        void start(const Request &, Completion) override { throw 42; }
     } host;
     CHECK_THROWS_CODE(read_parallel(Session("image/jpeg"), host), ErrorCode::Read);
 }
