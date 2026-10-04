@@ -31,13 +31,28 @@ c2pa = { version = "0.91", default-features = false, features = [
 ] }
 
 [dev-dependencies]
-# The write side, for the other direction of the interop check: sign with
+# The write side, for the other direction of the interop checks: sign with
 # this workspace's builder, read with the real `c2pa::Reader`.
 contentauth-c2pa-rs-compat-sign = { path = "../contentauth-c2pa-rs-compat-sign" }
-contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline", features = [
-    "fixtures",
+# Builds and signs a TIFF with this workspace's own write path, so the real
+# c2pa-rs can be asked to read what a second container format's handler
+# wrote — the interoperability question `contentauth-c2pa-format-tiff`
+# cannot answer for itself.
+contentauth-c2pa-builder = { path = "../contentauth-c2pa-builder" }
+contentauth-c2pa-format = { path = "../contentauth-c2pa-format", features = [
+    "test-util",
 ] }
-# Test-only signer, as every sibling crate's tests use. See deny.toml.
+contentauth-c2pa-format-tiff = { path = "../contentauth-c2pa-format-tiff" }
+contentauth-state-machine = { path = "../contentauth-state-machine" }
 c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
     "rust_native_crypto",
 ] }
+# The c2pa-rs-shaped manifest definition every write binding is held to,
+# so the claim itself is one c2pa-rs accepts and only the container is
+# under test.
+contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline", features = [
+    "fixtures",
+] }
+# Reads back the hard binding c2pa-rs wrote, to compare the exclusions the
+# TIFF handler reports against the ones c2pa-rs recorded.
+contentauth-c2pa-file-reader = { path = "../contentauth-c2pa-file-reader" }

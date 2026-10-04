@@ -11,13 +11,17 @@ me where it landed". This crate is where that knowledge plugs in — one
 crate per format, each implementing `FormatHandler`, none of which the
 reader, the builder, or this crate ever depend on. Third parties can ship a
 handler for a format this workspace has never heard of, and a host that
-knows what it is reading or writing picks the handler itself. (A registry
-that sniffs a format at run time is a separate, later concern; nothing
-here depends on one.)
+knows what it is reading or writing picks the handler itself. (Sniffing a
+format at run time is host-side work, in
+[`contentauth-c2pa-format-registry`](../contentauth-c2pa-format-registry);
+nothing here depends on it.)
 
 ## What a handler is
 
-Three operations, all format-specific, all pure:
+A `FormatDescriptor` — the format's name, media types, file extensions
+and byte signatures, as plain data with no code behind it, so a host can
+decide *which* handler an asset wants without running any of them — and
+three operations, all format-specific, all pure:
 
 | Operation | Produces | Purpose |
 |---|---|---|
@@ -43,12 +47,17 @@ crossable by a handler implemented in another language.
 ## Invariants
 
 `EmbedPlan::check` enforces the structural ones: every `Placeholder` slot
-lies inside the plan's exclusion range, and together the slots cover the
-manifest exactly once, in order. Two more are the handler's to honor and
+lies inside one of the plan's exclusions, no copied asset byte lies inside
+any, and together the slots cover the manifest exactly once, in order.
+A plan's `exclusions` are a *list* — one range for JPEG, two for TIFF,
+whose specification excludes a length field apart from the store — because
+real validators compare them exactly: a handler reports what its format's
+specification calls for, not a convenient superset. Two more are the handler's to honor and
 the conformance suite's to check:
 
-* Every `Patch` from `commit` lands inside the exclusion range — anything
-  outside it has already been hashed into the hard binding.
+* Every `Patch` from `commit` lands inside an exclusion
+  (`EmbedPlan::excludes`) — anything outside them has already been hashed
+  into the hard binding.
 * Embedding into an already-signed asset *replaces* the store and reports
   the replaced range in `EmbedPlan::replaced`. Whether replacing is
   acceptable, or whether the old store should be validated and carried

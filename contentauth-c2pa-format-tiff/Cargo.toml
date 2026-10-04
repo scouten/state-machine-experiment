@@ -1,0 +1,36 @@
+[package]
+name = "contentauth-c2pa-format-tiff"
+version = "0.1.0"
+description = "TIFF container support for the sans-I/O C2PA sessions: locating and embedding manifest stores as a private IFD tag, in TIFF and BigTIFF"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["c2pa", "content-credentials", "sans-io", "tiff"]
+categories = ["api-bindings", "multimedia::images"]
+publish = false
+
+[dependencies]
+# The contract this crate implements — the only crate in the workspace a
+# format handler needs to know about.
+contentauth-c2pa-format = { path = "../contentauth-c2pa-format" }
+contentauth-state-machine = { path = "../contentauth-state-machine" }
+contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
+
+[dev-dependencies]
+# The conformance suite every format handler runs against itself.
+contentauth-c2pa-format = { path = "../contentauth-c2pa-format", features = [
+    "test-util",
+] }
+# The end-to-end proof: a manifest built by the builder, embedded through
+# this crate, read back through the reader as trusted.
+contentauth-c2pa-builder = { path = "../contentauth-c2pa-builder" }
+contentauth-c2pa-reader = { path = "../contentauth-c2pa-reader" }
+# Test-only: plays the "host signer" in the end-to-end test, exactly as
+# contentauth-c2pa-builder's own tests do. See deny.toml for why its `rsa`
+# advisory is accepted for test-only use.
+c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
+    "rust_native_crypto",
+] }

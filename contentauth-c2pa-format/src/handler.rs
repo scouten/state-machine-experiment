@@ -17,6 +17,7 @@ use contentauth_c2pa_primitives::StreamId;
 use contentauth_state_machine::Session;
 
 use crate::{
+    descriptor::FormatDescriptor,
     error::FormatError,
     location::ManifestLocation,
     plan::{EmbedPlan, Patch},
@@ -54,12 +55,18 @@ impl<Output, S> FormatOp<Output> for S where
 /// types. A registry that picks a handler at run time is a separate
 /// concern for a separate crate, which can wrap any handler in an
 /// object-safe adapter of its own; nothing here needs to change for it.
+/// (`contentauth-c2pa-format-registry` is one.)
 pub trait FormatHandler {
     /// The operation [`Self::locate`] returns.
     type Locate: FormatOp<ManifestLocation>;
 
     /// The operation [`Self::plan_embed`] returns.
     type PlanEmbed: FormatOp<EmbedPlan>;
+
+    /// How this format identifies itself: plain data, with no code behind
+    /// it, so a host can decide *which* handler an asset wants without
+    /// running any of them. See [`FormatDescriptor`].
+    fn descriptor(&self) -> &FormatDescriptor;
 
     /// Finds the manifest store in the asset on `stream`.
     ///
@@ -86,8 +93,8 @@ pub trait FormatHandler {
     ///
     /// A pure function of the plan and the final store: a JPEG handler has
     /// nothing to patch, a PNG handler recomputes the chunk CRC. Every
-    /// patch must lie within [`EmbedPlan::exclusion`] — bytes outside it
-    /// have already been hashed into the hard binding — and a handler
+    /// patch must lie within one of [`EmbedPlan::exclusions`] — bytes outside
+    /// them have already been hashed into the hard binding — and a handler
     /// should also use this call to refuse a store that does not fit the
     /// assumptions its framing made ([`FormatError::ManifestMismatch`]).
     fn commit(&self, plan: &EmbedPlan, manifest: &[u8]) -> Result<Vec<Patch>, FormatError>;

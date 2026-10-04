@@ -32,22 +32,20 @@ pub enum Error {
         path: PathBuf,
     },
 
-    /// `path`'s extension names a container format no `FormatHandler` in
-    /// this crate's build has been wired up for.
+    /// `path` is neither recognizably a container format a registered
+    /// `FormatHandler` handles, nor named like one.
     ///
-    /// c2pa-rs resolves this from a registry of format handlers keyed by
-    /// MIME type; this crate has exactly one handler
-    /// ([`contentauth_c2pa_format_jpeg::JpegFormat`]), so the check is a
-    /// simple extension match today rather than a registry. See
-    /// [`crate::Reader::supported_extensions`], and `src/format.rs` for
-    /// where a second format handler would extend this.
-    #[error("{path} has an extension this build does not support (supported: {supported:?})")]
+    /// Content is checked before the extension (see `src/format.rs`), so
+    /// this means the file's leading bytes matched no registered format's
+    /// signature *and* its extension is not one any of them serves.
+    /// [`crate::Reader::supported_extensions`] lists the extensions.
+    #[error("{path} is not a recognized file type (supported extensions: {supported:?})")]
     UnsupportedType {
-        /// The path whose extension was not recognized.
+        /// The path that was not recognized.
         path: PathBuf,
 
         /// The extensions this build does recognize.
-        supported: &'static [&'static str],
+        supported: Vec<&'static str>,
     },
 
     /// The read engine itself failed — a malformed manifest store,

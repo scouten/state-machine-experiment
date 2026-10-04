@@ -278,7 +278,7 @@ enum State {
     AwaitingAssetLength {
         request: RequestId,
         manifest: Box<ManifestBuilder>,
-        exclusion: ByteRange,
+        exclusions: Vec<ByteRange>,
     },
     HashingAsset {
         /// Boxed for the same reason `contentauth-c2pa-reader`'s
@@ -286,23 +286,23 @@ enum State {
         /// session spends most of its life not hashing.
         stream: Box<HashStream>,
         manifest: Box<ManifestBuilder>,
-        exclusion: ByteRange,
+        exclusions: Vec<ByteRange>,
     },
     AwaitingSignature {
         request: RequestId,
         manifest: Box<ManifestBuilder>,
-        exclusion: ByteRange,
+        exclusions: Vec<ByteRange>,
     },
     AwaitingTimestamp {
         request: RequestId,
         manifest: Box<ManifestBuilder>,
-        exclusion: ByteRange,
+        exclusions: Vec<ByteRange>,
         signature: Vec<u8>,
     },
     AwaitingCommit {
         request: RequestId,
         manifest: Vec<u8>,
-        exclusion: ByteRange,
+        exclusions: Vec<ByteRange>,
     },
 
     /// Installed while a phase is being processed (see
@@ -350,33 +350,33 @@ impl BuilderSession {
                 State::AwaitingAssetLength {
                     request,
                     manifest,
-                    exclusion,
-                } => self.handle_awaiting_asset_length(request, manifest, exclusion),
+                    exclusions,
+                } => self.handle_awaiting_asset_length(request, manifest, exclusions),
 
                 State::HashingAsset {
                     stream,
                     manifest,
-                    exclusion,
-                } => self.handle_hashing_asset(stream, manifest, exclusion),
+                    exclusions,
+                } => self.handle_hashing_asset(stream, manifest, exclusions),
 
                 State::AwaitingSignature {
                     request,
                     manifest,
-                    exclusion,
-                } => self.handle_awaiting_signature(request, manifest, exclusion),
+                    exclusions,
+                } => self.handle_awaiting_signature(request, manifest, exclusions),
 
                 State::AwaitingTimestamp {
                     request,
                     manifest,
-                    exclusion,
+                    exclusions,
                     signature,
-                } => self.handle_awaiting_timestamp(request, manifest, exclusion, signature),
+                } => self.handle_awaiting_timestamp(request, manifest, exclusions, signature),
 
                 State::AwaitingCommit {
                     request,
                     manifest,
-                    exclusion,
-                } => self.handle_awaiting_commit(request, manifest, exclusion),
+                    exclusions,
+                } => self.handle_awaiting_commit(request, manifest, exclusions),
 
                 State::Poisoned => return Err(ProtocolError::SessionFailed.into()),
             }?;
@@ -456,15 +456,20 @@ impl BuilderSession {
                 return Ok(Some(Step::AwaitHost));
             }
 
-            Some(BuilderHostReply::PlaceholderReserved(exclusion)) => {
+            Some(BuilderHostReply::PlaceholderReserved(exclusions)) => {
                 // The container's framing around the placeholder (a
                 // JPEG's APP11 segment headers, say) belongs inside the
-                // exclusion, so the range may be longer than the
-                // placeholder — but never shorter, which would leave part
+                // exclusions, so they may total more than the
+                // placeholder — but never less, which would leave part
                 // of the manifest inside its own hash.
-                if exclusion.len < manifest.placeholder_bytes().len() as u64 {
+                let excluded = exclusions
+                    .iter()
+                    .try_fold(0u64, |total, range| total.checked_add(range.len));
+                if excluded
+                    .is_none_or(|excluded| excluded < manifest.placeholder_bytes().len() as u64)
+                {
                     return Err(Error::PlaceholderRangeInvalid(
-                        "the reserved range is shorter than the placeholder that was embedded",
+                        "the reserved ranges are shorter than the placeholder that was embedded",
                     ));
                 }
 
@@ -474,7 +479,7 @@ impl BuilderSession {
                 self.state = State::AwaitingAssetLength {
                     request,
                     manifest,
-                    exclusion,
+                    exclusions,
                 };
             }
 
@@ -502,20 +507,20 @@ impl BuilderSession {
         &mut self,
         request: RequestId,
         manifest: Box<ManifestBuilder>,
-        exclusion: ByteRange,
+        exclusions: Vec<ByteRange>,
     ) -> Result<Option<Step>, Error> {
         match self.core.take_reply(request) {
             None => {
                 self.state = State::AwaitingAssetLength {
                     request,
                     manifest,
-                    exclusion,
+                    exclusions,
                 };
                 return Ok(Some(Step::AwaitHost));
             }
 
             Some(BuilderHostReply::AssetLength(asset_len)) => {
-                let ranges = hash_stream::included_ranges(&[exclusion], asset_len).ok_or(
+                let ranges = hash_stream::included_ranges(&exclusions, asset_len).ok_or(
                     Error::PlaceholderRangeInvalid(
                         "the reserved placeholder range does not fit the asset",
                     ),
@@ -528,7 +533,7 @@ impl BuilderSession {
                 self.state = State::HashingAsset {
                     stream,
                     manifest,
-                    exclusion,
+                    exclusions,
                 };
             }
 
@@ -557,7 +562,7 @@ impl BuilderSession {
         &mut self,
         mut stream: Box<HashStream>,
         mut manifest: Box<ManifestBuilder>,
-        exclusion: ByteRange,
+        exclusions: Vec<ByteRange>,
     ) -> Result<Option<Step>, Error> {
         stream.absorb(&mut self.core)?;
 
@@ -566,13 +571,13 @@ impl BuilderSession {
             self.state = State::HashingAsset {
                 stream,
                 manifest,
-                exclusion,
+                exclusions,
             };
             return Ok(Some(Step::AwaitHost));
         }
 
         let hash = stream.finish()?;
-        let to_be_signed = manifest.apply_hard_binding(exclusion, hash)?;
+        let to_be_signed = manifest.apply_hard_binding(&exclusions, hash)?;
 
         let request = self.core.issue(BuilderRequest::Sign {
             alg: self.settings.signing_alg,
@@ -581,7 +586,7 @@ impl BuilderSession {
         self.state = State::AwaitingSignature {
             request,
             manifest,
-            exclusion,
+            exclusions,
         };
 
         Ok(Some(Step::AwaitHost))
@@ -593,14 +598,14 @@ impl BuilderSession {
         &mut self,
         request: RequestId,
         manifest: Box<ManifestBuilder>,
-        exclusion: ByteRange,
+        exclusions: Vec<ByteRange>,
     ) -> Result<Option<Step>, Error> {
         match self.core.take_reply(request) {
             None => {
                 self.state = State::AwaitingSignature {
                     request,
                     manifest,
-                    exclusion,
+                    exclusions,
                 };
                 return Ok(Some(Step::AwaitHost));
             }
@@ -617,11 +622,11 @@ impl BuilderSession {
                         self.state = State::AwaitingTimestamp {
                             request,
                             manifest,
-                            exclusion,
+                            exclusions,
                             signature,
                         };
                     }
-                    None => self.commit(manifest, exclusion, &signature, None)?,
+                    None => self.commit(manifest, exclusions, &signature, None)?,
                 }
             }
 
@@ -649,7 +654,7 @@ impl BuilderSession {
         &mut self,
         request: RequestId,
         manifest: Box<ManifestBuilder>,
-        exclusion: ByteRange,
+        exclusions: Vec<ByteRange>,
         signature: Vec<u8>,
     ) -> Result<Option<Step>, Error> {
         match self.core.take_reply(request) {
@@ -657,14 +662,14 @@ impl BuilderSession {
                 self.state = State::AwaitingTimestamp {
                     request,
                     manifest,
-                    exclusion,
+                    exclusions,
                     signature,
                 };
                 return Ok(Some(Step::AwaitHost));
             }
 
             Some(BuilderHostReply::Timestamp(token)) => {
-                self.commit(manifest, exclusion, &signature, Some(&token))?;
+                self.commit(manifest, exclusions, &signature, Some(&token))?;
             }
 
             // A failed timestamp is fatal, not a silent fallback to an
@@ -693,7 +698,7 @@ impl BuilderSession {
     fn commit(
         &mut self,
         manifest: Box<ManifestBuilder>,
-        exclusion: ByteRange,
+        exclusions: Vec<ByteRange>,
         signature: &[u8],
         timestamp_token: Option<&[u8]>,
     ) -> Result<(), Error> {
@@ -701,13 +706,13 @@ impl BuilderSession {
 
         let request = self.core.issue(BuilderRequest::CommitManifest {
             stream: Self::PRIMARY_STREAM,
-            range: exclusion,
+            exclusions: exclusions.clone(),
             manifest: final_bytes.clone(),
         });
         self.state = State::AwaitingCommit {
             request,
             manifest: final_bytes,
-            exclusion,
+            exclusions,
         };
 
         Ok(())
@@ -718,14 +723,14 @@ impl BuilderSession {
         &mut self,
         request: RequestId,
         manifest: Vec<u8>,
-        exclusion: ByteRange,
+        exclusions: Vec<ByteRange>,
     ) -> Result<Option<Step>, Error> {
         match self.core.take_reply(request) {
             None => {
                 self.state = State::AwaitingCommit {
                     request,
                     manifest,
-                    exclusion,
+                    exclusions,
                 };
                 return Ok(Some(Step::AwaitHost));
             }
@@ -733,7 +738,7 @@ impl BuilderSession {
             Some(BuilderHostReply::ManifestCommitted) => {
                 self.report = Some(BuilderReport {
                     manifest,
-                    manifest_range: exclusion,
+                    exclusions,
                 });
                 self.core.mark_complete();
             }
@@ -818,8 +823,9 @@ pub struct BuilderReport {
     /// patched into the asset via `BuilderRequest::CommitManifest`.
     pub manifest: Vec<u8>,
 
-    /// The byte range of the container structure carrying the manifest,
-    /// framing included — the hard binding's exclusion, as the host
-    /// reported it via `BuilderHostReply::PlaceholderReserved`.
-    pub manifest_range: ByteRange,
+    /// The hard binding's exclusions, as the host reported them via
+    /// `BuilderHostReply::PlaceholderReserved`: the container structure
+    /// carrying the manifest, framing included, and anything else the
+    /// format's specification excludes.
+    pub exclusions: Vec<ByteRange>,
 }

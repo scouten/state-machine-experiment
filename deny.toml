@@ -32,7 +32,7 @@ ignore = [
     #   attack does not touch.
     # * `contentauth-c2pa-builder`'s *dev*-dependency on `c2pa_raw_crypto`,
     #   which plays the "host signer" in its own integration tests (and
-    #   likewise `contentauth-c2pa-format-jpeg`'s, for its end-to-end
+    #   likewise `contentauth-c2pa-format-jpeg`'s and `-format-tiff`'s, for their end-to-end
     #   build-embed-read test). Real signing keys never enter the shipped
     #   crates — the builder only ever asks a host to sign, over its
     #   `BuilderRequest::Sign` request — so this exposure is test-only and

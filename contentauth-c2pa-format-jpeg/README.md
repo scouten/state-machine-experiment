@@ -3,7 +3,11 @@
 JPEG container support for the sans-I/O C2PA sessions in this workspace:
 a [`contentauth-c2pa-format`](../contentauth-c2pa-format) `FormatHandler`
 that locates a manifest store in a JPEG's `APP11` segments and plans
-embedding one. The first — and the reference — format handler.
+embedding one. The first — and the reference — format handler;
+[`contentauth-c2pa-format-tiff`](../contentauth-c2pa-format-tiff) is the
+second, and shows what a format that is not a segment stream looks like.
+It also publishes its `DESCRIPTOR` (name, media type, extensions, `FF D8 FF`
+signature), which is all a host needs to detect JPEG.
 
 ## What it does
 
@@ -46,7 +50,7 @@ a large JPEG costs a few dozen small reads regardless of size:
   `contentauth-c2pa-builder`, embedded through this crate — including one
   large enough to span two segments — and read back through this crate
   by `contentauth-c2pa-reader` as trusted, with the reader's hard-binding
-  check confirming the declared exclusion range is the one the signed
+  check confirming the declared exclusion is the one the signed
   hash was computed over.
 
 ## Building

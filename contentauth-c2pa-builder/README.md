@@ -37,10 +37,14 @@ trip:
    (the hard binding's hash, the claim signature, an RFC 3161 timestamp if
    requested) zero-filled at exactly its final encoded length — and asks
    the host to embed it (`BuilderRequest::ReservePlaceholder`).
-2. The host reports back the byte range of the container structure now
-   carrying the placeholder — framing included, since a JPEG's `APP11`
-   segment headers belong inside the exclusion too.
-3. The session hashes the asset outside that range, patches in the real
+2. The host reports back the byte ranges the hard binding must exclude —
+   usually the one range of the container structure now carrying the
+   placeholder, framing included (a JPEG's `APP11` segment headers belong
+   inside it too), but exactly what the format's specification calls for:
+   TIFF excludes a length field and the store, which are not adjacent. Up
+   to `MAX_EXCLUSIONS`; the placeholder reserves room for that many, and
+   the real assertion pads the difference.
+3. The session hashes the asset outside those ranges, patches in the real
    hash, and asks the host to sign the claim (`BuilderRequest::Sign`) and,
    if configured, obtain a timestamp (`BuilderRequest::Timestamp`).
 4. It patches the real signature (and timestamp) into the very same
