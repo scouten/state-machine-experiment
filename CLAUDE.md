@@ -227,9 +227,9 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   whole directory of assets (`examples/compare_corpus.rs`) as the seam for
   running the comparison at the scale of a real corpus. It also holds the
   second container format to the real thing: a TIFF signed by c2pa-rs is
-  read by this workspace's TIFF handler to the same answer, and c2pa-rs
-  finds the store in a TIFF signed here (but cannot yet validate it; see
-  `contentauth-c2pa-format-tiff`'s README). Deliberately
+  read by this workspace's TIFF handler to the same answer, while c2pa-rs
+  finds and parses a TIFF signed here but rejects its hard binding's
+  single exclusion range (see `contentauth-c2pa-format-tiff`'s README). Deliberately
   **not** a member of this workspace (it has its own `[workspace]` in its
   `Cargo.toml`) — see its own README: the real `c2pa` crate is heavy and
   under no obligation to satisfy this workspace's Wasm/MSRV/`cargo-deny`

@@ -48,9 +48,8 @@ const TIFF: &[u8] = b"II\x2a\0\x08\0\0\0\x01\0\0\x01\x03\0\x01\0\0\0\x01\0\0\0\0
 
 /// Builds and signs a manifest and embeds it into `source` through
 /// `handler`, as a host writing a file would.
-fn sign<H: FormatHandler>(handler: &H, mime: &str, source: &[u8]) -> Vec<u8> {
+fn sign<H: FormatHandler>(handler: &H, source: &[u8]) -> Vec<u8> {
     let settings = BuilderSettings::new(
-        mime,
         "xmp:iid:test-instance",
         "urn:uuid:test-manifest",
         GeneratorInfo::new("contentauth-c2pa-rs-compat-tests", "0.1"),
@@ -122,11 +121,11 @@ fn trusting() -> Context {
 }
 
 fn signed_tiff() -> Vec<u8> {
-    sign(&TiffFormat, "image/tiff", TIFF)
+    sign(&TiffFormat, TIFF)
 }
 
 fn signed_jpeg() -> Vec<u8> {
-    sign(&JpegFormat, "image/jpeg", C_JPG)
+    sign(&JpegFormat, C_JPG)
 }
 
 #[test]

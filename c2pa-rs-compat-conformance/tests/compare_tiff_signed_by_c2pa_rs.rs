@@ -31,11 +31,6 @@ fn path(name: &str) -> PathBuf {
 
 /// A little-endian TIFF with one IFD and an `ImageWidth`, `ImageLength`,
 /// and a strip of pixels the strip entries point at.
-///
-/// Signed with a v1 claim (`"claim_version": 1`): `contentauth-c2pa-reader`
-/// understands only v1-shaped claims today — c2pa-rs 0.91's default v2
-/// claim carries `claim_generator_info` as a map, which it rejects — and
-/// the question here is the container, not the claim.
 fn tiff() -> Vec<u8> {
     let mut out = b"II\x2a\0\x08\0\0\0".to_vec();
     out.extend([4, 0]);
@@ -66,9 +61,8 @@ fn sign_with_c2pa_rs(name: &str) -> PathBuf {
         .with_definition(
             r#"{
               "title": "tiff",
-              "claim_version": 1,
               "assertions": [{
-                "label": "c2pa.actions",
+                "label": "c2pa.actions.v2",
                 "data": {"actions": [{
                   "action": "c2pa.created",
                   "digitalSourceType": "http://cv.iptc.org/newscodes/digitalsourcetype/digitalCapture"
@@ -95,6 +89,7 @@ fn the_tiff_handler_reads_a_store_c2pa_rs_wrote() {
     // Valid, not merely readable: the hard binding checked out against the
     // exclusions c2pa-rs wrote for its own layout.
     assert_eq!(via_compat.validation_state, "Valid");
-    assert_eq!(via_compat.format.as_deref(), Some("image/tiff"));
+    // A v2 claim carries no `dc:format`; both readers agree on that.
+    assert_eq!(via_compat.format, None);
     assert_eq!(via_compat.title.as_deref(), Some("tiff"));
 }

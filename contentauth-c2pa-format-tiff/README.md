@@ -40,18 +40,26 @@ linked onto the end of the main chain:
 * Every byte of framing depends only on the store's *length*, which a plan
   is given, so `commit` has nothing to patch.
 
-### One finding for the contract
+### One finding for the contract — confirmed against c2pa-rs
 
 The specification excludes the entry's `count` field *and* the store from
 the hash. `EmbedPlan` has a single exclusion range, so this crate leans on
 the layout: with the entry last and the store right after it, `count`, the
 value offset, the (zero) next pointer, and the store are contiguous. That
 excludes two fields (the offset and the zero pointer) the specification
-does not — a small loosening. c2pa-rs's own writer reports two exclusions
-instead: the store, and the `count` field alone. A format that cannot
-arrange contiguity — or a hash that must be exact — would need
-`EmbedPlan::exclusion` to become a list. That change belongs in
-`contentauth-c2pa-format`; nothing here pushes on it yet.
+does not.
+
+**c2pa-rs rejects it.** Its writer reports two exclusions — the store, and
+the `count` field alone — and its validator requires the hard binding's to
+match: a TIFF signed here reads fine in c2pa-rs but fails
+`assertion.dataHash.mismatch` ("data hash exclusion does not match the
+manifest location in the asset"). This workspace's own reader checks the
+exclusions the assertion declares, so it says `Valid`; the two disagree,
+and `c2pa-rs-compat-conformance/tests/compare_tiff.rs` pins that
+disagreement. Closing it means `EmbedPlan::exclusion` (and the builder's
+`PlaceholderReserved` / `manifest_range`, and the file-builder and
+bindings that carry them) becoming a *list* of ranges. That is a contract
+change, not made here.
 
 ## What it does not do
 
@@ -66,20 +74,20 @@ arrange contiguity — or a hash that must be exact — would need
 
 ## Interoperability with c2pa-rs
 
-`c2pa-rs-compat-conformance`'s `tests/compare_tiff_signed_by_c2pa_rs.rs`
-has the real c2pa-rs sign a TIFF and checks this crate reads it — through
-`contentauth-c2pa-rs-compat`'s `Reader` — to the same answer c2pa-rs's own
-`Reader` gives, `Valid`, hard binding included. c2pa-rs lays the store out
-differently (for a single-page file it clones the first IFD and adds the
-entry among the others), so that test is of the handler's *reading*, not
-just its own writer's. c2pa-rs reads the last IFD for the entry first and
-the first IFD second, which finds this crate's layout too.
+`c2pa-rs-compat-conformance` checks both directions against the real
+c2pa-rs:
 
-The other direction is only half proven: c2pa-rs locates and parses a store
-this crate embedded, but cannot validate it — this workspace's builder
-emits a claim c2pa-rs 0.91 rejects for any container (see
-`tests/compare_tiff.rs`), so whether c2pa-rs accepts the slightly broader
-exclusion above is untested.
+* `tests/compare_tiff_signed_by_c2pa_rs.rs` — c2pa-rs signs a TIFF (its own
+  layout, which differs: for a single-page file it clones the first IFD and
+  adds the entry among the others), and this crate reads it, through
+  `contentauth-c2pa-rs-compat`'s `Reader`, to the same answer c2pa-rs's own
+  `Reader` gives, `Valid` included. So the handler's *reading* is the
+  specification's, not just its own writer's. (c2pa-rs looks in the last
+  IFD for the entry first and the first IFD second, which finds this
+  crate's layout too.)
+* `tests/compare_tiff.rs` — a TIFF signed here: c2pa-rs finds the store and
+  parses its v2 claim, and everything agrees *except* the hard-binding
+  verdict, for the reason in the finding above.
 
 ## Tests
 
