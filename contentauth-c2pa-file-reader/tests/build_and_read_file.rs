@@ -76,9 +76,9 @@ fn build_and_embed(source: &[u8]) -> (EmbedPlan, Vec<u8>) {
                         .run(JpegFormat.plan_embed(STREAM, placeholder.len() as u64))
                         .unwrap();
                     asset = embed_plan.materialize(source, placeholder).unwrap();
-                    let exclusion = embed_plan.exclusion;
+                    let exclusions = embed_plan.exclusions.clone();
                     plan = Some(embed_plan);
-                    BuilderHostReply::PlaceholderReserved(exclusion)
+                    BuilderHostReply::PlaceholderReserved(exclusions)
                 }
 
                 BuilderRequest::AssetLength { .. } => {
@@ -100,10 +100,12 @@ fn build_and_embed(source: &[u8]) -> (EmbedPlan, Vec<u8>) {
                 }
 
                 BuilderRequest::CommitManifest {
-                    range, manifest, ..
+                    exclusions,
+                    manifest,
+                    ..
                 } => {
                     let embed_plan = plan.as_ref().unwrap();
-                    assert_eq!(*range, embed_plan.exclusion);
+                    assert_eq!(*exclusions, embed_plan.exclusions);
 
                     let patches = JpegFormat.commit(embed_plan, manifest).unwrap();
                     asset = embed_plan.materialize(source, manifest).unwrap();
@@ -143,7 +145,7 @@ fn a_manifest_written_by_the_builder_reads_back_as_trusted_from_a_real_file() {
     assert_eq!(active.label, "urn:uuid:test-manifest");
     assert_eq!(
         active.data_hash.as_ref().unwrap().exclusions,
-        [plan.exclusion],
+        plan.exclusions,
         "the exclusion the reader verified against the real file matches what the builder placed"
     );
 }

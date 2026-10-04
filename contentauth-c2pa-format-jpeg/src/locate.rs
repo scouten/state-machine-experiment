@@ -46,7 +46,7 @@ impl Goal for LocateGoal {
 
     fn finalize(self, layout: Layout) -> Result<ManifestLocation, FormatError> {
         Ok(match layout.manifest_run()? {
-            Some(run) => ManifestLocation::embedded(run.jumbf, run.range),
+            Some(run) => ManifestLocation::embedded(run.jumbf, run.range, vec![run.range]),
             None => ManifestLocation::none(),
         })
     }

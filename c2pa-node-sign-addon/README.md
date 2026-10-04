@@ -21,7 +21,7 @@ const result = await signAsset(
   },
   { output: { path: "out.jpg" }, concurrency: 4 },
 );
-// { manifest, manifestStart, manifestLen }; with no `output`, also `buffer`
+// { manifest, exclusions: [{ start, len }, …] }; with no `output`, also `buffer`
 ```
 
 `new Builder(definition).sign(asset, signer, options)` is the same call.
@@ -38,7 +38,7 @@ for (;;) {
   }
   await Promise.race(inFlight);
 }
-const { manifest, manifestStart, manifestLen } = native.buildFinish(session);
+const { manifest, exclusions } = native.buildFinish(session);
 ```
 
 That is `drive` in `index.mjs`. Streams are `"source"` (read-only) and

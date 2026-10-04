@@ -29,8 +29,9 @@ use core::mem::replace;
 use contentauth_c2pa_format::{
     take_bytes, take_length,
     test_util::{conformance, MemoryHost, STREAM},
-    ByteRange, Edit, EmbedPlan, FormatError, FormatHandler, HostRequest, IoRequest,
-    ManifestLocation, Patch, ProtocolError, RequestId, Session, Step, StreamId,
+    ByteRange, Edit, EmbedPlan, FormatDescriptor, FormatError, FormatHandler, HostRequest,
+    IoRequest, ManifestLocation, Patch, ProtocolError, RequestId, Session, Signature, Step,
+    StreamId,
 };
 use contentauth_state_machine::SessionCore;
 
@@ -228,7 +229,7 @@ impl Session for Locate {
 
     fn finish(self) -> Result<ManifestLocation, FormatError> {
         Ok(match self.0.finish()?.store {
-            Some((range, jumbf)) => ManifestLocation::embedded(jumbf, range),
+            Some((range, jumbf)) => ManifestLocation::embedded(jumbf, range, vec![range]),
             None => ManifestLocation::none(),
         })
     }
@@ -286,11 +287,22 @@ impl Session for PlanEmbed {
     }
 }
 
+const DESCRIPTOR: FormatDescriptor = FormatDescriptor::new(
+    "trailer",
+    &["application/x-trailer"],
+    &["trl"],
+    &[Signature::new(0, b"TRLR")],
+);
+
 struct TrailerFormat;
 
 impl FormatHandler for TrailerFormat {
     type Locate = Locate;
     type PlanEmbed = PlanEmbed;
+
+    fn descriptor(&self) -> &FormatDescriptor {
+        &DESCRIPTOR
+    }
 
     fn locate(&self, stream: StreamId) -> Locate {
         Locate(Scan::new(stream))
@@ -309,7 +321,11 @@ impl FormatHandler for TrailerFormat {
                 "store length differs from the plan's",
             ));
         }
-        Ok(Vec::new())
+        // A real format patches bytes that depend on the store (a CRC, a
+        // length); this one restates the store's first byte, inside the
+        // exclusion, so the suite exercises the patch path too.
+        let first = plan.exclusions.first().map(|e| e.start).unwrap_or(0);
+        Ok(vec![Patch::new(first, manifest[..1].to_vec())])
     }
 }
 

@@ -92,13 +92,17 @@ test("the baseline case signs a JPEG file that reads back Trusted", async () => 
 
   assert.equal(signer.stats.calls, 1);
   assert.ok(result.manifest.length > 0);
-  assert.ok(result.manifestLen >= result.manifest.length);
+  assert.ok(
+    result.exclusions.reduce((total, e) => total + e.len, 0) >=
+      result.manifest.length,
+  );
   assert.equal(result.buffer, undefined);
 
   // The reported range holds the manifest store's bytes within its framing.
   const signed = readFileSync(output);
   assert.ok(signed.includes(result.manifest.subarray(0, 64)));
-  assert.ok(result.manifestStart + result.manifestLen <= signed.length);
+  const last = result.exclusions.at(-1);
+  assert.ok(last.start + last.len <= signed.length);
 
   assertBaseline(await Reader.fromAsset({ path: output }, trustSettings));
   // Without the anchor, the same asset is valid but not Trusted.
@@ -113,7 +117,7 @@ test("with no output path the signed asset is returned, identical to the file ro
   const viaBuffer = await signAsset({ path: SOURCE }, BASELINE, testSigner());
 
   assert.ok(Buffer.isBuffer(viaBuffer.buffer));
-  assert.equal(viaBuffer.manifestStart, viaFile.manifestStart);
+  assert.deepEqual(viaBuffer.exclusions, viaFile.exclusions);
   assert.equal(viaBuffer.buffer.length, readFileSync(output).length);
   assert.ok(viaBuffer.buffer.subarray(0, 2).equals(Buffer.from([0xff, 0xd8])));
 
@@ -189,8 +193,7 @@ test("the host's concurrency limit changes how requests are issued, not the resu
   // ECDSA is randomized, so signatures differ; everything else is identical.
   for (const other of [serial, two]) {
     assert.equal(other.buffer.length, unlimited.buffer.length);
-    assert.equal(other.manifestStart, unlimited.manifestStart);
-    assert.equal(other.manifestLen, unlimited.manifestLen);
+    assert.deepEqual(other.exclusions, unlimited.exclusions);
   }
 });
 

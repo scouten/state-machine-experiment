@@ -63,64 +63,113 @@ const BINDING_NAME: &str = "jumbf manifest";
 /// negative `start`/`length` as malformed).
 const MAX_INT_LEN: u64 = 9;
 
-/// Total bytes reserved for "the two exclusion integers (`start`,
-/// `length`), plus `pad` and `pad2`" — computed once, worst case, and
-/// never revisited. An empty `pad` and `pad2` each cost one byte (their
+/// The most exclusions a hard binding written by this crate may carry.
+///
+/// The placeholder is embedded before the host says how many ranges its
+/// format excludes, so its size has to leave room for the most there can
+/// be; the real assertion then pads the difference. Four is room for
+/// formats that exclude a few separate fields beside the store (TIFF
+/// needs two), at a cost of about 100 bytes in every manifest.
+pub const MAX_EXCLUSIONS: usize = 4;
+
+/// Bytes one exclusion costs beyond its two integers: the map head, and
+/// the `start` and `length` keys (a one-byte text head plus 5 and 6
+/// characters).
+const ENTRY_OVERHEAD_LEN: u64 = 1 + (1 + 5) + (1 + 6);
+
+/// Total bytes reserved for "every exclusion's map (`start` and `length`
+/// at their widest), plus `pad` and `pad2`" — computed once, worst case,
+/// and never revisited. An empty `pad` and `pad2` each cost one byte (their
 /// own one-byte, zero-length head), so [`encode`]'s placeholder pass
 /// reserves this many bytes regardless of the asset; every later pass
-/// computes the real, typically much smaller, integer encodings and grows
+/// computes the real, typically much smaller, encodings and grows
 /// `pad`/`pad2` to compensate, so this total never changes.
-const RESERVED_VARIABLE_LEN: u64 = MAX_INT_LEN + MAX_INT_LEN + 1 + 1;
+const RESERVED_VARIABLE_LEN: u64 =
+    MAX_EXCLUSIONS as u64 * (ENTRY_OVERHEAD_LEN + MAX_INT_LEN + MAX_INT_LEN) + 1 + 1;
 
 /// Encodes a `c2pa.hash.data` assertion.
 ///
-/// `exclusion` is `None` for the placeholder pass, before the host has
-/// reported where the manifest landed: a maximum-width placeholder
-/// exclusion is encoded instead, sized so that the real exclusion —
-/// reported once the placeholder has actually been embedded — never needs
-/// more room than this reserves. `Some(exclusion)` produces the final,
-/// real encoding, guaranteed to total the same length as the placeholder.
+/// `exclusions` is `None` for the placeholder pass, before the host has
+/// reported where the manifest landed: [`MAX_EXCLUSIONS`] maximum-width
+/// placeholder exclusions are encoded instead, sized so that the real
+/// exclusions — reported once the placeholder has actually been embedded —
+/// never need more room than this reserves. `Some(exclusions)` produces
+/// the final, real encoding, guaranteed to total the same length as the
+/// placeholder.
 pub(crate) fn encode(
     hash_alg: HashAlgorithm,
     hash: &[u8],
-    exclusion: Option<ByteRange>,
+    exclusions: Option<&[ByteRange]>,
 ) -> Result<Vec<u8>, Error> {
-    let (start, length) = match exclusion {
-        Some(range) => (
-            i64::try_from(range.start).map_err(|_| {
-                Error::PlaceholderRangeInvalid("exclusion start does not fit a CBOR integer")
-            })?,
-            i64::try_from(range.len).map_err(|_| {
-                Error::PlaceholderRangeInvalid("exclusion length does not fit a CBOR integer")
-            })?,
-        ),
-        // The placeholder pass: any value whose shortest-form CBOR
-        // encoding is the maximum width reserves the worst case. The
-        // magnitude carries no other meaning and is overwritten before
-        // this assertion is ever read.
-        None => (i64::MAX, i64::MAX),
+    // The placeholder pass: any value whose shortest-form CBOR encoding
+    // is the maximum width reserves the worst case. The magnitude carries
+    // no other meaning and is overwritten before this assertion is ever
+    // read.
+    let placeholder = [(i64::MAX, i64::MAX); MAX_EXCLUSIONS];
+
+    let entries: Vec<(i64, i64)> = match exclusions {
+        Some([]) => {
+            return Err(Error::PlaceholderRangeInvalid(
+                "a hard binding needs at least one exclusion",
+            ))
+        }
+        Some(ranges) if ranges.len() > MAX_EXCLUSIONS => {
+            return Err(Error::PlaceholderRangeInvalid(
+                "more exclusions than a hard binding has room reserved for",
+            ))
+        }
+        Some(ranges) => ranges
+            .iter()
+            .map(|range| {
+                Ok((
+                    i64::try_from(range.start).map_err(|_| {
+                        Error::PlaceholderRangeInvalid(
+                            "exclusion start does not fit a CBOR integer",
+                        )
+                    })?,
+                    i64::try_from(range.len).map_err(|_| {
+                        Error::PlaceholderRangeInvalid(
+                            "exclusion length does not fit a CBOR integer",
+                        )
+                    })?,
+                ))
+            })
+            .collect::<Result<_, Error>>()?,
+        None => placeholder.to_vec(),
     };
 
-    let real_ints_len = uint_head_len(start as u64) as u64 + uint_head_len(length as u64) as u64;
+    let real_len: u64 = entries
+        .iter()
+        .map(|(start, length)| {
+            ENTRY_OVERHEAD_LEN
+                + uint_head_len(*start as u64) as u64
+                + uint_head_len(*length as u64) as u64
+        })
+        .sum();
     let pads_target =
         RESERVED_VARIABLE_LEN
-            .checked_sub(real_ints_len)
+            .checked_sub(real_len)
             .ok_or(Error::PlaceholderSizeMismatch(
-                "exclusion integers exceeded the width reserved for them",
+                "exclusions exceeded the width reserved for them",
             ))?;
     let (pad_len, pad2_len) = pad_lens_for_target(pads_target).ok_or(
         Error::PlaceholderSizeMismatch("could not compute an exact padding length"),
     )?;
 
-    let exclusion_map = Value::Map(BTreeMap::from([
-        (Value::Text("start".to_string()), Value::Integer(start)),
-        (Value::Text("length".to_string()), Value::Integer(length)),
-    ]));
+    let exclusion_maps = entries
+        .into_iter()
+        .map(|(start, length)| {
+            Value::Map(BTreeMap::from([
+                (Value::Text("start".to_string()), Value::Integer(start)),
+                (Value::Text("length".to_string()), Value::Integer(length)),
+            ]))
+        })
+        .collect();
 
     let fields = BTreeMap::from([
         (
             Value::Text("exclusions".to_string()),
-            Value::Array(vec![exclusion_map]),
+            Value::Array(exclusion_maps),
         ),
         (
             Value::Text("name".to_string()),
@@ -162,10 +211,10 @@ mod tests {
         let real_small = encode(
             HashAlgorithm::Sha256,
             &hash,
-            Some(ByteRange {
+            Some(&[ByteRange {
                 start: 20,
                 len: 45884,
-            }),
+            }]),
         )
         .unwrap();
         assert_eq!(placeholder.len(), real_small.len());
@@ -174,10 +223,10 @@ mod tests {
         let real_large = encode(
             HashAlgorithm::Sha256,
             &hash,
-            Some(ByteRange {
+            Some(&[ByteRange {
                 start: 5_000_000_000,
                 len: 42,
-            }),
+            }]),
         )
         .unwrap();
         assert_eq!(placeholder.len(), real_large.len());
@@ -186,7 +235,7 @@ mod tests {
         let real_zero = encode(
             HashAlgorithm::Sha256,
             &hash,
-            Some(ByteRange { start: 0, len: 0 }),
+            Some(&[ByteRange { start: 0, len: 0 }]),
         )
         .unwrap();
         assert_eq!(placeholder.len(), real_zero.len());
@@ -205,10 +254,10 @@ mod tests {
             let bytes = encode(
                 hash_alg,
                 &hash,
-                Some(ByteRange {
+                Some(&[ByteRange {
                     start: 1234,
                     len: 5678,
-                }),
+                }]),
             )
             .unwrap();
 
@@ -252,12 +301,79 @@ mod tests {
             encode(
                 HashAlgorithm::Sha256,
                 &hash,
-                Some(ByteRange {
+                Some(&[ByteRange {
                     start: too_large,
                     len: 0
-                })
+                }])
             ),
             Err(Error::PlaceholderRangeInvalid(_))
         ));
+    }
+
+    #[test]
+    fn several_exclusions_encode_to_the_placeholder_length_too() {
+        let hash = vec![0xab; HashAlgorithm::Sha256.digest_len()];
+        let placeholder = encode(HashAlgorithm::Sha256, &hash, None).unwrap();
+
+        for count in 1..=MAX_EXCLUSIONS {
+            let ranges: Vec<ByteRange> = (0..count as u64)
+                .map(|i| ByteRange {
+                    start: 10 + i * 1_000_000_007,
+                    len: 4 + i * 70_000,
+                })
+                .collect();
+            let real = encode(HashAlgorithm::Sha256, &hash, Some(&ranges)).unwrap();
+            assert_eq!(placeholder.len(), real.len(), "{count} exclusions");
+
+            let decoded: Value = c2pa_cbor::from_slice(&real).unwrap();
+            let Some(Value::Array(exclusions)) = decoded
+                .as_map()
+                .unwrap()
+                .get(&Value::Text("exclusions".to_string()))
+            else {
+                panic!("expected an exclusions array");
+            };
+            assert_eq!(exclusions.len(), count);
+        }
+    }
+
+    #[test]
+    fn no_exclusions_or_too_many_are_refused() {
+        let hash = vec![0xab; HashAlgorithm::Sha256.digest_len()];
+        let range = ByteRange { start: 1, len: 1 };
+
+        assert!(matches!(
+            encode(HashAlgorithm::Sha256, &hash, Some(&[])),
+            Err(Error::PlaceholderRangeInvalid(_))
+        ));
+        assert!(matches!(
+            encode(
+                HashAlgorithm::Sha256,
+                &hash,
+                Some(&[range; MAX_EXCLUSIONS + 1])
+            ),
+            Err(Error::PlaceholderRangeInvalid(_))
+        ));
+    }
+
+    #[test]
+    fn offsets_too_large_for_a_cbor_integer_are_refused() {
+        let hash = vec![0xab; HashAlgorithm::Sha256.digest_len()];
+
+        for range in [
+            ByteRange {
+                start: u64::MAX,
+                len: 1,
+            },
+            ByteRange {
+                start: 1,
+                len: u64::MAX,
+            },
+        ] {
+            assert!(matches!(
+                encode(HashAlgorithm::Sha256, &hash, Some(&[range])),
+                Err(Error::PlaceholderRangeInvalid(_))
+            ));
+        }
     }
 }
