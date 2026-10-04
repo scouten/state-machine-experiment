@@ -161,3 +161,74 @@ fn the_same_signer_with_a_v1_claim_still_reads() {
     assert_eq!(active.claim_version(), ClaimVersion::V1);
     assert_eq!(reader.validation_state(), ValidationState::Valid);
 }
+
+/// Signs with the repository's test key. It protects nothing.
+struct WorkspaceSigner;
+
+impl contentauth_c2pa_rs_compat_sign::Signer for WorkspaceSigner {
+    fn alg(&self) -> contentauth_c2pa_rs_compat_sign::SigningAlg {
+        contentauth_c2pa_rs_compat_sign::SigningAlg::Es256
+    }
+
+    fn certs(&self) -> Vec<Vec<u8>> {
+        vec![SIGNER_CERT_DER.to_vec()]
+    }
+
+    fn sign(&self, data: &[u8]) -> Result<Vec<u8>, contentauth_c2pa_rs_compat_sign::HostError> {
+        c2pa_raw_crypto::signer_from_private_key(SIGNER_KEY_PEM, c2pa_raw_crypto::SigningAlg::Es256)
+            .and_then(|signer| signer.sign(data))
+            .map_err(|err| contentauth_c2pa_rs_compat_sign::HostError::new(err.to_string()))
+    }
+}
+
+/// The other direction: a manifest this workspace's *builder* writes is
+/// read by real c2pa-rs as a v2 claim, with a valid signature and a hard
+/// binding that matches — so a write-side mistake that this workspace's own
+/// reader happened to forgive would still be caught here.
+#[test]
+fn a_manifest_the_workspace_builder_wrote_is_a_valid_v2_claim_to_c2pa_rs() {
+    let mut signed = Cursor::new(Vec::new());
+    contentauth_c2pa_rs_compat_sign::Builder::from_json(
+        contentauth_c2pa_sign_baseline::BASELINE_DEFINITION,
+    )
+    .expect("the baseline definition is valid")
+    .sign(
+        &WorkspaceSigner,
+        "image/jpeg",
+        Cursor::new(unsigned_jpeg()),
+        &mut signed,
+    )
+    .expect("the workspace builder signs the JPEG");
+    let path = write_temp("workspace_built_v2.jpg", &signed.into_inner());
+
+    let reader = c2pa::Reader::from_context(c2pa::Context::new())
+        .with_file(&path)
+        .expect("c2pa-rs reads the workspace-built manifest");
+
+    let active = reader.active_manifest().expect("an active manifest");
+    assert_eq!(active.claim_version(), Some(2), "{}", reader.json());
+    assert_eq!(active.title(), Some("baseline.jpg"));
+
+    let results = reader
+        .validation_results()
+        .and_then(|results| results.active_manifest())
+        .expect("c2pa-rs validated the active manifest");
+    let failures: Vec<&str> = results.failure().iter().map(|s| s.code()).collect();
+    let successes: Vec<&str> = results.success().iter().map(|s| s.code()).collect();
+    // The only complaint is that the test signer chains to no trust
+    // anchor c2pa-rs holds; everything about the claim, its hashes, its
+    // binding and its signature is sound.
+    assert_eq!(failures, ["signingCredential.untrusted"], "{failures:?}");
+    assert!(
+        successes.contains(&"claimSignature.validated"),
+        "{successes:?}"
+    );
+    assert!(
+        successes.contains(&"assertion.dataHash.match"),
+        "{successes:?}"
+    );
+    assert!(
+        successes.contains(&"assertion.hashedURI.match"),
+        "{successes:?}"
+    );
+}

@@ -29,3 +29,15 @@ c2pa = { version = "0.91", default-features = false, features = [
     "file_io",
     "rust_native_crypto",
 ] }
+
+[dev-dependencies]
+# The write side, for the other direction of the interop check: sign with
+# this workspace's builder, read with the real `c2pa::Reader`.
+contentauth-c2pa-rs-compat-sign = { path = "../contentauth-c2pa-rs-compat-sign" }
+contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline", features = [
+    "fixtures",
+] }
+# Test-only signer, as every sibling crate's tests use. See deny.toml.
+c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
+    "rust_native_crypto",
+] }
