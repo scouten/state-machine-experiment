@@ -7,7 +7,7 @@
 use std::{io::Cursor, path::Path};
 
 use c2pa::{Builder, SigningAlg};
-use contentauth_c2pa_rs_compat::{Context, Reader, ValidationState};
+use contentauth_c2pa_rs_compat::{ClaimVersion, Context, Reader, ValidationState};
 
 const SIGNER_CERT_DER: &[u8] =
     include_bytes!("../../contentauth-c2pa-builder/tests/fixtures/test-signer.der");
@@ -133,7 +133,7 @@ fn a_manifest_c2pa_rs_signed_as_v2_reads_back_as_a_v2_claim_without_failures() {
     );
 
     let active = reader.active_manifest().expect("an active manifest");
-    assert_eq!(active.claim_version(), 2);
+    assert_eq!(active.claim_version(), ClaimVersion::V2);
     assert_eq!(active.format(), None, "a v2 claim has no dc:format");
 
     let info = active.claim_generator_info();
@@ -158,6 +158,6 @@ fn the_same_signer_with_a_v1_claim_still_reads() {
         .expect("the compat reader reads a c2pa-rs-signed v1 manifest");
 
     let active = reader.active_manifest().expect("an active manifest");
-    assert_eq!(active.claim_version(), 1);
+    assert_eq!(active.claim_version(), ClaimVersion::V1);
     assert_eq!(reader.validation_state(), ValidationState::Valid);
 }

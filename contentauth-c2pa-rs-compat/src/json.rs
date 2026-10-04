@@ -26,7 +26,7 @@
 
 use std::collections::BTreeMap;
 
-use contentauth_c2pa_reader::{ClaimVersion, ReadReport};
+use contentauth_c2pa_reader::ReadReport;
 use serde::Serialize;
 
 use crate::validation::ValidationState;
@@ -109,10 +109,7 @@ pub(crate) fn value(report: &ReadReport) -> Result<serde_json::Value, serde_json
                             spec_version: info.spec_version.as_deref(),
                         })
                         .collect(),
-                    claim_version: match manifest.claim.version {
-                        ClaimVersion::V1 => 1,
-                        _ => 2,
-                    },
+                    claim_version: manifest.claim.version.number(),
                     title: manifest.claim.title.as_deref(),
                     format: manifest.claim.format.as_deref(),
                     instance_id: manifest.claim.instance_id.as_deref().unwrap_or_default(),

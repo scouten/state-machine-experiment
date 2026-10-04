@@ -35,7 +35,7 @@
 
 use std::collections::BTreeMap;
 
-use contentauth_c2pa_reader::ReadReport;
+use contentauth_c2pa_reader::{ClaimVersion, ReadReport};
 use serde::Serialize;
 
 /// The asset's manifest store: what c2pa-wasm's `manifestStore()` returns.
@@ -56,6 +56,15 @@ pub struct ManifestStore {
     /// vocabulary of the C2PA specification.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub validation_status: Vec<ValidationStatus>,
+}
+
+/// Serializes a [`ClaimVersion`] as the number c2pa-js reports
+/// (`claim_version: 2`).
+fn serialize_claim_version<S: serde::Serializer>(
+    version: &ClaimVersion,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_u8(version.number())
 }
 
 /// One entry of a manifest's `claim_generator_info`.
@@ -102,7 +111,8 @@ pub struct Manifest {
 
     /// The version of the claim this manifest carries: `1` for a
     /// `c2pa.claim`, `2` for a `c2pa.claim.v2`.
-    pub claim_version: u8,
+    #[serde(serialize_with = "serialize_claim_version")]
+    pub claim_version: ClaimVersion,
 
     /// A user-displayable title for the asset, if the claim carries one.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -231,10 +241,7 @@ impl Manifest {
                     spec_version: info.spec_version.clone(),
                 })
                 .collect(),
-            claim_version: match manifest.claim.version {
-                contentauth_c2pa_reader::ClaimVersion::V1 => 1,
-                _ => 2,
-            },
+            claim_version: manifest.claim.version,
             title: manifest.claim.title.clone(),
             format: manifest.claim.format.clone(),
             instance_id: manifest.claim.instance_id.clone().unwrap_or_default(),
@@ -301,7 +308,7 @@ mod tests {
             label: "urn:uuid:x".to_string(),
             claim_generator: None,
             claim_generator_info: vec![],
-            claim_version: 1,
+            claim_version: ClaimVersion::V1,
             title: None,
             format: Some("image/jpeg".to_string()),
             instance_id: String::new(),

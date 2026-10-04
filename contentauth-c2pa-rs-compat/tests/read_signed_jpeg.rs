@@ -38,7 +38,7 @@ use contentauth_c2pa_format::{
 };
 use contentauth_c2pa_format_jpeg::JpegFormat;
 use contentauth_c2pa_rs_compat::{
-    Context, Error, ReadSettings, Reader, TrustList, ValidationState,
+    ClaimVersion, Context, Error, ReadSettings, Reader, TrustList, ValidationState,
 };
 use contentauth_state_machine::Session;
 use jumbf::{
@@ -261,7 +261,7 @@ fn a_manifest_written_by_the_builder_reads_back_as_trusted_through_the_compat_re
     assert_eq!(active.title(), Some("test.jpg"));
     // The builder writes a v2 claim, which has no `dc:format` field.
     assert_eq!(active.format(), None);
-    assert_eq!(active.claim_version(), 2);
+    assert_eq!(active.claim_version(), ClaimVersion::V2);
     assert_eq!(active.claim_generator_info().len(), 1);
     assert_eq!(
         active.claim_generator_info()[0].spec_version.as_deref(),
@@ -413,7 +413,7 @@ fn a_real_c2pa_rs_signed_fixture_reports_its_claim_generator() {
     // The same fixture is a v1 claim, the contrast to what this crate's
     // own builder writes: it has a `dc:format` and a legacy generator
     // string, and says so in both the accessor and the JSON.
-    assert_eq!(active.claim_version(), 1);
+    assert_eq!(active.claim_version(), ClaimVersion::V1);
     assert_eq!(active.format(), Some("image/jpeg"));
     let json: serde_json::Value = serde_json::from_str(&reader.json()).unwrap();
     let manifest_json = &json["manifests"][active.label()];

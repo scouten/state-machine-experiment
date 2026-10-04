@@ -119,6 +119,7 @@ mod reader;
 pub mod web;
 
 pub use blob::Blob;
+pub use contentauth_c2pa_reader::ClaimVersion;
 pub use context::Context;
 pub use drive::read_manifest;
 pub use error::{C2paError, Error};

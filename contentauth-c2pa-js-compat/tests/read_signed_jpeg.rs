@@ -28,7 +28,7 @@
 mod support;
 
 use contentauth_c2pa_js_compat::{
-    C2paError, Context, Error, OfflinePlatform, Reader, ValidationState,
+    C2paError, ClaimVersion, Context, Error, OfflinePlatform, Reader, ValidationState,
 };
 use contentauth_c2pa_reader::ReadSettings;
 use support::{
@@ -77,7 +77,7 @@ fn a_manifest_written_by_the_builder_reads_back_as_trusted_with_anchors_from_con
     assert_eq!(active.title.as_deref(), Some("test.jpg"));
     // A v2 claim, which has no `dc:format`: its generator is one map.
     assert_eq!(active.format, None);
-    assert_eq!(active.claim_version, 2);
+    assert_eq!(active.claim_version, ClaimVersion::V2);
     assert_eq!(active.claim_generator_info.len(), 1);
     assert_eq!(
         active.claim_generator_info[0].spec_version.as_deref(),

@@ -26,6 +26,8 @@
 //! [`crate::Reader::json`](crate::Reader::json) instead, or
 //! [`contentauth_c2pa_reader::Manifest`] directly.
 
+use contentauth_c2pa_reader::ClaimVersion;
+
 /// A read-only view over one manifest in a read [`crate::Reader`].
 ///
 /// Named and shaped after `Manifest` in c2pa-rs, but borrowed from the
@@ -81,12 +83,13 @@ impl<'a> Manifest<'a> {
         &self.0.claim.claim_generator_info
     }
 
-    /// Returns the version of the C2PA claim this manifest carries: `1`
-    /// for a `c2pa.claim`, `2` for a `c2pa.claim.v2`.
-    pub fn claim_version(&self) -> u8 {
-        match self.0.claim.version {
-            contentauth_c2pa_reader::ClaimVersion::V1 => 1,
-            _ => 2,
-        }
+    /// Returns the version of the C2PA claim this manifest carries:
+    /// [`ClaimVersion::V1`] for a `c2pa.claim`, [`ClaimVersion::V2`] for a
+    /// `c2pa.claim.v2`.
+    ///
+    /// c2pa-rs's own accessor returns a bare number; an enum here means a
+    /// version this crate does not know cannot be represented at all.
+    pub fn claim_version(&self) -> ClaimVersion {
+        self.0.claim.version
     }
 }

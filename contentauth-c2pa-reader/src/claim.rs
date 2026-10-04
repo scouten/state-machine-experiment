@@ -92,6 +92,21 @@ pub enum ClaimVersion {
     V2,
 }
 
+impl ClaimVersion {
+    /// The number this version is written as in the specification and in
+    /// c2pa-rs's JSON (`claim_version`): `1` or `2`.
+    ///
+    /// The one place a version becomes a number, so that code outside this
+    /// crate (where the enum is `#[non_exhaustive]`) never has to pick a
+    /// fallback for a version it does not know.
+    pub const fn number(self) -> u8 {
+        match self {
+            Self::V1 => 1,
+            Self::V2 => 2,
+        }
+    }
+}
+
 /// A decoded C2PA claim.
 ///
 /// Every field but [`Self::version`] is optional: a claim that omits one
@@ -821,6 +836,12 @@ mod tests {
     fn a_v1_claim_is_never_missing_required_fields() {
         let decoded = decode(&encode(&map(vec![])), ClaimVersion::V1).unwrap();
         assert!(decoded.missing_required_fields().is_empty());
+    }
+
+    #[test]
+    fn claim_versions_are_numbered_as_the_specification_names_them() {
+        assert_eq!(ClaimVersion::V1.number(), 1);
+        assert_eq!(ClaimVersion::V2.number(), 2);
     }
 
     #[test]
