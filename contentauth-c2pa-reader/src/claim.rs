@@ -23,6 +23,16 @@
 //! same [`Claim`] type: a claim populates whichever of the three fields its
 //! version uses, and [`Claim::assertion_references`] iterates all of them
 //! together so callers do not need to know which version they read.
+//!
+//! The two versions also differ in the shape of `claim_generator_info`: v1
+//! carries an array of generator maps, v2 a single `generator-info-map`
+//! (with `specVersion` and `icon` fields v1 lacks). Either decodes into
+//! [`Claim::claim_generator_info`], a one-entry list for v2. v2's
+//! `redacted_assertions` decode into [`Claim::redacted_assertions`].
+//!
+//! Decoding is deliberately lenient about *absent* fields — whether a v2
+//! claim is missing one the specification requires is a validation
+//! question, answered by [`Claim::missing_required_fields`].
 
 use c2pa_cbor::Value;
 
@@ -57,6 +67,8 @@ impl GeneratorInfo {
         Self {
             name: Some(name.into()),
             version: Some(version.into()),
+            spec_version: None,
+            icon: None,
         }
     }
 }
@@ -78,6 +90,21 @@ pub enum ClaimVersion {
     /// and [`Claim::gathered_assertions`].
     #[default]
     V2,
+}
+
+impl ClaimVersion {
+    /// The number this version is written as in the specification and in
+    /// c2pa-rs's JSON (`claim_version`): `1` or `2`.
+    ///
+    /// The one place a version becomes a number, so that code outside this
+    /// crate (where the enum is `#[non_exhaustive]`) never has to pick a
+    /// fallback for a version it does not know.
+    pub const fn number(self) -> u8 {
+        match self {
+            Self::V1 => 1,
+            Self::V2 => 2,
+        }
+    }
 }
 
 /// A decoded C2PA claim.
@@ -132,9 +159,79 @@ pub struct Claim {
     ///
     /// Empty for a v1 claim, which uses [`Self::assertions`] instead.
     pub gathered_assertions: Vec<HashedUri>,
+
+    /// `redacted_assertions` — JUMBF URIs of assertions in *ingredient*
+    /// manifests that this claim redacts, in a v2 claim.
+    ///
+    /// Plain URI references, not hashed ones: a redacted assertion's
+    /// content is gone, so there is nothing left to hash. Empty for a v1
+    /// claim and for a v2 claim that redacts nothing.
+    pub redacted_assertions: Vec<String>,
+
+    /// Which of the fields a v2 claim must carry appeared in the CBOR, so
+    /// that [`Self::missing_required_fields`] can tell "absent" from
+    /// "present but empty".
+    presence: Presence,
+}
+
+/// Records which fields appeared in a claim's CBOR at all.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct Presence {
+    instance_id: bool,
+    signature: bool,
+    created_assertions: bool,
+    claim_generator_info: bool,
 }
 
 impl Claim {
+    /// For a v2 claim, names each field the C2PA specification requires
+    /// of a claim that is absent: `instanceID`, `signature`,
+    /// `created_assertions`, `claim_generator_info`, and — when the latter
+    /// is present — its `name`.
+    ///
+    /// Always empty for a v1 claim, whose field requirements this reader
+    /// does not enforce.
+    pub fn missing_required_fields(&self) -> Vec<&'static str> {
+        if self.version != ClaimVersion::V2 {
+            return Vec::new();
+        }
+
+        let mut missing = Vec::new();
+        if !self.presence.instance_id {
+            missing.push("instanceID");
+        }
+        if !self.presence.signature {
+            missing.push("signature");
+        }
+        if !self.presence.created_assertions {
+            missing.push("created_assertions");
+        }
+        if !self.presence.claim_generator_info {
+            missing.push("claim_generator_info");
+        } else if self.claim_generator_info.iter().all(|g| g.name.is_none()) {
+            missing.push("claim_generator_info.name");
+        }
+        missing
+    }
+}
+
+impl Claim {
+    /// Iterates the hashed references this claim holds to an *assertion*:
+    /// [`Self::assertion_references`] plus each generator's `icon`, which
+    /// names a `c2pa.icon` assertion and is hashed the same way.
+    ///
+    /// An icon pointing anywhere but the assertion store (the deprecated
+    /// data-box form) is left out: this reader does not resolve data
+    /// boxes, and reporting such an icon "missing" would be wrong.
+    pub fn hashed_references(&self) -> impl Iterator<Item = &HashedUri> {
+        self.assertion_references().chain(
+            self.claim_generator_info
+                .iter()
+                .filter_map(|generator| generator.icon.as_ref())
+                .filter(|icon| icon.url.contains("c2pa.assertions")),
+        )
+    }
+
     /// Iterates every assertion reference this claim covers, regardless of
     /// whether it is a v1 claim (`assertions`) or a v2 claim
     /// (`created_assertions` and `gathered_assertions`).
@@ -155,6 +252,15 @@ pub struct GeneratorInfo {
 
     /// Version of the generating product.
     pub version: Option<String>,
+
+    /// `specVersion` — SemVer of the C2PA specification the generator
+    /// used as its normative reference (for example `"2.4.0"`). A v2
+    /// field; purely informational.
+    pub spec_version: Option<String>,
+
+    /// `icon` — hashed reference to a `c2pa.icon` embedded-data assertion
+    /// graphically representing the generator. A v2 field.
+    pub icon: Option<HashedUri>,
 }
 
 /// A JUMBF URI paired with a cryptographic hash of what it points at.
@@ -197,26 +303,51 @@ pub(crate) fn decode(cbor: &[u8], version: ClaimVersion) -> Result<Claim, ClaimE
         match key {
             "dc:title" => claim.title = Some(text(value, "dc:title")?),
             "dc:format" => claim.format = Some(text(value, "dc:format")?),
-            "instanceID" => claim.instance_id = Some(text(value, "instanceID")?),
+            "instanceID" => {
+                claim.instance_id = Some(text(value, "instanceID")?);
+                claim.presence.instance_id = true;
+            }
             "claim_generator" => claim.claim_generator = Some(text(value, "claim_generator")?),
-            "signature" => claim.signature = Some(text(value, "signature")?),
+            "signature" => {
+                claim.signature = Some(text(value, "signature")?);
+                claim.presence.signature = true;
+            }
             "alg" => claim.alg = Some(text(value, "alg")?),
 
+            // A v1 claim carries an array of generator maps; a v2 claim
+            // exactly one map, and an array there is malformed. A v1 claim
+            // is also let off with a lone map, which is lenient but harmless.
             "claim_generator_info" => {
-                let entries = value.as_array().ok_or(ClaimError::UnexpectedType {
-                    field: "claim_generator_info",
-                })?;
-
-                claim.claim_generator_info = entries
-                    .iter()
-                    .map(generator_info)
-                    .collect::<Result<_, _>>()?;
+                claim.claim_generator_info = match (version, value) {
+                    (ClaimVersion::V1, Value::Array(entries)) => entries
+                        .iter()
+                        .map(generator_info)
+                        .collect::<Result<_, _>>()?,
+                    (_, Value::Array(_)) => {
+                        return Err(ClaimError::UnexpectedType {
+                            field: "claim_generator_info",
+                        })
+                    }
+                    _ => vec![generator_info(value)?],
+                };
+                claim.presence.claim_generator_info = true;
             }
 
             "assertions" => claim.assertions = hashed_uri_array(value, "assertions")?,
 
             "created_assertions" => {
-                claim.created_assertions = hashed_uri_array(value, "created_assertions")?
+                claim.created_assertions = hashed_uri_array(value, "created_assertions")?;
+                claim.presence.created_assertions = true;
+            }
+
+            "redacted_assertions" => {
+                let entries = value.as_array().ok_or(ClaimError::UnexpectedType {
+                    field: "redacted_assertions",
+                })?;
+                claim.redacted_assertions = entries
+                    .iter()
+                    .map(|entry| text(entry, "redacted_assertions"))
+                    .collect::<Result<_, _>>()?;
             }
 
             "gathered_assertions" => {
@@ -252,6 +383,10 @@ fn generator_info(value: &Value) -> Result<GeneratorInfo, ClaimError> {
         match key.as_str() {
             Some("name") => info.name = Some(text(value, "claim_generator_info.name")?),
             Some("version") => info.version = Some(text(value, "claim_generator_info.version")?),
+            Some("specVersion") => {
+                info.spec_version = Some(text(value, "claim_generator_info.specVersion")?)
+            }
+            Some("icon") => info.icon = Some(hashed_uri(value)?),
             _ => {}
         }
     }
@@ -417,7 +552,7 @@ mod tests {
             (text_value("instanceID"), text_value("xmp:iid:1234")),
             (
                 text_value("claim_generator_info"),
-                Value::Array(vec![map(vec![(text_value("name"), text_value("test"))])]),
+                map(vec![(text_value("name"), text_value("test"))]),
             ),
             (
                 text_value("created_assertions"),
@@ -548,7 +683,7 @@ mod tests {
             text_value("claim_generator_info"),
             Value::Array(vec![map(vec![
                 (text_value("name"), text_value("tool")),
-                (text_value("icon"), text_value("ignored")),
+                (text_value("operating_system"), text_value("ignored")),
             ])]),
         )]);
 
@@ -558,6 +693,198 @@ mod tests {
             Some("tool")
         );
         assert_eq!(decoded.claim_generator_info[0].version, None);
+    }
+
+    /// A v2 claim carrying every required field, as a CBOR map.
+    fn v2_claim_fields() -> Vec<(Value, Value)> {
+        vec![
+            (text_value("instanceID"), text_value("xmp:iid:1")),
+            (
+                text_value("signature"),
+                text_value("self#jumbf=c2pa.signature"),
+            ),
+            (
+                text_value("claim_generator_info"),
+                map(vec![(text_value("name"), text_value("tool"))]),
+            ),
+            (text_value("created_assertions"), Value::Array(vec![])),
+        ]
+    }
+
+    #[test]
+    fn decodes_a_v2_generator_info_map_with_spec_version_and_icon() {
+        let claim = map(vec![(
+            text_value("claim_generator_info"),
+            map(vec![
+                (text_value("name"), text_value("tool")),
+                (text_value("version"), text_value("2.0")),
+                (text_value("specVersion"), text_value("2.4.0")),
+                (
+                    text_value("icon"),
+                    map(vec![
+                        (text_value("url"), text_value("self#jumbf=c2pa.icon")),
+                        (text_value("hash"), Value::Bytes(vec![9; 32])),
+                    ]),
+                ),
+            ]),
+        )]);
+
+        let decoded = decode(&encode(&claim), ClaimVersion::V2).unwrap();
+
+        assert_eq!(decoded.claim_generator_info.len(), 1);
+        let info = &decoded.claim_generator_info[0];
+        assert_eq!(info.name.as_deref(), Some("tool"));
+        assert_eq!(info.version.as_deref(), Some("2.0"));
+        assert_eq!(info.spec_version.as_deref(), Some("2.4.0"));
+        let icon = info.icon.as_ref().unwrap();
+        assert_eq!(icon.url, "self#jumbf=c2pa.icon");
+        assert_eq!(icon.hash, vec![9; 32]);
+    }
+
+    #[test]
+    fn a_v2_generator_info_array_is_malformed_but_a_v1_one_is_not() {
+        let claim = map(vec![(
+            text_value("claim_generator_info"),
+            Value::Array(vec![map(vec![(text_value("name"), text_value("tool"))])]),
+        )]);
+
+        assert_eq!(
+            decode(&encode(&claim), ClaimVersion::V2),
+            Err(ClaimError::UnexpectedType {
+                field: "claim_generator_info"
+            })
+        );
+        assert_eq!(
+            decode(&encode(&claim), ClaimVersion::V1)
+                .unwrap()
+                .claim_generator_info
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn rejects_a_generator_info_that_is_neither_map_nor_array() {
+        let claim = map(vec![(
+            text_value("claim_generator_info"),
+            text_value("tool/1.0"),
+        )]);
+
+        assert_eq!(
+            decode(&encode(&claim), ClaimVersion::V2),
+            Err(ClaimError::UnexpectedType {
+                field: "claim_generator_info"
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_a_malformed_generator_icon() {
+        let claim = map(vec![(
+            text_value("claim_generator_info"),
+            map(vec![
+                (text_value("name"), text_value("tool")),
+                (text_value("icon"), text_value("not-a-hashed-uri")),
+            ]),
+        )]);
+
+        assert!(decode(&encode(&claim), ClaimVersion::V2).is_err());
+    }
+
+    #[test]
+    fn decodes_redacted_assertions() {
+        let mut fields = v2_claim_fields();
+        fields.push((
+            text_value("redacted_assertions"),
+            Value::Array(vec![
+                text_value("self#jumbf=/c2pa/urn:uuid:a/c2pa.assertions/c2pa.thumbnail"),
+                text_value("self#jumbf=/c2pa/urn:uuid:b/c2pa.assertions/c2pa.actions"),
+            ]),
+        ));
+
+        let decoded = decode(&encode(&map(fields)), ClaimVersion::V2).unwrap();
+
+        assert_eq!(
+            decoded.redacted_assertions,
+            vec![
+                "self#jumbf=/c2pa/urn:uuid:a/c2pa.assertions/c2pa.thumbnail",
+                "self#jumbf=/c2pa/urn:uuid:b/c2pa.assertions/c2pa.actions",
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_redacted_assertions_of_the_wrong_shape() {
+        let not_an_array = map(vec![(text_value("redacted_assertions"), text_value("x"))]);
+        assert_eq!(
+            decode(&encode(&not_an_array), ClaimVersion::V2),
+            Err(ClaimError::UnexpectedType {
+                field: "redacted_assertions"
+            })
+        );
+
+        let not_text = map(vec![(
+            text_value("redacted_assertions"),
+            Value::Array(vec![Value::Integer(1)]),
+        )]);
+        assert_eq!(
+            decode(&encode(&not_text), ClaimVersion::V2),
+            Err(ClaimError::UnexpectedType {
+                field: "redacted_assertions"
+            })
+        );
+    }
+
+    #[test]
+    fn a_complete_v2_claim_is_missing_nothing() {
+        let decoded = decode(&encode(&map(v2_claim_fields())), ClaimVersion::V2).unwrap();
+        assert!(decoded.missing_required_fields().is_empty());
+    }
+
+    #[test]
+    fn each_absent_required_v2_field_is_named() {
+        for field in [
+            "instanceID",
+            "signature",
+            "created_assertions",
+            "claim_generator_info",
+        ] {
+            let fields = v2_claim_fields()
+                .into_iter()
+                .filter(|(key, _)| key.as_str() != Some(field))
+                .collect();
+
+            let decoded = decode(&encode(&map(fields)), ClaimVersion::V2).unwrap();
+            assert_eq!(decoded.missing_required_fields(), vec![field]);
+        }
+    }
+
+    #[test]
+    fn a_v2_generator_info_without_a_name_is_missing_it() {
+        let mut fields = v2_claim_fields();
+        fields.retain(|(key, _)| key.as_str() != Some("claim_generator_info"));
+        fields.push((
+            text_value("claim_generator_info"),
+            map(vec![(text_value("version"), text_value("1"))]),
+        ));
+
+        let decoded = decode(&encode(&map(fields)), ClaimVersion::V2).unwrap();
+        assert_eq!(
+            decoded.missing_required_fields(),
+            vec!["claim_generator_info.name"]
+        );
+    }
+
+    #[test]
+    fn a_v1_claim_is_never_missing_required_fields() {
+        let decoded = decode(&encode(&map(vec![])), ClaimVersion::V1).unwrap();
+        assert!(decoded.missing_required_fields().is_empty());
+    }
+
+    #[test]
+    fn claim_versions_are_numbered_as_the_specification_names_them() {
+        assert_eq!(ClaimVersion::V1.number(), 1);
+        assert_eq!(ClaimVersion::V2.number(), 2);
     }
 
     #[test]

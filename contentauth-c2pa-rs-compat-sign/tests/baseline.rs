@@ -18,7 +18,7 @@
 
 use std::{io::Cursor, path::PathBuf};
 
-use contentauth_c2pa_rs_compat::{Context, ReadSettings, Reader, ValidationState};
+use contentauth_c2pa_rs_compat::{ClaimVersion, Context, ReadSettings, Reader, ValidationState};
 use contentauth_c2pa_rs_compat_sign::{Builder, Error, HostError, Signer, SigningAlg};
 use contentauth_c2pa_sign_baseline::{fixtures::*, BASELINE_DEFINITION};
 
@@ -60,7 +60,14 @@ fn assert_baseline(reader: &Reader) {
 
     let active = reader.active_manifest().unwrap();
     assert_eq!(active.title(), Some("baseline.jpg"));
-    assert_eq!(active.format(), Some("image/jpeg"));
+    // A v2 claim has no `dc:format`, and one `claim_generator_info` map.
+    assert_eq!(active.format(), None);
+    assert_eq!(active.claim_version(), ClaimVersion::V2);
+    assert_eq!(active.claim_generator_info().len(), 1);
+    assert_eq!(
+        active.claim_generator_info()[0].name.as_deref(),
+        Some("c2pa-sign-baseline")
+    );
     assert_eq!(
         active.instance_id(),
         "xmp:iid:00000000-0000-4000-8000-000000000001"

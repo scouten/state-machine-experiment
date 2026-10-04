@@ -51,7 +51,6 @@ const C_JPG: &[u8] = include_bytes!("../../contentauth-c2pa-reader/tests/fixture
 /// and returns the resulting bytes and the plan used to place them.
 fn build_and_embed(source: &[u8]) -> (EmbedPlan, Vec<u8>) {
     let mut settings = BuilderSettings::new(
-        "image/jpeg",
         "xmp:iid:test-instance",
         "urn:uuid:test-manifest",
         GeneratorInfo::new("contentauth-c2pa-file-reader-tests", "0.1"),

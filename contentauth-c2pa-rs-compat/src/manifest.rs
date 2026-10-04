@@ -20,10 +20,13 @@
 //! values, thumbnails, and resource references — none of which
 //! [`contentauth_c2pa_reader`] decodes yet (see its own README for what it
 //! reads today). Rather than fabricate those, this wrapper exposes only
-//! `label`, `title`, `format`, `instance_id`, and `claim_generator`; a
+//! `label`, `title`, `format`, `instance_id`, `claim_generator`,
+//! `claim_generator_info`, and `claim_version`; a
 //! caller after the full manifest graph wants
 //! [`crate::Reader::json`](crate::Reader::json) instead, or
 //! [`contentauth_c2pa_reader::Manifest`] directly.
+
+use contentauth_c2pa_reader::ClaimVersion;
 
 /// A read-only view over one manifest in a read [`crate::Reader`].
 ///
@@ -47,6 +50,9 @@ impl<'a> Manifest<'a> {
 
     /// Returns a MIME content type for the asset this manifest describes,
     /// if the claim carries one.
+    ///
+    /// Only a v1 claim does: the v2 claim has no `dc:format` field (see
+    /// [`Self::claim_version`]), so this is `None` for a v2 manifest.
     pub fn format(&self) -> Option<&'a str> {
         self.0.claim.format.as_deref()
     }
@@ -67,5 +73,23 @@ impl<'a> Manifest<'a> {
     /// produced this claim, if any.
     pub fn claim_generator(&self) -> Option<&'a str> {
         self.0.claim.claim_generator.as_deref()
+    }
+
+    /// Returns the structured descriptions of the software that produced
+    /// this claim: the `claim_generator_info` array of a v1 claim, or the
+    /// single `generator-info-map` of a v2 claim (the only form a v2 claim
+    /// has — it carries no legacy [`Self::claim_generator`] string).
+    pub fn claim_generator_info(&self) -> &'a [contentauth_c2pa_reader::GeneratorInfo] {
+        &self.0.claim.claim_generator_info
+    }
+
+    /// Returns the version of the C2PA claim this manifest carries:
+    /// [`ClaimVersion::V1`] for a `c2pa.claim`, [`ClaimVersion::V2`] for a
+    /// `c2pa.claim.v2`.
+    ///
+    /// c2pa-rs's own accessor returns a bare number; an enum here means a
+    /// version this crate does not know cannot be represented at all.
+    pub fn claim_version(&self) -> ClaimVersion {
+        self.0.claim.version
     }
 }

@@ -65,10 +65,10 @@ impl Builder {
             .tsa_url
             .clone()
             .or_else(|| signer.time_authority_url());
-        let mut settings =
-            self.definition
-                .clone()
-                .into_settings("image/jpeg", signer.alg(), signer.certs())?;
+        let mut settings = self
+            .definition
+            .clone()
+            .into_settings(signer.alg(), signer.certs())?;
         if tsa_url.is_some() && settings.timestamp.is_none() {
             settings.timestamp = Some(TimestampSettings::default());
         }

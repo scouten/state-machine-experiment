@@ -93,7 +93,6 @@ pub(crate) struct AssertionInput<'a> {
 pub(crate) struct ManifestInputs<'a> {
     pub(crate) manifest_label: &'a str,
     pub(crate) title: Option<&'a str>,
-    pub(crate) format: &'a str,
     pub(crate) instance_id: &'a str,
     pub(crate) generator_name: &'a str,
     pub(crate) generator_version: &'a str,
@@ -125,7 +124,6 @@ pub(crate) struct ManifestBuilder {
     timestamp_reserve: Option<usize>,
 
     title: Option<String>,
-    format: String,
     instance_id: String,
     generator_name: String,
     generator_version: String,
@@ -193,7 +191,6 @@ impl ManifestBuilder {
 
         let claim_fields = ClaimFields {
             title: inputs.title,
-            format: inputs.format,
             instance_id: inputs.instance_id,
             generator_name: inputs.generator_name,
             generator_version: inputs.generator_version,
@@ -242,7 +239,6 @@ impl ManifestBuilder {
             signature_len: inputs.signature_len,
             timestamp_reserve: inputs.timestamp_reserve,
             title: inputs.title.map(str::to_string),
-            format: inputs.format.to_string(),
             instance_id: inputs.instance_id.to_string(),
             generator_name: inputs.generator_name.to_string(),
             generator_version: inputs.generator_version.to_string(),
@@ -293,7 +289,6 @@ impl ManifestBuilder {
 
         let claim_fields = ClaimFields {
             title: self.title.as_deref(),
-            format: &self.format,
             instance_id: &self.instance_id,
             generator_name: &self.generator_name,
             generator_version: &self.generator_version,
@@ -410,7 +405,6 @@ mod tests {
         ManifestInputs {
             manifest_label: "urn:uuid:test",
             title: Some("A.jpg"),
-            format: "image/jpeg",
             instance_id: "xmp:iid:1234",
             generator_name: "test",
             generator_version: "1.0",

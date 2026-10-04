@@ -52,6 +52,18 @@ decoding, report population) and verifies:
   certificate must be valid *now*, not merely when the response says it
   was produced.
 
+* **Claim structure, for both claim versions** — a `c2pa.claim` (v1) and a
+  `c2pa.claim.v2` decode into the same `Claim`: a v2
+  `claim_generator_info` is a single map (with `specVersion` and `icon`),
+  a v1 one an array, and v2's `redacted_assertions` are read too. A v2
+  claim missing a field the specification requires (`instanceID`,
+  `signature`, `created_assertions`, `claim_generator_info` and its
+  `name`) is reported `claim.malformed`, and one that redacts an assertion
+  in its *own* manifest `assertion.selfRedacted`. Not yet done for
+  `redacted_assertions`: checking that an ingredient's redacted assertion
+  was actually zeroed (`assertion.notRedacted`), which needs ingredient
+  manifests.
+
 A report can reach `Trusted` or `Valid`. Not yet checked, and able to
 change a verdict: ingredient manifests and remote manifest retrieval.
 

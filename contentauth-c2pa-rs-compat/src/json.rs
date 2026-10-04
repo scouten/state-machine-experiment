@@ -46,12 +46,28 @@ struct ManifestJson<'a> {
     label: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     claim_generator: Option<&'a str>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    claim_generator_info: Vec<GeneratorInfoJson<'a>>,
+    claim_version: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
     title: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     format: Option<&'a str>,
     instance_id: &'a str,
     assertions: &'a [String],
+}
+
+/// One `claim_generator_info` entry. `specVersion` keeps its
+/// specification spelling; `icon` is not reported (a hashed reference to
+/// an embedded-data assertion this reader does not resolve).
+#[derive(Serialize)]
+struct GeneratorInfoJson<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<&'a str>,
+    #[serde(rename = "specVersion", skip_serializing_if = "Option::is_none")]
+    spec_version: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -83,6 +99,17 @@ pub(crate) fn value(report: &ReadReport) -> Result<serde_json::Value, serde_json
                 ManifestJson {
                     label: &manifest.label,
                     claim_generator: manifest.claim.claim_generator.as_deref(),
+                    claim_generator_info: manifest
+                        .claim
+                        .claim_generator_info
+                        .iter()
+                        .map(|info| GeneratorInfoJson {
+                            name: info.name.as_deref(),
+                            version: info.version.as_deref(),
+                            spec_version: info.spec_version.as_deref(),
+                        })
+                        .collect(),
+                    claim_version: manifest.claim.version.number(),
                     title: manifest.claim.title.as_deref(),
                     format: manifest.claim.format.as_deref(),
                     instance_id: manifest.claim.instance_id.as_deref().unwrap_or_default(),
