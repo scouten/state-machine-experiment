@@ -171,6 +171,8 @@ public:
                 host_->start(request, done);
             } catch (const std::exception &e) {
                 done(Failed{e.what()});
+            } catch (...) {
+                done(Failed{"unknown host error"});
             }
         }
         return false;

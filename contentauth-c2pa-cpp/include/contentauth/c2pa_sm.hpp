@@ -448,7 +448,11 @@ public:
     uint64_t length() override {
         stream_.clear();
         stream_.seekg(0, std::ios::end);
-        return static_cast<uint64_t>(stream_.tellg());
+        const std::streampos end = stream_.tellg();
+        if (stream_.fail() || end < 0) {
+            throw std::runtime_error("cannot determine the length of the stream");
+        }
+        return static_cast<uint64_t>(end);
     }
 
 private:
