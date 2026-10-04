@@ -368,3 +368,83 @@ jobs:
           verbose: true
           flags: node-sign-addon
           files: ./c2pa-node-sign-addon/lcov.info,./c2pa-node-sign-addon/lcov.rust.info
+
+  cpp-binding:
+    name: C++ binding (${{ matrix.name }})
+    runs-on: ubuntu-latest
+
+    # `contentauth-c2pa-cpp` is a Rust static library behind a C ABI plus
+    # header-only C++ (C++17 core and thread-based drivers, C++20
+    # coroutines). Its Rust half is an ordinary workspace member, tested by
+    # the jobs above; this job builds the C++ half against it with CMake
+    # and runs the C++ tests and examples three ways:
+    #   - plain, with coverage of the C++ headers (uploaded to Codecov);
+    #   - under AddressSanitizer (leaks, use-after-free on cancellation);
+    #   - under ThreadSanitizer (the session handed between threads, and
+    #     completions racing the driver).
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: coverage
+            cmake_args: -DC2PA_SM_COVERAGE=ON
+          - name: AddressSanitizer
+            cmake_args: -DC2PA_SM_SANITIZE=address
+          - name: ThreadSanitizer
+            cmake_args: -DC2PA_SM_SANITIZE=thread
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master@2026-06-30
+        with:
+          toolchain: stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: ". -> contentauth-c2pa-cpp/build/cargo"
+
+      - name: Configure
+        working-directory: contentauth-c2pa-cpp
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug ${{ matrix.cmake_args }}
+
+      - name: Build
+        working-directory: contentauth-c2pa-cpp
+        run: cmake --build build -j
+
+      - name: Test
+        working-directory: contentauth-c2pa-cpp
+        env:
+          TSAN_OPTIONS: halt_on_error=1
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Install gcovr
+        if: matrix.name == 'coverage'
+        run: pipx install gcovr
+
+      # Only the headers: the tests and examples shouldn't count for or
+      # against coverage (as for the Rust jobs), and the Rust half is
+      # covered by the `tests` job. gcov's counters can go negative under
+      # threads even with atomic updates; that is a known gcov quirk.
+      - name: Generate code coverage
+        if: matrix.name == 'coverage'
+        run: >
+          gcovr --root . --object-directory contentauth-c2pa-cpp/build
+          --filter 'contentauth-c2pa-cpp/include/'
+          --gcov-ignore-parse-errors negative_hits.warn_once_per_file
+          --lcov lcov.cpp.info --txt
+
+      # Tokens aren't available for PRs originating from forks,
+      # so we don't attempt to upload code coverage in that case.
+      - name: Upload code coverage results
+        if: matrix.name == 'coverage' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: true
+          verbose: true
+          flags: cpp-binding
+          files: ./lcov.cpp.info
