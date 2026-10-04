@@ -49,7 +49,6 @@ fn source_stream() -> contentauth_c2pa_primitives::StreamId {
 
 fn settings() -> BuilderSettings {
     BuilderSettings::new(
-        "image/jpeg",
         "xmp:iid:test-instance",
         "urn:uuid:test-manifest",
         GeneratorInfo::new("contentauth-c2pa-file-builder-tests", "0.1"),

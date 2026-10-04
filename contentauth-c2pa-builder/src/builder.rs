@@ -37,9 +37,6 @@ use crate::{
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct BuilderSettings {
-    /// MIME type of the asset being signed (for example, `"image/jpeg"`).
-    pub format: String,
-
     /// Human-readable title of the asset, if any.
     pub title: Option<String>,
 
@@ -103,7 +100,6 @@ impl BuilderSettings {
     /// algorithms), and no timestamp — set the corresponding public field
     /// afterward to change any of those.
     pub fn new(
-        format: impl Into<String>,
         instance_id: impl Into<String>,
         manifest_label: impl Into<String>,
         claim_generator_info: GeneratorInfo,
@@ -111,7 +107,6 @@ impl BuilderSettings {
         certificates: Vec<Vec<u8>>,
     ) -> Self {
         Self {
-            format: format.into(),
             title: None,
             instance_id: instance_id.into(),
             manifest_label: manifest_label.into(),
@@ -424,7 +419,6 @@ impl BuilderSession {
         let inputs = ManifestInputs {
             manifest_label: &self.settings.manifest_label,
             title: self.settings.title.as_deref(),
-            format: &self.settings.format,
             instance_id: &self.settings.instance_id,
             generator_name: &generator.name,
             generator_version: &generator.version,

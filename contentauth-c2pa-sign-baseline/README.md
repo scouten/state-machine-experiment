@@ -15,7 +15,7 @@ through the binding language's own kind of asynchrony, asset in, asset out)
 with nothing else in the way.
 
 This crate holds only the language-free part: `Definition::from_json` and
-`Definition::into_settings(format, alg, certificates)`, turning the
+`Definition::into_settings(alg, certificates)`, turning the
 definition plus what a *signer* decides into `BuilderSettings`. Bindings:
 
 | Binding | Crate | Signer | Asset in / out |
