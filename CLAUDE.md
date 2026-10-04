@@ -173,6 +173,21 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   member (own `[workspace]`): a Neon `cdylib` cannot link outside Node, so
   CI builds and tests it in its own `node-addon` job
   (`npm run build && npm test` in that directory).
+- **`contentauth-c2pa-cpp`** — an exploration of a C++ binding, aimed at
+  the async/threaded behavior a callback-based API cannot express. A Rust
+  static library behind a small C ABI (`src/lib.rs`, `include/contentauth_c2pa_sm.h`;
+  the one crate here allowed `unsafe`, being the FFI boundary; symbols are
+  `c2pa_sm_*` to coexist with c2pa-c) wrapping `contentauth-c2pa-node-compat`'s
+  flat `NodeSession`, plus header-only C++ in `include/contentauth/`:
+  a C++17 core (`Session`, `Reader`, blocking `read()`), C++17 thread-based
+  drivers (`Reading`/`Mailbox`, `read_parallel`, `read_future`,
+  `ThreadPool`/`PooledHost`) and C++20 coroutines (`co_read`, `spawn`).
+  Errors are values, not thread-local, so a session can move between
+  threads. Built with CMake (`cpp/`, `CMakeLists.txt`); its README holds the
+  review of c2pa-cpp's API and the rationale for every departure. Read side
+  only. CI's `cpp-binding` job runs the C++ tests with coverage and under
+  ASan/TSan; a C++ edit must be checked with
+  `cmake -S contentauth-c2pa-cpp -B contentauth-c2pa-cpp/build && cmake --build contentauth-c2pa-cpp/build && ctest --test-dir contentauth-c2pa-cpp/build`.
 - **`contentauth-c2pa-sign-baseline`** — the *baseline signing case*
   every binding of the write path is held to: sign a JPEG with ES256 from
   a c2pa-rs-shaped JSON definition (title, one generator, one
@@ -261,7 +276,8 @@ comments for the reasoning): `cert.rs` is the only place that names an
 and `claim.rs` walks `c2pa_cbor::Value` by hand rather than using serde
 derives, so the set of claim fields understood stays explicit.
 
-Both crates deny `unsafe_code`, `missing_docs`, `clippy::unwrap_used`,
+Both crates deny `unsafe_code` (the C ABI crate `contentauth-c2pa-cpp` is
+the deliberate exception), `missing_docs`, `clippy::unwrap_used`,
 `clippy::expect_used`, and `clippy::panic` at the crate root — write
 fallible code and propagate errors through the crate's `Error` type rather
 than reaching for `.unwrap()`/`.expect()`/`panic!()`, including in new
