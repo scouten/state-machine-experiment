@@ -79,10 +79,9 @@ private:
 
 namespace detail {
 
-[[noreturn]] inline void throw_error(C2paSmError *error, int status) {
-    if (error == nullptr) {
-        throw Exception(static_cast<ErrorCode>(status), "Unknown", "unknown error");
-    }
+// A null `error` (which the library never returns with a failing status) reads
+// as InvalidArgument with an empty message, per the ABI.
+[[noreturn]] inline void throw_error(C2paSmError *error) {
     Exception ex(static_cast<ErrorCode>(c2pa_sm_error_code(error)), c2pa_sm_error_name(error),
                  c2pa_sm_error_message(error));
     c2pa_sm_error_free(error);
@@ -91,7 +90,7 @@ namespace detail {
 
 inline void check(int status, C2paSmError *error) {
     if (status != C2PA_SM_OK) {
-        throw_error(error, status);
+        throw_error(error);
     }
 }
 
@@ -161,6 +160,25 @@ struct Failed {
 };
 using Reply = std::variant<Bytes, Length, Time, Ocsp, Failed>;
 
+namespace detail {
+
+/// Copies a request out of the session's borrowed storage into plain values.
+inline Request describe(const C2paSmRequest &r) {
+    switch (r.kind) {
+        case C2PA_SM_REQUEST_READ:
+            return ReadRequest{r.id, r.start, r.len};
+        case C2PA_SM_REQUEST_LENGTH:
+            return LengthRequest{r.id};
+        case C2PA_SM_REQUEST_TIME:
+            return TimeRequest{r.id};
+        default:
+            return OcspRequest{r.id, std::string(r.url, r.url_len),
+                               std::vector<uint8_t>(r.body, r.body + r.body_len)};
+    }
+}
+
+}  // namespace detail
+
 /// @brief The `id` to quote when answering `request`.
 inline uint64_t request_id(const Request &request) {
     return std::visit([](const auto &r) { return r.id; }, request);
@@ -187,10 +205,8 @@ public:
     /// @brief The active manifest's label, if any.
     std::optional<std::string> active_label() const {
         char *label = c2pa_sm_reader_active_label(raw_.get());
-        if (label == nullptr) {
-            return std::nullopt;
-        }
-        return detail::take_string(label);
+        return label != nullptr ? std::optional<std::string>(detail::take_string(label))
+                                : std::nullopt;
     }
 
     /// @brief Whether the manifest store was embedded in the asset.
@@ -265,25 +281,9 @@ public:
         step.requests.reserve(count);
         for (size_t i = 0; i < count; ++i) {
             C2paSmRequest r{};
-            if (!c2pa_sm_session_request(raw_.get(), i, &r)) {
-                continue;
-            }
-            switch (r.kind) {
-                case C2PA_SM_REQUEST_READ:
-                    step.requests.emplace_back(ReadRequest{r.id, r.start, r.len});
-                    break;
-                case C2PA_SM_REQUEST_LENGTH:
-                    step.requests.emplace_back(LengthRequest{r.id});
-                    break;
-                case C2PA_SM_REQUEST_TIME:
-                    step.requests.emplace_back(TimeRequest{r.id});
-                    break;
-                default:
-                    step.requests.emplace_back(OcspRequest{
-                        r.id, std::string(r.url, r.url_len),
-                        std::vector<uint8_t>(r.body, r.body + r.body_len)});
-                    break;
-            }
+            // `i < count`, so this cannot fail.
+            (void)c2pa_sm_session_request(raw_.get(), i, &r);
+            step.requests.push_back(detail::describe(r));
         }
         return step;
     }

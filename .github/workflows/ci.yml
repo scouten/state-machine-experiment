@@ -435,7 +435,13 @@ jobs:
           gcovr --root . --object-directory contentauth-c2pa-cpp/build
           --filter 'contentauth-c2pa-cpp/include/'
           --gcov-ignore-parse-errors negative_hits.warn_once_per_file
+          --exclude-throw-branches --exclude-unreachable-branches
           --lcov lcov.cpp.info --txt
+
+      # Codecov wants repository-relative paths, whatever machine ran this.
+      - name: Make coverage paths repository-relative
+        if: matrix.name == 'coverage'
+        run: sed -i "s|^SF:$PWD/|SF:|" lcov.cpp.info
 
       # Tokens aren't available for PRs originating from forks,
       # so we don't attempt to upload code coverage in that case.
@@ -447,4 +453,7 @@ jobs:
           fail_ci_if_error: true
           verbose: true
           flags: cpp-binding
+          # Upload only the report above: auto-discovery would also pick up
+          # the raw gcov data for the tests and examples.
+          disable_search: true
           files: ./lcov.cpp.info
