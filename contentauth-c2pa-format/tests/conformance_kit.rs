@@ -321,7 +321,11 @@ impl FormatHandler for TrailerFormat {
                 "store length differs from the plan's",
             ));
         }
-        Ok(Vec::new())
+        // A real format patches bytes that depend on the store (a CRC, a
+        // length); this one restates the store's first byte, inside the
+        // exclusion, so the suite exercises the patch path too.
+        let first = plan.exclusions.first().map(|e| e.start).unwrap_or(0);
+        Ok(vec![Patch::new(first, manifest[..1].to_vec())])
     }
 }
 
