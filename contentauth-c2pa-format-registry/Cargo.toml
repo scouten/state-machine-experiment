@@ -1,0 +1,40 @@
+[package]
+name = "contentauth-c2pa-format-registry"
+version = "0.1.0"
+description = "Host-side format detection and run-time handler dispatch for the sans-I/O C2PA sessions: a registry of FormatHandlers, chosen by content, extension, or media type"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["c2pa", "content-credentials", "sans-io", "file-format"]
+categories = ["api-bindings"]
+publish = false
+
+[features]
+default = ["jpeg", "tiff"]
+
+# `Registry::standard()` includes the named format. Each is an optional
+# dependency on purpose: this crate is the one place a host's choice of
+# *which* formats it ships is made, and a host that wants a smaller
+# build — or only its own handlers — turns the others off.
+jpeg = ["dep:contentauth-c2pa-format-jpeg"]
+tiff = ["dep:contentauth-c2pa-format-tiff"]
+
+[dependencies]
+# The contract: `FormatHandler`, `FormatDescriptor`. Nothing else from
+# the workspace is needed to dispatch over handlers.
+contentauth-c2pa-format = { path = "../contentauth-c2pa-format" }
+contentauth-state-machine = { path = "../contentauth-state-machine" }
+contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
+
+contentauth-c2pa-format-jpeg = { path = "../contentauth-c2pa-format-jpeg", optional = true }
+contentauth-c2pa-format-tiff = { path = "../contentauth-c2pa-format-tiff", optional = true }
+
+[dev-dependencies]
+# The conformance suite, run against a handler that has been through the
+# type-erasing adapter: it must still honor the contract.
+contentauth-c2pa-format = { path = "../contentauth-c2pa-format", features = [
+    "test-util",
+] }

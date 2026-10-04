@@ -72,7 +72,7 @@ impl Host {
         loop {
             if session.advance().unwrap() == BuilderStep::Complete {
                 let report = session.finish().unwrap();
-                assert_eq!(report.manifest_range, self.plan.as_ref().unwrap().exclusion);
+                assert_eq!(report.exclusions, self.plan.as_ref().unwrap().exclusions);
                 return self.asset.clone();
             }
 
@@ -90,9 +90,9 @@ impl Host {
                     .run(JpegFormat.plan_embed(STREAM, placeholder.len() as u64))
                     .unwrap();
                 self.asset = plan.materialize(&self.source, placeholder).unwrap();
-                let exclusion = plan.exclusion;
+                let exclusions = plan.exclusions.clone();
                 self.plan = Some(plan);
-                BuilderHostReply::PlaceholderReserved(exclusion)
+                BuilderHostReply::PlaceholderReserved(exclusions)
             }
 
             BuilderRequest::AssetLength { .. } => {
@@ -114,10 +114,12 @@ impl Host {
             }
 
             BuilderRequest::CommitManifest {
-                range, manifest, ..
+                exclusions,
+                manifest,
+                ..
             } => {
                 let plan = self.plan.as_ref().unwrap();
-                assert_eq!(*range, plan.exclusion);
+                assert_eq!(*exclusions, plan.exclusions);
 
                 // Write last, once: the final store goes into the plan's
                 // slots, and the handler's patches (none, for JPEG) on
@@ -188,7 +190,7 @@ fn a_manifest_embedded_in_an_unsigned_jpeg_reads_back_as_trusted() {
     let plan = host.plan.unwrap();
 
     assert_eq!(plan.replaced, None);
-    assert_eq!(plan.exclusion.start, AFTER_APP0);
+    assert_eq!(plan.exclusions[0].start, AFTER_APP0);
 
     let report = read_back(&asset);
     assert_eq!(report.validation_state, Some(ValidationState::Trusted));
@@ -197,7 +199,7 @@ fn a_manifest_embedded_in_an_unsigned_jpeg_reads_back_as_trusted() {
     assert_eq!(active.label, "urn:uuid:test-manifest");
     assert_eq!(
         active.data_hash.as_ref().unwrap().exclusions,
-        [plan.exclusion],
+        plan.exclusions,
         "the hard binding excludes exactly the segment run this crate declared"
     );
 }
@@ -236,7 +238,7 @@ fn a_manifest_large_enough_to_span_segments_reads_back_as_trusted() {
             .as_ref()
             .unwrap()
             .exclusions,
-        [plan.exclusion]
+        plan.exclusions
     );
 }
 
@@ -254,7 +256,7 @@ fn re_signing_a_c2pa_rs_file_replaces_its_manifest_and_reads_back_as_trusted() {
         }),
         "the c2pa-rs store was replaced, and the plan says so"
     );
-    assert_eq!(plan.exclusion.start, 20);
+    assert_eq!(plan.exclusions[0].start, 20);
 
     let report = read_back(&asset);
     assert_eq!(report.validation_state, Some(ValidationState::Trusted));
@@ -271,6 +273,6 @@ fn re_signing_a_c2pa_rs_file_replaces_its_manifest_and_reads_back_as_trusted() {
             .as_ref()
             .unwrap()
             .exclusions,
-        [plan.exclusion]
+        plan.exclusions
     );
 }

@@ -251,15 +251,15 @@ impl ManifestBuilder {
         &self.buffer
     }
 
-    /// Patches in the real hard binding, given the exclusion range the
+    /// Patches in the real hard binding, given the exclusion ranges the
     /// host reported and the digest this crate computed over the asset
-    /// outside it. Returns the bytes the claim signature must cover.
+    /// outside them. Returns the bytes the claim signature must cover.
     pub(crate) fn apply_hard_binding(
         &mut self,
-        exclusion: ByteRange,
+        exclusions: &[ByteRange],
         hash: Vec<u8>,
     ) -> Result<Vec<u8>, Error> {
-        let real_data_hash_cbor = data_hash::encode(self.hash_alg, &hash, Some(exclusion))?;
+        let real_data_hash_cbor = data_hash::encode(self.hash_alg, &hash, Some(exclusions))?;
         check_len(&self.data_hash_placeholder, real_data_hash_cbor.len())?;
 
         let mut cursor = Cursor::new(std::mem::take(&mut self.buffer));
@@ -425,12 +425,12 @@ mod tests {
 
         let placeholder_len = manifest.placeholder_bytes().len();
 
-        let exclusion = ByteRange {
+        let exclusions = [ByteRange {
             start: 1234,
             len: placeholder_len as u64,
-        };
+        }];
         let hash = vec![0xab; HashAlgorithm::Sha256.digest_len()];
-        let to_be_signed = manifest.apply_hard_binding(exclusion, hash).unwrap();
+        let to_be_signed = manifest.apply_hard_binding(&exclusions, hash).unwrap();
         assert!(!to_be_signed.is_empty());
 
         assert!(manifest.countersigned_bytes(&[0u8; 64]).is_none());
@@ -491,10 +491,10 @@ mod tests {
 
         manifest
             .apply_hard_binding(
-                ByteRange {
+                &[ByteRange {
                     start: 0,
                     len: placeholder_len as u64,
-                },
+                }],
                 vec![0u8; HashAlgorithm::Sha256.digest_len()],
             )
             .unwrap();
@@ -517,10 +517,10 @@ mod tests {
 
         manifest
             .apply_hard_binding(
-                ByteRange {
+                &[ByteRange {
                     start: 0,
                     len: placeholder_len as u64,
-                },
+                }],
                 vec![0u8; HashAlgorithm::Sha256.digest_len()],
             )
             .unwrap();

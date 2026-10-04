@@ -71,7 +71,7 @@
 //!     .with_stream(stream, jpeg.to_vec())
 //!     .run(JpegFormat.plan_embed(stream, 1000))?;
 //! // The store goes right after the APP0 segment.
-//! assert_eq!(plan.exclusion.start, 20);
+//! assert_eq!(plan.exclusions[0].start, 20);
 //! # Ok::<(), contentauth_c2pa_format::FormatError>(())
 //! ```
 
@@ -87,10 +87,21 @@ mod op;
 mod scan;
 mod segment;
 
-use contentauth_c2pa_format::{EmbedPlan, FormatError, FormatHandler, Patch, StreamId};
+use contentauth_c2pa_format::{
+    EmbedPlan, FormatDescriptor, FormatError, FormatHandler, Patch, Signature, StreamId,
+};
 pub use contentauth_c2pa_format::{FormatOp, ManifestLocation};
 pub use embed::PlanEmbed;
 pub use locate::Locate;
+
+/// How JPEG identifies itself: an `SOI` marker followed by the first
+/// marker's `0xFF` prefix.
+pub const DESCRIPTOR: FormatDescriptor = FormatDescriptor::new(
+    "jpeg",
+    &["image/jpeg"],
+    &["jpg", "jpeg"],
+    &[Signature::new(0, &[0xff, 0xd8, 0xff])],
+);
 
 /// The JPEG format handler.
 ///
@@ -102,6 +113,10 @@ pub struct JpegFormat;
 impl FormatHandler for JpegFormat {
     type Locate = Locate;
     type PlanEmbed = PlanEmbed;
+
+    fn descriptor(&self) -> &FormatDescriptor {
+        &DESCRIPTOR
+    }
 
     fn locate(&self, stream: StreamId) -> Locate {
         Locate::new(stream)

@@ -76,11 +76,12 @@ impl Reader {
     /// File extensions this build can locate a manifest store within.
     ///
     /// Named after c2pa-rs's `Reader::supported_mime_types`; extensions
-    /// rather than MIME types because format selection here is a plain
-    /// extension match today (see `src/format.rs`) rather than a registry
-    /// keyed by content-sniffed MIME type.
-    pub fn supported_extensions() -> &'static [&'static str] {
-        format::EXTENSIONS
+    /// rather than MIME types because [`Self::with_file`] starts from a
+    /// path. (A file is recognized by its content first — see
+    /// `src/format.rs` — so an extension not listed here can still be
+    /// read; the list is what a file *name* alone is enough to select.)
+    pub fn supported_extensions() -> Vec<&'static str> {
+        format::extensions()
     }
 
     /// Creates a `Reader` from the given [`Context`], with no asset loaded
@@ -108,9 +109,9 @@ impl Reader {
     /// Fails with [`Error::JumbfNotFound`] if the asset carries no manifest
     /// store — matching c2pa-rs's own `Reader::with_file`, which does the
     /// same absent a sidecar `.c2pa` file (this crate does not look for
-    /// one). Fails with [`Error::UnsupportedType`] if `path`'s extension
-    /// names a format no handler in this build recognizes; see
-    /// [`Self::supported_extensions`].
+    /// one). Fails with [`Error::UnsupportedType`] if `path` is not
+    /// recognizably a format any handler in this build handles, by its
+    /// content or its extension; see [`Self::supported_extensions`].
     ///
     /// Reading more than one file into the same `Reader` — c2pa-rs supports
     /// this, to merge manifests from more than one source — is not: a
@@ -118,10 +119,9 @@ impl Reader {
     /// merging with it, since this crate's use case is a single asset.
     pub fn with_file(mut self, path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = path.as_ref();
-        let handler = format::for_path(path)?;
         let settings = self.context.settings().clone();
 
-        let report = crate::host::read_and_validate(&handler, path, settings)?;
+        let report = crate::host::read_and_validate(path, settings)?;
 
         if !report.manifest_store_found {
             return Err(Error::JumbfNotFound {

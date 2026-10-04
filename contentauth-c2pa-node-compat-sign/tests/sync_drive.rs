@@ -118,8 +118,10 @@ fn the_baseline_case_signs_through_a_plain_loop_and_reads_back_trusted() {
     let (output, report, signatures) = sign_with(session, &test_sign).unwrap();
     assert_eq!(signatures, 1);
     assert!(!report.manifest.is_empty());
-    assert!(report.manifest_len >= report.manifest.len() as u64);
-    assert!(report.manifest_start + report.manifest_len <= output.len() as u64);
+    let excluded: u64 = report.exclusions.iter().map(|e| e.len).sum();
+    assert!(excluded >= report.manifest.len() as u64);
+    let last = report.exclusions.last().unwrap();
+    assert!(last.start + last.len <= output.len() as u64);
 
     let path: PathBuf = [env!("CARGO_TARGET_TMPDIR"), "node-sign-out.jpg"]
         .iter()
@@ -211,7 +213,8 @@ fn a_tsa_url_makes_the_loop_answer_a_timestamp_request_and_embed_the_token() {
     assert_eq!(asked[0].1[0], 0x30);
 
     assert!(report.manifest.windows(300).any(|w| w == [0x42; 300]));
-    assert!(output.len() as u64 >= report.manifest_start + report.manifest_len);
+    let last = report.exclusions.last().unwrap();
+    assert!(output.len() as u64 >= last.start + last.len);
 }
 
 #[test]
