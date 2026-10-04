@@ -137,7 +137,6 @@ impl Host {
 
 fn settings(assertions: Vec<Assertion>) -> BuilderSettings {
     let mut settings = BuilderSettings::new(
-        "image/jpeg",
         "xmp:iid:test-instance",
         "urn:uuid:test-manifest",
         GeneratorInfo::new("contentauth-c2pa-format-jpeg-tests", "0.1"),

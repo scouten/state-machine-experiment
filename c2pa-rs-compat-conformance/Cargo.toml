@@ -31,6 +31,9 @@ c2pa = { version = "0.91", default-features = false, features = [
 ] }
 
 [dev-dependencies]
+# The write side, for the other direction of the interop checks: sign with
+# this workspace's builder, read with the real `c2pa::Reader`.
+contentauth-c2pa-rs-compat-sign = { path = "../contentauth-c2pa-rs-compat-sign" }
 # Builds and signs a TIFF with this workspace's own write path, so the real
 # c2pa-rs can be asked to read what a second container format's handler
 # wrote — the interoperability question `contentauth-c2pa-format-tiff`

@@ -54,6 +54,7 @@ use crate::{
     chain::PendingChain,
     claim::Claim,
     cose::{self, TimestampHeader},
+    manifest_store::CLAIM_V2_LABEL,
     timestamp::PendingTimestamp,
 };
 
@@ -89,6 +90,15 @@ pub mod status_code {
 
     /// The hard binding assertion could not be interpreted.
     pub const ASSERTION_DATAHASH_MALFORMED: &str = "assertion.dataHash.malformed";
+
+    /// A v2 claim lacks a field the specification requires of it
+    /// (`instanceID`, `signature`, `created_assertions`,
+    /// `claim_generator_info`, or the latter's `name`).
+    pub const CLAIM_MALFORMED: &str = "claim.malformed";
+
+    /// A v2 claim's `redacted_assertions` names an assertion in the
+    /// claim's own manifest, which a claim may not redact.
+    pub const ASSERTION_SELF_REDACTED: &str = "assertion.selfRedacted";
 
     /// The claim signature verified against the signer's public key.
     ///
@@ -378,6 +388,8 @@ impl ValidationStatus {
             status_code::ASSERTION_HASHEDURI_MISMATCH
                 | status_code::ASSERTION_DATAHASH_MISMATCH
                 | status_code::ASSERTION_DATAHASH_MALFORMED
+                | status_code::CLAIM_MALFORMED
+                | status_code::ASSERTION_SELF_REDACTED
                 | status_code::CLAIM_SIGNATURE_MISMATCH
                 | status_code::CLAIM_SIGNATURE_MISSING
                 | status_code::CLAIM_SIGNATURE_OUTSIDE_VALIDITY
@@ -599,6 +611,45 @@ pub(crate) fn check_claim_signature(
     }
 }
 
+/// Checks a decoded claim against the field requirements the C2PA
+/// specification places on a v2 claim, appending a failure per violation.
+///
+/// A v1 claim is not held to these (see
+/// [`Claim::missing_required_fields`]); the one check that applies to
+/// either version's `redacted_assertions` is that a claim never redacts
+/// its own manifest's assertions.
+pub(crate) fn check_claim_fields(
+    manifest_label: &str,
+    claim: &Claim,
+    statuses: &mut Vec<ValidationStatus>,
+) {
+    let claim_url = format!("self#jumbf=/c2pa/{manifest_label}/{CLAIM_V2_LABEL}");
+
+    let missing = claim.missing_required_fields();
+    if !missing.is_empty() {
+        statuses.push(ValidationStatus::for_url(
+            status_code::CLAIM_MALFORMED,
+            &claim_url,
+            format!("claim is missing required field(s): {}", missing.join(", ")),
+        ));
+    }
+
+    let own_prefix = format!("/c2pa/{manifest_label}/");
+    for uri in &claim.redacted_assertions {
+        let path = uri.rsplit_once('=').map_or(uri.as_str(), |(_, path)| path);
+
+        // A relative reference resolves inside the claim's own manifest;
+        // an absolute one does only when it names that manifest's label.
+        if !path.starts_with('/') || path.starts_with(&own_prefix) {
+            statuses.push(ValidationStatus::for_url(
+                status_code::ASSERTION_SELF_REDACTED,
+                uri,
+                "claim redacts an assertion in its own manifest",
+            ));
+        }
+    }
+}
+
 /// Verifies every hashed URI in `claim` against the bytes actually present
 /// in `manifest`, appending a status per reference.
 ///
@@ -614,7 +665,7 @@ pub(crate) fn check_assertion_hashes(
 ) {
     let claim_algorithm = claim.alg.as_deref();
 
-    for reference in claim.assertion_references() {
+    for reference in claim.hashed_references() {
         let named = reference.alg.as_deref().or(claim_algorithm);
 
         // A claim that names no algorithm gets the specification's

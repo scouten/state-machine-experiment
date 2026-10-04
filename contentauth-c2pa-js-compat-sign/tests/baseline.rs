@@ -189,11 +189,7 @@ fn the_async_host_agrees_with_the_blocking_host() {
 
     let settings = Definition::from_json(BASELINE_DEFINITION)
         .unwrap()
-        .into_settings(
-            "image/jpeg",
-            SigningAlg::Es256,
-            vec![TEST_SIGNER_CERT.to_vec()],
-        )
+        .into_settings(SigningAlg::Es256, vec![TEST_SIGNER_CERT.to_vec()])
         .unwrap();
     let mut sync_out = std::io::Cursor::new(Vec::new());
     let report = build_and_sign(

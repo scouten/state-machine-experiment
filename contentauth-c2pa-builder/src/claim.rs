@@ -16,10 +16,16 @@
 //! versions — this crate only ever builds v2 claims (v1 is a read-only
 //! concern, for interoperating with manifests this crate did not write).
 //!
-//! Emits `dc:title`, `dc:format`, `instanceID`, `claim_generator_info`,
-//! `signature`, `alg`, and `created_assertions` — plus `gathered_assertions`
-//! when the host marked any assertion as gathered rather than created (see
+//! Emits `dc:title`, `instanceID`, `claim_generator_info`, `signature`,
+//! `alg`, and `created_assertions` — plus `gathered_assertions` when the
+//! host marked any assertion as gathered rather than created (see
 //! [`crate::AssertionKind`]).
+//!
+//! The shape follows the specification's `claim-map-v2`, which departs
+//! from v1 in ways a v1-shaped writer would get wrong: `claim_generator_info`
+//! is a single `generator-info-map` (carrying `specVersion`), not an array,
+//! and the v1 `dc:format` and `claim_generator` fields do not exist. A
+//! claim generator "shall not" produce a v1 claim, so there is no option to.
 //!
 //! # Why this needs no padding
 //!
@@ -41,12 +47,16 @@ use crate::error::Error;
 /// carry.
 const SIGNATURE_URI: &str = "self#jumbf=c2pa.signature";
 
+/// The version of the C2PA specification this encoder follows, written as
+/// the generator's `specVersion` (SemVer, per the specification). Matches
+/// the snapshot under `reference/c2pa-spec`.
+const SPEC_VERSION: &str = "2.4.0";
+
 /// The subset of a [`BuilderSettings`](crate::BuilderSettings) that
 /// [`encode`] needs, decoupled from that type so this module can be
 /// exercised independently of it.
 pub(crate) struct ClaimFields<'a> {
     pub(crate) title: Option<&'a str>,
-    pub(crate) format: &'a str,
     pub(crate) instance_id: &'a str,
     pub(crate) generator_name: &'a str,
     pub(crate) generator_version: &'a str,
@@ -78,16 +88,12 @@ pub(crate) fn encode(
     }
 
     map.insert(
-        Value::Text("dc:format".to_string()),
-        Value::Text(fields.format.to_string()),
-    );
-    map.insert(
         Value::Text("instanceID".to_string()),
         Value::Text(fields.instance_id.to_string()),
     );
     map.insert(
         Value::Text("claim_generator_info".to_string()),
-        Value::Array(vec![Value::Map(BTreeMap::from([
+        Value::Map(BTreeMap::from([
             (
                 Value::Text("name".to_string()),
                 Value::Text(fields.generator_name.to_string()),
@@ -96,7 +102,11 @@ pub(crate) fn encode(
                 Value::Text("version".to_string()),
                 Value::Text(fields.generator_version.to_string()),
             ),
-        ]))]),
+            (
+                Value::Text("specVersion".to_string()),
+                Value::Text(SPEC_VERSION.to_string()),
+            ),
+        ])),
     );
     map.insert(
         Value::Text("signature".to_string()),
@@ -147,7 +157,6 @@ mod tests {
     fn fields() -> ClaimFields<'static> {
         ClaimFields {
             title: Some("A.jpg"),
-            format: "image/jpeg",
             instance_id: "xmp:iid:1234",
             generator_name: "test",
             generator_version: "1.0",
@@ -176,9 +185,14 @@ mod tests {
             map.get(&Value::Text("dc:title".to_string())),
             Some(&Value::Text("A.jpg".to_string()))
         );
-        assert_eq!(
-            map.get(&Value::Text("dc:format".to_string())),
-            Some(&Value::Text("image/jpeg".to_string()))
+        assert!(
+            map.get(&Value::Text("dc:format".to_string())).is_none(),
+            "dc:format does not exist in a v2 claim"
+        );
+        assert!(
+            map.get(&Value::Text("claim_generator".to_string()))
+                .is_none(),
+            "claim_generator does not exist in a v2 claim"
         );
         assert_eq!(
             map.get(&Value::Text("instanceID".to_string())),
@@ -193,12 +207,23 @@ mod tests {
             Some(&Value::Text("sha256".to_string()))
         );
 
-        let Some(Value::Array(generators)) =
-            map.get(&Value::Text("claim_generator_info".to_string()))
+        // A single map, not v1's array of maps.
+        let Some(Value::Map(generator)) = map.get(&Value::Text("claim_generator_info".to_string()))
         else {
-            panic!("expected claim_generator_info array");
+            panic!("expected claim_generator_info map");
         };
-        assert_eq!(generators.len(), 1);
+        assert_eq!(
+            generator.get(&Value::Text("name".to_string())),
+            Some(&Value::Text("test".to_string()))
+        );
+        assert_eq!(
+            generator.get(&Value::Text("version".to_string())),
+            Some(&Value::Text("1.0".to_string()))
+        );
+        assert_eq!(
+            generator.get(&Value::Text("specVersion".to_string())),
+            Some(&Value::Text(SPEC_VERSION.to_string()))
+        );
 
         let Some(Value::Array(assertions)) =
             map.get(&Value::Text("created_assertions".to_string()))

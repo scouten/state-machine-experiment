@@ -232,7 +232,6 @@ mod tests {
         Definition::from_json(BASELINE_DEFINITION)
             .and_then(|d| {
                 d.into_settings(
-                    "image/jpeg",
                     contentauth_c2pa_primitives::SigningAlg::Es256,
                     vec![TEST_SIGNER_CERT.to_vec()],
                 )

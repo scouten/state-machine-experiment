@@ -209,24 +209,24 @@ pub(crate) fn claim_box_with_alg(
     superbox(type_uuid(*b"c2cl"), "c2pa.claim", &[boxed(b"cbor", &cbor)])
 }
 
-/// Builds a v2-shaped claim box: `created_assertions` and
+/// Builds a conformant v2 claim box: every field the specification
+/// requires (`instanceID`, `signature`, a single-map `claim_generator_info`
+/// with a `name`, `created_assertions`), with `created_assertions` and
 /// `gathered_assertions` in place of v1's flat `assertions` list.
 pub(crate) fn claim_box_v2(
     title: &str,
     created_assertions: Vec<Value>,
     gathered_assertions: Vec<Value>,
 ) -> Vec<u8> {
-    let mut fields = BTreeMap::from([(
+    let mut fields = v2_required_fields();
+    fields.insert(
         Value::Text("dc:title".to_string()),
         Value::Text(title.to_string()),
-    )]);
-
-    if !created_assertions.is_empty() {
-        fields.insert(
-            Value::Text("created_assertions".to_string()),
-            Value::Array(created_assertions),
-        );
-    }
+    );
+    fields.insert(
+        Value::Text("created_assertions".to_string()),
+        Value::Array(created_assertions),
+    );
 
     if !gathered_assertions.is_empty() {
         fields.insert(
@@ -235,6 +235,33 @@ pub(crate) fn claim_box_v2(
         );
     }
 
+    claim_box_v2_from_fields(fields)
+}
+
+/// The required v2 claim fields except `created_assertions`.
+pub(crate) fn v2_required_fields() -> BTreeMap<Value, Value> {
+    BTreeMap::from([
+        (
+            Value::Text("instanceID".to_string()),
+            Value::Text("xmp:iid:v2".to_string()),
+        ),
+        (
+            Value::Text("signature".to_string()),
+            Value::Text("self#jumbf=c2pa.signature".to_string()),
+        ),
+        (
+            Value::Text("claim_generator_info".to_string()),
+            Value::Map(BTreeMap::from([(
+                Value::Text("name".to_string()),
+                Value::Text("test".to_string()),
+            )])),
+        ),
+    ])
+}
+
+/// Wraps arbitrary CBOR map fields in a `c2pa.claim.v2` claim box, for
+/// tests that need a claim that departs from the specification.
+pub(crate) fn claim_box_v2_from_fields(fields: BTreeMap<Value, Value>) -> Vec<u8> {
     let cbor = c2pa_cbor::to_vec(&Value::Map(fields)).unwrap();
 
     superbox(

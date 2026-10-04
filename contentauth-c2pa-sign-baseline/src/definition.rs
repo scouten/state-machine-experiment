@@ -127,15 +127,14 @@ impl Definition {
         Ok(definition)
     }
 
-    /// Builds the engine's settings for `format` (a MIME type), signed
-    /// with `alg` and the DER certificate chain `certificates` (signer
-    /// first) — the two things a signer, rather than a definition, decides.
+    /// Builds the engine's settings, signed with `alg` and the DER
+    /// certificate chain `certificates` (signer first) — the two things a
+    /// signer, rather than a definition, decides.
     ///
     /// RSASSA-PSS algorithms need `BuilderSettings::rsa_signature_len`
     /// too; set it on the result.
     pub fn into_settings(
         self,
-        format: &str,
         alg: SigningAlg,
         certificates: Vec<Vec<u8>>,
     ) -> Result<BuilderSettings, Error> {
@@ -143,7 +142,6 @@ impl Definition {
             .map_err(|_| Error::ClaimGenerator)?;
 
         let mut settings = BuilderSettings::new(
-            format,
             self.instance_id,
             self.label,
             GeneratorInfo::new(generator.name, generator.version),
@@ -179,14 +177,13 @@ mod tests {
     use super::*;
 
     fn settings(json: &str) -> Result<BuilderSettings, Error> {
-        Definition::from_json(json)?.into_settings("image/jpeg", SigningAlg::Es256, vec![vec![1]])
+        Definition::from_json(json)?.into_settings(SigningAlg::Es256, vec![vec![1]])
     }
 
     #[test]
     fn the_baseline_definition_becomes_one_created_actions_assertion() {
         let settings = settings(BASELINE_DEFINITION).unwrap();
 
-        assert_eq!(settings.format, "image/jpeg");
         assert_eq!(settings.title.as_deref(), Some("baseline.jpg"));
         assert_eq!(settings.claim_generator_info.name, "c2pa-sign-baseline");
         assert_eq!(settings.signing_alg, SigningAlg::Es256);
@@ -219,7 +216,7 @@ mod tests {
         );
 
         let settings = definition
-            .into_settings("image/jpeg", SigningAlg::Es256, vec![vec![1]])
+            .into_settings(SigningAlg::Es256, vec![vec![1]])
             .unwrap();
         assert_eq!(
             settings.timestamp.map(|t| t.reserve_size),

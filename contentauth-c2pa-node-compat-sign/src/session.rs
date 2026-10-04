@@ -221,7 +221,7 @@ impl NodeBuildSession {
         let alg = parse_alg(alg)?;
         let definition = Definition::from_json(definition_json)?;
         let tsa_url = definition.tsa_url.clone();
-        let settings = definition.into_settings("image/jpeg", alg, certs)?;
+        let settings = definition.into_settings(alg, certs)?;
 
         Ok(Self {
             inner: FileBuilderSession::new(JpegFormat, settings),

@@ -152,7 +152,6 @@ fn fabricate_timestamp_token(_digest: &[u8]) -> Vec<u8> {
 
 fn settings(assertions: Vec<Assertion>, timestamp: Option<TimestampSettings>) -> BuilderSettings {
     let mut settings = BuilderSettings::new(
-        "image/jpeg",
         "xmp:iid:test-instance",
         "urn:uuid:test-manifest",
         GeneratorInfo::new("contentauth-c2pa-builder-tests", "0.1"),
@@ -225,7 +224,16 @@ fn a_signed_manifest_with_no_assertions_reads_back_as_trusted() {
     assert_eq!(active.label, "urn:uuid:test-manifest");
     assert_eq!(active.claim.version, ClaimVersion::V2);
     assert_eq!(active.claim.title.as_deref(), Some("test.jpg"));
-    assert_eq!(active.claim.format.as_deref(), Some("image/jpeg"));
+    // `dc:format` and `claim_generator` are v1 fields; a v2 claim has
+    // neither, and its generator is a single map carrying `specVersion`.
+    assert_eq!(active.claim.format, None);
+    assert_eq!(active.claim.claim_generator, None);
+    assert!(active.claim.missing_required_fields().is_empty());
+    assert_eq!(active.claim.claim_generator_info.len(), 1);
+    assert_eq!(
+        active.claim.claim_generator_info[0].spec_version.as_deref(),
+        Some("2.4.0")
+    );
     assert_eq!(
         active.claim.instance_id.as_deref(),
         Some("xmp:iid:test-instance")
