@@ -101,11 +101,26 @@ struct ReaderDeleter {
     void operator()(C2paSmReader *r) const noexcept { c2pa_sm_reader_free(r); }
 };
 
-/// Takes ownership of a string returned by the library.
-inline std::string take_string(char *s) {
-    std::string out = s != nullptr ? s : "";
+/// Takes ownership of an optional string returned by the library.
+inline std::optional<std::string> take_optional_string(char *s) {
+    std::optional<std::string> out;
+    if (s != nullptr) {
+        out = s;
+    }
     c2pa_sm_string_free(s);
     return out;
+}
+
+/// Takes ownership of a string returned by the library (null reads as empty).
+inline std::string take_string(char *s) { return take_optional_string(s).value_or(""); }
+
+/// A driver that finds the session neither finished nor waiting on anything
+/// it has started would otherwise wait forever; say so instead.
+inline void require_progress(bool progressing) {
+    if (!progressing) {
+        throw Exception(ErrorCode::Read, "Read(Stalled)",
+                        "the session is waiting on nothing the host was asked for");
+    }
 }
 
 }  // namespace detail
@@ -204,9 +219,7 @@ public:
 
     /// @brief The active manifest's label, if any.
     std::optional<std::string> active_label() const {
-        char *label = c2pa_sm_reader_active_label(raw_.get());
-        return label != nullptr ? std::optional<std::string>(detail::take_string(label))
-                                : std::nullopt;
+        return detail::take_optional_string(c2pa_sm_reader_active_label(raw_.get()));
     }
 
     /// @brief Whether the manifest store was embedded in the asset.
@@ -407,10 +420,7 @@ inline std::optional<Reader> read(Session session, SyncHost &host) {
         if (step.done) {
             return std::move(session).finish();
         }
-        if (step.requests.empty()) {
-            throw Exception(ErrorCode::Read, "Read(Stalled)",
-                            "the session is waiting on nothing the host was asked for");
-        }
+        detail::require_progress(!step.requests.empty());
         for (const Request &request : step.requests) {
             session.fulfill(request_id(request), answer(host, request));
         }

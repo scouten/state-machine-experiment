@@ -158,10 +158,7 @@ public:
         if (step.done) {
             return true;
         }
-        if (step.requests.empty() && in_flight_ == 0) {
-            throw Exception(ErrorCode::Read, "Read(Stalled)",
-                            "the session is waiting on nothing the host was asked for");
-        }
+        detail::require_progress(!step.requests.empty() || in_flight_ > 0);
         for (const Request &request : step.requests) {
             ++in_flight_;
             max_in_flight_ = std::max(max_in_flight_, in_flight_);

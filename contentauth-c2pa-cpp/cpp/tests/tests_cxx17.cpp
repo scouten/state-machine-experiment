@@ -178,6 +178,28 @@ TEST(every_kind_of_request_the_library_reports_is_described_as_plain_values) {
     CHECK_EQ(request_id(Request(ocsp)), uint64_t(7));
 }
 
+TEST(small_helpers_handle_the_cases_the_engine_does_not_produce) {
+    // A null string from the library reads as absent / empty.
+    CHECK(!detail::take_optional_string(nullptr).has_value());
+    CHECK_EQ(detail::take_string(nullptr), "");
+
+    // A driver with nothing to wait on reports it rather than hanging.
+    detail::require_progress(true);
+    CHECK_THROWS_CODE(detail::require_progress(false), ErrorCode::Read);
+
+    // The default clock is the system clock; a pinned one is not.
+    MemoryHost unpinned({});
+    CHECK(unpinned.now() > 1'700'000'000);
+    CHECK_EQ(MemoryHost({}, 5).now(), int64_t(5));
+    bool threw = false;
+    try {
+        MemoryHost({1}).read(9, 1);  // start past the end, as opposed to len
+    } catch (const std::out_of_range &) {
+        threw = true;
+    }
+    CHECK(threw);
+}
+
 TEST(misusing_the_protocol_is_an_error_and_leaves_the_session_usable) {
     Session session("image/jpeg");
     Step step = session.advance();
