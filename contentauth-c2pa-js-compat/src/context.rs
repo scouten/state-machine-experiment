@@ -43,10 +43,11 @@
 //! becomes a named [`TrustList`] ([`ReadSettings::trust_lists`] /
 //! [`ReadSettings::timestamp_trust_lists`]), so the URI is reported as
 //! `trust_list_uri` on the trusted statuses, as c2pa-rs does. `cawg`
-//! lists are accepted and ignored, there being no CAWG identity
-//! validation in this workspace. The other per-list fields
-//! (`trust_config`, `allowed_list`, `trusted_ica_issuers`) are likewise
-//! accepted and ignored.
+//! lists go the same way into [`ReadSettings::identity_trust_anchors`] and
+//! [`ReadSettings::identity_trust_lists`], which judge the X.509
+//! credentials of CAWG identity assertions. The other per-list fields
+//! (`trust_config`, `allowed_list`, `trusted_ica_issuers`) are accepted
+//! and ignored.
 //!
 //! The older `trust.trust_anchors` and `trust.user_anchors` strings, which
 //! c2pa-rs 0.91 deprecated (and plans to remove in 0.92), are still
@@ -123,6 +124,8 @@ impl Context {
         let mut timestamp_anchors = Vec::new();
         let mut signing_lists = Vec::new();
         let mut timestamp_lists = Vec::new();
+        let mut identity_anchors = Vec::new();
+        let mut identity_lists = Vec::new();
 
         let bad =
             |key: &str, err: String| C2paError::BadParam(format!("settings JSON: {key}: {err}"));
@@ -143,7 +146,7 @@ impl Context {
             let (anonymous, named) = match list.trust_kind {
                 TrustListKind::Manifest => (&mut signing_anchors, &mut signing_lists),
                 TrustListKind::Tsa => (&mut timestamp_anchors, &mut timestamp_lists),
-                TrustListKind::Cawg => continue,
+                TrustListKind::Cawg => (&mut identity_anchors, &mut identity_lists),
             };
             match list.trust_uri {
                 Some(uri) => named.push(TrustList {
@@ -166,6 +169,8 @@ impl Context {
             timestamp_trust_anchors: timestamp_anchors,
             trust_lists: signing_lists,
             timestamp_trust_lists: timestamp_lists,
+            identity_trust_anchors: identity_anchors,
+            identity_trust_lists: identity_lists,
             check_ocsp: doc.verify.ocsp_fetch.unwrap_or(defaults.check_ocsp),
             fetch_remote_manifests: defaults.fetch_remote_manifests,
         };
@@ -359,6 +364,34 @@ mod tests {
         assert_eq!(
             context.settings().timestamp_trust_anchors,
             vec![tsa.to_vec()]
+        );
+        assert_eq!(
+            context.settings().identity_trust_anchors,
+            vec![cawg.to_vec()]
+        );
+    }
+
+    #[test]
+    fn a_cawg_list_with_a_trust_uri_becomes_a_named_identity_list() {
+        let cawg = [0x30u8, 0x03, 0x02, 0x01, 0x03];
+        let json = serde_json::json!({
+            "trust": {
+                "anchors": [
+                    { "trust_anchors": pem_of(&cawg), "trust_kind": "cawg",
+                      "trust_uri": "https://example.com/cawg.pem" },
+                ]
+            }
+        })
+        .to_string();
+
+        let context = Context::from_json(&json).expect("parses");
+        assert!(context.settings().identity_trust_anchors.is_empty());
+        assert_eq!(
+            context.settings().identity_trust_lists,
+            vec![TrustList {
+                uri: "https://example.com/cawg.pem".to_string(),
+                anchors: vec![cawg.to_vec()],
+            }]
         );
     }
 

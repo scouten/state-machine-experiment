@@ -68,6 +68,7 @@ impl Builder {
             settings,
             |_, data| signer.sign(data),
             Some(&mut |alg, digest| timestamp(signer, tsa_url.as_deref(), alg, digest)),
+            None,
         )?;
         Ok(report.manifest)
     }
@@ -101,6 +102,7 @@ impl Builder {
             settings,
             |_, data| signer.sign(data),
             Some(&mut |alg, digest| timestamp(signer, tsa_url.as_deref(), alg, digest)),
+            None,
         )?;
         Ok(manifest)
     }

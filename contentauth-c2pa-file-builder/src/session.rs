@@ -39,7 +39,9 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use contentauth_c2pa_builder::{BuilderHostReply, BuilderRequest, BuilderSession, BuilderSettings};
+use contentauth_c2pa_builder::{
+    BuilderHostReply, BuilderRequest, BuilderSession, BuilderSettings, SignPurpose,
+};
 use contentauth_c2pa_format::{Edit, EmbedPlan, FormatHandler, IoReply, IoRequest};
 use contentauth_c2pa_primitives::{ByteRange, HashAlgorithm, HostError, SigningAlg, StreamId};
 use contentauth_state_machine::{
@@ -118,6 +120,10 @@ pub enum FileBuilderRequest {
     /// Mirrors [`BuilderRequest::Sign`] exactly: the host is responsible
     /// for however it holds or reaches the signing key.
     Sign {
+        /// What is being signed, and so whose key is wanted — see
+        /// [`BuilderRequest::Sign`].
+        purpose: SignPurpose,
+
         /// The algorithm to sign with.
         alg: SigningAlg,
 
@@ -627,8 +633,9 @@ impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
                                 self.pending.insert(outer, request.id);
                             }
 
-                            BuilderRequest::Sign { alg, data } => {
+                            BuilderRequest::Sign { purpose, alg, data } => {
                                 let outer = self.core.issue(FileBuilderRequest::Sign {
+                                    purpose: purpose.clone(),
                                     alg: *alg,
                                     data: data.clone(),
                                 });
@@ -1245,6 +1252,7 @@ mod tests {
                 bytes: vec![1, 2, 3],
             },
             FileBuilderRequest::Sign {
+                purpose: SignPurpose::Claim,
                 alg: SigningAlg::Es256,
                 data: vec![1, 2, 3],
             },
@@ -1630,6 +1638,7 @@ mod tests {
     fn step_writing_does_not_reissue_a_still_pending_source_read() {
         let mut core = SessionCore::default();
         let outer_request = core.issue(FileBuilderRequest::Sign {
+            purpose: SignPurpose::Claim,
             alg: SigningAlg::Es256,
             data: vec![],
         });
@@ -1683,6 +1692,7 @@ mod tests {
     fn step_writing_does_not_reissue_a_still_pending_write() {
         let mut core = SessionCore::default();
         let outer_request = core.issue(FileBuilderRequest::Sign {
+            purpose: SignPurpose::Claim,
             alg: SigningAlg::Es256,
             data: vec![],
         });
@@ -1739,6 +1749,7 @@ mod tests {
     fn step_validating_rejects_a_plan_that_does_not_check_out() {
         let mut core = SessionCore::default();
         let request = core.issue(FileBuilderRequest::Sign {
+            purpose: SignPurpose::Claim,
             alg: SigningAlg::Es256,
             data: vec![],
         });
@@ -1762,6 +1773,7 @@ mod tests {
     fn step_validating_awaits_a_still_pending_source_length() {
         let mut core = SessionCore::default();
         let request = core.issue(FileBuilderRequest::Sign {
+            purpose: SignPurpose::Claim,
             alg: SigningAlg::Es256,
             data: vec![],
         });

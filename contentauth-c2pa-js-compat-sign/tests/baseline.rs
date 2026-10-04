@@ -199,6 +199,7 @@ fn the_async_host_agrees_with_the_blocking_host() {
         settings,
         |_, data| sign_with_test_key(data),
         None,
+        None,
     )
     .unwrap();
 

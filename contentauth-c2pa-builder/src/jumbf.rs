@@ -41,6 +41,7 @@ use crate::{
     claim::{self, ClaimFields},
     cose, data_hash,
     error::Error,
+    identity::{self, CredentialPlan, IdentityCredential},
 };
 
 /// Builds a JUMBF type UUID from its four-character code.
@@ -90,6 +91,16 @@ pub(crate) struct AssertionInput<'a> {
 /// Everything [`ManifestBuilder::build_placeholder`] needs, decoupled from
 /// [`crate::BuilderSettings`] so this module can be exercised
 /// independently of it.
+/// One identity assertion to reserve and, later, write.
+pub(crate) struct IdentityInput<'a> {
+    pub(crate) credential: &'a IdentityCredential,
+    pub(crate) roles: &'a [String],
+
+    /// Labels of the host assertions vouched for, in the order they are
+    /// named; the hard binding follows them. Already checked to exist.
+    pub(crate) referenced: Vec<&'a str>,
+}
+
 pub(crate) struct ManifestInputs<'a> {
     pub(crate) manifest_label: &'a str,
     pub(crate) title: Option<&'a str>,
@@ -101,6 +112,29 @@ pub(crate) struct ManifestInputs<'a> {
     pub(crate) certificates: &'a [Vec<u8>],
     pub(crate) signature_len: usize,
     pub(crate) timestamp_reserve: Option<usize>,
+    pub(crate) identities: &'a [IdentityInput<'a>],
+}
+
+/// One reserved identity assertion, and what is needed to write it.
+struct IdentityPart {
+    label: String,
+    credential: IdentityCredential,
+    plan: CredentialPlan,
+    roles: Vec<String>,
+
+    /// The URIs and hashes of the host assertions vouched for, in
+    /// reference order. The hard binding, whose hash is not known yet, is
+    /// appended when the payload is built.
+    referenced: Vec<(String, Vec<u8>)>,
+
+    placeholder: PlaceholderDataBox,
+
+    /// The `signer_payload` once built, which is what the host's
+    /// signature covers and what the assertion then embeds.
+    payload: Option<Vec<u8>>,
+
+    /// This assertion's hash as referenced from the claim, once written.
+    claim_hash: Option<Vec<u8>>,
 }
 
 /// Assembles a manifest store's JUMBF bytes and holds the state needed to
@@ -122,6 +156,11 @@ pub(crate) struct ManifestBuilder {
     protected_header: Vec<u8>,
     signature_len: usize,
     timestamp_reserve: Option<usize>,
+
+    /// The hard binding assertion's hash as referenced from the claim and
+    /// from identity assertions; known once the binding is applied.
+    data_hash_ref: Option<Vec<u8>>,
+    identities: Vec<IdentityPart>,
 
     title: Option<String>,
     instance_id: String,
@@ -165,6 +204,48 @@ impl ManifestBuilder {
             assertions_builder = assertions_builder.add_child_box(sbox);
         }
 
+        // Identity assertions: each vouches for host assertions whose
+        // hashes are already final, plus the hard binding, whose is not.
+        // The placeholder is the assertion as it will finally be encoded,
+        // minus the real hash and signature.
+        let mut identities = Vec::with_capacity(inputs.identities.len());
+        for (index, input) in inputs.identities.iter().enumerate() {
+            let plan = input.credential.plan()?;
+
+            let referenced = input
+                .referenced
+                .iter()
+                .filter_map(|label| {
+                    assertion_refs
+                        .iter()
+                        .find(|(url, _, _)| url.ends_with(&format!("/{label}")))
+                        .map(|(url, hash, _)| (url.clone(), hash.clone()))
+                })
+                .collect::<Vec<_>>();
+
+            let mut dummy_refs = referenced.clone();
+            dummy_refs.push((
+                format!("self#jumbf=c2pa.assertions/{}", data_hash::LABEL),
+                vec![0u8; hash_alg.digest_len()],
+            ));
+            let dummy_payload = identity::signer_payload(&dummy_refs, plan.sig_type, input.roles);
+            let dummy_signature = input
+                .credential
+                .signature_field(&plan, &vec![0u8; plan.signature_len])?;
+            let dummy_cbor = identity::assertion_cbor(&dummy_payload, &dummy_signature);
+
+            identities.push(IdentityPart {
+                label: identity::label_for(index),
+                credential: input.credential.clone(),
+                plan,
+                roles: input.roles.to_vec(),
+                referenced,
+                placeholder: PlaceholderDataBox::new(CBOR_BOX_TYPE, dummy_cbor.len()),
+                payload: None,
+                claim_hash: None,
+            });
+        }
+
         // The hard binding: placeholder exclusion and hash, both at their
         // final encoded lengths.
         let dummy_hash = vec![0u8; hash_alg.digest_len()];
@@ -176,7 +257,19 @@ impl ManifestBuilder {
             .set_label(data_hash::LABEL)
             .add_borrowed_child_box(&data_hash_placeholder);
 
-        let assertions_sbox = assertions_builder.add_borrowed_child_box(&data_hash_sbox);
+        let identity_sboxes: Vec<_> = identities
+            .iter()
+            .map(|part| {
+                SuperBoxBuilder::new(&ASSERTION_UUID)
+                    .set_label(&part.label)
+                    .add_borrowed_child_box(&part.placeholder)
+            })
+            .collect();
+
+        let mut assertions_sbox = assertions_builder.add_borrowed_child_box(&data_hash_sbox);
+        for identity_sbox in &identity_sboxes {
+            assertions_sbox = assertions_sbox.add_borrowed_child_box(identity_sbox);
+        }
 
         // The claim: every reference final except the hard binding's own,
         // which is a fixed-length digest either way. The hard binding is
@@ -187,6 +280,13 @@ impl ManifestBuilder {
             vec![0u8; hash_alg.digest_len()],
             AssertionKind::Created,
         ));
+        for part in &identities {
+            dummy_claim_refs.push((
+                format!("self#jumbf=c2pa.assertions/{}", part.label),
+                vec![0u8; hash_alg.digest_len()],
+                AssertionKind::Created,
+            ));
+        }
         let (dummy_created, dummy_gathered) = partition_by_kind(&dummy_claim_refs);
 
         let claim_fields = ClaimFields {
@@ -238,6 +338,8 @@ impl ManifestBuilder {
             protected_header,
             signature_len: inputs.signature_len,
             timestamp_reserve: inputs.timestamp_reserve,
+            data_hash_ref: None,
+            identities,
             title: inputs.title.map(str::to_string),
             instance_id: inputs.instance_id.to_string(),
             generator_name: inputs.generator_name.to_string(),
@@ -253,12 +355,17 @@ impl ManifestBuilder {
 
     /// Patches in the real hard binding, given the exclusion ranges the
     /// host reported and the digest this crate computed over the asset
-    /// outside them. Returns the bytes the claim signature must cover.
+    /// outside them.
+    ///
+    /// The claim is not written yet: it lists every assertion's hash,
+    /// including those of identity assertions, which in turn vouch for
+    /// this binding. See [`Self::identity_to_be_signed`] and
+    /// [`Self::apply_claim`].
     pub(crate) fn apply_hard_binding(
         &mut self,
         exclusions: &[ByteRange],
         hash: Vec<u8>,
-    ) -> Result<Vec<u8>, Error> {
+    ) -> Result<(), Error> {
         let real_data_hash_cbor = data_hash::encode(self.hash_alg, &hash, Some(exclusions))?;
         check_len(&self.data_hash_placeholder, real_data_hash_cbor.len())?;
 
@@ -269,22 +376,121 @@ impl ManifestBuilder {
 
         // The claim's reference to the hard binding covers the assertion
         // box's own rendered bytes, which just changed.
-        let data_hash_sbox = SuperBoxBuilder::new(&ASSERTION_UUID)
-            .set_label(data_hash::LABEL)
-            .add_child_box(DataBoxBuilder::from_owned(
-                CBOR_BOX_TYPE,
-                real_data_hash_cbor,
-            ));
-        let mut rendered = Cursor::new(Vec::new());
-        data_hash_sbox.write_jumbf(&mut rendered)?;
-        let data_hash_ref_hash = self.hash_alg.digest(&rendered.into_inner()[8..]);
+        self.data_hash_ref = Some(self.assertion_box_hash(real_data_hash_cbor, data_hash::LABEL)?);
+
+        Ok(())
+    }
+
+    /// The number of identity assertions this manifest carries.
+    pub(crate) fn identity_count(&self) -> usize {
+        self.identities.len()
+    }
+
+    /// Builds the `signer_payload` of identity assertion `index` and
+    /// returns what the host must sign for it: the algorithm, the label
+    /// (to say whose key), and the bytes.
+    ///
+    /// Only meaningful once [`Self::apply_hard_binding`] has run, since
+    /// every identity assertion vouches for the hard binding.
+    pub(crate) fn identity_to_be_signed(
+        &mut self,
+        index: usize,
+    ) -> Result<(String, SigningAlg, Vec<u8>), Error> {
+        let data_hash_ref = self
+            .data_hash_ref
+            .clone()
+            .ok_or(Error::PlaceholderSizeMismatch(
+                "an identity assertion was signed before the hard binding was applied",
+            ))?;
+        let part = self
+            .identities
+            .get_mut(index)
+            .ok_or(Error::PlaceholderSizeMismatch("no such identity assertion"))?;
+
+        let mut referenced = part.referenced.clone();
+        referenced.push((
+            format!("self#jumbf=c2pa.assertions/{}", data_hash::LABEL),
+            data_hash_ref,
+        ));
+
+        let payload = identity::signer_payload(&referenced, part.plan.sig_type, &part.roles);
+        let to_be_signed = part.credential.to_be_signed(&part.plan, &payload);
+        part.payload = Some(payload);
+
+        Ok((part.label.clone(), part.plan.alg, to_be_signed))
+    }
+
+    /// Writes identity assertion `index` with the host's signature over
+    /// what [`Self::identity_to_be_signed`] returned.
+    pub(crate) fn apply_identity_signature(
+        &mut self,
+        index: usize,
+        signature: &[u8],
+    ) -> Result<(), Error> {
+        let part = self
+            .identities
+            .get(index)
+            .ok_or(Error::PlaceholderSizeMismatch("no such identity assertion"))?;
+
+        if signature.len() != part.plan.signature_len {
+            return Err(Error::SignatureLengthMismatch {
+                expected: part.plan.signature_len,
+                actual: signature.len(),
+            });
+        }
+
+        let payload = part
+            .payload
+            .as_deref()
+            .ok_or(Error::PlaceholderSizeMismatch(
+                "an identity assertion was written before it was signed",
+            ))?;
+        let field = part.credential.signature_field(&part.plan, signature)?;
+        let cbor = identity::assertion_cbor(payload, &field);
+        check_len(&part.placeholder, cbor.len())?;
+
+        let mut cursor = Cursor::new(std::mem::take(&mut self.buffer));
+        part.placeholder.replace_payload(&mut cursor, &cbor)?;
+        self.buffer = cursor.into_inner();
+
+        let label = part.label.clone();
+        let claim_hash = self.assertion_box_hash(cbor, &label)?;
+        if let Some(part) = self.identities.get_mut(index) {
+            part.claim_hash = Some(claim_hash);
+        }
+
+        Ok(())
+    }
+
+    /// Writes the claim, now that every assertion's hash is final, and
+    /// returns the bytes the claim signature must cover.
+    pub(crate) fn apply_claim(&mut self) -> Result<Vec<u8>, Error> {
+        let data_hash_ref = self
+            .data_hash_ref
+            .clone()
+            .ok_or(Error::PlaceholderSizeMismatch(
+                "the claim was written before the hard binding was applied",
+            ))?;
 
         let mut claim_refs = self.assertion_refs.clone();
         claim_refs.push((
             format!("self#jumbf=c2pa.assertions/{}", data_hash::LABEL),
-            data_hash_ref_hash,
+            data_hash_ref,
             AssertionKind::Created,
         ));
+        for part in &self.identities {
+            let hash = part
+                .claim_hash
+                .clone()
+                .ok_or(Error::PlaceholderSizeMismatch(
+                    "the claim was written before every identity assertion was",
+                ))?;
+            claim_refs.push((
+                format!("self#jumbf=c2pa.assertions/{}", part.label),
+                hash,
+                AssertionKind::Created,
+            ));
+        }
         let (created, gathered) = partition_by_kind(&claim_refs);
 
         let claim_fields = ClaimFields {
@@ -304,6 +510,17 @@ impl ManifestBuilder {
         self.buffer = cursor.into_inner();
 
         Ok(to_be_signed)
+    }
+
+    /// The hash the claim records for an assertion whose box holds `cbor`:
+    /// over the box's rendered payload, not its header.
+    fn assertion_box_hash(&self, cbor: Vec<u8>, label: &str) -> Result<Vec<u8>, Error> {
+        let sbox = SuperBoxBuilder::new(&ASSERTION_UUID)
+            .set_label(label)
+            .add_child_box(DataBoxBuilder::from_owned(CBOR_BOX_TYPE, cbor));
+        let mut rendered = Cursor::new(Vec::new());
+        sbox.write_jumbf(&mut rendered)?;
+        Ok(self.hash_alg.digest(&rendered.into_inner()[8..]))
     }
 
     /// The bytes an RFC 3161 timestamp must cover, given the real
@@ -413,6 +630,7 @@ mod tests {
             certificates,
             signature_len: 64,
             timestamp_reserve,
+            identities: &[],
         }
     }
 
@@ -430,7 +648,8 @@ mod tests {
             len: placeholder_len as u64,
         }];
         let hash = vec![0xab; HashAlgorithm::Sha256.digest_len()];
-        let to_be_signed = manifest.apply_hard_binding(&exclusions, hash).unwrap();
+        manifest.apply_hard_binding(&exclusions, hash).unwrap();
+        let to_be_signed = manifest.apply_claim().unwrap();
         assert!(!to_be_signed.is_empty());
 
         assert!(manifest.countersigned_bytes(&[0u8; 64]).is_none());

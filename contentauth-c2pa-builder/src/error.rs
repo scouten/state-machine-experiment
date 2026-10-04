@@ -65,6 +65,16 @@ pub enum Error {
     #[error("assertion label {0:?} is duplicated or reserved for the hard binding assertion")]
     InvalidAssertionLabel(String),
 
+    /// An [`IdentitySettings::referenced_assertions`] entry names an
+    /// assertion that is not in
+    /// [`BuilderSettings::assertions`](crate::BuilderSettings::assertions).
+    ///
+    /// [`IdentitySettings::referenced_assertions`]: crate::IdentitySettings::referenced_assertions
+    #[error(
+        "an identity assertion references {0:?}, which is not one of the manifest's assertions"
+    )]
+    UnknownReferencedAssertion(String),
+
     /// The host returned a different number of bytes than the range it was
     /// asked for.
     ///

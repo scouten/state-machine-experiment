@@ -19,6 +19,35 @@ use contentauth_state_machine::{ProtocolError, RequestId};
 
 use crate::{cert::CertError, claim::ClaimError};
 
+/// Which trust anchor setting an anchor came from; see
+/// [`Error::MalformedTrustAnchor`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum AnchorKind {
+    /// [`ReadSettings::trust_anchors`] or [`ReadSettings::trust_lists`]:
+    /// whose claim signatures are believed.
+    ///
+    /// [`ReadSettings::trust_anchors`]: crate::read::ReadSettings::trust_anchors
+    /// [`ReadSettings::trust_lists`]: crate::read::ReadSettings::trust_lists
+    Claim,
+
+    /// [`ReadSettings::timestamp_trust_anchors`] or
+    /// [`ReadSettings::timestamp_trust_lists`]: whose word on the time is
+    /// taken.
+    ///
+    /// [`ReadSettings::timestamp_trust_anchors`]: crate::read::ReadSettings::timestamp_trust_anchors
+    /// [`ReadSettings::timestamp_trust_lists`]: crate::read::ReadSettings::timestamp_trust_lists
+    Timestamp,
+
+    /// [`ReadSettings::identity_trust_anchors`] or
+    /// [`ReadSettings::identity_trust_lists`]: whose CAWG identity
+    /// credentials are believed.
+    ///
+    /// [`ReadSettings::identity_trust_anchors`]: crate::read::ReadSettings::identity_trust_anchors
+    /// [`ReadSettings::identity_trust_lists`]: crate::read::ReadSettings::identity_trust_lists
+    Identity,
+}
+
 /// Errors surfaced by [`ReadSession`](crate::ReadSession).
 ///
 /// Two broad families live here:
@@ -77,7 +106,7 @@ pub enum Error {
     /// error: an anchor that cannot be decoded cannot be consulted, and
     /// skipping it would silently downgrade every manifest that should have
     /// chained to it.
-    #[error("{list} anchor {index}{named} is not a valid certificate: {source}", list = if *timestamp { "timestamp trust" } else { "trust" }, named = trust_list.as_ref().map(|uri| format!(" of list {uri:?}")).unwrap_or_default())]
+    #[error("{list} anchor {index}{named} is not a valid certificate: {source}", list = match kind { AnchorKind::Claim => "trust", AnchorKind::Timestamp => "timestamp trust", AnchorKind::Identity => "identity trust" }, named = trust_list.as_ref().map(|uri| format!(" of list {uri:?}")).unwrap_or_default())]
     MalformedTrustAnchor {
         /// Position of the offending anchor within its list.
         index: usize,
@@ -88,13 +117,8 @@ pub enum Error {
         /// [`TrustList::uri`]: crate::read::TrustList::uri
         trust_list: Option<String>,
 
-        /// True if it came from
-        /// [`ReadSettings::timestamp_trust_anchors`] rather than
-        /// [`ReadSettings::trust_anchors`].
-        ///
-        /// [`ReadSettings::timestamp_trust_anchors`]: crate::read::ReadSettings::timestamp_trust_anchors
-        /// [`ReadSettings::trust_anchors`]: crate::read::ReadSettings::trust_anchors
-        timestamp: bool,
+        /// Which of the three kinds of anchor setting it came from.
+        kind: AnchorKind,
 
         /// Why it could not be decoded.
         source: CertError,

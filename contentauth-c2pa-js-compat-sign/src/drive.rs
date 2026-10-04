@@ -17,6 +17,7 @@
 
 use contentauth_c2pa_file_builder::{
     BuilderSettings, FileBuilderReply, FileBuilderRequest, FileBuilderSession, FormatHandler,
+    SignPurpose,
 };
 use contentauth_c2pa_js_compat::Blob;
 use contentauth_c2pa_primitives::{
@@ -95,10 +96,21 @@ where
                     }
                 }
 
-                FileBuilderRequest::Sign { data, .. } => match signer.sign(data).await {
+                FileBuilderRequest::Sign {
+                    purpose: SignPurpose::Claim,
+                    data,
+                    ..
+                } => match signer.sign(data).await {
                     Ok(signature) => FileBuilderReply::Signature(signature),
                     Err(err) => FileBuilderReply::Failed(err),
                 },
+
+                // The `AsyncSigner` holds the claim's key only, and this
+                // crate's settings name no identity assertions; a request
+                // for one fails rather than being signed with that key.
+                FileBuilderRequest::Sign { purpose, .. } => FileBuilderReply::Failed(
+                    HostError::new(format!("this builder cannot sign for {purpose:?}")),
+                ),
 
                 FileBuilderRequest::Timestamp { digest, hash_alg } => {
                     match timestamp(signer, tsa_url, *hash_alg, digest).await {
@@ -237,6 +249,41 @@ mod tests {
                 )
             })
             .unwrap_or_else(|_| unreachable!("the baseline definition is valid"))
+    }
+
+    #[test]
+    fn an_identity_assertion_is_never_signed_with_the_claims_key() {
+        let mut settings = settings();
+        settings.identities = vec![contentauth_c2pa_file_builder::IdentitySettings::x509(
+            contentauth_c2pa_primitives::SigningAlg::Es256,
+            vec![TEST_SIGNER_CERT.to_vec()],
+        )];
+
+        let err = block_on(build(
+            JpegFormat,
+            &Bytes(SOURCE_JPEG),
+            &NeverSigns,
+            settings,
+            None,
+        ))
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("cannot sign for Identity"),
+            "{err}"
+        );
+    }
+
+    /// A blob over plain bytes.
+    struct Bytes(&'static [u8]);
+
+    impl Blob for Bytes {
+        fn size(&self) -> u64 {
+            self.0.len() as u64
+        }
+
+        async fn bytes(&self, range: ByteRange) -> Result<Vec<u8>, HostError> {
+            Ok(self.0[range.start as usize..(range.start + range.len) as usize].to_vec())
+        }
     }
 
     /// A blob that answers every read one byte short.

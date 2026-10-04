@@ -65,6 +65,13 @@ pub(crate) fn claim_signature(claim_cbor: &[u8]) -> Vec<u8> {
 /// 9052 only signs the protected one), so varying it here never touches
 /// the signature itself.
 pub(crate) fn claim_signature_with_unprotected(claim_cbor: &[u8], unprotected: Value) -> Vec<u8> {
+    detached_signature(claim_cbor, unprotected)
+}
+
+/// Builds a detached-payload `COSE_Sign1` over `payload` that verifies
+/// against [`TEST_SIGNER_CERT`] — what a claim signature and a CAWG
+/// identity assertion's X.509 signature both are.
+pub(crate) fn detached_signature(payload: &[u8], unprotected: Value) -> Vec<u8> {
     let protected = {
         let mut map = BTreeMap::new();
         // 1 = alg, -7 = ES256; 33 = x5chain.
@@ -82,7 +89,7 @@ pub(crate) fn claim_signature_with_unprotected(claim_cbor: &[u8], unprotected: V
     to_be_signed.extend_from_slice(b"Signature1");
     cbor_bytes(&mut to_be_signed, &protected);
     cbor_bytes(&mut to_be_signed, &[]);
-    cbor_bytes(&mut to_be_signed, claim_cbor);
+    cbor_bytes(&mut to_be_signed, payload);
 
     let signer = c2pa_raw_crypto::signer_from_private_key(
         TEST_SIGNER_KEY,
@@ -450,4 +457,190 @@ pub(crate) fn manifest_with_broken_signature(
 /// Builds a manifest store around the given manifests.
 pub(crate) fn manifest_store(manifests: &[Vec<u8>]) -> Vec<u8> {
     superbox(type_uuid(*b"c2pa"), "c2pa", manifests)
+}
+
+/// The asset the hard binding of an [`identity_manifest`] covers.
+pub(crate) const IDENTITY_ASSET: &[u8] = b"an asset for the identity tests";
+
+/// The hard binding of an [`identity_manifest`]: no exclusions, the whole
+/// of [`IDENTITY_ASSET`].
+fn identity_hard_binding() -> Vec<u8> {
+    data_hash_box(&[], Sha256::digest(IDENTITY_ASSET).to_vec())
+}
+
+/// Everything a test may vary about a manifest carrying one CAWG identity
+/// assertion, starting from a correct one. See [`identity_manifest`].
+pub(crate) struct IdentityParts {
+    /// What the identity assertion vouches for: label and hash. Starts as
+    /// the host assertion and the hard binding, with their true hashes.
+    pub(crate) referenced: Vec<(String, Vec<u8>)>,
+
+    /// The `sig_type`.
+    pub(crate) sig_type: String,
+
+    /// The `role`s; none are written when empty.
+    pub(crate) roles: Vec<String>,
+
+    /// `pad1`.
+    pub(crate) pad1: Vec<u8>,
+
+    /// `pad2`, written only when present.
+    pub(crate) pad2: Option<Vec<u8>>,
+
+    /// Bytes to sign instead of the real `signer_payload`, so the
+    /// signature does not verify.
+    pub(crate) sign_instead: Option<Vec<u8>>,
+
+    /// The `COSE_Sign1` unprotected header.
+    pub(crate) unprotected: Value,
+
+    /// Edits the `signer_payload` map *before* it is signed.
+    pub(crate) edit_payload: Option<fn(&mut BTreeMap<Value, Value>)>,
+
+    /// Edits the assertion's top-level map *after* signing.
+    pub(crate) edit_assertion: Option<fn(&mut BTreeMap<Value, Value>)>,
+
+    /// Replaces the assertion's CBOR wholesale.
+    pub(crate) raw_cbor: Option<Vec<u8>>,
+
+    /// Labels of the other assertions in the claim to list, besides the
+    /// hard binding and identity assertion; the host assertion
+    /// `a.test` is always built.
+    pub(crate) omit_from_claim: Vec<String>,
+
+    /// Replaces the signature field with these bytes.
+    pub(crate) signature_override: Option<Vec<u8>>,
+}
+
+impl Default for IdentityParts {
+    fn default() -> Self {
+        let a = assertion_box("a.test");
+        let hash = identity_hard_binding();
+
+        Self {
+            referenced: vec![
+                ("a.test".to_string(), Sha256::digest(&a[8..]).to_vec()),
+                (
+                    "c2pa.hash.data".to_string(),
+                    Sha256::digest(&hash[8..]).to_vec(),
+                ),
+            ],
+            sig_type: "cawg.x509.cose".to_string(),
+            roles: vec![],
+            pad1: vec![],
+            pad2: None,
+            sign_instead: None,
+            unprotected: Value::Map(BTreeMap::new()),
+            edit_payload: None,
+            edit_assertion: None,
+            raw_cbor: None,
+            omit_from_claim: vec![],
+            signature_override: None,
+        }
+    }
+}
+
+/// Builds a v2 manifest with a host assertion (`a.test`), a hard binding,
+/// and one identity assertion (`cawg.identity`), all listed in the claim
+/// with true hashes; `adjust` makes the identity assertion wrong in
+/// whatever way a test wants.
+pub(crate) fn identity_manifest(adjust: impl FnOnce(&mut IdentityParts)) -> Vec<u8> {
+    let mut parts = IdentityParts::default();
+    adjust(&mut parts);
+
+    let identity = identity_box("cawg.identity", &parts);
+    identity_manifest_from(&parts, vec![identity])
+}
+
+/// As [`identity_manifest`], with identity assertion boxes of the test's
+/// own making (in place of the one `parts` would build).
+pub(crate) fn identity_manifest_from(parts: &IdentityParts, identities: Vec<Vec<u8>>) -> Vec<u8> {
+    let a = assertion_box("a.test");
+    let hash = identity_hard_binding();
+
+    let mut boxes = vec![a, hash];
+    boxes.extend(identities);
+
+    let labels = ["a.test", "c2pa.hash.data", "cawg.identity"];
+    let refs: Vec<Value> = boxes
+        .iter()
+        .enumerate()
+        .map(|(i, b)| {
+            let label = labels.get(i).copied().unwrap_or("cawg.identity__1");
+            (label, b)
+        })
+        .filter(|(label, _)| !parts.omit_from_claim.iter().any(|o| o == label))
+        .map(|(label, b)| hashed_uri(label, b))
+        .collect();
+
+    let claim = claim_box_v2("identity.jpg", refs, vec![]);
+    manifest_with_claim("urn:uuid:identity", &boxes, claim)
+}
+
+/// Builds the identity assertion box for `parts`.
+pub(crate) fn identity_box(label: &str, parts: &IdentityParts) -> Vec<u8> {
+    if let Some(raw) = &parts.raw_cbor {
+        return superbox(type_uuid(*b"cbor"), label, &[boxed(b"cbor", raw)]);
+    }
+
+    let mut payload = BTreeMap::from([
+        (
+            Value::Text("referenced_assertions".to_string()),
+            Value::Array(
+                parts
+                    .referenced
+                    .iter()
+                    .map(|(label, hash)| hashed_uri_with_hash(label, hash.clone()))
+                    .collect(),
+            ),
+        ),
+        (
+            Value::Text("sig_type".to_string()),
+            Value::Text(parts.sig_type.clone()),
+        ),
+    ]);
+
+    if !parts.roles.is_empty() {
+        payload.insert(
+            Value::Text("role".to_string()),
+            Value::Array(parts.roles.iter().cloned().map(Value::Text).collect()),
+        );
+    }
+
+    if let Some(edit) = parts.edit_payload {
+        edit(&mut payload);
+    }
+
+    let payload = Value::Map(payload);
+    let payload_bytes = c2pa_cbor::to_vec(&payload).unwrap();
+
+    let signature = parts.signature_override.clone().unwrap_or_else(|| {
+        detached_signature(
+            parts.sign_instead.as_deref().unwrap_or(&payload_bytes),
+            parts.unprotected.clone(),
+        )
+    });
+
+    let mut fields = BTreeMap::from([
+        (Value::Text("signer_payload".to_string()), payload),
+        (
+            Value::Text("signature".to_string()),
+            Value::Bytes(signature),
+        ),
+        (
+            Value::Text("pad1".to_string()),
+            Value::Bytes(parts.pad1.clone()),
+        ),
+    ]);
+
+    if let Some(pad2) = &parts.pad2 {
+        fields.insert(Value::Text("pad2".to_string()), Value::Bytes(pad2.clone()));
+    }
+
+    if let Some(edit) = parts.edit_assertion {
+        edit(&mut fields);
+    }
+
+    let cbor = c2pa_cbor::to_vec(&Value::Map(fields)).unwrap();
+    superbox(type_uuid(*b"cbor"), label, &[boxed(b"cbor", &cbor)])
 }

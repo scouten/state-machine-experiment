@@ -23,8 +23,8 @@
 use std::path::PathBuf;
 
 use contentauth_c2pa_file_builder::{
-    build_and_sign_file, BuilderSettings, GeneratorInfo, HashAlgorithm, HostError, SigningAlg,
-    TimestampSettings,
+    build_and_sign_file, BuilderSettings, GeneratorInfo, HashAlgorithm, HostError,
+    IdentitySettings, SigningAlg, TimestampSettings,
 };
 use contentauth_c2pa_file_reader::read_manifest_from_file;
 use contentauth_c2pa_format_jpeg::JpegFormat;
@@ -72,8 +72,16 @@ fn sign(alg: SigningAlg, data: &[u8]) -> Result<Vec<u8>, HostError> {
 fn a_jpeg_built_and_signed_reads_back_as_trusted() {
     let output: PathBuf = [env!("CARGO_TARGET_TMPDIR"), "signed.jpg"].iter().collect();
 
-    let report = build_and_sign_file(JpegFormat, C_JPG_PATH, &output, settings(), sign, None)
-        .expect("building and signing should succeed");
+    let report = build_and_sign_file(
+        JpegFormat,
+        C_JPG_PATH,
+        &output,
+        settings(),
+        sign,
+        None,
+        None,
+    )
+    .expect("building and signing should succeed");
 
     // Replaces the existing c2pa-rs store at the same offset, per
     // `JpegFormat`'s own insertion rule.
@@ -113,6 +121,7 @@ fn a_missing_source_file_is_reported_as_an_io_error() {
         settings(),
         sign,
         None,
+        None,
     )
     .expect_err("a missing source file cannot be read");
 
@@ -132,8 +141,16 @@ fn an_unwritable_output_path_is_reported_as_an_io_error() {
     .iter()
     .collect();
 
-    let err = build_and_sign_file(JpegFormat, C_JPG_PATH, &output, settings(), sign, None)
-        .expect_err("a nonexistent output directory cannot be written to");
+    let err = build_and_sign_file(
+        JpegFormat,
+        C_JPG_PATH,
+        &output,
+        settings(),
+        sign,
+        None,
+        None,
+    )
+    .expect_err("a nonexistent output directory cannot be written to");
 
     assert!(matches!(
         err,
@@ -164,6 +181,7 @@ fn a_failed_build_removes_the_temporary_file_and_leaves_the_output_untouched() {
         settings(),
         never_signs,
         None,
+        None,
     )
     .expect_err("a build whose signer always refuses cannot succeed");
 
@@ -190,8 +208,16 @@ fn a_rename_failure_is_reported_as_an_io_error_and_cleans_up_the_temporary_file(
     std::fs::create_dir_all(&output).unwrap();
     remove_temp_files_for(&output);
 
-    let err = build_and_sign_file(JpegFormat, C_JPG_PATH, &output, settings(), sign, None)
-        .expect_err("renaming onto an existing directory cannot succeed");
+    let err = build_and_sign_file(
+        JpegFormat,
+        C_JPG_PATH,
+        &output,
+        settings(),
+        sign,
+        None,
+        None,
+    )
+    .expect_err("renaming onto an existing directory cannot succeed");
 
     assert!(matches!(
         err,
@@ -269,6 +295,7 @@ fn a_timestamp_function_supplies_the_token_embedded_in_the_manifest() {
             asked.push((alg, digest.len()));
             Ok(FAKE_TOKEN.to_vec())
         }),
+        None,
     )
     .expect("building with a timestamp should succeed");
 
@@ -303,6 +330,7 @@ fn a_failed_timestamp_fails_the_build_and_leaves_the_output_untouched() {
         timestamped_settings(),
         sign,
         Some(&mut |_, _| Err(HostError::new("the authority is down"))),
+        None,
     )
     .unwrap_err();
 
@@ -322,7 +350,91 @@ fn no_timestamp_function_means_a_timestamp_request_fails_the_build() {
         timestamped_settings(),
         sign,
         None,
+        None,
     )
     .unwrap_err();
     assert!(err.to_string().contains("timestamp"), "{err}");
+}
+
+/// An identity assertion built through the file-level entry point — signed
+/// by its own function, told by label whose key is wanted — reads back from
+/// a real JPEG well formed and trusted.
+#[test]
+fn a_jpeg_with_an_identity_assertion_reads_back_with_it_verified() {
+    let output: PathBuf = [env!("CARGO_TARGET_TMPDIR"), "signed-identity.jpg"]
+        .iter()
+        .collect();
+
+    let mut settings = settings();
+    settings.identities = vec![IdentitySettings::x509(
+        SigningAlg::Es256,
+        vec![TEST_SIGNER_CERT.to_vec()],
+    )];
+
+    let mut identity_labels = Vec::new();
+    build_and_sign_file(
+        JpegFormat,
+        C_JPG_PATH,
+        &output,
+        settings,
+        sign,
+        None,
+        Some(&mut |label: &str, alg, data: &[u8]| {
+            identity_labels.push(label.to_string());
+            sign(alg, data)
+        }),
+    )
+    .expect("building and signing should succeed");
+
+    assert_eq!(identity_labels, ["cawg.identity"]);
+
+    let read = read_manifest_from_file(
+        &JpegFormat,
+        &output,
+        ReadSettings {
+            trust_anchors: vec![TEST_SIGNER_CERT.to_vec()],
+            identity_trust_anchors: vec![TEST_SIGNER_CERT.to_vec()],
+            ..ReadSettings::default()
+        },
+    )
+    .expect("the signed file should read back cleanly");
+
+    assert_eq!(read.validation_state, Some(ValidationState::Trusted));
+
+    let codes: Vec<_> = read
+        .statuses
+        .iter()
+        .filter(|s| s.is_identity_finding())
+        .map(|s| s.code.as_str())
+        .collect();
+    assert_eq!(
+        codes,
+        [
+            "cawg.x509.signature.validated",
+            "cawg.identity.well-formed",
+            "cawg.x509.credential.trusted"
+        ]
+    );
+    assert_eq!(read.active().unwrap().identity_assertions.len(), 1);
+}
+
+/// With no function for identity signatures, the build fails rather than
+/// signing the assertion with the claim's key.
+#[test]
+fn an_identity_assertion_with_no_identity_signer_fails_the_build() {
+    let output: PathBuf = [env!("CARGO_TARGET_TMPDIR"), "unsigned-identity.jpg"]
+        .iter()
+        .collect();
+
+    let mut settings = settings();
+    settings.identities = vec![IdentitySettings::x509(
+        SigningAlg::Es256,
+        vec![TEST_SIGNER_CERT.to_vec()],
+    )];
+
+    let err = build_and_sign_file(JpegFormat, C_JPG_PATH, &output, settings, sign, None, None)
+        .unwrap_err();
+
+    assert!(err.to_string().contains("cawg.identity"), "{err}");
+    assert!(!output.exists());
 }

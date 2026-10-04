@@ -30,6 +30,7 @@ use crate::{
     claim::{self, Claim, ClaimVersion},
     data_hash::{self, DataHash},
     error::Error,
+    identity::{self, IdentityAssertion},
     validation::{self, status_code, ValidationStatus},
 };
 
@@ -104,6 +105,15 @@ pub struct Manifest {
     /// `None` covers both "no hard binding present" and "present but
     /// malformed"; the latter also records a validation status.
     pub data_hash: Option<DataHash>,
+
+    /// The CAWG identity assertions this manifest carries, in store
+    /// order. An assertion whose CBOR could not be read at all is absent
+    /// here and reported as a status instead.
+    ///
+    /// Each says what a named actor *claims*; whether the claim holds is
+    /// in the report's statuses, which name an assertion by
+    /// [`IdentityAssertion::url`].
+    pub identity_assertions: Vec<IdentityAssertion>,
 }
 
 /// The result of reading a manifest store.
@@ -130,6 +140,14 @@ pub(crate) struct ParsedManifestStore {
     /// after the host has been asked for the current time, by which point
     /// the store bytes are long gone.
     pub(crate) chains: Vec<PendingChain>,
+
+    /// The same for each identity assertion whose X.509 signature
+    /// verified, to be judged against the identity trust anchors.
+    ///
+    /// Kept apart from [`Self::chains`]: a claim signer's chain shapes the
+    /// store's [`ValidationState`](crate::ValidationState), an identity
+    /// signer's never does.
+    pub(crate) identity_chains: Vec<PendingChain>,
 }
 
 /// Reads a manifest store from its JUMBF bytes.
@@ -142,10 +160,16 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ParsedManifestStore, Error> {
 
     let mut statuses = Vec::new();
     let mut chains = Vec::new();
+    let mut identity_chains = Vec::new();
     let mut manifests = Vec::new();
 
     for manifest in child_superboxes(&manifest_store) {
-        manifests.push(read_manifest(manifest, &mut statuses, &mut chains)?);
+        manifests.push(read_manifest(
+            manifest,
+            &mut statuses,
+            &mut chains,
+            &mut identity_chains,
+        )?);
     }
 
     // The C2PA specification defines the active manifest as the last
@@ -157,11 +181,14 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ParsedManifestStore, Error> {
         active_manifest,
         statuses,
         chains,
+        identity_chains,
     })
 }
 
 /// Returns a superbox's child superboxes, in order.
-fn child_superboxes<'a>(parent: &'a SuperBox<'a>) -> impl Iterator<Item = &'a SuperBox<'a>> {
+pub(crate) fn child_superboxes<'a>(
+    parent: &'a SuperBox<'a>,
+) -> impl Iterator<Item = &'a SuperBox<'a>> {
     parent.child_boxes.iter().filter_map(|child| match child {
         ChildBox::SuperBox(sbox) => Some(sbox),
         ChildBox::DataBox(_) => None,
@@ -178,7 +205,7 @@ fn child_by_uuid<'a>(parent: &'a SuperBox<'a>, uuid: &[u8; 16]) -> Option<&'a Su
 }
 
 /// Returns the payload of a superbox's first data box of the given type.
-fn content<'a>(parent: &'a SuperBox<'a>, box_type: BoxType) -> Option<&'a [u8]> {
+pub(crate) fn content<'a>(parent: &'a SuperBox<'a>, box_type: BoxType) -> Option<&'a [u8]> {
     parent.child_boxes.iter().find_map(|child| match child {
         ChildBox::DataBox(dbox) if dbox.tbox == box_type => Some(dbox.data),
         _ => None,
@@ -190,6 +217,7 @@ fn read_manifest(
     manifest: &SuperBox<'_>,
     statuses: &mut Vec<ValidationStatus>,
     chains: &mut Vec<PendingChain>,
+    identity_chains: &mut Vec<PendingChain>,
 ) -> Result<Manifest, Error> {
     let label = manifest
         .desc
@@ -254,12 +282,24 @@ fn read_manifest(
 
     let data_hash = read_data_hash(manifest, statuses);
 
+    // After the claim and its assertion hashes: an identity assertion is
+    // checked against what the claim lists, so the claim has to be read.
+    let identity_assertions = identity::check_manifest(
+        &label,
+        child_by_uuid(manifest, &ASSERTIONS_UUID),
+        &claim,
+        statuses,
+        identity_chains,
+    )
+    .assertions;
+
     Ok(Manifest {
         label,
         claim,
         assertion_labels,
         has_signature: signature.is_some(),
         data_hash,
+        identity_assertions,
     })
 }
 
