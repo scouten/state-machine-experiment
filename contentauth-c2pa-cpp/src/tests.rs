@@ -452,6 +452,22 @@ fn a_panic_never_unwinds_across_the_boundary() {
 }
 
 #[test]
+fn engine_errors_map_to_their_codes() {
+    let not_found = Failure::from(Error::C2pa(C2paError::JumbfNotFound));
+    assert_eq!(not_found.code, C2PA_SM_ERR_NOT_FOUND);
+    assert_eq!(not_found.name, "C2pa(JumbfNotFound)");
+}
+
+#[test]
+fn an_ocsp_reply_is_marshalled_and_refused_by_id() {
+    let session = new_session("image/jpeg", None);
+    let (code, _) = fulfill(session, &reply(C2PA_SM_REPLY_OCSP, 12345, 0, &[1, 2, 3])).unwrap_err();
+    assert_eq!(code, C2PA_SM_ERR_INVALID_ARGUMENT);
+    // SAFETY: a live session, freed once.
+    unsafe { c2pa_sm_session_free(session) };
+}
+
+#[test]
 fn interior_nuls_in_a_message_are_replaced_rather_than_lost() {
     assert_eq!(c_string("a\0b").to_str().unwrap(), "a\u{fffd}b");
 }

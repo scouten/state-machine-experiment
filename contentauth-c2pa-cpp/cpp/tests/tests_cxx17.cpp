@@ -147,6 +147,37 @@ TEST(answer_turns_every_request_kind_into_a_reply_and_exceptions_into_failed) {
     CHECK(std::holds_alternative<Failed>(answer(weird, LengthRequest{6})));
 }
 
+TEST(every_kind_of_request_the_library_reports_is_described_as_plain_values) {
+    // The engine never issues an OCSP request for this repository's
+    // fixtures, so the description is checked on hand-built C structs.
+    C2paSmRequest r{};
+    r.id = 7;
+    r.kind = C2PA_SM_REQUEST_READ;
+    r.start = 5;
+    r.len = 9;
+    auto read_request = std::get<ReadRequest>(detail::describe(r));
+    CHECK_EQ(read_request.id, uint64_t(7));
+    CHECK_EQ(read_request.start, uint64_t(5));
+    CHECK_EQ(read_request.len, uint64_t(9));
+
+    r.kind = C2PA_SM_REQUEST_LENGTH;
+    CHECK_EQ(std::get<LengthRequest>(detail::describe(r)).id, uint64_t(7));
+    r.kind = C2PA_SM_REQUEST_TIME;
+    CHECK_EQ(std::get<TimeRequest>(detail::describe(r)).id, uint64_t(7));
+
+    const char url[] = "http://ocsp.example/";
+    const uint8_t body[] = {1, 2, 3};
+    r.kind = C2PA_SM_REQUEST_OCSP;
+    r.url = url;
+    r.url_len = sizeof(url) - 1;
+    r.body = body;
+    r.body_len = sizeof(body);
+    auto ocsp = std::get<OcspRequest>(detail::describe(r));
+    CHECK_EQ(ocsp.url, "http://ocsp.example/");
+    CHECK_EQ(ocsp.body, (std::vector<uint8_t>{1, 2, 3}));
+    CHECK_EQ(request_id(Request(ocsp)), uint64_t(7));
+}
+
 TEST(misusing_the_protocol_is_an_error_and_leaves_the_session_usable) {
     Session session("image/jpeg");
     Step step = session.advance();
