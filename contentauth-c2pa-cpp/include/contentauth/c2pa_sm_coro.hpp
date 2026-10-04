@@ -64,8 +64,7 @@ public:
         Task get_return_object() { return Task(Handle::from_promise(*this)); }
         std::suspend_always initial_suspend() noexcept { return {}; }
 
-        struct Final {
-            bool await_ready() noexcept { return false; }
+        struct Final : std::suspend_always {
             std::coroutine_handle<> await_suspend(Handle h) noexcept {
                 promise_type &p = h.promise();
                 if (p.continuation) {
@@ -78,7 +77,6 @@ public:
                 p.cv.notify_all();
                 return std::noop_coroutine();
             }
-            void await_resume() noexcept {}
         };
         Final final_suspend() noexcept { return {}; }
 
