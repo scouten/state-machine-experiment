@@ -99,10 +99,7 @@ impl Layout {
     /// That is: the entry is the only one in the last IFD of the chain,
     /// and its data follows that IFD directly and runs to the end of the
     /// file. Such a store can be replaced by cutting the asset off at the
-    /// `count` field and writing a new one there, and the range is
-    /// contiguous, so it can serve as a single hash exclusion — the
-    /// `count` field is excluded too, as the specification asks, so a
-    /// later update manifest may change the store's size.
+    /// `count` field and writing a new one there.
     ///
     /// A store anywhere else (an entry among a main IFD's others, data
     /// elsewhere in the file) is readable but not replaceable here.

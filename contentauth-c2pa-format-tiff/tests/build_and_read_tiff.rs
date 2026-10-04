@@ -72,7 +72,7 @@ impl Host {
         loop {
             if session.advance().unwrap() == BuilderStep::Complete {
                 let report = session.finish().unwrap();
-                assert_eq!(report.manifest_range, self.plan.as_ref().unwrap().exclusion);
+                assert_eq!(report.exclusions, self.plan.as_ref().unwrap().exclusions);
                 return self.asset.clone();
             }
 
@@ -90,9 +90,9 @@ impl Host {
                     .run(TiffFormat.plan_embed(STREAM, placeholder.len() as u64))
                     .unwrap();
                 self.asset = plan.materialize(&self.source, placeholder).unwrap();
-                let exclusion = plan.exclusion;
+                let exclusions = plan.exclusions.clone();
                 self.plan = Some(plan);
-                BuilderHostReply::PlaceholderReserved(exclusion)
+                BuilderHostReply::PlaceholderReserved(exclusions)
             }
 
             BuilderRequest::AssetLength { .. } => {
@@ -114,10 +114,12 @@ impl Host {
             }
 
             BuilderRequest::CommitManifest {
-                range, manifest, ..
+                exclusions,
+                manifest,
+                ..
             } => {
                 let plan = self.plan.as_ref().unwrap();
-                assert_eq!(*range, plan.exclusion);
+                assert_eq!(*exclusions, plan.exclusions);
 
                 // Write last, once: the final store goes into the plan's
                 // slots, and the handler's patches (none, for TIFF) on
@@ -203,8 +205,8 @@ fn a_manifest_embedded_in_a_tiff_reads_back_as_trusted_in_every_flavor() {
         assert_eq!(active.label, "urn:uuid:test-manifest");
         assert_eq!(
             active.data_hash.as_ref().unwrap().exclusions,
-            [plan.exclusion],
-            "the hard binding excludes exactly the span this crate declared"
+            plan.exclusions,
+            "the hard binding excludes exactly the ranges this crate declared"
         );
     }
 }
@@ -225,7 +227,15 @@ fn re_signing_replaces_the_manifest_and_reads_back_as_trusted() {
     )])));
     let plan = second.plan.unwrap();
 
-    assert_eq!(plan.replaced, Some(first.plan.unwrap().exclusion));
+    // Everything from the old `count` field to the old end of the file.
+    let cut = first.plan.unwrap().exclusions[0].start;
+    assert_eq!(
+        plan.replaced,
+        Some(contentauth_c2pa_format::ByteRange {
+            start: cut,
+            len: signed_once.len() as u64 - cut
+        })
+    );
     assert!(signed_twice.len() > signed_once.len());
     assert_eq!(
         read_back(&signed_twice).validation_state,
@@ -266,4 +276,31 @@ fn the_rewritten_ifd_pointer_is_covered_by_the_hard_binding() {
         read_back(&asset).validation_state,
         Some(ValidationState::Trusted)
     );
+}
+
+#[test]
+fn the_value_offset_between_the_two_exclusions_is_hashed() {
+    // Only the `count` field and the store are excluded; the entry's value
+    // offset and the next pointer sit between them, so they are inside the
+    // hash — redirecting the offset (to a different store, say) would
+    // invalidate the signature, not just the reader's view of the file.
+    for kind in ALL_KINDS {
+        let mut host = Host::new(tiff(kind, 1, 0));
+        let asset = host.build(BuilderSession::new(settings(vec![])));
+        let plan = host.plan.unwrap();
+
+        let [count_field, store] = plan.exclusions[..] else {
+            panic!("expected two exclusions");
+        };
+        let between = count_field.start + count_field.len..store.start;
+        assert_eq!(between.end - between.start, 2 * kind.word() as u64);
+
+        // The bytes there are the value offset, which points at the store.
+        let offset = &asset[between.start as usize..][..kind.word()];
+        let mut expected = store.start.to_be_bytes()[8 - kind.word()..].to_vec();
+        if kind.little {
+            expected.reverse();
+        }
+        assert_eq!(offset, &expected[..], "{kind:?}");
+    }
 }

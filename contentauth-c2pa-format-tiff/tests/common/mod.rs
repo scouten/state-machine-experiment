@@ -149,13 +149,19 @@ pub fn store(len: usize) -> Vec<u8> {
     out
 }
 
-/// Where `store`'s data begins in the asset `kind` lays out after
-/// `source_len` bytes.
-pub fn expected_exclusion(kind: Kind, source_len: usize, store_len: usize) -> ByteRange {
+/// The two ranges a hard binding excludes for the asset `kind` lays out
+/// after `source_len` bytes: the new entry's `count` field, and the store.
+pub fn expected_exclusions(kind: Kind, source_len: usize, store_len: usize) -> Vec<ByteRange> {
     let ifd_start = source_len + source_len % 2;
     let count_field = ifd_start + if kind.big { 8 } else { 2 } + 4;
-    ByteRange {
-        start: count_field as u64,
-        len: (3 * kind.word() + store_len) as u64,
-    }
+    vec![
+        ByteRange {
+            start: count_field as u64,
+            len: kind.word() as u64,
+        },
+        ByteRange {
+            start: (ifd_start + kind.ifd_len(1)) as u64,
+            len: store_len as u64,
+        },
+    ]
 }

@@ -16,7 +16,7 @@ handler, chosen to exercise what JPEG does not.
 | Byte order | One | Declared by the file, and not the store's own |
 | Width | One | Classic (32-bit offsets) and BigTIFF (64-bit), same logic at two widths |
 | Embedding | New segments inserted; no byte elsewhere changes | Existing offsets everywhere in the file must stay valid, so nothing may move: the store is *appended* and the one pointer that reaches it rewritten |
-| Hard-binding exclusion | The segment run | The specification also excludes the entry's `count` field, so a later update manifest may change the store's size |
+| Hard-binding exclusions | One: the segment run | Two, not adjacent: the entry's `count` field (so a later update manifest may change the store's size) and the store — the value offset and next pointer between them stay hashed |
 | Alignment | None | IFDs on even offsets; an odd-length file is padded |
 | Existing store | Always replaceable | Replaceable only if laid out the way this crate lays one out; one written into the middle of another IFD is read but not replaced |
 
@@ -27,7 +27,8 @@ linked onto the end of the main chain:
 
 ```text
  source bytes … │ pad │ entry count │ tag │ type │ count │ value │ next │ store
-                  (even)  =1          CD41   7     └──────── excluded ─────────┘
+                  (even)  =1          CD41   7     └─ ✗ ─┘ ofs→    0    └─ ✗ ─┘
+                                                 (✗ = excluded from the hash)
 ```
 
 * Satisfies the specification for every case: a single-IFD file may hold the
@@ -40,26 +41,25 @@ linked onto the end of the main chain:
 * Every byte of framing depends only on the store's *length*, which a plan
   is given, so `commit` has nothing to patch.
 
-### One finding for the contract — confirmed against c2pa-rs
+### What TIFF taught the contract
 
 The specification excludes the entry's `count` field *and* the store from
-the hash. `EmbedPlan` has a single exclusion range, so this crate leans on
-the layout: with the entry last and the store right after it, `count`, the
-value offset, the (zero) next pointer, and the store are contiguous. That
-excludes two fields (the offset and the zero pointer) the specification
-does not.
+the hash, and they are not adjacent. `EmbedPlan` first had room for one
+exclusion range, so this crate reported one contiguous superset (the two
+fields and the offset and next pointer between them). **c2pa-rs rejected
+it** — its validator compares exclusions exactly (`assertion.dataHash.mismatch`:
+"data hash exclusion does not match the manifest location in the asset") —
+which only became visible once the workspace could write a claim c2pa-rs
+reads at all.
 
-**c2pa-rs rejects it.** Its writer reports two exclusions — the store, and
-the `count` field alone — and its validator requires the hard binding's to
-match: a TIFF signed here reads fine in c2pa-rs but fails
-`assertion.dataHash.mismatch` ("data hash exclusion does not match the
-manifest location in the asset"). This workspace's own reader checks the
-exclusions the assertion declares, so it says `Valid`; the two disagree,
-and `c2pa-rs-compat-conformance/tests/compare_tiff.rs` pins that
-disagreement. Closing it means `EmbedPlan::exclusion` (and the builder's
-`PlaceholderReserved` / `manifest_range`, and the file-builder and
-bindings that carry them) becoming a *list* of ranges. That is a contract
-change, not made here.
+So `EmbedPlan::exclusion` became `exclusions`, a list, and so did what
+carries it: `ManifestLocation`'s `EmbeddedManifest::exclusions` (beside
+`range`, which is what a re-embed replaces), the builder's
+`PlaceholderReserved` / `CommitManifest` / `BuilderReport`, the
+file-builder's report, and the Node signing binding's result
+(`exclusions: [{ start, len }]`). The data-hash placeholder reserves room
+for `MAX_EXCLUSIONS` of them and pads the difference, since it is embedded
+before the host says how many there are. JPEG reports a list of one.
 
 ## What it does not do
 
@@ -85,9 +85,9 @@ c2pa-rs:
   specification's, not just its own writer's. (c2pa-rs looks in the last
   IFD for the entry first and the first IFD second, which finds this
   crate's layout too.)
-* `tests/compare_tiff.rs` — a TIFF signed here: c2pa-rs finds the store and
-  parses its v2 claim, and everything agrees *except* the hard-binding
-  verdict, for the reason in the finding above.
+* `tests/compare_tiff.rs` — a TIFF signed here: c2pa-rs reads it and
+  validates it, to the same answer as this workspace's reader, so it
+  accepts the two exclusions above.
 
 ## Tests
 

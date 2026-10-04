@@ -40,12 +40,13 @@ impl ManifestLocation {
         Self::default()
     }
 
-    /// An embedded manifest store: its exact bytes, and the range of the
-    /// container structure that carries it (see
-    /// [`EmbeddedManifest::range`]).
-    pub fn embedded(jumbf: Vec<u8>, range: ByteRange) -> Self {
+    /// An embedded manifest store: its exact bytes, the range of the
+    /// container structure that carries it, and the ranges a hard binding
+    /// for the asset excludes (see [`EmbeddedManifest::range`] and
+    /// [`EmbeddedManifest::exclusions`]).
+    pub fn embedded(jumbf: Vec<u8>, range: ByteRange, exclusions: Vec<ByteRange>) -> Self {
         Self {
-            embedded: Some(EmbeddedManifest::new(jumbf, range)),
+            embedded: Some(EmbeddedManifest::new(jumbf, range, exclusions)),
             remote: None,
         }
     }
@@ -87,15 +88,26 @@ pub struct EmbeddedManifest {
     /// The range of the asset occupied by the container structure carrying
     /// the store — framing included, so for a JPEG this spans the `APP11`
     /// segments' markers and headers, not just their payloads. This is
-    /// the range a `c2pa.hash.data` hard binding written for this asset
-    /// excludes, and the range a re-embed replaces.
+    /// the range a re-embed replaces
+    /// ([`EmbedPlan::replaced`](crate::EmbedPlan::replaced)).
     pub range: ByteRange,
+
+    /// The ranges a `c2pa.hash.data` hard binding written for this asset
+    /// excludes: ascending, not overlapping, and exactly what the format's
+    /// specification calls for. For a JPEG, the one [`Self::range`]; for
+    /// TIFF, the entry's `count` field and the store, which are not
+    /// adjacent — and which a validator compares exactly.
+    pub exclusions: Vec<ByteRange>,
 }
 
 impl EmbeddedManifest {
     /// Describes an embedded manifest store.
-    pub fn new(jumbf: Vec<u8>, range: ByteRange) -> Self {
-        Self { jumbf, range }
+    pub fn new(jumbf: Vec<u8>, range: ByteRange, exclusions: Vec<ByteRange>) -> Self {
+        Self {
+            jumbf,
+            range,
+            exclusions,
+        }
     }
 }
 
@@ -109,7 +121,7 @@ mod tests {
 
         assert!(ManifestLocation::none().is_none());
 
-        let embedded = ManifestLocation::embedded(vec![1, 2, 3], range);
+        let embedded = ManifestLocation::embedded(vec![1, 2, 3], range, vec![range]);
         assert!(!embedded.is_none());
         assert_eq!(
             embedded.embedded.as_ref().map(|e| (&e.jumbf[..], e.range)),

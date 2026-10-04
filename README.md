@@ -48,7 +48,7 @@ experiment grows.
   second handler, for a format JPEG's segment model says nothing about:
   TIFF and BigTIFF (either byte order; DNG too), where the store is a tag
   in a graph of offsets, nothing already in the file may move, and the
-  specification's hash exclusion is wider than a segment run.
+  specification's hash exclusions are two separate ranges rather than one segment run.
 * [`contentauth-c2pa-format-registry`](contentauth-c2pa-format-registry) —
   the *host's* side of choosing a format: detection by content, extension
   or media type from the plain-data descriptors handlers publish, and a

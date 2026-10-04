@@ -20,10 +20,10 @@
 
 mod common;
 
-use common::{expected_exclusion, store, tiff, Kind, ALL_KINDS, PIXELS};
+use common::{expected_exclusions, store, tiff, Kind, ALL_KINDS, PIXELS};
 use contentauth_c2pa_format::{
     test_util::{conformance, MemoryHost, STREAM},
-    Edit, FormatError, FormatHandler, HostError, IoReply, ProtocolError, Session, Step,
+    ByteRange, Edit, FormatError, FormatHandler, HostError, IoReply, ProtocolError, Session, Step,
 };
 use contentauth_c2pa_format_tiff::TiffFormat;
 
@@ -55,10 +55,19 @@ fn the_store_goes_in_a_new_ifd_and_nothing_already_in_the_file_moves() {
         let manifest = store(100);
         let (plan, output) = conformance::embed(&TiffFormat, &source, &manifest);
 
-        assert_eq!(plan.exclusion, expected_exclusion(kind, source.len(), 100));
         assert_eq!(
-            output.len() as u64,
-            plan.exclusion.start + plan.exclusion.len
+            plan.exclusions,
+            expected_exclusions(kind, source.len(), 100)
+        );
+        // The store is last; the value offset and next pointer between the
+        // two exclusions stay hashed.
+        let [count_field, store_range] = plan.exclusions[..] else {
+            panic!("expected two exclusions");
+        };
+        assert_eq!(output.len() as u64, store_range.start + store_range.len);
+        assert_eq!(
+            store_range.start - (count_field.start + count_field.len),
+            2 * kind.word() as u64
         );
         assert!(output.ends_with(&manifest));
 
@@ -127,14 +136,20 @@ fn replacing_a_store_cuts_the_old_one_off_and_leaves_the_rest_alone() {
         let (first_plan, once) = conformance::embed(&TiffFormat, &source, &store(300));
         let (second_plan, twice) = conformance::embed(&TiffFormat, &once, &store(40));
 
-        assert_eq!(second_plan.replaced, Some(first_plan.exclusion));
+        // What is cut off is everything from the old `count` field to the
+        // end of the file.
+        let cut = first_plan.exclusions[0].start;
+        assert_eq!(
+            second_plan.replaced,
+            Some(ByteRange {
+                start: cut,
+                len: once.len() as u64 - cut
+            })
+        );
         // The new store is shorter, so the output is too; nothing else
         // about the old IFD moved.
         assert_eq!(twice.len(), once.len() - 260);
-        assert_eq!(
-            &twice[..first_plan.exclusion.start as usize],
-            &once[..first_plan.exclusion.start as usize]
-        );
+        assert_eq!(&twice[..cut as usize], &once[..cut as usize]);
     }
 }
 
@@ -151,7 +166,10 @@ fn a_plan_copies_the_source_around_its_one_rewritten_pointer() {
         .iter()
         .filter(|e| matches!(e, Edit::Emit(_)))
         .count();
-    assert_eq!(emits, 3, "pointer, IFD lead-in, excluded framing");
+    assert_eq!(
+        emits, 4,
+        "pointer, IFD lead-in, excluded count field, hashed offset and next"
+    );
     assert_eq!(plan.replaced, None);
 }
 
@@ -407,4 +425,22 @@ fn an_implausibly_long_ifd_chain_is_refused() {
     }
 
     assert!(matches!(locate_err(asset), FormatError::Malformed(m) if m.contains("implausibly")));
+}
+
+#[test]
+fn a_store_that_overlaps_its_own_entry_is_malformed() {
+    let kind = ALL_KINDS[0];
+    let hl = kind.header_len() as u64;
+
+    // The store's data begins at the entry itself, so it covers the
+    // entry's own `count` field.
+    let entry_at = hl + kind.header_len() as u64 / 4; // inside the IFD
+    let mut asset = kind.header(hl);
+    asset.extend(kind.ifd(&[kind.entry(0xcd41, 7, 64, entry_at)], 0));
+    asset.extend([0u8; 64]);
+
+    assert!(matches!(
+        locate_err(asset),
+        FormatError::Malformed(m) if m.contains("overlaps")
+    ));
 }

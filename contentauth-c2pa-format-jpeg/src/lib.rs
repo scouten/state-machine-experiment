@@ -71,7 +71,7 @@
 //!     .with_stream(stream, jpeg.to_vec())
 //!     .run(JpegFormat.plan_embed(stream, 1000))?;
 //! // The store goes right after the APP0 segment.
-//! assert_eq!(plan.exclusion.start, 20);
+//! assert_eq!(plan.exclusions[0].start, 20);
 //! # Ok::<(), contentauth_c2pa_format::FormatError>(())
 //! ```
 

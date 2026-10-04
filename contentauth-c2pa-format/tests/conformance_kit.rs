@@ -229,7 +229,7 @@ impl Session for Locate {
 
     fn finish(self) -> Result<ManifestLocation, FormatError> {
         Ok(match self.0.finish()?.store {
-            Some((range, jumbf)) => ManifestLocation::embedded(jumbf, range),
+            Some((range, jumbf)) => ManifestLocation::embedded(jumbf, range, vec![range]),
             None => ManifestLocation::none(),
         })
     }

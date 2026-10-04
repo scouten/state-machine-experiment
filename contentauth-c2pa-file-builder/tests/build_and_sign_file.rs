@@ -77,7 +77,7 @@ fn a_jpeg_built_and_signed_reads_back_as_trusted() {
 
     // Replaces the existing c2pa-rs store at the same offset, per
     // `JpegFormat`'s own insertion rule.
-    assert_eq!(report.manifest_range.start, 20);
+    assert_eq!(report.exclusions[0].start, 20);
     assert!(!report.manifest.is_empty());
 
     let read = read_manifest_from_file(
@@ -96,7 +96,7 @@ fn a_jpeg_built_and_signed_reads_back_as_trusted() {
     assert_eq!(active.label, "urn:uuid:test-manifest");
     assert_eq!(
         active.data_hash.as_ref().unwrap().exclusions,
-        [report.manifest_range]
+        report.exclusions
     );
 }
 

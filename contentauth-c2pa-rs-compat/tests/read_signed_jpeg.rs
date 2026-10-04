@@ -82,9 +82,9 @@ fn build_and_embed(source: &[u8]) -> (EmbedPlan, Vec<u8>) {
                         .run(JpegFormat.plan_embed(STREAM, placeholder.len() as u64))
                         .unwrap();
                     asset = embed_plan.materialize(source, placeholder).unwrap();
-                    let exclusion = embed_plan.exclusion;
+                    let exclusions = embed_plan.exclusions.clone();
                     plan = Some(embed_plan);
-                    BuilderHostReply::PlaceholderReserved(exclusion)
+                    BuilderHostReply::PlaceholderReserved(exclusions)
                 }
 
                 BuilderRequest::AssetLength { .. } => {
@@ -106,10 +106,12 @@ fn build_and_embed(source: &[u8]) -> (EmbedPlan, Vec<u8>) {
                 }
 
                 BuilderRequest::CommitManifest {
-                    range, manifest, ..
+                    exclusions,
+                    manifest,
+                    ..
                 } => {
                     let embed_plan = plan.as_ref().unwrap();
-                    assert_eq!(*range, embed_plan.exclusion);
+                    assert_eq!(*exclusions, embed_plan.exclusions);
 
                     let patches = JpegFormat.commit(embed_plan, manifest).unwrap();
                     asset = embed_plan.materialize(source, manifest).unwrap();
@@ -433,7 +435,7 @@ fn a_tampered_asset_reads_back_as_invalid() {
     // data (which the JPEG handler never inspects, only hashes), and far
     // from both the framing at the very start and the EOI marker at the
     // very end.
-    let exclusion_end = (plan.exclusion.start + plan.exclusion.len) as usize;
+    let exclusion_end = (plan.exclusions[0].start + plan.exclusions[0].len) as usize;
     let offset = exclusion_end + (asset.len() - exclusion_end) / 2;
     asset[offset] ^= 0xff;
 

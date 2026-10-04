@@ -40,7 +40,8 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   (name, MIME types, extensions, byte signatures — no code, so a host can
   detect a format without running a handler), the single `IoRequest`
   vocabulary every handler operation speaks, the `EmbedPlan`/`Patch`
-  model, and (behind the `test-util` feature) an in-memory host plus a
+  model (a plan's hard-binding `exclusions` are a *list*: real validators
+  compare them exactly, and TIFF's two are not adjacent), and (behind the `test-util` feature) an in-memory host plus a
   conformance suite. Format-specific knowledge never lives here.
 - **`contentauth-c2pa-format-jpeg`** — the first format handler: locating
   and embedding manifest stores in a JPEG's `APP11` segments, following
@@ -51,9 +52,9 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   IFD tag `0xCD41` in a graph of offsets (pointer-chasing reads, either
   byte order, two offset widths), nothing already in the file may move
   (the store goes in a new trailing IFD and one next-IFD pointer is
-  rewritten), and the specification's hash exclusion includes the entry's
-  `count` field (made contiguous with the store by the layout, to fit
-  `EmbedPlan`'s single exclusion range — see its README for the finding).
+  rewritten), and the specification's hash exclusions are two separate
+  ranges, the entry's `count` field and the store — which is what made
+  `EmbedPlan::exclusion` a list (see its README for the finding).
 - **`contentauth-c2pa-format-registry`** — the *host's* half of choosing a
   format: a `Registry` (detect by content via descriptors' signatures, or
   by extension / MIME type) and `AnyFormat`, a type-erased handler that
@@ -227,9 +228,9 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   whole directory of assets (`examples/compare_corpus.rs`) as the seam for
   running the comparison at the scale of a real corpus. It also holds the
   second container format to the real thing: a TIFF signed by c2pa-rs is
-  read by this workspace's TIFF handler to the same answer, while c2pa-rs
-  finds and parses a TIFF signed here but rejects its hard binding's
-  single exclusion range (see `contentauth-c2pa-format-tiff`'s README). Deliberately
+  read by this workspace's TIFF handler to the same answer, and c2pa-rs
+  reads and validates a TIFF signed here to the same answer as the
+  workspace's reader. Deliberately
   **not** a member of this workspace (it has its own `[workspace]` in its
   `Cargo.toml`) — see its own README: the real `c2pa` crate is heavy and
   under no obligation to satisfy this workspace's Wasm/MSRV/`cargo-deny`

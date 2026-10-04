@@ -18,7 +18,7 @@
 
 use std::path::PathBuf;
 
-use c2pa_rs_compat_conformance::{read_and_summarize, Summary};
+use c2pa_rs_compat_conformance::read_and_summarize;
 use contentauth_c2pa_builder::{
     BuilderHostReply, BuilderRequest, BuilderSession, BuilderSettings, BuilderStep, SigningAlg,
 };
@@ -58,9 +58,9 @@ fn sign<H: FormatHandler>(handler: &H, source: &[u8]) -> Vec<u8> {
                         .run(handler.plan_embed(STREAM, placeholder.len() as u64))
                         .unwrap();
                     asset = embed_plan.materialize(source, placeholder).unwrap();
-                    let exclusion = embed_plan.exclusion;
+                    let exclusions = embed_plan.exclusions.clone();
                     plan = Some(embed_plan);
-                    BuilderHostReply::PlaceholderReserved(exclusion)
+                    BuilderHostReply::PlaceholderReserved(exclusions)
                 }
                 BuilderRequest::AssetLength { .. } => {
                     BuilderHostReply::AssetLength(asset.len() as u64)
@@ -119,20 +119,11 @@ fn tiff(extra_ifds: bool) -> Vec<u8> {
 }
 
 /// Signs `source` with this workspace's builder through the TIFF handler,
-/// and reads it with the real c2pa-rs and with the compat reader.
-///
-/// c2pa-rs finds the store through the handler's layout and parses its v2
-/// claim — everything but the hard binding agrees. The hard binding is the
-/// known gap: the specification excludes the entry's `count` field and the
-/// store, and c2pa-rs insists on exactly those *two* ranges
-/// ("data hash exclusion does not match the manifest location in the
-/// asset"), where `EmbedPlan` has room for one range and the handler's is
-/// the contiguous span covering both (plus the two small fields between
-/// them). So c2pa-rs reports `Invalid` where this workspace's reader,
-/// which checks the exclusions the assertion itself declares, says
-/// `Valid`. Closing it means `EmbedPlan::exclusion` becoming a list (see
-/// `contentauth-c2pa-format-tiff`'s README); this test then flips to
-/// asserting `Valid` on both sides.
+/// and checks the real c2pa-rs and the compat reader read it identically:
+/// c2pa-rs finds the store through the handler's layout, parses its v2
+/// claim, and accepts its hard binding — which excludes exactly the two
+/// ranges the specification calls for (the entry's `count` field and the
+/// store), as c2pa-rs's validator insists.
 fn compare(name: &str, source: &[u8]) {
     let signed = sign(&TiffFormat, source);
     let path = write_temp(name, &signed);
@@ -142,24 +133,16 @@ fn compare(name: &str, source: &[u8]) {
     let via_compat = read_and_summarize::<contentauth_c2pa_rs_compat::Reader>(&path)
         .expect("the compat reader reads our own TIFF");
 
-    assert_eq!(via_compat.validation_state, "Valid");
-    assert_eq!(via_c2pa_rs.validation_state, "Invalid", "{via_c2pa_rs:?}");
-    assert_eq!(
-        Summary {
-            validation_state: "Valid",
-            ..via_c2pa_rs
-        },
-        via_compat,
-        "everything but the hard-binding verdict agrees"
-    );
+    assert_eq!(via_c2pa_rs, via_compat);
+    assert_eq!(via_c2pa_rs.validation_state, "Valid", "{via_c2pa_rs:?}");
 }
 
 #[test]
-fn c2pa_rs_reads_a_tiff_signed_here() {
+fn c2pa_rs_validates_a_tiff_signed_here() {
     compare("signed_single_ifd.tif", &tiff(false));
 }
 
 #[test]
-fn c2pa_rs_reads_a_multi_ifd_tiff_signed_here() {
+fn c2pa_rs_validates_a_multi_ifd_tiff_signed_here() {
     compare("signed_two_ifds.tif", &tiff(true));
 }

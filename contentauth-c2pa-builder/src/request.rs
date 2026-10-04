@@ -39,11 +39,14 @@ pub enum BuilderRequest {
     /// BMFF, …), exactly as [`ReadRequest::ManifestStore`] does for
     /// reading — typically by way of a `contentauth-c2pa-format` handler.
     /// Reply with [`BuilderHostReply::PlaceholderReserved`], naming the
-    /// byte range of the container structure that now carries the
-    /// placeholder, *framing included*: for a JPEG, the whole run of
-    /// `APP11` segments, markers and headers and all. This becomes the
-    /// hard binding's exclusion, so it may be longer than the placeholder
-    /// but never shorter.
+    /// byte ranges the hard binding must exclude — usually the one range
+    /// of the container structure that now carries the placeholder,
+    /// *framing included* (for a JPEG, the whole run of `APP11` segments,
+    /// markers and headers and all), but exactly what the container
+    /// format's specification calls for: TIFF excludes a length field and
+    /// the store, which are not adjacent. They become the hard binding's
+    /// exclusions, so together they may total more than the placeholder
+    /// but never less.
     ///
     /// [`ReadRequest::ManifestStore`]: https://docs.rs/contentauth-c2pa-reader/latest/contentauth_c2pa_reader/enum.ReadRequest.html#variant.ManifestStore
     ReservePlaceholder {
@@ -120,9 +123,9 @@ pub enum BuilderRequest {
         /// The asset stream to patch.
         stream: StreamId,
 
-        /// The byte range of the container structure carrying the
-        /// placeholder, from [`BuilderHostReply::PlaceholderReserved`].
-        range: ByteRange,
+        /// The hard binding's exclusions, from
+        /// [`BuilderHostReply::PlaceholderReserved`].
+        exclusions: Vec<ByteRange>,
 
         /// The final manifest store bytes.
         manifest: Vec<u8>,
@@ -170,10 +173,12 @@ impl Request for BuilderRequest {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum BuilderHostReply {
-    /// Answers [`BuilderRequest::ReservePlaceholder`]: the byte range of
+    /// Answers [`BuilderRequest::ReservePlaceholder`]: the byte ranges the
+    /// hard binding excludes, in ascending order and not overlapping —
     /// the container structure now carrying the placeholder, framing
-    /// included.
-    PlaceholderReserved(ByteRange),
+    /// included, and anything else the format's specification excludes.
+    /// At most [`MAX_EXCLUSIONS`](crate::MAX_EXCLUSIONS) of them.
+    PlaceholderReserved(Vec<ByteRange>),
 
     /// Answers [`BuilderRequest::AssetLength`]: the stream's total length
     /// in bytes.
@@ -226,7 +231,7 @@ mod tests {
             },
             BuilderRequest::CommitManifest {
                 stream,
-                range,
+                exclusions: vec![range],
                 manifest: vec![0; 4],
             },
         ]
@@ -238,7 +243,7 @@ mod tests {
     fn all_replies() -> Vec<(BuilderHostReply, &'static str)> {
         vec![
             (
-                BuilderHostReply::PlaceholderReserved(ByteRange { start: 0, len: 4 }),
+                BuilderHostReply::PlaceholderReserved(vec![ByteRange { start: 0, len: 4 }]),
                 "PlaceholderReserved",
             ),
             (BuilderHostReply::AssetLength(1024), "AssetLength"),

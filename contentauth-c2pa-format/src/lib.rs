@@ -63,12 +63,14 @@
 //! # Invariants a handler must keep
 //!
 //! [`EmbedPlan::check`] enforces the structural ones: every
-//! [`Edit::Placeholder`] lies inside the plan's declared exclusion range,
-//! and together they cover the manifest exactly once, in order. Two more
+//! [`Edit::Placeholder`] lies inside one of the plan's declared
+//! [`exclusions`](EmbedPlan::exclusions) (a list: TIFF's specification
+//! excludes two separate ranges, and validators compare them exactly), and
+//! together they cover the manifest exactly once, in order. Two more
 //! are the handler's to honor and the conformance suite's to check:
 //!
 //! * Every [`Patch`] returned by [`FormatHandler::commit`] lands inside the
-//!   plan's exclusion range. A patch outside it would change bytes the
+//!   plan's exclusions. A patch outside them would change bytes the
 //!   hard binding has already hashed and silently invalidate the
 //!   signature.
 //! * Embedding into an asset that already carries a manifest store

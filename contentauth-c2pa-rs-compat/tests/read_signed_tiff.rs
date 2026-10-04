@@ -74,9 +74,9 @@ fn sign<H: FormatHandler>(handler: &H, source: &[u8]) -> Vec<u8> {
                         .run(handler.plan_embed(STREAM, placeholder.len() as u64))
                         .unwrap();
                     asset = embed_plan.materialize(source, placeholder).unwrap();
-                    let exclusion = embed_plan.exclusion;
+                    let exclusions = embed_plan.exclusions.clone();
                     plan = Some(embed_plan);
-                    BuilderHostReply::PlaceholderReserved(exclusion)
+                    BuilderHostReply::PlaceholderReserved(exclusions)
                 }
                 BuilderRequest::AssetLength { .. } => {
                     BuilderHostReply::AssetLength(asset.len() as u64)

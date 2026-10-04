@@ -23,8 +23,8 @@
 //!
 //! ```text
 //!  source bytes … │ pad │ entry count │ tag │ type │ count │ value │ next │ store
-//!                   (even)  =1          CD41   7     └──────────── excluded ───────┘
-//!                          └ emitted, hashed ┘      len  ofs→   0
+//!                   (even)  =1          CD41   7     └─ ✗ ─┘ ofs→    0    └─ ✗ ─┘
+//!                          └ emitted, hashed ┘            └ hashed ┘   (✗ = excluded)
 //! ```
 //!
 //! Three properties follow, each unlike JPEG:
@@ -36,15 +36,17 @@
 //! * **Everything the framing depends on is known up front.** The
 //!   `count` field and the offset to the store are fixed by the store's
 //!   *length*, which a plan is given, so [`commit`] has nothing to patch.
-//! * **One contiguous exclusion.** The specification asks that the
-//!   entry's `count` field be excluded from a `c2pa.hash.data` hard binding
-//!   (so an update manifest of another size can follow). With the entry
-//!   last and the store right after it, `count`, the value offset, the
-//!   (zero) next pointer, and the store form one range — which is what
-//!   [`EmbedPlan::exclusion`] can express. The offset and next pointer are
-//!   excluded along with them: a small loosening, accepted here in return
-//!   for fitting the contract's single range. Had it not, the contract
-//!   would need to grow a list of exclusions — a finding of this format.
+//! * **Two exclusions, exactly the specification's.** The specification
+//!   asks that the entry's `count` field be excluded from a
+//!   `c2pa.hash.data` hard binding (so an update manifest of another size
+//!   can follow), along with the store itself. They are *not* adjacent —
+//!   the value offset and the next pointer sit between — and a validator
+//!   (c2pa-rs's does) compares them exactly, so the plan reports both and
+//!   nothing else: the offset and the next pointer stay hashed, and
+//!   cannot be redirected without breaking the signature. (An earlier
+//!   version of this crate reported one contiguous superset, because the
+//!   contract then had room for only one exclusion range; c2pa-rs
+//!   rejected it. See [`EmbedPlan::exclusions`].)
 //!
 //! Re-embedding into a file already laid out this way cuts it off at the
 //! `count` field and writes the new framing and store there. Replacing a
@@ -89,12 +91,12 @@ impl Goal for PlanEmbedGoal {
     }
 }
 
-/// The three words that follow an IFD's `type` field, then the store's
-/// slot: the part of the framing the hard binding excludes.
-fn excluded_framing(endian: Endian, flavor: Flavor, manifest_len: u64, data_start: u64) -> Vec<u8> {
+/// The entry's value offset and the (zero) next-IFD pointer: the framing
+/// between the excluded `count` field and the excluded store, which stays
+/// hashed.
+fn offset_and_next(endian: Endian, flavor: Flavor, data_start: u64) -> Vec<u8> {
     let word = flavor.word_len() as usize;
-    let mut bytes = endian.encode(manifest_len, word);
-    bytes.extend(endian.encode(data_start, word));
+    let mut bytes = endian.encode(data_start, word);
     bytes.extend(endian.encode(0, word));
     bytes
 }
@@ -153,11 +155,17 @@ fn plan(layout: &Layout, manifest_len: u64) -> Result<EmbedPlan, FormatError> {
         ));
     }
 
-    let framing = excluded_framing(endian, flavor, manifest_len, data_start);
-    let exclusion = ByteRange {
+    let count_field = ByteRange {
         start: ifd_start + flavor.count_len() + 4,
-        len: framing.len() as u64 + manifest_len,
+        len: flavor.word_len(),
     };
+    let exclusions = vec![
+        count_field,
+        ByteRange {
+            start: data_start,
+            len: manifest_len,
+        },
+    ];
 
     let mut edits = Vec::new();
     match replaced {
@@ -177,13 +185,16 @@ fn plan(layout: &Layout, manifest_len: u64) -> Result<EmbedPlan, FormatError> {
             edits.push(Edit::Emit(lead_in));
         }
     }
-    edits.push(Edit::Emit(framing));
+    edits.push(Edit::Emit(
+        endian.encode(manifest_len, flavor.word_len() as usize),
+    ));
+    edits.push(Edit::Emit(offset_and_next(endian, flavor, data_start)));
     edits.push(Edit::Placeholder(ByteRange {
         start: 0,
         len: manifest_len,
     }));
 
-    let plan = EmbedPlan::new(edits, manifest_len, exclusion, replaced);
+    let plan = EmbedPlan::new(edits, manifest_len, exclusions, replaced);
     plan.check(source_len)?;
     Ok(plan)
 }

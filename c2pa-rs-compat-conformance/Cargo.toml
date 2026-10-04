@@ -53,3 +53,6 @@ c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
 contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline", features = [
     "fixtures",
 ] }
+# Reads back the hard binding c2pa-rs wrote, to compare the exclusions the
+# TIFF handler reports against the ones c2pa-rs recorded.
+contentauth-c2pa-file-reader = { path = "../contentauth-c2pa-file-reader" }

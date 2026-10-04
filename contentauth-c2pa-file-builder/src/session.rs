@@ -201,12 +201,14 @@ pub enum FileBuilderReply {
 #[non_exhaustive]
 pub struct FileBuilderReport {
     /// The final, signed C2PA manifest store bytes alone — identical to
-    /// the bytes written at [`Self::manifest_range`] of the output.
+    /// the bytes written into the plan's placeholder slots, inside
+    /// [`Self::exclusions`], of the output.
     pub manifest: Vec<u8>,
 
-    /// The byte range of the container structure carrying the manifest,
-    /// framing included — the hard binding's exclusion.
-    pub manifest_range: ByteRange,
+    /// The hard binding's exclusions: the container structure carrying the
+    /// manifest, framing included, and anything else the format's
+    /// specification excludes.
+    pub exclusions: Vec<ByteRange>,
 }
 
 /// One pending unit of output: bytes to place at `output_offset`, either
@@ -240,8 +242,8 @@ enum Inflight {
 /// What a [`Sub::Writing`] run answers, and how, once every task is done.
 enum WriteThen {
     /// Answer the outstanding `ReservePlaceholder` with the plan's
-    /// exclusion range.
-    PlaceholderReserved { exclusion: ByteRange },
+    /// exclusions.
+    PlaceholderReserved { exclusions: Vec<ByteRange> },
 
     /// Answer the outstanding `CommitManifest`.
     ManifestCommitted,
@@ -493,14 +495,14 @@ impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
                             plan: embed_plan,
                             tasks,
                             request,
-                            exclusion,
+                            exclusions,
                         } => {
                             let plan = Some(embed_plan);
                             let sub = Some(Sub::Writing {
                                 tasks,
                                 inflight: None,
                                 request,
-                                then: WriteThen::PlaceholderReserved { exclusion },
+                                then: WriteThen::PlaceholderReserved { exclusions },
                             });
                             self.phase = Some(Phase::Building { session, plan, sub });
                             continue;
@@ -532,8 +534,8 @@ impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
 
                         WritingStep::Done { request, then } => {
                             let reply = match then {
-                                WriteThen::PlaceholderReserved { exclusion } => {
-                                    BuilderHostReply::PlaceholderReserved(exclusion)
+                                WriteThen::PlaceholderReserved { exclusions } => {
+                                    BuilderHostReply::PlaceholderReserved(exclusions)
                                 }
                                 WriteThen::ManifestCommitted => BuilderHostReply::ManifestCommitted,
                             };
@@ -567,7 +569,7 @@ impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
                         self.core.mark_complete();
                         self.phase = Some(Phase::Done(FileBuilderReport {
                             manifest: report.manifest,
-                            manifest_range: report.manifest_range,
+                            exclusions: report.exclusions,
                         }));
                         return Ok(Step::Complete);
                     }
@@ -809,7 +811,7 @@ enum ValidatingStep<H: FormatHandler> {
         plan: EmbedPlan,
         tasks: VecDeque<WriteTask>,
         request: RequestId,
-        exclusion: ByteRange,
+        exclusions: Vec<ByteRange>,
     },
 }
 
@@ -836,13 +838,13 @@ fn step_validating<H: FormatHandler>(
 
     plan.check(source_len)?;
 
-    let exclusion = plan.exclusion;
+    let exclusions = plan.exclusions.clone();
     let tasks = tasks_for_edits(&plan.edits, &placeholder)?;
     Ok(ValidatingStep::Done {
         plan,
         tasks,
         request,
-        exclusion,
+        exclusions,
     })
 }
 
@@ -1083,12 +1085,12 @@ fn tasks_for_commit<H: FormatHandler>(
 
     for patch in patches {
         // `FormatHandler::commit`'s own contract: every patch must lie
-        // within the exclusion range, since bytes outside it are already
+        // within an exclusion, since bytes outside them are already
         // hashed into the hard binding. A handler that violates this is
         // buggy, not this session's problem to route around.
-        if !patch.lies_within(plan.exclusion) {
+        if !plan.excludes(patch.range()) {
             return Err(Error::Invariant(
-                "commit() returned a patch outside the plan's exclusion range",
+                "commit() returned a patch outside the plan's exclusions",
             ));
         }
 
@@ -1445,7 +1447,7 @@ mod tests {
         let plan = EmbedPlan::new(
             vec![Edit::Placeholder(ByteRange { start: 0, len: 5 })],
             5,
-            ByteRange { start: 0, len: 5 },
+            vec![ByteRange { start: 0, len: 5 }],
             None,
         );
         assert!(matches!(
@@ -1477,7 +1479,7 @@ mod tests {
                 }),
             ],
             manifest_len,
-            ByteRange { start: 10, len: 10 },
+            vec![ByteRange { start: 10, len: 10 }],
             None,
         );
 
@@ -1676,7 +1678,7 @@ mod tests {
         let plan = EmbedPlan::new(
             vec![Edit::Copy(ByteRange { start: 0, len: 10 })],
             0,
-            ByteRange { start: 0, len: 0 },
+            vec![ByteRange { start: 0, len: 0 }],
             None,
         );
 
@@ -1694,7 +1696,7 @@ mod tests {
         });
         let length_request = core.issue(FileBuilderRequest::Length { stream: stream() });
 
-        let plan = EmbedPlan::new(vec![], 0, ByteRange { start: 0, len: 0 }, None);
+        let plan = EmbedPlan::new(vec![], 0, vec![ByteRange { start: 0, len: 0 }], None);
 
         let step = step_validating::<JpegFormat>(&mut core, plan, vec![], request, length_request)
             .unwrap();

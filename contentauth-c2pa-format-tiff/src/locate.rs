@@ -13,7 +13,7 @@
 
 //! Locating a manifest store.
 
-use contentauth_c2pa_format::{FormatError, ManifestLocation, StreamId};
+use contentauth_c2pa_format::{ByteRange, FormatError, ManifestLocation, StreamId};
 
 use crate::{
     op::{delegate_session, Goal, ScanOp},
@@ -28,13 +28,14 @@ use crate::{
 /// Reports embedded stores only: this crate does not parse XMP, so a
 /// `dcterms:provenance` reference to a remote store goes unreported.
 ///
-/// The reported range is the contiguous span a hard binding for the file
-/// excludes *when the store is laid out as this crate lays one out*: from
-/// its entry's `count` field to the end of the file. A store laid out
-/// differently — its entry among others in a main IFD, its data elsewhere
-/// — is read correctly but is not contiguous with its entry; for those the
-/// range is the store's bytes alone. A reader should rely on the hard
-/// binding's own exclusions, not on this range.
+/// The reported exclusions are the specification's two — the entry's
+/// `count` field and the store — wherever the entry and the store are in
+/// the file, so a store another tool laid out is described as exactly as
+/// one this crate wrote. The reported range is what a re-embed replaces:
+/// from the `count` field to the end of the file when the store is laid
+/// out as this crate lays one out, and otherwise just the store's bytes
+/// (such a store cannot be replaced; see
+/// [`PlanEmbed`](crate::PlanEmbed)).
 pub struct Locate(ScanOp<LocateGoal>);
 
 impl Locate {
@@ -60,6 +61,19 @@ impl Goal for LocateGoal {
         let jumbf = layout.manifest.ok_or(FormatError::Malformed(
             "the manifest store was not read".to_string(),
         ))?;
-        Ok(ManifestLocation::embedded(jumbf, range))
+
+        let count_field = ByteRange {
+            start: c2pa.entry_offset + 4,
+            len: layout.header.flavor.word_len(),
+        };
+        let mut exclusions = vec![count_field, c2pa.data];
+        exclusions.sort_by_key(|range| range.start);
+        if exclusions[0].start + exclusions[0].len > exclusions[1].start {
+            return Err(FormatError::Malformed(
+                "the manifest store overlaps its own entry".to_string(),
+            ));
+        }
+
+        Ok(ManifestLocation::embedded(jumbf, range, exclusions))
     }
 }

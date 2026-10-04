@@ -93,8 +93,8 @@ pub trait FormatHandler {
     ///
     /// A pure function of the plan and the final store: a JPEG handler has
     /// nothing to patch, a PNG handler recomputes the chunk CRC. Every
-    /// patch must lie within [`EmbedPlan::exclusion`] — bytes outside it
-    /// have already been hashed into the hard binding — and a handler
+    /// patch must lie within one of [`EmbedPlan::exclusions`] — bytes outside
+    /// them have already been hashed into the hard binding — and a handler
     /// should also use this call to refuse a store that does not fit the
     /// assumptions its framing made ([`FormatError::ManifestMismatch`]).
     fn commit(&self, plan: &EmbedPlan, manifest: &[u8]) -> Result<Vec<Patch>, FormatError>;

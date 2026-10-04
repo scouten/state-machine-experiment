@@ -63,9 +63,11 @@
 //! let plan = MemoryHost::new()
 //!     .with_stream(stream, tiff.to_vec())
 //!     .run(TiffFormat.plan_embed(stream, 1000))?;
-//! // The store goes in a new IFD appended at offset 26; the excluded span
-//! // starts at its `count` field, after the entry count, tag and type.
-//! assert_eq!(plan.exclusion.start, 26 + 2 + 4);
+//! // The store goes in a new IFD appended at offset 26. A hard binding
+//! // excludes two ranges: the entry's `count` field (after the entry
+//! // count, tag and type) and, 12 bytes later, the store itself.
+//! assert_eq!(plan.exclusions[0].start, 26 + 2 + 4);
+//! assert_eq!(plan.exclusions[1].start, 26 + 18);
 //! # Ok::<(), contentauth_c2pa_format::FormatError>(())
 //! ```
 

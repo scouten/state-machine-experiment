@@ -93,3 +93,49 @@ fn the_tiff_handler_reads_a_store_c2pa_rs_wrote() {
     assert_eq!(via_compat.format, None);
     assert_eq!(via_compat.title.as_deref(), Some("tiff"));
 }
+
+#[test]
+fn the_tiff_handler_reports_the_exclusions_c2pa_rs_wrote() {
+    use contentauth_c2pa_format::{
+        test_util::{MemoryHost, STREAM},
+        FormatHandler,
+    };
+
+    let signed = sign_with_c2pa_rs("exclusions");
+    let bytes = std::fs::read(&signed).unwrap();
+
+    // What c2pa-rs recorded in its own hard binding (read back by this
+    // workspace's reader, which decodes the assertion)…
+    let report = contentauth_c2pa_file_reader::read_manifest_from_file(
+        &contentauth_c2pa_format_tiff::TiffFormat,
+        &signed,
+        contentauth_c2pa_file_reader::ReadSettings::default(),
+    )
+    .unwrap();
+    let mut recorded: Vec<(u64, u64)> = report
+        .active()
+        .unwrap()
+        .data_hash
+        .as_ref()
+        .unwrap()
+        .exclusions
+        .iter()
+        .map(|range| (range.start, range.len))
+        .collect();
+    recorded.sort();
+
+    // …is what this crate's handler says a hard binding excludes.
+    let located = MemoryHost::of(bytes)
+        .run(contentauth_c2pa_format_tiff::TiffFormat.locate(STREAM))
+        .unwrap()
+        .embedded
+        .unwrap();
+    let reported: Vec<(u64, u64)> = located
+        .exclusions
+        .iter()
+        .map(|range| (range.start, range.len))
+        .collect();
+
+    assert_eq!(reported, recorded);
+    assert_eq!(reported.len(), 2, "the count field, and the store");
+}

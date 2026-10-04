@@ -50,7 +50,7 @@ a large JPEG costs a few dozen small reads regardless of size:
   `contentauth-c2pa-builder`, embedded through this crate — including one
   large enough to span two segments — and read back through this crate
   by `contentauth-c2pa-reader` as trusted, with the reader's hard-binding
-  check confirming the declared exclusion range is the one the signed
+  check confirming the declared exclusion is the one the signed
   hash was computed over.
 
 ## Building
