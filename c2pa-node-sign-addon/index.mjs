@@ -56,7 +56,8 @@ export class Builder {
    * left untouched. Without it the signed asset is returned as
    * `result.buffer`.
    *
-   * Resolves to `{ manifest, manifestStart, manifestLen, buffer? }`.
+   * Resolves to `{ manifest, exclusions, buffer? }`, where `exclusions` is the
+   * hard binding's excluded ranges, `[{ start, len }, …]` in ascending order.
    * Rejects with the signer's own error if it rejected, or an `Error`
    * whose `name` is the Rust side's error string (e.g.
    * `Definition(BadDefinition("..."))`, `C2pa(UnsupportedType)`).
@@ -173,8 +174,8 @@ async function drive(session, io, options) {
   }
   if (failure) throw failure;
 
-  const { manifest, manifestStart, manifestLen } = native.buildFinish(session);
-  return { manifest, manifestStart, manifestLen };
+  const { manifest, exclusions } = native.buildFinish(session);
+  return { manifest, exclusions };
 }
 
 /**

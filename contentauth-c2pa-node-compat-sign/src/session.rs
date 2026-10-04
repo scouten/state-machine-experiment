@@ -178,11 +178,20 @@ pub enum Step {
 pub struct SignReport {
     /// The manifest store's bytes, as embedded.
     pub manifest: Vec<u8>,
-    /// Offset in the output of the container structure carrying the
-    /// manifest, framing included (the hard binding's exclusion).
-    pub manifest_start: u64,
-    /// Length of that structure.
-    pub manifest_len: u64,
+    /// The hard binding's exclusions, ascending: the container structure
+    /// carrying the manifest, framing included, and anything else the
+    /// format's specification excludes (TIFF excludes a length field apart
+    /// from the store).
+    pub exclusions: Vec<Exclusion>,
+}
+
+/// One range of the output the hard binding excludes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Exclusion {
+    /// Offset in the output.
+    pub start: u64,
+    /// Length in bytes.
+    pub len: u64,
 }
 
 /// A signing of one asset, driven entirely by its caller.
@@ -280,8 +289,14 @@ impl NodeBuildSession {
         let report = self.inner.finish().map_err(Error::from)?;
         Ok(SignReport {
             manifest: report.manifest,
-            manifest_start: report.manifest_range.start,
-            manifest_len: report.manifest_range.len,
+            exclusions: report
+                .exclusions
+                .iter()
+                .map(|range| Exclusion {
+                    start: range.start,
+                    len: range.len,
+                })
+                .collect(),
         })
     }
 }

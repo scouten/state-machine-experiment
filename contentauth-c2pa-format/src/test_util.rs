@@ -154,11 +154,11 @@ pub mod conformance {
         let patches = handler.commit(&plan, manifest).expect("commit failed");
         for patch in &patches {
             assert!(
-                patch.lies_within(plan.exclusion),
-                "commit patch at offset {} ({} bytes) lies outside the exclusion range {:?}",
+                plan.excludes(patch.range()),
+                "commit patch at offset {} ({} bytes) lies outside the exclusions {:?}",
                 patch.offset,
                 patch.bytes.len(),
-                plan.exclusion
+                plan.exclusions
             );
             patch
                 .apply(&mut output)
@@ -193,8 +193,8 @@ pub mod conformance {
             "the located manifest store differs from the one embedded"
         );
         assert_eq!(
-            embedded.range, plan.exclusion,
-            "the located range differs from the plan's exclusion range"
+            embedded.exclusions, plan.exclusions,
+            "the located exclusions differ from the plan's"
         );
 
         output
@@ -222,10 +222,14 @@ pub mod conformance {
             "embedding into an unsigned asset reported a replaced range"
         );
 
+        let located_once = locate(handler, &signed_once)
+            .embedded
+            .expect("locate found no embedded manifest store after one was embedded");
+
         let (second_plan, signed_twice) = embed(handler, &signed_once, second);
         assert_eq!(
             second_plan.replaced,
-            Some(first_plan.exclusion),
+            Some(located_once.range),
             "re-embedding must report the range of the store it replaced"
         );
 
@@ -236,7 +240,7 @@ pub mod conformance {
             embedded.jumbf, second,
             "the located manifest store is not the one most recently embedded"
         );
-        assert_eq!(embedded.range, second_plan.exclusion);
+        assert_eq!(embedded.exclusions, second_plan.exclusions);
 
         let (_, direct) = embed(handler, unsigned_source, second);
         assert_eq!(

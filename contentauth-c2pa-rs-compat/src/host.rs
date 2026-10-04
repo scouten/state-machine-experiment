@@ -57,13 +57,13 @@ use std::{
 };
 
 use contentauth_c2pa_file_reader::{
-    FileReadReply, FileReadRequest, FileReadSession, FormatHandler, ReadReport, ReadSettings,
+    FileReadReply, FileReadRequest, FileReadSession, ReadReport, ReadSettings,
 };
 use contentauth_c2pa_primitives::{ByteRange, HostError};
 use contentauth_state_machine::{Session, Step};
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 
-use crate::error::Error;
+use crate::{error::Error, format};
 
 /// The media type RFC 6960 §4.1 names for an OCSP request body.
 const OCSP_REQUEST_CONTENT_TYPE: &str = "application/ocsp-request";
@@ -76,22 +76,23 @@ const OCSP_REQUEST_CONTENT_TYPE: &str = "application/ocsp-request";
 /// control — see [`fetch_ocsp`].
 const MAX_OCSP_RESPONSE_BYTES: u64 = 64 * 1024;
 
-/// Opens `path`, then locates and reads its C2PA manifest store, answering
-/// every request [`FileReadSession`] issues — network requests included.
-pub(crate) fn read_and_validate<H: FormatHandler>(
-    handler: &H,
-    path: &Path,
-    settings: ReadSettings,
-) -> Result<ReadReport, Error> {
+/// Opens `path`, works out what format it is, then locates and reads its
+/// C2PA manifest store, answering every request [`FileReadSession`]
+/// issues — network requests included.
+pub(crate) fn read_and_validate(path: &Path, settings: ReadSettings) -> Result<ReadReport, Error> {
     let mut source = File::open(path).map_err(|source| Error::Io {
         path: path.to_path_buf(),
         source,
     })?;
 
+    // The one place this host decides what the file is — before any
+    // session exists, from the file itself.
+    let handler = format::choose(path, &mut source)?;
+
     let client = reqwest::blocking::Client::builder()
         .dns_resolver(Arc::new(PublicOnlyResolver))
         .build()?;
-    let mut session = FileReadSession::new(handler, settings);
+    let mut session = FileReadSession::new(&handler, settings);
 
     loop {
         if session.advance()? == Step::Complete {

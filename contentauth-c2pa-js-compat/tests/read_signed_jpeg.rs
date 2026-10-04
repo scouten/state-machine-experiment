@@ -230,7 +230,7 @@ fn a_tampered_asset_reads_back_as_invalid() {
 
     // Flip a byte inside the image's scan data, well clear of both the
     // manifest's own segments and the file's framing.
-    let exclusion_end = (plan.exclusion.start + plan.exclusion.len) as usize;
+    let exclusion_end = (plan.exclusions[0].start + plan.exclusions[0].len) as usize;
     let offset = exclusion_end + (asset.len() - exclusion_end) / 2;
     asset[offset] ^= 0xff;
 

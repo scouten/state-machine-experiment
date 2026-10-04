@@ -72,7 +72,7 @@ fn re_signing_a_c2pa_rs_file_replaces_its_store() {
     assert_eq!(plan.replaced, Some(C_JPG_MANIFEST_RANGE));
     // The new store goes where the old one was, in one segment.
     assert_eq!(
-        plan.exclusion,
+        plan.exclusions[0],
         ByteRange {
             start: 20,
             len: 4 + 8 + 1000
@@ -80,7 +80,7 @@ fn re_signing_a_c2pa_rs_file_replaces_its_store() {
     );
     assert_eq!(
         output.len(),
-        C_JPG.len() - C_JPG_MANIFEST_RANGE.len as usize + plan.exclusion.len as usize
+        C_JPG.len() - C_JPG_MANIFEST_RANGE.len as usize + plan.exclusions[0].len as usize
     );
 
     let embedded = conformance::locate(&JpegFormat, &output).embedded.unwrap();
@@ -89,7 +89,7 @@ fn re_signing_a_c2pa_rs_file_replaces_its_store() {
     // Everything outside the store is untouched.
     assert_eq!(&output[..20], &C_JPG[..20]);
     assert_eq!(
-        &output[plan.exclusion.start as usize + plan.exclusion.len as usize..],
+        &output[plan.exclusions[0].start as usize + plan.exclusions[0].len as usize..],
         &C_JPG[(C_JPG_MANIFEST_RANGE.start + C_JPG_MANIFEST_RANGE.len) as usize..]
     );
 }
@@ -97,10 +97,10 @@ fn re_signing_a_c2pa_rs_file_replaces_its_store() {
 #[test]
 fn the_store_goes_after_app0_or_after_soi() {
     let (plan, _) = conformance::embed(&JpegFormat, &unsigned_jpeg(true, true), &store(100));
-    assert_eq!(plan.exclusion.start, AFTER_APP0);
+    assert_eq!(plan.exclusions[0].start, AFTER_APP0);
 
     let (plan, _) = conformance::embed(&JpegFormat, &unsigned_jpeg(false, true), &store(100));
-    assert_eq!(plan.exclusion.start, 2);
+    assert_eq!(plan.exclusions[0].start, 2);
 }
 
 #[test]
@@ -108,7 +108,7 @@ fn a_large_store_is_written_the_way_c2pa_rs_writes_it() {
     let big = store(64_000 * 2 + 5);
     let (plan, output) = conformance::embed(&JpegFormat, &unsigned_jpeg(true, false), &big);
 
-    let run = &output[plan.exclusion.start as usize..][..plan.exclusion.len as usize];
+    let run = &output[plan.exclusions[0].start as usize..][..plan.exclusions[0].len as usize];
 
     // Three segments: 64,000 + 64,000 + 5 bytes of store.
     let mut pos = 0;
@@ -153,7 +153,7 @@ fn non_c2pa_app11_segments_are_carried_through() {
     let (plan, output) = conformance::embed(&JpegFormat, &jpeg, &store(64));
     assert_eq!(plan.replaced, None);
     // Right after the 9-byte APP0 segment.
-    assert_eq!(plan.exclusion.start, 2 + 9);
+    assert_eq!(plan.exclusions[0].start, 2 + 9);
     assert!(
         output
             .windows(other.len())

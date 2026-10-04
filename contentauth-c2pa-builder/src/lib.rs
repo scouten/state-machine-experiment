@@ -95,5 +95,6 @@ pub use builder::{
 };
 pub use contentauth_c2pa_primitives::{ByteRange, HashAlgorithm, HostError, SigningAlg, StreamId};
 pub use contentauth_state_machine::{HostRequest, ProtocolError, RequestId, Session};
+pub use data_hash::MAX_EXCLUSIONS;
 pub use error::Error;
 pub use request::{BuilderHostReply, BuilderRequest};

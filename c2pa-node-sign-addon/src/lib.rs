@@ -165,7 +165,7 @@ fn build_fulfill(mut cx: FunctionContext) -> JsResult<JsUndefined> {
     }
 }
 
-/// `{ manifest: Buffer, manifestStart, manifestLen }`.
+/// `{ manifest: Buffer, exclusions: [{ start, len }, …] }`.
 fn build_finish(mut cx: FunctionContext) -> JsResult<JsObject> {
     let handle = cx.argument::<JsBox<Session>>(0)?;
     let Some(session) = handle.0.borrow_mut().take() else {
@@ -175,11 +175,17 @@ fn build_finish(mut cx: FunctionContext) -> JsResult<JsObject> {
         Ok(report) => {
             let out = cx.empty_object();
             let manifest = JsBuffer::from_slice(&mut cx, &report.manifest)?;
-            let start = cx.number(report.manifest_start as f64);
-            let len = cx.number(report.manifest_len as f64);
+            let exclusions = cx.empty_array();
+            for (index, exclusion) in report.exclusions.iter().enumerate() {
+                let item = cx.empty_object();
+                let start = cx.number(exclusion.start as f64);
+                let len = cx.number(exclusion.len as f64);
+                item.set(&mut cx, "start", start)?;
+                item.set(&mut cx, "len", len)?;
+                exclusions.set(&mut cx, index as u32, item)?;
+            }
             out.set(&mut cx, "manifest", manifest)?;
-            out.set(&mut cx, "manifestStart", start)?;
-            out.set(&mut cx, "manifestLen", len)?;
+            out.set(&mut cx, "exclusions", exclusions)?;
             Ok(out)
         }
         Err(err) => {

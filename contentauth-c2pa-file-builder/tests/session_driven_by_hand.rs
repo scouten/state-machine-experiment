@@ -130,7 +130,7 @@ fn a_hand_rolled_host_can_build_and_sign_a_real_jpeg() {
     }
 
     let report = session.finish().unwrap();
-    assert_eq!(report.manifest_range.start, 20);
+    assert_eq!(report.exclusions[0].start, 20);
     assert!(!output.is_empty());
     assert_ne!(output, C_JPG);
 }

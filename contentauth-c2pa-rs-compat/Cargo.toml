@@ -23,10 +23,11 @@ contentauth-c2pa-file-reader = { path = "../contentauth-c2pa-file-reader" }
 # types this crate's compat surface wraps rather than duplicates.
 contentauth-c2pa-reader = { path = "../contentauth-c2pa-reader" }
 
-# The only `FormatHandler` wired up today. See `src/format.rs` for why this
-# is the seam a second format would extend rather than a design choice
-# baked into `Reader` itself.
-contentauth-c2pa-format-jpeg = { path = "../contentauth-c2pa-format-jpeg" }
+# Which `FormatHandler` to use for a file: a registry of every format this
+# workspace ships, detected by content or extension. `src/format.rs` is
+# this host's whole policy for choosing; nothing else in this crate names
+# a container format.
+contentauth-c2pa-format-registry = { path = "../contentauth-c2pa-format-registry" }
 
 # `HostError`, for `src/host.rs`'s own request handling — the same type
 # every other sans-I/O host in this workspace reports a failed request
@@ -64,6 +65,10 @@ reqwest = { version = "0.13.5", features = ["blocking"] }
 url = "2.5"
 
 [dev-dependencies]
+# Test-only: the concrete handlers, to embed a manifest into a fixture the
+# way a host would.
+contentauth-c2pa-format-jpeg = { path = "../contentauth-c2pa-format-jpeg" }
+contentauth-c2pa-format-tiff = { path = "../contentauth-c2pa-format-tiff" }
 # Builds and signs a manifest to embed in this crate's own round-trip test
 # fixture, exactly as the sibling crates' own tests do.
 contentauth-c2pa-builder = { path = "../contentauth-c2pa-builder" }

@@ -57,4 +57,4 @@ mod error;
 mod session;
 
 pub use error::Error;
-pub use session::{NodeBuildSession, PendingRequest, Reply, SignReport, Step, Stream};
+pub use session::{Exclusion, NodeBuildSession, PendingRequest, Reply, SignReport, Step, Stream};

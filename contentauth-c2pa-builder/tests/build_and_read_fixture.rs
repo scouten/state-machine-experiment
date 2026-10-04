@@ -87,10 +87,10 @@ impl Host {
                     placeholder.iter().copied(),
                 );
                 self.manifest_range = Some((offset, placeholder.len() as u64));
-                BuilderHostReply::PlaceholderReserved(contentauth_c2pa_builder::ByteRange {
+                BuilderHostReply::PlaceholderReserved(vec![contentauth_c2pa_builder::ByteRange {
                     start: offset,
                     len: placeholder.len() as u64,
-                })
+                }])
             }
 
             BuilderRequest::AssetLength { .. } => {
@@ -119,8 +119,11 @@ impl Host {
             }
 
             BuilderRequest::CommitManifest {
-                range, manifest, ..
+                exclusions,
+                manifest,
+                ..
             } => {
+                let range = exclusions[0];
                 let start = range.start as usize;
                 let end = start + range.len as usize;
                 assert_eq!(manifest.len(), range.len as usize);
@@ -211,7 +214,7 @@ fn a_signed_manifest_with_no_assertions_reads_back_as_trusted() {
     let (asset, report) = host.build(session);
 
     assert_eq!(
-        (report.manifest_range.start, report.manifest_range.len),
+        (report.exclusions[0].start, report.exclusions[0].len),
         host.manifest_range.unwrap()
     );
 
@@ -402,12 +405,12 @@ fn a_host_that_refuses_to_sign_fails_the_session() {
                     session
                         .fulfill(
                             request.id,
-                            BuilderHostReply::PlaceholderReserved(
+                            BuilderHostReply::PlaceholderReserved(vec![
                                 contentauth_c2pa_builder::ByteRange {
                                     start: offset,
                                     len: placeholder.len() as u64,
                                 },
-                            ),
+                            ]),
                         )
                         .unwrap();
                 }
@@ -498,14 +501,14 @@ fn a_reservation_range_shorter_than_the_placeholder_is_rejected() {
                 session
                     .fulfill(
                         request.id,
-                        BuilderHostReply::PlaceholderReserved(
+                        BuilderHostReply::PlaceholderReserved(vec![
                             contentauth_c2pa_builder::ByteRange {
                                 start: offset,
                                 // One byte short of the placeholder that was
                                 // actually embedded.
                                 len: placeholder.len() as u64 - 1,
                             },
-                        ),
+                        ]),
                     )
                     .unwrap();
             }
@@ -513,6 +516,33 @@ fn a_reservation_range_shorter_than_the_placeholder_is_rejected() {
         },
         other => panic!("unexpected requests: {other:?}"),
     }
+
+    assert!(session.advance().is_err());
+}
+
+/// Reserved ranges whose lengths overflow when added are as unusable as
+/// ones that are too short.
+#[test]
+fn reservation_ranges_whose_lengths_overflow_are_rejected() {
+    let mut session = BuilderSession::new(settings(vec![], None));
+    assert_eq!(session.advance().unwrap(), BuilderStep::AwaitHost);
+
+    let request = session.outstanding_requests()[0].clone();
+    session
+        .fulfill(
+            request.id,
+            BuilderHostReply::PlaceholderReserved(vec![
+                contentauth_c2pa_builder::ByteRange {
+                    start: 0,
+                    len: u64::MAX,
+                },
+                contentauth_c2pa_builder::ByteRange {
+                    start: 0,
+                    len: u64::MAX,
+                },
+            ]),
+        )
+        .unwrap();
 
     assert!(session.advance().is_err());
 }
@@ -551,10 +581,10 @@ fn a_reservation_range_longer_than_the_placeholder_is_accepted() {
     session
         .fulfill(
             request.id,
-            BuilderHostReply::PlaceholderReserved(contentauth_c2pa_builder::ByteRange {
+            BuilderHostReply::PlaceholderReserved(vec![contentauth_c2pa_builder::ByteRange {
                 start: range.0,
                 len: range.1,
-            }),
+            }]),
         )
         .unwrap();
 
@@ -567,8 +597,11 @@ fn a_reservation_range_longer_than_the_placeholder_is_accepted() {
         for request in session.outstanding_requests().to_vec() {
             let reply = match &request.kind {
                 BuilderRequest::CommitManifest {
-                    range, manifest, ..
+                    exclusions,
+                    manifest,
+                    ..
                 } => {
+                    let range = exclusions[0];
                     assert_eq!((range.start, range.len), host.manifest_range.unwrap());
                     let start = range.start as usize + FRAMING.len();
                     host.asset[start..start + manifest.len()].copy_from_slice(manifest);
@@ -580,7 +613,7 @@ fn a_reservation_range_longer_than_the_placeholder_is_accepted() {
         }
     };
     assert_eq!(
-        (report.manifest_range.start, report.manifest_range.len),
+        (report.exclusions[0].start, report.exclusions[0].len),
         range
     );
 
@@ -595,7 +628,7 @@ fn a_reservation_range_longer_than_the_placeholder_is_accepted() {
             .as_ref()
             .unwrap()
             .exclusions,
-        [report.manifest_range],
+        [report.exclusions[0]],
         "the framed span is what the hard binding excludes"
     );
 }

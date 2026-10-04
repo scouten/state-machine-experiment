@@ -80,13 +80,22 @@ pub struct EmbedPlan {
     /// signed store that replaces it.
     pub manifest_len: u64,
 
-    /// The range of the *output* occupied by the container structure
-    /// carrying the manifest store, framing included. This is what a
-    /// `c2pa.hash.data` hard binding written for the output excludes, and
-    /// what [`FormatHandler::locate`](crate::FormatHandler::locate) reports
-    /// as [`EmbeddedManifest::range`](crate::EmbeddedManifest::range) when
-    /// run on the output.
-    pub exclusion: ByteRange,
+    /// The ranges of the *output* a `c2pa.hash.data` hard binding written
+    /// for it excludes, in ascending order and not overlapping.
+    ///
+    /// Usually one: the container structure carrying the manifest store,
+    /// framing included (JPEG's run of `APP11` segments). A format may
+    /// need more — TIFF's specification excludes the entry's `count`
+    /// field *and* the store, which sit apart — and real validators
+    /// compare them exactly, so a handler reports precisely the ranges
+    /// its format's specification calls for, not a convenient superset.
+    ///
+    /// Every [`Edit::Placeholder`] lies within one of them; no
+    /// [`Edit::Copy`] overlaps any. This is also what
+    /// [`FormatHandler::locate`](crate::FormatHandler::locate) reports as
+    /// [`EmbeddedManifest::exclusions`](crate::EmbeddedManifest::exclusions)
+    /// when run on the output.
+    pub exclusions: Vec<ByteRange>,
 
     /// The range of the *source* occupied by a manifest store this plan
     /// drops, if the source already carried one.
@@ -108,13 +117,13 @@ impl EmbedPlan {
     pub fn new(
         edits: Vec<Edit>,
         manifest_len: u64,
-        exclusion: ByteRange,
+        exclusions: Vec<ByteRange>,
         replaced: Option<ByteRange>,
     ) -> Self {
         Self {
             edits,
             manifest_len,
-            exclusion,
+            exclusions,
             replaced,
         }
     }
@@ -127,7 +136,7 @@ impl EmbedPlan {
     ///
     /// `insert_at` may not fall strictly inside `replace`; it typically
     /// equals `replace.start`, putting the new store where the old one
-    /// was. The exclusion range is the output span of `wrapped`. The
+    /// was. The one exclusion range is the output span of `wrapped`. The
     /// result has already passed [`Self::check`].
     pub fn splice(
         source_len: u64,
@@ -173,10 +182,10 @@ impl EmbedPlan {
         let plan = Self {
             edits,
             manifest_len,
-            exclusion: ByteRange {
+            exclusions: vec![ByteRange {
                 start: exclusion_start,
                 len: exclusion_len,
-            },
+            }],
             replaced: replace,
         };
         plan.check(source_len)?;
@@ -194,23 +203,33 @@ impl EmbedPlan {
     /// Verifies the invariants every consumer of a plan relies on, and
     /// returns the output length.
     ///
+    /// * The exclusions are in ascending order, do not overlap, and lie
+    ///   within the output.
     /// * Every [`Edit::Copy`] lies within the source, and none of its
-    ///   output lies within the exclusion range: bytes carried over from
-    ///   the asset are exactly what the hard binding exists to protect,
-    ///   so an exclusion wide enough to swallow any of them is a plan
-    ///   bug, never something a consumer should hash around.
+    ///   output lies within an exclusion: bytes carried over from the
+    ///   asset are exactly what the hard binding exists to protect, so an
+    ///   exclusion wide enough to swallow any of them is a plan bug, never
+    ///   something a consumer should hash around.
     /// * The [`Edit::Placeholder`] slots, taken in order, cover
     ///   `[0, manifest_len)` exactly once with no gaps or overlaps.
-    /// * Every placeholder slot lies within the exclusion range, which in
-    ///   turn lies within the output. (Handler-emitted framing may be
-    ///   excluded too; the manifest bytes must be.)
+    /// * Every placeholder slot lies within one exclusion. (Handler-emitted
+    ///   framing may be excluded too; the manifest bytes must be.)
     /// * `replaced`, if set, lies within the source.
     ///
     /// A violation is [`FormatError::InvalidPlan`] — a bug in the handler
     /// that produced the plan.
     pub fn check(&self, source_len: u64) -> Result<u64, FormatError> {
-        let exclusion_end = range_end(self.exclusion)
-            .ok_or(FormatError::InvalidPlan("exclusion range overflows"))?;
+        let mut previous_end = 0u64;
+        for exclusion in &self.exclusions {
+            let end = range_end(*exclusion)
+                .ok_or(FormatError::InvalidPlan("exclusion range overflows"))?;
+            if exclusion.start < previous_end {
+                return Err(FormatError::InvalidPlan(
+                    "exclusion ranges are out of order or overlap",
+                ));
+            }
+            previous_end = end;
+        }
 
         let mut output_len = 0u64;
         let mut next_slot = 0u64;
@@ -231,9 +250,13 @@ impl EmbedPlan {
                         ));
                     }
 
-                    // Non-empty overlap of [start, output_len) with the
-                    // exclusion.
-                    if start < exclusion_end && output_len > self.exclusion.start {
+                    // Non-empty overlap of [start, output_len) with an
+                    // exclusion. (Ends were checked not to overflow.)
+                    if self
+                        .exclusions
+                        .iter()
+                        .any(|e| start < e.start + e.len && output_len > e.start)
+                    {
                         return Err(FormatError::InvalidPlan(
                             "a copy of asset bytes lies inside the exclusion range",
                         ));
@@ -251,7 +274,11 @@ impl EmbedPlan {
                     next_slot = range_end(*range)
                         .ok_or(FormatError::InvalidPlan("a placeholder range overflows"))?;
 
-                    if start < self.exclusion.start || output_len > exclusion_end {
+                    if !self
+                        .exclusions
+                        .iter()
+                        .any(|e| start >= e.start && output_len <= e.start + e.len)
+                    {
                         return Err(FormatError::InvalidPlan(
                             "a placeholder slot lies outside the exclusion range",
                         ));
@@ -266,7 +293,7 @@ impl EmbedPlan {
             ));
         }
 
-        if exclusion_end > output_len {
+        if previous_end > output_len {
             return Err(FormatError::InvalidPlan(
                 "exclusion range reaches past the end of the output",
             ));
@@ -283,6 +310,19 @@ impl EmbedPlan {
         }
 
         Ok(output_len)
+    }
+
+    /// True if `range` lies entirely within one of the plan's exclusions.
+    ///
+    /// What a [`Patch`] must satisfy: bytes outside every exclusion have
+    /// already been hashed into the hard binding.
+    pub fn excludes(&self, range: ByteRange) -> bool {
+        self.exclusions
+            .iter()
+            .any(|e| match (range_end(range), range_end(*e)) {
+                (Some(end), Some(e_end)) => range.start >= e.start && end <= e_end,
+                _ => false,
+            })
     }
 
     /// Produces the output in memory: the reference implementation of
@@ -379,9 +419,9 @@ impl Patch {
 
     /// True if this patch lies entirely within `range`.
     ///
-    /// Every patch a handler returns must lie within the plan's exclusion
-    /// range: anything outside it has already been hashed into the hard
-    /// binding.
+    /// Every patch a handler returns must lie within one of the plan's
+    /// exclusions ([`EmbedPlan::excludes`]): anything outside them has
+    /// already been hashed into the hard binding.
     pub fn lies_within(&self, range: ByteRange) -> bool {
         match (range_end(self.range()), range_end(range)) {
             (Some(end), Some(range_end)) => self.offset >= range.start && end <= range_end,
@@ -436,7 +476,7 @@ mod tests {
                 Edit::Copy(range(10, 90)),
             ]
         );
-        assert_eq!(plan.exclusion, range(10, 11));
+        assert_eq!(plan.exclusions, [range(10, 11)]);
         assert_eq!(plan.replaced, None);
         assert_eq!(plan.output_len(), Some(111));
     }
@@ -455,7 +495,7 @@ mod tests {
                 Edit::Copy(range(50, 50)),
             ]
         );
-        assert_eq!(plan.exclusion, range(20, 11));
+        assert_eq!(plan.exclusions, [range(20, 11)]);
         assert_eq!(plan.replaced, Some(range(20, 30)));
 
         // The old store before the insertion point.
@@ -471,7 +511,7 @@ mod tests {
                 Edit::Copy(range(70, 30)),
             ]
         );
-        assert_eq!(plan.exclusion, range(40, 11));
+        assert_eq!(plan.exclusions, [range(40, 11)]);
 
         // The old store after the insertion point.
         let plan = EmbedPlan::splice(100, Some(range(60, 30)), 10, 5, wrapped(5)).unwrap();
@@ -489,18 +529,18 @@ mod tests {
 
         // Inserting right after the old store is allowed too.
         let plan = EmbedPlan::splice(100, Some(range(20, 30)), 50, 5, wrapped(5)).unwrap();
-        assert_eq!(plan.exclusion, range(20, 11));
+        assert_eq!(plan.exclusions, [range(20, 11)]);
     }
 
     #[test]
     fn splice_at_the_edges_of_the_source() {
         let plan = EmbedPlan::splice(100, None, 0, 5, wrapped(5)).unwrap();
         assert_eq!(plan.edits[0], Edit::Emit(vec![0xaa; 4]));
-        assert_eq!(plan.exclusion, range(0, 11));
+        assert_eq!(plan.exclusions, [range(0, 11)]);
 
         let plan = EmbedPlan::splice(100, None, 100, 5, wrapped(5)).unwrap();
         assert_eq!(plan.edits.last(), Some(&Edit::Emit(vec![0xbb; 2])));
-        assert_eq!(plan.exclusion, range(100, 11));
+        assert_eq!(plan.exclusions, [range(100, 11)]);
 
         // Replacing a store that is the entire source.
         let plan = EmbedPlan::splice(100, Some(range(0, 100)), 0, 5, wrapped(5)).unwrap();
@@ -569,7 +609,7 @@ mod tests {
 
         // A slot outside the exclusion.
         let mut outside = ok.clone();
-        outside.exclusion = range(11, 5);
+        outside.exclusions = vec![range(11, 5)];
         assert!(matches!(
             outside.check(100),
             Err(FormatError::InvalidPlan(
@@ -581,7 +621,7 @@ mod tests {
         // byte before the framing, and one byte after it.
         for exclusion in [range(9, 12), range(10, 12)] {
             let mut too_wide = ok.clone();
-            too_wide.exclusion = exclusion;
+            too_wide.exclusions = vec![exclusion];
             let result = too_wide.check(100);
             assert!(
                 matches!(
@@ -604,7 +644,7 @@ mod tests {
         // framing at the very end, so no copied bytes fall inside it and
         // the overrun is the only violation.
         let mut long = EmbedPlan::splice(100, None, 100, 5, wrapped(5)).unwrap();
-        long.exclusion = range(100, 200);
+        long.exclusions = vec![range(100, 200)];
         assert!(matches!(
             long.check(100),
             Err(FormatError::InvalidPlan(
@@ -630,7 +670,7 @@ mod tests {
             Err(FormatError::InvalidPlan("a copy range overflows"))
         ));
         let mut overflow = ok;
-        overflow.exclusion = range(u64::MAX, 1);
+        overflow.exclusions = vec![range(u64::MAX, 1)];
         assert!(matches!(
             overflow.check(100),
             Err(FormatError::InvalidPlan("exclusion range overflows"))
@@ -695,5 +735,78 @@ mod tests {
         assert_eq!(Edit::Placeholder(range(5, 0)).len(), 0);
         assert!(Edit::Placeholder(range(5, 0)).is_empty());
         assert!(!Edit::Emit(vec![0]).is_empty());
+    }
+
+    /// A plan shaped like TIFF's: a 4-byte field excluded, 4 bytes hashed,
+    /// then the store excluded.
+    fn two_apart() -> EmbedPlan {
+        EmbedPlan::new(
+            vec![
+                Edit::Copy(range(0, 10)),
+                Edit::Emit(vec![1; 4]),
+                Edit::Emit(vec![2; 4]),
+                Edit::Placeholder(range(0, 6)),
+            ],
+            6,
+            vec![range(10, 4), range(18, 6)],
+            None,
+        )
+    }
+
+    #[test]
+    fn exclusions_may_be_several_ranges_with_hashed_bytes_between() {
+        let plan = two_apart();
+        assert_eq!(plan.check(10).unwrap(), 24);
+        assert_eq!(plan.materialize(&[7; 10], &[9; 6]).unwrap().len(), 24);
+    }
+
+    #[test]
+    fn a_patch_must_lie_within_one_exclusion() {
+        let plan = two_apart();
+        assert!(plan.excludes(range(10, 4)));
+        assert!(plan.excludes(range(20, 2)));
+        // In the gap between them, spanning both, or off the end.
+        assert!(!plan.excludes(range(14, 4)));
+        assert!(!plan.excludes(range(12, 8)));
+        assert!(!plan.excludes(range(22, 4)));
+        assert!(!plan.excludes(range(u64::MAX, 2)));
+    }
+
+    #[test]
+    fn exclusions_must_be_ordered_and_disjoint() {
+        let mut plan = two_apart();
+        plan.exclusions = vec![range(18, 6), range(10, 4)];
+        assert!(matches!(
+            plan.check(10),
+            Err(FormatError::InvalidPlan(m)) if m.contains("out of order")
+        ));
+
+        plan.exclusions = vec![range(10, 10), range(18, 6)];
+        assert!(matches!(
+            plan.check(10),
+            Err(FormatError::InvalidPlan(m)) if m.contains("overlap")
+        ));
+    }
+
+    #[test]
+    fn a_copy_inside_any_exclusion_is_refused() {
+        let mut plan = two_apart();
+        // Excluding the hashed gap bytes' neighbor swallows nothing, but
+        // an exclusion over the copied bytes does.
+        plan.exclusions = vec![range(8, 6), range(18, 6)];
+        assert!(matches!(
+            plan.check(10),
+            Err(FormatError::InvalidPlan(m)) if m.contains("copy")
+        ));
+    }
+
+    #[test]
+    fn the_store_must_be_excluded_even_when_the_framing_is_too() {
+        let mut plan = two_apart();
+        plan.exclusions = vec![range(10, 4)];
+        assert!(matches!(
+            plan.check(10),
+            Err(FormatError::InvalidPlan(m)) if m.contains("outside")
+        ));
     }
 }
