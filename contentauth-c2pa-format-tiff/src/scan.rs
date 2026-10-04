@@ -110,7 +110,11 @@ impl Layout {
         let trailing = c2pa.ifd + 1 == self.ifds.len()
             && ifd.entries == 1
             && ifd.next == 0
-            && c2pa.data.start == ifd.offset.saturating_add(self.header.flavor.ifd_len(1))
+            && [
+                ifd.offset.saturating_add(self.header.flavor.ifd_len(1)),
+                self.header.flavor.store_offset(ifd.offset),
+            ]
+            .contains(&c2pa.data.start)
             && c2pa.data.start.saturating_add(c2pa.data.len) == self.source_len;
         if !trailing {
             return None;

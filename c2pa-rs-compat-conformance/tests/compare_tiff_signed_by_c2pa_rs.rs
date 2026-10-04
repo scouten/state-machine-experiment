@@ -43,10 +43,34 @@ fn tiff() -> Vec<u8> {
     out
 }
 
-fn sign_with_c2pa_rs(name: &str) -> PathBuf {
+/// A little-endian BigTIFF: one IFD of three entries and a strip of pixels
+/// they point at. 98 bytes long on purpose — neither even-aligned nor
+/// 8-aligned past 96 — so that a writer's alignment of what it appends is
+/// exercised.
+fn big_tiff() -> Vec<u8> {
+    let mut out = b"II\x2b\0\x08\0\0\0".to_vec();
+    out.extend(16u64.to_le_bytes());
+    out.extend(3u64.to_le_bytes());
+    let entry = |tag: u16, kind: u16, value: u64| {
+        let mut e = tag.to_le_bytes().to_vec();
+        e.extend(kind.to_le_bytes());
+        e.extend(1u64.to_le_bytes());
+        e.extend(value.to_le_bytes());
+        e
+    };
+    out.extend(entry(256, 3, 4)); // ImageWidth
+    out.extend(entry(273, 4, 92)); // StripOffsets -> the pixels below
+    out.extend(entry(279, 4, 6)); // StripByteCounts
+    out.extend(0u64.to_le_bytes()); // no next IFD
+    out.extend([1, 2, 3, 4, 5, 6]);
+    assert_eq!(out.len(), 98);
+    out
+}
+
+fn sign_with_c2pa_rs(name: &str, source_bytes: &[u8]) -> PathBuf {
     let source = path(&format!("{name}_unsigned.tif"));
     let dest = path(&format!("{name}_signed.tif"));
-    std::fs::write(&source, tiff()).unwrap();
+    std::fs::write(&source, source_bytes).unwrap();
     let _ = std::fs::remove_file(&dest);
 
     let signer =
@@ -79,7 +103,7 @@ fn sign_with_c2pa_rs(name: &str) -> PathBuf {
 
 #[test]
 fn the_tiff_handler_reads_a_store_c2pa_rs_wrote() {
-    let signed = sign_with_c2pa_rs("by_c2pa_rs");
+    let signed = sign_with_c2pa_rs("by_c2pa_rs", &tiff());
 
     let via_c2pa_rs = read_and_summarize::<c2pa::Reader>(&signed).expect("c2pa-rs reads its own");
     let via_compat = read_and_summarize::<contentauth_c2pa_rs_compat::Reader>(&signed)
@@ -101,7 +125,7 @@ fn the_tiff_handler_reports_the_exclusions_c2pa_rs_wrote() {
         FormatHandler,
     };
 
-    let signed = sign_with_c2pa_rs("exclusions");
+    let signed = sign_with_c2pa_rs("exclusions", &tiff());
     let bytes = std::fs::read(&signed).unwrap();
 
     // What c2pa-rs recorded in its own hard binding (read back by this
@@ -138,4 +162,16 @@ fn the_tiff_handler_reports_the_exclusions_c2pa_rs_wrote() {
 
     assert_eq!(reported, recorded);
     assert_eq!(reported.len(), 2, "the count field, and the store");
+}
+
+#[test]
+fn the_tiff_handler_reads_a_bigtiff_c2pa_rs_signed() {
+    let signed = sign_with_c2pa_rs("bigtiff_by_c2pa_rs", &big_tiff());
+
+    let via_c2pa_rs = read_and_summarize::<c2pa::Reader>(&signed).unwrap();
+    let via_compat = read_and_summarize::<contentauth_c2pa_rs_compat::Reader>(&signed)
+        .expect("the TIFF handler reads a BigTIFF c2pa-rs wrote");
+
+    assert_eq!(via_c2pa_rs, via_compat);
+    assert_eq!(via_compat.validation_state, "Valid");
 }

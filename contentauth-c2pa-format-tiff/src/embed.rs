@@ -18,12 +18,13 @@
 //! The specification wants the store at the end of the file, in the last
 //! IFD of the main chain, and — unless that IFD is the file's only one — as
 //! that IFD's only entry. The one layout that satisfies every case is to
-//! append a new IFD holding just the C2PA entry, directly followed by the
-//! store, and link it onto the end of the chain:
+//! append a new IFD holding just the C2PA entry, followed by the store
+//! (after four bytes of padding in BigTIFF, to keep it 8-byte aligned), and
+//! link it onto the end of the chain:
 //!
 //! ```text
-//!  source bytes … │ pad │ entry count │ tag │ type │ count │ value │ next │ store
-//!                   (even)  =1          CD41   7     └─ ✗ ─┘ ofs→    0    └─ ✗ ─┘
+//!  source bytes … │ pad │ entry count │ tag │ type │ count │ value │ next │ pad │ store
+//!                   (aligned) =1        CD41   7     └─ ✗ ─┘ ofs→    0   (BigTIFF)└─ ✗ ─┘
 //!                          └ emitted, hashed ┘            └ hashed ┘   (✗ = excluded)
 //! ```
 //!
@@ -132,10 +133,11 @@ fn plan(layout: &Layout, manifest_len: u64) -> Result<EmbedPlan, FormatError> {
             (old.start - lead, Vec::new(), old.start, Some(old))
         }
 
-        // Append after the source, word-aligned (TIFF wants IFDs on even
-        // offsets), and say how the new IFD begins.
+        // Append after the source, aligned (TIFF wants IFDs on even
+        // offsets; BigTIFF's design asks for eight bytes), and say how the
+        // new IFD begins.
         None => {
-            let pad = source_len % 2;
+            let pad = flavor.align_up(source_len) - source_len;
             let mut lead_in = vec![0u8; pad as usize];
             lead_in.extend(endian.encode(1, flavor.count_len() as usize));
             lead_in.extend(endian.encode(u64::from(C2PA_TAG), 2));
@@ -144,7 +146,7 @@ fn plan(layout: &Layout, manifest_len: u64) -> Result<EmbedPlan, FormatError> {
         }
     };
 
-    let data_start = ifd_start + flavor.ifd_len(1);
+    let data_start = flavor.store_offset(ifd_start);
     let end = data_start
         .checked_add(manifest_len)
         .ok_or_else(|| FormatError::Unsupported("the output length overflows".to_string()))?;
@@ -189,6 +191,11 @@ fn plan(layout: &Layout, manifest_len: u64) -> Result<EmbedPlan, FormatError> {
         endian.encode(manifest_len, flavor.word_len() as usize),
     ));
     edits.push(Edit::Emit(offset_and_next(endian, flavor, data_start)));
+    // Padding that puts the store on its alignment (BigTIFF only); hashed.
+    let store_pad = data_start - (ifd_start + flavor.ifd_len(1));
+    if store_pad > 0 {
+        edits.push(Edit::Emit(vec![0u8; store_pad as usize]));
+    }
     edits.push(Edit::Placeholder(ByteRange {
         start: 0,
         len: manifest_len,

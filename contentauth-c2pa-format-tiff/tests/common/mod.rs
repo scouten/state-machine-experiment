@@ -69,6 +69,17 @@ impl Kind {
         }
     }
 
+    /// Where the handler puts the new IFD after `source_len` bytes: even
+    /// for classic TIFF, 8-byte aligned for BigTIFF.
+    pub fn ifd_start(self, source_len: usize) -> usize {
+        source_len.next_multiple_of(if self.big { 8 } else { 2 })
+    }
+
+    /// Where it puts the store for an IFD at `ifd_start`.
+    pub fn store_start(self, ifd_start: usize) -> usize {
+        (ifd_start + self.ifd_len(1)).next_multiple_of(if self.big { 8 } else { 2 })
+    }
+
     pub fn ifd_len(self, entries: usize) -> usize {
         let (count, entry) = if self.big { (8, 20) } else { (2, 12) };
         count + entries * entry + self.word()
@@ -152,7 +163,7 @@ pub fn store(len: usize) -> Vec<u8> {
 /// The two ranges a hard binding excludes for the asset `kind` lays out
 /// after `source_len` bytes: the new entry's `count` field, and the store.
 pub fn expected_exclusions(kind: Kind, source_len: usize, store_len: usize) -> Vec<ByteRange> {
-    let ifd_start = source_len + source_len % 2;
+    let ifd_start = kind.ifd_start(source_len);
     let count_field = ifd_start + if kind.big { 8 } else { 2 } + 4;
     vec![
         ByteRange {
@@ -160,7 +171,7 @@ pub fn expected_exclusions(kind: Kind, source_len: usize, store_len: usize) -> V
             len: kind.word() as u64,
         },
         ByteRange {
-            start: (ifd_start + kind.ifd_len(1)) as u64,
+            start: kind.store_start(ifd_start) as u64,
             len: store_len as u64,
         },
     ]

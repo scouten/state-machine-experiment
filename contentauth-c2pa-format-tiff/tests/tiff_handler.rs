@@ -67,7 +67,7 @@ fn the_store_goes_in_a_new_ifd_and_nothing_already_in_the_file_moves() {
         assert_eq!(output.len() as u64, store_range.start + store_range.len);
         assert_eq!(
             store_range.start - (count_field.start + count_field.len),
-            2 * kind.word() as u64
+            2 * kind.word() as u64 + store_pad(kind)
         );
         assert!(output.ends_with(&manifest));
 
@@ -76,7 +76,7 @@ fn the_store_goes_in_a_new_ifd_and_nothing_already_in_the_file_moves() {
         let changed: Vec<usize> = (0..source.len())
             .filter(|&i| source[i] != output[i])
             .collect();
-        let new_ifd = source.len() + source.len() % 2;
+        let new_ifd = kind.ifd_start(source.len());
         let pointer = kind.uint(new_ifd as u64, kind.word());
         let at = source.len() - PIXELS - kind.word();
         assert!(changed.iter().all(|i| (at..at + kind.word()).contains(i)));
@@ -86,7 +86,7 @@ fn the_store_goes_in_a_new_ifd_and_nothing_already_in_the_file_moves() {
         // an offset to the store that is where the store is, no next IFD.
         let ifd = &output[new_ifd..];
         let expected = kind.ifd(
-            &[kind.entry(0xcd41, 7, 100, (new_ifd + kind.ifd_len(1)) as u64)],
+            &[kind.entry(0xcd41, 7, 100, kind.store_start(new_ifd) as u64)],
             0,
         );
         assert_eq!(&ifd[..expected.len()], &expected[..]);
@@ -166,10 +166,9 @@ fn a_plan_copies_the_source_around_its_one_rewritten_pointer() {
         .iter()
         .filter(|e| matches!(e, Edit::Emit(_)))
         .count();
-    assert_eq!(
-        emits, 4,
-        "pointer, IFD lead-in, excluded count field, hashed offset and next"
-    );
+    // Pointer, IFD lead-in, excluded count field, hashed offset and next
+    // — and, in BigTIFF only, padding that aligns the store.
+    assert_eq!(emits, 4 + usize::from(store_pad(kind) > 0));
     assert_eq!(plan.replaced, None);
 }
 
@@ -443,4 +442,64 @@ fn a_store_that_overlaps_its_own_entry_is_malformed() {
         locate_err(asset),
         FormatError::Malformed(m) if m.contains("overlaps")
     ));
+}
+
+/// Padding between a new IFD and its store: BigTIFF's 36-byte IFD leaves the
+/// store off an 8-byte boundary, so four bytes push it onto one.
+fn store_pad(kind: Kind) -> u64 {
+    if kind.big {
+        4
+    } else {
+        0
+    }
+}
+
+#[test]
+fn everything_written_is_aligned_for_its_flavor() {
+    // For every source length mod 8, so every amount of leading padding.
+    for kind in ALL_KINDS {
+        let align = if kind.big { 8 } else { 2 };
+        for extra in 0..8 {
+            let source = tiff(kind, 1, extra);
+            let (plan, output) = conformance::embed(&TiffFormat, &source, &store(100));
+
+            let [count_field, store_range] = plan.exclusions[..] else {
+                panic!("expected two exclusions");
+            };
+            let ifd_start = count_field.start as usize - (if kind.big { 8 } else { 2 }) - 4;
+            assert_eq!(ifd_start % align, 0, "{kind:?} +{extra}: IFD");
+            assert_eq!(
+                store_range.start as usize % align,
+                0,
+                "{kind:?} +{extra}: store"
+            );
+            assert_eq!(output.len() as u64, store_range.start + store_range.len);
+        }
+    }
+}
+
+#[test]
+fn a_store_laid_out_without_bigtiff_padding_is_still_replaceable() {
+    // c2pa-rs writes the store directly after the IFD, unpadded; the
+    // handler reads it as trailing and replaces it.
+    let kind = ALL_KINDS[2]; // BigTIFF, little-endian
+    let manifest = store(64);
+
+    let hl = kind.header_len() as u64;
+    let data = hl + kind.ifd_len(1) as u64;
+    let mut asset = kind.header(hl);
+    asset.extend(kind.ifd(&[kind.entry(0xcd41, 7, 64, data)], 0));
+    asset.extend(&manifest);
+
+    let embedded = conformance::locate(&TiffFormat, &asset).embedded.unwrap();
+    assert_eq!(embedded.jumbf, manifest);
+    assert_eq!(
+        embedded.range.start + embedded.range.len,
+        asset.len() as u64
+    );
+
+    let plan = MemoryHost::of(asset)
+        .run(TiffFormat.plan_embed(STREAM, 80))
+        .unwrap();
+    assert_eq!(plan.replaced, Some(embedded.range));
 }

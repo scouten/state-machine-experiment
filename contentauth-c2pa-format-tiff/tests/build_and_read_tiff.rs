@@ -293,7 +293,10 @@ fn the_value_offset_between_the_two_exclusions_is_hashed() {
             panic!("expected two exclusions");
         };
         let between = count_field.start + count_field.len..store.start;
-        assert_eq!(between.end - between.start, 2 * kind.word() as u64);
+        // The offset and next pointer, then (BigTIFF) four bytes of padding
+        // that align the store.
+        let pad = if kind.big { 4 } else { 0 };
+        assert_eq!(between.end - between.start, 2 * kind.word() as u64 + pad);
 
         // The bytes there are the value offset, which points at the store.
         let offset = &asset[between.start as usize..][..kind.word()];

@@ -93,6 +93,29 @@ impl Flavor {
         }
     }
 
+    /// The alignment this crate gives what it writes: word (even) offsets
+    /// for classic TIFF, as TIFF 6.0 requires, and 8 bytes for BigTIFF,
+    /// whose design documentation asks that all values begin at an
+    /// 8-byte-aligned address.
+    pub(crate) fn alignment(self) -> u64 {
+        match self {
+            Self::Classic => 2,
+            Self::Big => 8,
+        }
+    }
+
+    /// Rounds `offset` up to [`Self::alignment`].
+    pub(crate) fn align_up(self, offset: u64) -> u64 {
+        offset.next_multiple_of(self.alignment())
+    }
+
+    /// Where this crate puts the store for a single-entry IFD at
+    /// `ifd_start`: directly after it, but on the alignment — so BigTIFF
+    /// leaves four bytes of padding after its 36-byte IFD.
+    pub(crate) fn store_offset(self, ifd_start: u64) -> u64 {
+        self.align_up(ifd_start + self.ifd_len(1))
+    }
+
     /// The length of an IFD holding `entries` entries, next-IFD pointer
     /// included.
     pub(crate) fn ifd_len(self, entries: u64) -> u64 {
@@ -232,5 +255,18 @@ mod tests {
     fn ifd_lengths_follow_the_flavor() {
         assert_eq!(Flavor::Classic.ifd_len(1), 18);
         assert_eq!(Flavor::Big.ifd_len(1), 36);
+    }
+
+    #[test]
+    fn what_is_written_is_aligned_per_flavor() {
+        assert_eq!(Flavor::Classic.align_up(97), 98);
+        assert_eq!(Flavor::Classic.align_up(98), 98);
+        assert_eq!(Flavor::Big.align_up(98), 104);
+        assert_eq!(Flavor::Big.align_up(104), 104);
+
+        // A classic single-entry IFD ends on an even offset; BigTIFF's 36
+        // bytes do not end on an 8-byte one, so the store is pushed out.
+        assert_eq!(Flavor::Classic.store_offset(98), 98 + 18);
+        assert_eq!(Flavor::Big.store_offset(104), 104 + 40);
     }
 }

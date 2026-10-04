@@ -118,6 +118,30 @@ fn tiff(extra_ifds: bool) -> Vec<u8> {
     out
 }
 
+/// A little-endian BigTIFF: one IFD of three entries and a strip of pixels
+/// they point at. 98 bytes long on purpose — neither even-aligned nor
+/// 8-aligned past 96 — so that a writer's alignment of what it appends is
+/// exercised.
+fn big_tiff() -> Vec<u8> {
+    let mut out = b"II\x2b\0\x08\0\0\0".to_vec();
+    out.extend(16u64.to_le_bytes());
+    out.extend(3u64.to_le_bytes());
+    let entry = |tag: u16, kind: u16, value: u64| {
+        let mut e = tag.to_le_bytes().to_vec();
+        e.extend(kind.to_le_bytes());
+        e.extend(1u64.to_le_bytes());
+        e.extend(value.to_le_bytes());
+        e
+    };
+    out.extend(entry(256, 3, 4)); // ImageWidth
+    out.extend(entry(273, 4, 92)); // StripOffsets -> the pixels below
+    out.extend(entry(279, 4, 6)); // StripByteCounts
+    out.extend(0u64.to_le_bytes()); // no next IFD
+    out.extend([1, 2, 3, 4, 5, 6]);
+    assert_eq!(out.len(), 98);
+    out
+}
+
 /// Signs `source` with this workspace's builder through the TIFF handler,
 /// and checks the real c2pa-rs and the compat reader read it identically:
 /// c2pa-rs finds the store through the handler's layout, parses its v2
@@ -145,4 +169,9 @@ fn c2pa_rs_validates_a_tiff_signed_here() {
 #[test]
 fn c2pa_rs_validates_a_multi_ifd_tiff_signed_here() {
     compare("signed_two_ifds.tif", &tiff(true));
+}
+
+#[test]
+fn c2pa_rs_validates_a_bigtiff_signed_here() {
+    compare("signed_bigtiff.tif", &big_tiff());
 }

@@ -17,7 +17,7 @@ handler, chosen to exercise what JPEG does not.
 | Width | One | Classic (32-bit offsets) and BigTIFF (64-bit), same logic at two widths |
 | Embedding | New segments inserted; no byte elsewhere changes | Existing offsets everywhere in the file must stay valid, so nothing may move: the store is *appended* and the one pointer that reaches it rewritten |
 | Hard-binding exclusions | One: the segment run | Two, not adjacent: the entry's `count` field (so a later update manifest may change the store's size) and the store — the value offset and next pointer between them stay hashed |
-| Alignment | None | IFDs on even offsets; an odd-length file is padded |
+| Alignment | None | IFDs on even offsets (classic) or 8-byte offsets (BigTIFF, whose design asks that all values begin at an 8-byte-aligned address — the store included, so a four-byte hashed pad follows its 36-byte IFD); the source is padded up to it |
 | Existing store | Always replaceable | Replaceable only if laid out the way this crate lays one out; one written into the middle of another IFD is read but not replaced |
 
 ## The layout it writes
@@ -26,8 +26,8 @@ A new IFD holding only the C2PA entry, directly followed by the store,
 linked onto the end of the main chain:
 
 ```text
- source bytes … │ pad │ entry count │ tag │ type │ count │ value │ next │ store
-                  (even)  =1          CD41   7     └─ ✗ ─┘ ofs→    0    └─ ✗ ─┘
+ source bytes … │ pad │ entry count │ tag │ type │ count │ value │ next │ pad │ store
+                (aligned) =1          CD41   7     └─ ✗ ─┘ ofs→    0   (BigTIFF)└─ ✗ ─┘
                                                  (✗ = excluded from the hash)
 ```
 
@@ -81,12 +81,13 @@ c2pa-rs:
   layout, which differs: for a single-page file it clones the first IFD and
   adds the entry among the others), and this crate reads it, through
   `contentauth-c2pa-rs-compat`'s `Reader`, to the same answer c2pa-rs's own
-  `Reader` gives, `Valid` included. So the handler's *reading* is the
+  `Reader` gives, `Valid` included (classic and BigTIFF). So the handler's *reading* is the
   specification's, not just its own writer's. (c2pa-rs looks in the last
   IFD for the entry first and the first IFD second, which finds this
   crate's layout too.)
-* `tests/compare_tiff.rs` — a TIFF signed here: c2pa-rs reads it and
-  validates it, to the same answer as this workspace's reader, so it
+* `tests/compare_tiff.rs` — a TIFF (classic, multi-IFD, and a 98-byte
+  BigTIFF, whose appended IFD and store need alignment padding) signed
+  here: c2pa-rs reads it and validates it, to the same answer as this workspace's reader, so it
   accepts the two exclusions above.
 
 ## Tests
