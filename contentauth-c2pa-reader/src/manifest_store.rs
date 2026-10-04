@@ -698,6 +698,74 @@ mod tests {
             .all(|s| s.code != status_code::ASSERTION_SELF_REDACTED));
     }
 
+    /// Parses a v2 manifest whose generator `icon` references `icon_url`
+    /// with `hash`, alongside a real `c2pa.icon` assertion.
+    fn statuses_for_icon(icon_url: &str, hash: Vec<u8>) -> Vec<ValidationStatus> {
+        use c2pa_cbor::Value;
+
+        let icon = assertion_box("c2pa.icon");
+        let mut fields = v2_required_fields();
+        fields.insert(
+            Value::Text("created_assertions".to_string()),
+            Value::Array(vec![hashed_uri("c2pa.icon", &icon)]),
+        );
+        fields.insert(
+            Value::Text("claim_generator_info".to_string()),
+            Value::Map(std::collections::BTreeMap::from([
+                (
+                    Value::Text("name".to_string()),
+                    Value::Text("t".to_string()),
+                ),
+                (
+                    Value::Text("icon".to_string()),
+                    Value::Map(std::collections::BTreeMap::from([
+                        (
+                            Value::Text("url".to_string()),
+                            Value::Text(icon_url.to_string()),
+                        ),
+                        (Value::Text("hash".to_string()), Value::Bytes(hash)),
+                    ])),
+                ),
+            ])),
+        );
+
+        let bytes = manifest_store(&[manifest_with_claim(
+            "urn:uuid:v2",
+            &[icon],
+            claim_box_v2_from_fields(fields),
+        )]);
+        parse(&bytes).unwrap().statuses
+    }
+
+    #[test]
+    fn a_generator_icons_hash_is_checked_like_an_assertions() {
+        let icon = assertion_box("c2pa.icon");
+        let good = <sha2::Sha256 as sha2::Digest>::digest(&icon[8..]).to_vec();
+
+        let matched = statuses_for_icon("self#jumbf=c2pa.assertions/c2pa.icon", good);
+        assert_eq!(
+            matched
+                .iter()
+                .filter(|s| s.code == status_code::ASSERTION_HASHEDURI_MATCH)
+                .count(),
+            2,
+            "the claim's own reference and the icon's"
+        );
+
+        let wrong = statuses_for_icon("self#jumbf=c2pa.assertions/c2pa.icon", vec![0; 32]);
+        assert!(wrong
+            .iter()
+            .any(|s| s.code == status_code::ASSERTION_HASHEDURI_MISMATCH && s.is_failure()));
+    }
+
+    #[test]
+    fn a_data_box_icon_is_not_reported_missing() {
+        let statuses = statuses_for_icon("self#jumbf=c2pa.databoxes/c2pa.icon", vec![0; 32]);
+        assert!(statuses
+            .iter()
+            .all(|s| s.code != status_code::HASHED_URI_MISSING));
+    }
+
     #[test]
     fn a_reference_to_an_absent_assertion_is_reported_missing() {
         // The claim references an assertion the store does not contain.

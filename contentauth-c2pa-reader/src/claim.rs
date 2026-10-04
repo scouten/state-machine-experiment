@@ -216,6 +216,22 @@ impl Claim {
 }
 
 impl Claim {
+    /// Iterates the hashed references this claim holds to an *assertion*:
+    /// [`Self::assertion_references`] plus each generator's `icon`, which
+    /// names a `c2pa.icon` assertion and is hashed the same way.
+    ///
+    /// An icon pointing anywhere but the assertion store (the deprecated
+    /// data-box form) is left out: this reader does not resolve data
+    /// boxes, and reporting such an icon "missing" would be wrong.
+    pub fn hashed_references(&self) -> impl Iterator<Item = &HashedUri> {
+        self.assertion_references().chain(
+            self.claim_generator_info
+                .iter()
+                .filter_map(|generator| generator.icon.as_ref())
+                .filter(|icon| icon.url.contains("c2pa.assertions")),
+        )
+    }
+
     /// Iterates every assertion reference this claim covers, regardless of
     /// whether it is a v1 claim (`assertions`) or a v2 claim
     /// (`created_assertions` and `gathered_assertions`).
@@ -298,15 +314,20 @@ pub(crate) fn decode(cbor: &[u8], version: ClaimVersion) -> Result<Claim, ClaimE
             }
             "alg" => claim.alg = Some(text(value, "alg")?),
 
-            // A v1 claim carries an array of generator maps, a v2 claim a
-            // single map; each shape is accepted whichever version the
-            // box's label announced, since the shape is what is decoded.
+            // A v1 claim carries an array of generator maps; a v2 claim
+            // exactly one map, and an array there is malformed. A v1 claim
+            // is also let off with a lone map, which is lenient but harmless.
             "claim_generator_info" => {
-                claim.claim_generator_info = match value {
-                    Value::Array(entries) => entries
+                claim.claim_generator_info = match (version, value) {
+                    (ClaimVersion::V1, Value::Array(entries)) => entries
                         .iter()
                         .map(generator_info)
                         .collect::<Result<_, _>>()?,
+                    (_, Value::Array(_)) => {
+                        return Err(ClaimError::UnexpectedType {
+                            field: "claim_generator_info",
+                        })
+                    }
                     _ => vec![generator_info(value)?],
                 };
                 claim.presence.claim_generator_info = true;
@@ -531,7 +552,7 @@ mod tests {
             (text_value("instanceID"), text_value("xmp:iid:1234")),
             (
                 text_value("claim_generator_info"),
-                Value::Array(vec![map(vec![(text_value("name"), text_value("test"))])]),
+                map(vec![(text_value("name"), text_value("test"))]),
             ),
             (
                 text_value("created_assertions"),
@@ -718,6 +739,28 @@ mod tests {
         let icon = info.icon.as_ref().unwrap();
         assert_eq!(icon.url, "self#jumbf=c2pa.icon");
         assert_eq!(icon.hash, vec![9; 32]);
+    }
+
+    #[test]
+    fn a_v2_generator_info_array_is_malformed_but_a_v1_one_is_not() {
+        let claim = map(vec![(
+            text_value("claim_generator_info"),
+            Value::Array(vec![map(vec![(text_value("name"), text_value("tool"))])]),
+        )]);
+
+        assert_eq!(
+            decode(&encode(&claim), ClaimVersion::V2),
+            Err(ClaimError::UnexpectedType {
+                field: "claim_generator_info"
+            })
+        );
+        assert_eq!(
+            decode(&encode(&claim), ClaimVersion::V1)
+                .unwrap()
+                .claim_generator_info
+                .len(),
+            1
+        );
     }
 
     #[test]
