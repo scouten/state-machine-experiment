@@ -245,6 +245,19 @@ handler. New format = new crate implementing `FormatHandler` and passing
 `contentauth_c2pa_format::test_util::conformance::run_all`; nothing in
 the reader, builder, or contract crate changes.
 
+## Maintaining the walkthrough
+
+[`docs/walkthrough`](docs/walkthrough) is a Markdown-and-Mermaid tour of
+this project for teammates (start at its
+[README](docs/walkthrough/README.md)). Keep it current as PRs land: a PR
+that adds, removes, or renames a crate, changes how crates depend on each
+other, adds a format or binding, or changes what the reader validates or the
+builder writes must update the affected walkthrough pages in the same PR —
+the crate table and dependency graph in `02-architecture.md`, and the
+"done" / "next" split in `09-future.md` (move an item out of "next" when it
+lands; add items a PR reveals). Diagrams are Mermaid so GitHub renders them;
+when a diagram and the code disagree, the code wins — fix the diagram.
+
 ## Specification reference
 
 [`reference/c2pa-spec`](reference/c2pa-spec) holds a pinned
