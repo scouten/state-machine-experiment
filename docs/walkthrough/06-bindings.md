@@ -18,7 +18,7 @@ flowchart TB
 
 | Binding | Mirrors | Async lives in | Notable |
 |---|---|---|---|
-| `rs-compat` | c2pa-rs `Context`, `Reader`, `Manifest` | Nowhere — blocking | Only network dependency: `reqwest` answers `Ocsp`. Owns format *policy* (`src/format.rs`). |
+| `rs-compat` | c2pa-rs `Context`, `Reader`, `Manifest` | Nowhere — blocking | One of two network dependencies (with `rs-compat-sign`): `reqwest` answers `Ocsp`. Owns format *policy* (`src/format.rs`). |
 | `js-compat` | c2pa-wasm `WasmReader` | One `async fn` driving the session (`src/drive.rs`) | `Blob` ≈ `Blob.size` + `slice().arrayBuffer()`; `Platform` supplies clock/OCSP, which c2pa-rs gets implicitly. `web` feature adds a `#[wasm_bindgen]` `WasmReader`. |
 | `node-compat` | c2pa-node `Reader` | Node itself | Rust has no runtime, threads, locks, or `async`. 4 synchronous exports (~150 lines of Neon). |
 

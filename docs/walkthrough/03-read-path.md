@@ -63,8 +63,19 @@ Not yet checked: ingredient manifests, remote manifest retrieval,
 | `CurrentDateTime` | Cert validity windows; the crate reads no clock |
 | `Ocsp { url, request_der }` | Host does only the HTTP POST |
 
-Any request can be answered with `Failed`. For the reader this is graceful
-(OCSP is fail-open); in the builder every failure is fatal.
+Any request can be answered with `Failed`, but the outcome differs by
+request. A host author should not treat an asset read failure as a normal
+validation result:
+
+| Request answered `Failed` | Outcome |
+|---|---|
+| `ManifestStore` | **Read stops** with `Error::HostFailure`; no report |
+| `AssetBytes` | **Read stops** with `Error::HostFailure`; no report |
+| `AssetLength` | Report is produced; the hard binding is recorded as not checked (`general.error`, "asset not available") |
+| `CurrentDateTime` | Report is produced; trust is evaluated without a "now", so only signatures carrying a trusted timestamp can be fully evaluated |
+| `Ocsp` | Report is produced. A CA certificate's unreachable responder is no finding; the signer's is recorded as `signingCredential.ocsp.inaccessible` |
+
+In the builder, by contrast, every host failure is fatal.
 
 ## Three hosts for one session
 

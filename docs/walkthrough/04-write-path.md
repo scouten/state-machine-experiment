@@ -75,7 +75,7 @@ Design decisions worth discussing:
   here can sign for a host.
 * **`build_and_sign_file` is safe by construction:** exclusive-create
   temporary file with an unpredictable name beside the target, renamed into
-  place only on success, cleaned up on any failure.
+  place only on success, removed on failure on a best-effort basis (if the removal itself fails, a temporary file can be left behind; the output path is untouched either way).
 
 ## What gets built today
 
