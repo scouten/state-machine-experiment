@@ -19,6 +19,12 @@ validating a manifest store, generating and signing one, and so on — are
 expected to live in their own crates alongside it in this workspace as the
 experiment grows.
 
+## Walkthrough
+
+New here? [`docs/walkthrough`](docs/walkthrough/README.md) is a guided tour —
+how this differs from c2pa-rs and its bindings, the architecture, and
+where it could go next — written in Markdown with Mermaid diagrams.
+
 ## Crates
 
 * [`contentauth-state-machine`](contentauth-state-machine) — the
