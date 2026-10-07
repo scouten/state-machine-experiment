@@ -59,7 +59,7 @@ a large JPEG costs a few dozen small reads regardless of size:
 cargo test
 ```
 
-Minimum supported Rust version: 1.88.0.
+Minimum supported Rust version: 1.96.0.
 
 Code format uses nightly rustfmt:
 
