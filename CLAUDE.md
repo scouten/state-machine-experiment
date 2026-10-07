@@ -367,7 +367,7 @@ cargo check --all-features --target wasm32-unknown-unknown --workspace --exclude
 cargo check --all-features --target wasm32-wasip2 --workspace --exclude contentauth-c2pa-rs-compat --exclude contentauth-c2pa-rs-compat-sign
 ```
 
-MSRV is 1.88.0 (kept in sync between `Cargo.toml`'s `rust-version` and the
+MSRV is 1.96.0 (kept in sync between `Cargo.toml`'s `rust-version` and the
 `msrv` CI job).
 
 ## CI

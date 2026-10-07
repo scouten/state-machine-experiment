@@ -32,7 +32,7 @@ flowchart TB
 
 `.github/workflows/ci.yml`, as separate jobs: unit tests + Codecov, doc
 tests, Clippy (`-Dwarnings`), nightly rustfmt, rustdoc (warnings denied),
-Wasm checks, MSRV (1.88.0), `cargo-deny`; plus separate jobs for the
+Wasm checks, MSRV (1.96.0), `cargo-deny`; plus separate jobs for the
 `c2pa-rs-compat-conformance` differential tests (`compat-conformance`, run
 on every PR) and the two Neon addons (`node-addon`, `node-sign-addon`).
 
@@ -41,7 +41,7 @@ flowchart LR
     PR[PR to main] --> T[tests + coverage]
     PR --> L["clippy / fmt / docs"]
     PR --> W["wasm32-unknown-unknown<br/>wasm32-wasip2"]
-    PR --> M[MSRV 1.88]
+    PR --> M[MSRV 1.96]
     PR --> D[cargo-deny]
     PR --> C["compat-conformance<br/>(differential tests vs c2pa-rs)"]
     PR --> N["node-addon,<br/>node-sign-addon"]

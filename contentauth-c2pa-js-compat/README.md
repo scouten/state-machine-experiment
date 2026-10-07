@@ -141,7 +141,7 @@ cargo test -p contentauth-c2pa-js-compat
 cargo check -p contentauth-c2pa-js-compat --all-features --target wasm32-unknown-unknown
 ```
 
-Minimum supported Rust version: 1.88.0.
+Minimum supported Rust version: 1.96.0.
 
 Code format uses nightly rustfmt:
 

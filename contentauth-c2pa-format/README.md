@@ -81,7 +81,7 @@ possible one.
 cargo test --features test-util
 ```
 
-Minimum supported Rust version: 1.88.0.
+Minimum supported Rust version: 1.96.0.
 
 Code format uses nightly rustfmt:
 
