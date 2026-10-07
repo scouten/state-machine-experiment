@@ -97,6 +97,14 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 * **Benchmarks** against c2pa-rs for large assets (the Node numbers are
   encouraging but not comparative).
 
+## 6. Merging with `asset-io`
+
+A proposal for combining this work with Gavin Peacock's
+[`asset-io`](https://github.com/gpeacock/asset-io) (no-copy reads, fast
+writes, parallel and box hashing, fuzzing) is in
+[`../asset-io-merge-plan.md`](../asset-io-merge-plan.md), including an
+analysis of where its callback-based APIs conflict with the sans-I/O model.
+
 ## Questions for discussion
 
 1. Is "host drives" worth the boundary cost for the bindings we ship?
