@@ -34,10 +34,9 @@
 //!
 //! [`SignPurpose::Identity`]: crate::SignPurpose::Identity
 
-use contentauth_c2pa_primitives::{
-    cbor::{byte_string, head},
-    SigningAlg,
-};
+use contentauth_c2pa_primitives::SigningAlg;
+use serde::Serialize;
+use serde_bytes::Bytes;
 
 use crate::{cose, error::Error};
 
@@ -47,15 +46,6 @@ pub const LABEL: &str = "cawg.identity";
 
 /// `sig_type` of an X.509 credential signed as a `COSE_Sign1`.
 const SIG_TYPE_X509_COSE: &str = "cawg.x509.cose";
-
-/// CBOR major type 3: text string.
-const MAJOR_TEXT: u8 = 3;
-
-/// CBOR major type 4: array.
-const MAJOR_ARRAY: u8 = 4;
-
-/// CBOR major type 5: map.
-const MAJOR_MAP: u8 = 5;
 
 /// One CAWG identity assertion to add to the manifest.
 ///
@@ -200,12 +190,6 @@ fn empty_map() -> c2pa_cbor::Value {
     c2pa_cbor::Value::Map(std::collections::BTreeMap::new())
 }
 
-/// Writes a CBOR text string.
-fn text(out: &mut Vec<u8>, text: &str) {
-    head(out, MAJOR_TEXT, text.len() as u64);
-    out.extend_from_slice(text.as_bytes());
-}
-
 /// The label of the `index`th identity assertion in a manifest.
 pub(crate) fn label_for(index: usize) -> String {
     match index {
@@ -214,64 +198,81 @@ pub(crate) fn label_for(index: usize) -> String {
     }
 }
 
+/// A hashed reference to an assertion, as the `signer_payload` lists it.
+#[derive(Serialize)]
+struct HashedUri<'a> {
+    url: &'a str,
+    #[serde(with = "serde_bytes")]
+    hash: &'a [u8],
+}
+
+/// The `signer_payload`. Field order is the order c2pa-rs declares and so
+/// serialises them in (`referenced_assertions`, `sig_type`, `role`) — a
+/// sorted map would put `role` first, and a verifier that re-derives the
+/// bytes from the decoded payload, as c2pa-rs does, would then see a
+/// signature over bytes it does not reproduce. The reader in this
+/// workspace verifies the bytes as written and does not depend on this.
+#[derive(Serialize)]
+struct SignerPayload<'a> {
+    referenced_assertions: Vec<HashedUri<'a>>,
+    sig_type: &'a str,
+    #[serde(rename = "role", skip_serializing_if = "<[String]>::is_empty")]
+    roles: &'a [String],
+}
+
+/// The identity assertion: the `signer_payload`, the `signature`, and an
+/// empty `pad1` (required by the specification; this assertion's length is
+/// fixed by the signature's, so there is nothing to pad).
+///
+/// The payload is serialised in place from the same struct the signed
+/// bytes came from, so it reproduces them exactly: a nested value is
+/// encoded as it would be alone.
+#[derive(Serialize)]
+struct IdentityAssertion<'a> {
+    signer_payload: SignerPayload<'a>,
+    #[serde(with = "serde_bytes")]
+    signature: &'a [u8],
+    pad1: &'a Bytes,
+}
+
 /// Encodes a `signer_payload`: the assertions vouched for (each a URI and
 /// its hash), the `sig_type`, and the roles if any.
-///
-/// Written by hand, in the field order c2pa-rs serialises it in
-/// (`referenced_assertions`, `sig_type`, `role`) and with the hashed URIs
-/// naming no algorithm of their own, so the bytes are identical to the
-/// ones a c2pa-rs verifier re-derives from the decoded payload. The
-/// reader in this workspace verifies against the bytes as written, so
-/// does not depend on this; another one may.
 pub(crate) fn signer_payload(
     referenced: &[(String, Vec<u8>)],
     sig_type: &str,
     roles: &[String],
-) -> Vec<u8> {
-    let mut out = Vec::new();
-
-    head(&mut out, MAJOR_MAP, if roles.is_empty() { 2 } else { 3 });
-
-    text(&mut out, "referenced_assertions");
-    head(&mut out, MAJOR_ARRAY, referenced.len() as u64);
-    for (url, hash) in referenced {
-        head(&mut out, MAJOR_MAP, 2);
-        text(&mut out, "url");
-        text(&mut out, url);
-        text(&mut out, "hash");
-        byte_string(&mut out, hash);
-    }
-
-    text(&mut out, "sig_type");
-    text(&mut out, sig_type);
-
-    if !roles.is_empty() {
-        text(&mut out, "role");
-        head(&mut out, MAJOR_ARRAY, roles.len() as u64);
-        for role in roles {
-            text(&mut out, role);
-        }
-    }
-
-    out
+) -> Result<Vec<u8>, Error> {
+    Ok(c2pa_cbor::to_vec(&payload(referenced, sig_type, roles))?)
 }
 
-/// Encodes the identity assertion itself: the `signer_payload` verbatim,
-/// the `signature`, and an empty `pad1` (present because the
-/// specification requires it; the length of this assertion is fixed by the
-/// signature's, so there is nothing to pad).
-pub(crate) fn assertion_cbor(signer_payload: &[u8], signature: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
+fn payload<'a>(
+    referenced: &'a [(String, Vec<u8>)],
+    sig_type: &'a str,
+    roles: &'a [String],
+) -> SignerPayload<'a> {
+    SignerPayload {
+        referenced_assertions: referenced
+            .iter()
+            .map(|(url, hash)| HashedUri { url, hash })
+            .collect(),
+        sig_type,
+        roles,
+    }
+}
 
-    head(&mut out, MAJOR_MAP, 3);
-    text(&mut out, "signer_payload");
-    out.extend_from_slice(signer_payload);
-    text(&mut out, "signature");
-    byte_string(&mut out, signature);
-    text(&mut out, "pad1");
-    byte_string(&mut out, &[]);
-
-    out
+/// Encodes the identity assertion: the same payload [`signer_payload`]
+/// encodes, and the `signature` field.
+pub(crate) fn assertion_cbor(
+    referenced: &[(String, Vec<u8>)],
+    sig_type: &str,
+    roles: &[String],
+    signature: &[u8],
+) -> Result<Vec<u8>, Error> {
+    Ok(c2pa_cbor::to_vec(&IdentityAssertion {
+        signer_payload: payload(referenced, sig_type, roles),
+        signature,
+        pad1: Bytes::new(&[]),
+    })?)
 }
 
 #[cfg(test)]
@@ -300,7 +301,7 @@ mod tests {
         ];
         let roles = vec!["creator".to_string(), "editor".to_string()];
 
-        let bytes = signer_payload(&referenced, SIG_TYPE_X509_COSE, &roles);
+        let bytes = signer_payload(&referenced, SIG_TYPE_X509_COSE, &roles).unwrap();
         let value: Value = c2pa_cbor::from_slice(&bytes).unwrap();
         let map = value.as_map().unwrap();
 
@@ -331,7 +332,7 @@ mod tests {
 
     #[test]
     fn no_roles_means_no_role_field() {
-        let bytes = signer_payload(&[], SIG_TYPE_X509_COSE, &[]);
+        let bytes = signer_payload(&[], SIG_TYPE_X509_COSE, &[]).unwrap();
         let value: Value = c2pa_cbor::from_slice(&bytes).unwrap();
         let map = value.as_map().unwrap();
 
@@ -340,13 +341,33 @@ mod tests {
     }
 
     #[test]
-    fn the_assertion_embeds_the_payload_verbatim() {
-        let payload = signer_payload(&[], SIG_TYPE_X509_COSE, &[]);
-        let bytes = assertion_cbor(&payload, &[7; 5]);
+    fn the_payload_is_in_c2pa_rs_field_order_not_sorted() {
+        // `role` is declared last, so it is written last; a sorted map
+        // would put it between the other two.
+        let roles = vec!["creator".to_string()];
+        let bytes = signer_payload(&[], SIG_TYPE_X509_COSE, &roles).unwrap();
+
+        let position = |needle: &[u8]| bytes.windows(needle.len()).position(|w| w == needle);
+        let refs = position(b"referenced_assertions").unwrap();
+        let sig_type = position(b"sig_type").unwrap();
+        let role = position(b"role").unwrap();
+        assert!(refs < sig_type && sig_type < role);
+    }
+
+    #[test]
+    fn the_assertion_embeds_exactly_the_bytes_that_were_signed() {
+        let referenced = vec![("self#jumbf=c2pa.assertions/a".to_string(), vec![1, 2, 3])];
+        let roles = vec!["creator".to_string(), "editor".to_string()];
+
+        let payload = signer_payload(&referenced, SIG_TYPE_X509_COSE, &roles).unwrap();
+        let bytes = assertion_cbor(&referenced, SIG_TYPE_X509_COSE, &roles, &[7; 5]).unwrap();
+
+        assert!(bytes
+            .windows(payload.len())
+            .any(|w| w == payload.as_slice()));
 
         let value: Value = c2pa_cbor::from_slice(&bytes).unwrap();
         let map = value.as_map().unwrap();
-
         assert_eq!(
             map.get(&Value::Text("signature".into())),
             Some(&Value::Bytes(vec![7; 5]))
@@ -355,9 +376,6 @@ mod tests {
             map.get(&Value::Text("pad1".into())),
             Some(&Value::Bytes(vec![]))
         );
-        assert!(bytes
-            .windows(payload.len())
-            .any(|w| w == payload.as_slice()));
     }
 
     #[test]
@@ -387,7 +405,7 @@ mod tests {
         assert_eq!(plan.alg, SigningAlg::Es256);
         assert_eq!(plan.signature_len, 64);
 
-        let payload = signer_payload(&[], plan.sig_type, &[]);
+        let payload = signer_payload(&[], plan.sig_type, &[]).unwrap();
         let to_be_signed = settings.credential.to_be_signed(&plan, &payload);
         assert!(to_be_signed
             .windows(payload.len())

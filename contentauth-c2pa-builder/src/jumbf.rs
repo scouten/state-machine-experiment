@@ -129,9 +129,10 @@ struct IdentityPart {
 
     placeholder: PlaceholderDataBox,
 
-    /// The `signer_payload` once built, which is what the host's
-    /// signature covers and what the assertion then embeds.
-    payload: Option<Vec<u8>>,
+    /// Everything the assertion vouches for once the hard binding's hash
+    /// is known: what the host's signature covers, and what the assertion
+    /// then embeds.
+    signed_refs: Option<Vec<(String, Vec<u8>)>>,
 
     /// This assertion's hash as referenced from the claim, once written.
     claim_hash: Option<Vec<u8>>,
@@ -228,11 +229,15 @@ impl ManifestBuilder {
                 format!("self#jumbf=c2pa.assertions/{}", data_hash::LABEL),
                 vec![0u8; hash_alg.digest_len()],
             ));
-            let dummy_payload = identity::signer_payload(&dummy_refs, plan.sig_type, input.roles);
             let dummy_signature = input
                 .credential
                 .signature_field(&plan, &vec![0u8; plan.signature_len])?;
-            let dummy_cbor = identity::assertion_cbor(&dummy_payload, &dummy_signature);
+            let dummy_cbor = identity::assertion_cbor(
+                &dummy_refs,
+                plan.sig_type,
+                input.roles,
+                &dummy_signature,
+            )?;
 
             identities.push(IdentityPart {
                 label: identity::label_for(index),
@@ -241,7 +246,7 @@ impl ManifestBuilder {
                 roles: input.roles.to_vec(),
                 referenced,
                 placeholder: PlaceholderDataBox::new(CBOR_BOX_TYPE, dummy_cbor.len()),
-                payload: None,
+                signed_refs: None,
                 claim_hash: None,
             });
         }
@@ -413,9 +418,9 @@ impl ManifestBuilder {
             data_hash_ref,
         ));
 
-        let payload = identity::signer_payload(&referenced, part.plan.sig_type, &part.roles);
+        let payload = identity::signer_payload(&referenced, part.plan.sig_type, &part.roles)?;
         let to_be_signed = part.credential.to_be_signed(&part.plan, &payload);
-        part.payload = Some(payload);
+        part.signed_refs = Some(referenced);
 
         Ok((part.label.clone(), part.plan.alg, to_be_signed))
     }
@@ -439,14 +444,14 @@ impl ManifestBuilder {
             });
         }
 
-        let payload = part
-            .payload
+        let referenced = part
+            .signed_refs
             .as_deref()
             .ok_or(Error::PlaceholderSizeMismatch(
                 "an identity assertion was written before it was signed",
             ))?;
         let field = part.credential.signature_field(&part.plan, signature)?;
-        let cbor = identity::assertion_cbor(payload, &field);
+        let cbor = identity::assertion_cbor(referenced, part.plan.sig_type, &part.roles, &field)?;
         check_len(&part.placeholder, cbor.len())?;
 
         let mut cursor = Cursor::new(std::mem::take(&mut self.buffer));
