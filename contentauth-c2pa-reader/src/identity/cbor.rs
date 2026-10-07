@@ -11,146 +11,112 @@
 // specific language governing permissions and limitations under
 // each license.
 
-//! Locating a CBOR item's exact bytes inside an enclosing item.
+//! Locating a CBOR item's exact bytes inside an enclosing item, with
+//! `c2pa_cbor` doing all the decoding.
 //!
 //! An identity assertion's signature covers the `signer_payload` *as the
 //! signer encoded it*, so verification needs those bytes, not a decoded
-//! and re-encoded equivalent: a different map order or integer width in
-//! someone else's encoder would turn a good signature into a mismatch.
-//! Decoding to a `Value` throws the original encoding away, so this module
-//! finds where one entry's value starts and ends instead.
+//! and re-encoded equivalent: `c2pa_cbor::Value` keeps maps sorted, and a
+//! signer that wrote its fields in another order (c2pa-rs writes
+//! `referenced_assertions`, `sig_type`, `role`) would otherwise turn a good
+//! signature into a mismatch. Decoding throws the original encoding away,
+//! so the decoder is run over a reader that counts what it consumes, and
+//! the offsets either side of the wanted value are read off it.
 
-/// Deepest nesting this module will walk. Identity assertions are a few
-/// levels deep; the bound exists because the input is untrusted.
-const MAX_DEPTH: usize = 32;
+use std::{
+    cell::Cell,
+    fmt,
+    io::{self, Read},
+    rc::Rc,
+};
 
-/// Returns the length in bytes of the CBOR data item at the start of
-/// `bytes`, or `None` if it is truncated, uses an indefinite length (which
-/// deterministic encodings never do), or nests too deeply.
-fn item_len(bytes: &[u8], depth: usize) -> Option<usize> {
-    if depth > MAX_DEPTH {
-        return None;
+use c2pa_cbor::{Decoder, Value};
+use serde::de::{Deserializer, IgnoredAny, MapAccess, Visitor};
+
+/// A reader over a slice that publishes how much has been consumed.
+struct Counting<'a> {
+    bytes: &'a [u8],
+    consumed: Rc<Cell<usize>>,
+}
+
+impl Read for Counting<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.bytes.len().min(buf.len());
+        let (head, rest) = self.bytes.split_at(n);
+        buf[..n].copy_from_slice(head);
+        self.bytes = rest;
+        self.consumed.set(self.consumed.get() + n);
+        Ok(n)
+    }
+}
+
+/// Walks a map, noting the span of the value stored under `key`.
+struct FindValue<'k> {
+    key: &'k str,
+    consumed: Rc<Cell<usize>>,
+    span: Rc<Cell<Option<(usize, usize, Value)>>>,
+}
+
+impl<'de> Visitor<'de> for FindValue<'_> {
+    type Value = ();
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a map")
     }
 
-    let first = *bytes.first()?;
-    let major = first >> 5;
-    let info = first & 0x1f;
-
-    let (argument, head) = match info {
-        0..=23 => (u64::from(info), 1),
-        24 => (u64::from(*bytes.get(1)?), 2),
-        25 => (
-            u64::from(u16::from_be_bytes(bytes.get(1..3)?.try_into().ok()?)),
-            3,
-        ),
-        26 => (
-            u64::from(u32::from_be_bytes(bytes.get(1..5)?.try_into().ok()?)),
-            5,
-        ),
-        27 => (u64::from_be_bytes(bytes.get(1..9)?.try_into().ok()?), 9),
-        _ => return None,
-    };
-
-    match major {
-        // Integers and simple values/floats: the head is everything.
-        0 | 1 | 7 => Some(head),
-
-        // Byte and text strings: the head, then `argument` bytes.
-        2 | 3 => {
-            let end = head.checked_add(usize::try_from(argument).ok()?)?;
-            (end <= bytes.len()).then_some(end)
-        }
-
-        // Arrays and maps: the head, then that many items (two per map
-        // entry).
-        4 | 5 => {
-            let items = if major == 5 {
-                argument.checked_mul(2)?
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+        let mut seen = false;
+        while let Some(key) = map.next_key::<Value>()? {
+            // A decoder reads a key and then the value that follows it, so
+            // the count is at the start of the value here.
+            if key.as_str() == Some(self.key) && !seen {
+                seen = true;
+                let start = self.consumed.get();
+                let value: Value = map.next_value()?;
+                self.span.set(Some((start, self.consumed.get(), value)));
             } else {
-                argument
-            };
-
-            let mut offset = head;
-            for _ in 0..items {
-                offset += item_len(bytes.get(offset..)?, depth + 1)?;
+                map.next_value::<IgnoredAny>()?;
             }
-            Some(offset)
         }
-
-        // A tag wraps one item.
-        _ => Some(head + item_len(bytes.get(head..)?, depth + 1)?),
+        Ok(())
     }
 }
 
 /// Returns the exact bytes of the value stored under the text key `key` in
 /// the CBOR map that is `bytes`.
 ///
-/// `None` if `bytes` is not a definite-length map, is malformed, or has no
-/// such key. The first of any duplicated keys wins.
+/// `None` if `bytes` is not a map, is malformed, or has no such key. The
+/// first of any duplicated keys wins.
+///
+/// The span is checked before it is returned: decoding it on its own must
+/// succeed, consume it entirely, and give the value the walk saw. That
+/// guards against the count being off — by a byte the decoder looked ahead
+/// at, say — so a wrong span is refused instead of verified against.
 pub(super) fn map_value<'a>(bytes: &'a [u8], key: &str) -> Option<&'a [u8]> {
-    let first = *bytes.first()?;
-    if first >> 5 != 5 {
-        return None;
-    }
+    let consumed = Rc::new(Cell::new(0));
+    let span = Rc::new(Cell::new(None));
 
-    // Reuse `item_len` to learn where the head ends: a map of zero
-    // entries has length equal to its head.
-    let (entries, head) = match first & 0x1f {
-        info @ 0..=23 => (u64::from(info), 1),
-        24 => (u64::from(*bytes.get(1)?), 2),
-        25 => (
-            u64::from(u16::from_be_bytes(bytes.get(1..3)?.try_into().ok()?)),
-            3,
-        ),
-        26 => (
-            u64::from(u32::from_be_bytes(bytes.get(1..5)?.try_into().ok()?)),
-            5,
-        ),
-        27 => (u64::from_be_bytes(bytes.get(1..9)?.try_into().ok()?), 9),
-        _ => return None,
-    };
+    let mut decoder = Decoder::new(Counting {
+        bytes,
+        consumed: Rc::clone(&consumed),
+    });
+    (&mut decoder)
+        .deserialize_map(FindValue {
+            key,
+            consumed,
+            span: Rc::clone(&span),
+        })
+        .ok()?;
 
-    let mut offset = head;
-    for _ in 0..entries {
-        let key_len = item_len(bytes.get(offset..)?, 1)?;
-        let key_bytes = bytes.get(offset..offset + key_len)?;
-        offset += key_len;
+    let (start, end, value) = span.take()?;
+    let found = bytes.get(start..end)?;
 
-        let value_len = item_len(bytes.get(offset..)?, 1)?;
-        let value_bytes = bytes.get(offset..offset + value_len)?;
-        offset += value_len;
-
-        if text_key(key_bytes) == Some(key) {
-            return Some(value_bytes);
-        }
-    }
-
-    None
-}
-
-/// Reads a definite-length CBOR text string's contents, without
-/// allocating. `None` for any other item.
-fn text_key(bytes: &[u8]) -> Option<&str> {
-    let first = *bytes.first()?;
-    if first >> 5 != 3 {
-        return None;
-    }
-
-    let head = match first & 0x1f {
-        0..=23 => 1,
-        24 => 2,
-        25 => 3,
-        26 => 5,
-        27 => 9,
-        _ => return None,
-    };
-
-    core::str::from_utf8(bytes.get(head..)?).ok()
+    (c2pa_cbor::from_slice::<Value>(found).ok()? == value).then_some(found)
 }
 
 #[cfg(test)]
 mod tests {
-    use c2pa_cbor::Value;
+    #![allow(clippy::unwrap_used)]
 
     use super::*;
 
@@ -208,111 +174,77 @@ mod tests {
     fn something_other_than_a_map_is_none() {
         assert_eq!(map_value(&encode(&Value::Integer(1)), "a"), None);
         assert_eq!(map_value(&[], "a"), None);
-        assert_eq!(map_value(&[0xbf, 0xff], "a"), None);
     }
 
     #[test]
-    fn every_head_width_is_measured() {
-        // Text lengths 23, 24, 256 and 65_536 exercise the one-, two-,
-        // three- and five-byte heads; an eight-byte head is built by hand.
-        for len in [23usize, 24, 256, 65_536] {
-            let item = encode(&Value::Text("x".repeat(len)));
-            assert_eq!(item_len(&item, 0), Some(item.len()));
-        }
-
-        let mut wide = vec![0x7b];
-        wide.extend_from_slice(&2u64.to_be_bytes());
-        wide.extend_from_slice(b"hi");
-        assert_eq!(item_len(&wide, 0), Some(wide.len()));
-
-        // Floats are heads of 3, 5 and 9 bytes.
-        assert_eq!(item_len(&[0xf9, 0, 0], 0), Some(3));
-        assert_eq!(item_len(&[0xfa, 0, 0, 0, 0], 0), Some(5));
-        assert_eq!(item_len(&[0xfb, 0, 0, 0, 0, 0, 0, 0, 0], 0), Some(9));
-        assert_eq!(item_len(&[0xf4], 0), Some(1));
-        assert_eq!(item_len(&[0xf8, 0x20], 0), Some(2));
+    fn the_encoders_key_order_is_preserved_not_sorted() {
+        // `z` before `a`: a decode to `Value` and back would swap them.
+        let bytes = [
+            0xa2, 0x61, b'z', 0x01, 0x61, b'a', 0xa2, 0x62, b'y', b'y', 0x01, 0x62, b'x', b'x',
+            0x02,
+        ];
+        let found = map_value(&bytes, "a").unwrap();
+        assert_eq!(found, &bytes[6..]);
     }
 
     #[test]
-    fn truncation_and_indefinite_lengths_are_refused() {
-        assert_eq!(item_len(&[], 0), None);
-        // A byte string promising more than is there.
-        assert_eq!(item_len(&[0x45, 1, 2], 0), None);
-        // Heads cut short.
-        assert_eq!(item_len(&[0x18], 0), None);
-        assert_eq!(item_len(&[0x19, 0], 0), None);
-        assert_eq!(item_len(&[0x1a, 0, 0, 0], 0), None);
-        assert_eq!(item_len(&[0x1b, 0, 0, 0, 0], 0), None);
-        // Indefinite-length and reserved additional information.
-        assert_eq!(item_len(&[0x5f, 0xff], 0), None);
-        assert_eq!(item_len(&[0x1c], 0), None);
-        // An array promising items that are not there.
-        assert_eq!(item_len(&[0x82, 0x01], 0), None);
-        // A tag with nothing under it.
-        assert_eq!(item_len(&[0xc1], 0), None);
-        // A string length that cannot be addressed.
-        let mut huge = vec![0x5b];
-        huge.extend_from_slice(&u64::MAX.to_be_bytes());
-        assert_eq!(item_len(&huge, 0), None);
+    fn indefinite_length_items_are_located_exactly() {
+        // {"k": {_ "b": 1, "a": 2}} with an indefinite-length inner map.
+        let bytes = [
+            0xa1, 0x61, b'k', 0xbf, 0x61, b'b', 0x01, 0x61, b'a', 0x02, 0xff,
+        ];
+        assert_eq!(map_value(&bytes, "k"), Some(&bytes[3..]));
+
+        // And an indefinite-length outer map, with the wanted entry
+        // followed by another.
+        let bytes = [0xbf, 0x61, b'k', 0x82, 0x01, 0x02, 0x61, b'm', 0x03, 0xff];
+        assert_eq!(map_value(&bytes, "k"), Some(&bytes[3..6]));
     }
 
     #[test]
-    fn nesting_is_bounded() {
-        let mut deep = vec![0x81; MAX_DEPTH + 2];
-        deep.push(0x00);
-        assert_eq!(item_len(&deep, 0), None);
-
-        let mut shallow = vec![0x81; 4];
-        shallow.push(0x00);
-        assert_eq!(item_len(&shallow, 0), Some(5));
-    }
-
-    #[test]
-    fn map_walk_stops_at_malformed_entries() {
-        // One entry claimed, key present, value missing.
+    fn truncated_or_malformed_input_is_none() {
+        // A value promised but missing.
         assert_eq!(map_value(&[0xa1, 0x61, b'a'], "a"), None);
-        // A non-text key is skipped over rather than matched.
+        // A byte string longer than the input.
+        assert_eq!(map_value(&[0xa1, 0x61, b'a', 0x45, 1, 2], "a"), None);
+        // Reserved additional information.
+        assert_eq!(map_value(&[0xa1, 0x61, b'a', 0x1c], "a"), None);
+    }
+
+    #[test]
+    fn non_text_and_non_utf8_keys_never_match() {
         let mixed = [0xa2, 0x01, 0x02, 0x61, b'k', 0x03];
         assert_eq!(map_value(&mixed, "k"), Some(&[0x03][..]));
-        // A text key that is not UTF-8 never matches.
+
         let bad = [0xa1, 0x61, 0xff, 0x01];
         assert_eq!(map_value(&bad, "a"), None);
     }
 
     #[test]
-    fn every_map_head_width_is_read() {
-        // A map whose entry count needs a 1-, 2-, 4- and 8-byte argument,
-        // each holding the single entry the argument claims is too many
-        // for the bytes present — so the walk fails — except the first.
-        let entry = [0x61, b'a', 0x01];
-        let mut one = vec![0xb8, 1];
-        one.extend_from_slice(&entry);
-        assert_eq!(map_value(&one, "a"), Some(&[0x01][..]));
-
-        let mut two = vec![0xb9, 0, 1];
-        two.extend_from_slice(&entry);
-        assert_eq!(map_value(&two, "a"), Some(&[0x01][..]));
-
-        let mut four = vec![0xba, 0, 0, 0, 1];
-        four.extend_from_slice(&entry);
-        assert_eq!(map_value(&four, "a"), Some(&[0x01][..]));
-
-        let mut eight = vec![0xbb, 0, 0, 0, 0, 0, 0, 0, 1];
-        eight.extend_from_slice(&entry);
-        assert_eq!(map_value(&eight, "a"), Some(&[0x01][..]));
-
-        assert_eq!(map_value(&[0xbc], "a"), None);
+    fn the_first_of_duplicate_keys_wins() {
+        let bytes = [0xa2, 0x61, b'a', 0x01, 0x61, b'a', 0x02];
+        assert_eq!(map_value(&bytes, "a"), Some(&[0x01][..]));
     }
 
     #[test]
-    fn text_keys_of_every_head_width_are_read() {
-        assert_eq!(text_key(&[0x61, b'a']), Some("a"));
-        assert_eq!(text_key(&[0x78, 1, b'a']), Some("a"));
-        assert_eq!(text_key(&[0x79, 0, 1, b'a']), Some("a"));
-        assert_eq!(text_key(&[0x7a, 0, 0, 0, 1, b'a']), Some("a"));
-        assert_eq!(text_key(&[0x7b, 0, 0, 0, 0, 0, 0, 0, 1, b'a']), Some("a"));
-        assert_eq!(text_key(&[0x7c]), None);
-        assert_eq!(text_key(&[0x41, 1]), None);
-        assert_eq!(text_key(&[]), None);
+    fn nesting_beyond_the_decoders_limit_is_none() {
+        let mut deep = vec![0xa1, 0x61, b'a'];
+        deep.extend(std::iter::repeat_n(0x81, 5_000));
+        deep.push(0x00);
+        assert_eq!(map_value(&deep, "a"), None);
+    }
+
+    #[test]
+    fn the_reader_reports_a_short_read_as_end_of_input() {
+        let consumed = Rc::new(Cell::new(0));
+        let mut reader = Counting {
+            bytes: &[1, 2, 3],
+            consumed: Rc::clone(&consumed),
+        };
+
+        let mut buf = [0u8; 8];
+        assert_eq!(reader.read(&mut buf).unwrap(), 3);
+        assert_eq!(reader.read(&mut buf).unwrap(), 0);
+        assert_eq!(consumed.get(), 3);
     }
 }

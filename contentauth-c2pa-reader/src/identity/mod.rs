@@ -703,10 +703,11 @@ mod tests {
     }
 
     #[test]
-    fn a_payload_encoded_with_indefinite_lengths_cannot_be_located() {
-        // `signer_payload` as an indefinite-length map: valid CBOR, but
-        // there is no way to tell where it ends without decoding it, which
-        // would lose the encoding the signature covers.
+    fn a_payload_encoded_with_indefinite_lengths_is_read_from_its_own_bytes() {
+        // `signer_payload` as an indefinite-length map: valid CBOR whose
+        // signed bytes are the ones as written, which is why they are
+        // located rather than re-encoded. The signature here is empty, so
+        // it is the signature, not the encoding, that is refused.
         let mut raw = vec![0xa3];
         raw.extend_from_slice(&[0x6e]);
         raw.extend_from_slice(b"signer_payload");
@@ -724,10 +725,28 @@ mod tests {
         raw.extend_from_slice(b"pad1");
         raw.extend_from_slice(&[0x40]);
 
+        let parsed = parse_one(identity_manifest(|p| p.raw_cbor = Some(raw)));
+
         assert_eq!(
-            cbor_invalid_reason(|p| p.raw_cbor = Some(raw)),
-            "signer_payload uses an encoding this crate cannot locate"
+            identity_codes(&parsed),
+            [
+                "cawg.identity.hard_binding_missing",
+                "cawg.x509.credential.invalid"
+            ]
         );
+        assert_eq!(parsed.manifests[0].identity_assertions.len(), 1);
+    }
+
+    #[test]
+    fn a_payload_in_another_key_order_is_verified_as_signed() {
+        // c2pa-rs's order puts `role` last; a sorted encoding puts it
+        // before `sig_type`. Either must verify, which only holds if the
+        // signed bytes are the ones in the assertion.
+        let parsed = parse_one(identity_manifest(|p| {
+            p.roles = vec!["creator".into()];
+            p.sign_instead = None;
+        }));
+        assert!(parsed.statuses.iter().all(|s| !s.is_failure()));
     }
 
     #[test]
