@@ -8,7 +8,7 @@
 name = "c2pa-node-sign-addon"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.88.0"
+rust-version = "1.96.0"
 license = "MIT OR Apache-2.0"
 publish = false
 
