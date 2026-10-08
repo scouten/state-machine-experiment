@@ -43,6 +43,7 @@ contentauth-c2pa-format = { path = "../contentauth-c2pa-format", features = [
     "test-util",
 ] }
 contentauth-c2pa-format-tiff = { path = "../contentauth-c2pa-format-tiff" }
+contentauth-c2pa-format-riff = { path = "../contentauth-c2pa-format-riff" }
 contentauth-state-machine = { path = "../contentauth-state-machine" }
 c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
     "rust_native_crypto",

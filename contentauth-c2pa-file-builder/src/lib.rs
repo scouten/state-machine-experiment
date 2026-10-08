@@ -37,9 +37,11 @@
 //! one at a time, each becoming a [`FileBuilderRequest::Read`] against
 //! [`FileBuilderSession::SOURCE_STREAM`] or a
 //! [`FileBuilderRequest::Write`] against
-//! [`FileBuilderSession::OUTPUT_STREAM`] — and `AssetLength`/`AssetBytes`,
-//! needed to hash the output for the hard binding, are forwarded as plain
-//! reads of the output stream once it has been written. Only
+//! [`FileBuilderSession::OUTPUT_STREAM`]. The hard binding is hashed *as
+//! the output is produced* — each copied range as it comes back from the
+//! source, each piece of framing as it is emitted, the manifest's own
+//! slot skipped — so the output is never read back: one read of the
+//! source, one write of the output, whatever the asset's size. Only
 //! [`FileBuilderRequest::Sign`] and [`FileBuilderRequest::Timestamp`] ever
 //! reach the host as themselves: a signing key and an RFC 3161 authority
 //! round trip are not things this crate, or any format handler, can stand
@@ -47,9 +49,10 @@
 //!
 //! [`build_and_sign`] and [`build_and_sign_file`] are a host for exactly
 //! that session, for the common case: a caller with plain, synchronous
-//! `Read + Seek` access to the source asset, `Read + Write + Seek` access
-//! to write the output (read-back is needed for the hashing above), and a
-//! plain signing function, and optionally a function that answers each
+//! `Read + Seek` access to the source asset, `Write + Seek` access to
+//! write the output (`Seek` because the final manifest replaces the
+//! placeholder written earlier; no `Read`, since nothing is read back), and
+//! a plain signing function, and optionally a function that answers each
 //! RFC 3161 timestamp request (without one, a request fails the build).
 //! Reach for [`FileBuilderSession`] directly once any of
 //! that stops being true — async or network-backed asset access, say.
@@ -175,7 +178,7 @@ pub fn build_and_sign<H, S, O>(
 where
     H: FormatHandler + Send,
     S: Read + Seek,
-    O: Read + Write + Seek,
+    O: Write + Seek,
 {
     drive::build(
         handler,

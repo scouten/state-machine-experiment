@@ -70,6 +70,15 @@ pub enum BuilderRequest {
     /// exclusions, so together they may total more than the placeholder
     /// but never less.
     ///
+    /// A host that writes the asset itself can save the session a second
+    /// pass over it: hash the asset with `hash_alg` *as it writes* —
+    /// everything outside the ranges it reports, in order — and put the
+    /// digest in the reply ([`BuilderHostReply::PlaceholderReserved`]'s
+    /// `hash`). The session then signs at once, without asking for
+    /// [`Self::AssetLength`] or [`Self::AssetBytes`]. A host that does
+    /// not (one that cannot hash as it goes, or does not own the bytes)
+    /// leaves `hash` empty and answers those requests as before.
+    ///
     /// [`ReadRequest::ManifestStore`]: https://docs.rs/contentauth-c2pa-reader/latest/contentauth_c2pa_reader/enum.ReadRequest.html#variant.ManifestStore
     ReservePlaceholder {
         /// The asset stream to embed the placeholder into.
@@ -77,6 +86,10 @@ pub enum BuilderRequest {
 
         /// The placeholder bytes to embed verbatim.
         placeholder: Vec<u8>,
+
+        /// The algorithm the hard binding is computed with: the one a
+        /// host that supplies the digest itself must use.
+        hash_alg: HashAlgorithm,
     },
 
     /// Report the total length of a stream, in bytes.
@@ -184,7 +197,7 @@ impl Request for BuilderRequest {
             (_, BuilderHostReply::Failed(_))
                 | (
                     Self::ReservePlaceholder { .. },
-                    BuilderHostReply::PlaceholderReserved(_)
+                    BuilderHostReply::PlaceholderReserved { .. }
                 )
                 | (Self::AssetLength { .. }, BuilderHostReply::AssetLength(_))
                 | (Self::AssetBytes { .. }, BuilderHostReply::AssetBytes(_))
@@ -207,7 +220,23 @@ pub enum BuilderHostReply {
     /// the container structure now carrying the placeholder, framing
     /// included, and anything else the format's specification excludes.
     /// At most [`MAX_EXCLUSIONS`](crate::MAX_EXCLUSIONS) of them.
-    PlaceholderReserved(Vec<ByteRange>),
+    ///
+    /// `hash` is optional: the digest, under the request's `hash_alg`, of
+    /// every byte of the asset *outside* `exclusions`, in order, as the
+    /// asset now stands with the placeholder in it. A host that computed
+    /// it while writing the asset supplies it and spares the session a
+    /// pass over the asset; with `None`, the session asks for the asset's
+    /// length and bytes and hashes them itself. The session signs whatever
+    /// digest it is given — the host that wrote the bytes is the one
+    /// party who knows what they are — but refuses one of the wrong
+    /// length.
+    PlaceholderReserved {
+        /// The ranges the hard binding excludes.
+        exclusions: Vec<ByteRange>,
+
+        /// The digest of the rest of the asset, if the host computed it.
+        hash: Option<Vec<u8>>,
+    },
 
     /// Answers [`BuilderRequest::AssetLength`]: the stream's total length
     /// in bytes.
@@ -247,6 +276,7 @@ mod tests {
             BuilderRequest::ReservePlaceholder {
                 stream,
                 placeholder: vec![0; 4],
+                hash_alg: HashAlgorithm::Sha256,
             },
             BuilderRequest::AssetLength { stream },
             BuilderRequest::AssetBytes { stream, range },
@@ -273,7 +303,10 @@ mod tests {
     fn all_replies() -> Vec<(BuilderHostReply, &'static str)> {
         vec![
             (
-                BuilderHostReply::PlaceholderReserved(vec![ByteRange { start: 0, len: 4 }]),
+                BuilderHostReply::PlaceholderReserved {
+                    exclusions: vec![ByteRange { start: 0, len: 4 }],
+                    hash: None,
+                },
                 "PlaceholderReserved",
             ),
             (BuilderHostReply::AssetLength(1024), "AssetLength"),

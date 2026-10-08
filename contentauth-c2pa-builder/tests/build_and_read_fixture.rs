@@ -45,6 +45,12 @@ const TEST_SIGNER_KEY: &[u8] = include_bytes!("fixtures/test-signer.key.pem");
 struct Host {
     asset: Vec<u8>,
     manifest_range: Option<(u64, u64)>,
+
+    /// If set, the host hashes the asset itself when it embeds the
+    /// placeholder, as a host that writes as it hashes would, and
+    /// supplies the digest with its reply — so any request for the asset's
+    /// length or bytes is a failure of the test.
+    supply_hash: Option<fn(Vec<u8>) -> Vec<u8>>,
 }
 
 impl Host {
@@ -52,6 +58,16 @@ impl Host {
         Self {
             asset: (0..asset_len as u32).map(|i| (i % 251) as u8).collect(),
             manifest_range: None,
+            supply_hash: None,
+        }
+    }
+
+    /// A host that supplies the hard binding's digest with its reply to
+    /// `ReservePlaceholder`; `corrupt` may alter the digest first.
+    fn supplying_hash(asset_len: usize, corrupt: fn(Vec<u8>) -> Vec<u8>) -> Self {
+        Self {
+            supply_hash: Some(corrupt),
+            ..Self::new(asset_len)
         }
     }
 
@@ -78,7 +94,11 @@ impl Host {
 
     fn reply_to(&mut self, request: &BuilderRequest) -> BuilderHostReply {
         match request {
-            BuilderRequest::ReservePlaceholder { placeholder, .. } => {
+            BuilderRequest::ReservePlaceholder {
+                placeholder,
+                hash_alg,
+                ..
+            } => {
                 // Embed the placeholder at a fixed offset, standing in for
                 // wherever a real container format would put it.
                 let offset = 100u64;
@@ -87,17 +107,36 @@ impl Host {
                     placeholder.iter().copied(),
                 );
                 self.manifest_range = Some((offset, placeholder.len() as u64));
-                BuilderHostReply::PlaceholderReserved(vec![contentauth_c2pa_builder::ByteRange {
-                    start: offset,
-                    len: placeholder.len() as u64,
-                }])
+
+                let hash = self.supply_hash.map(|alter| {
+                    let end = offset as usize + placeholder.len();
+                    let mut outside = self.asset[..offset as usize].to_vec();
+                    outside.extend_from_slice(&self.asset[end..]);
+                    alter(hash_alg.digest(&outside))
+                });
+
+                BuilderHostReply::PlaceholderReserved {
+                    exclusions: vec![contentauth_c2pa_builder::ByteRange {
+                        start: offset,
+                        len: placeholder.len() as u64,
+                    }],
+                    hash,
+                }
             }
 
             BuilderRequest::AssetLength { .. } => {
+                assert!(
+                    self.supply_hash.is_none(),
+                    "a session whose host supplied the hash must not ask for the asset"
+                );
                 BuilderHostReply::AssetLength(self.asset.len() as u64)
             }
 
             BuilderRequest::AssetBytes { range, .. } => {
+                assert!(
+                    self.supply_hash.is_none(),
+                    "a session whose host supplied the hash must not ask for the asset"
+                );
                 let start = range.start as usize;
                 let end = start + range.len as usize;
                 BuilderHostReply::AssetBytes(self.asset[start..end].to_vec())
@@ -205,6 +244,61 @@ fn read_back_with_manifest(
             session.fulfill(request.id, reply).unwrap();
         }
     }
+}
+
+/// A host that hashed the asset itself while writing it, and said so in its
+/// reply, spares the session the second pass: the session never asks for
+/// the asset's length or bytes (the host panics if it does), yet the
+/// manifest it signs binds to the asset exactly as before — the reader,
+/// which hashes the asset independently, finds it `Trusted`.
+#[test]
+fn a_host_supplied_hash_replaces_the_asset_requests() {
+    let mut host = Host::supplying_hash(5000, |hash| hash);
+    let session = BuilderSession::new(settings(vec![], None));
+    let (asset, _) = host.build(session);
+
+    let parsed = read_back_with_manifest(&asset, host.manifest_range.unwrap());
+    assert_eq!(parsed.validation_state, Some(ValidationState::Trusted));
+}
+
+/// The session signs the digest it is given, so a wrong one yields a
+/// manifest whose hard binding the reader rejects — the host that wrote
+/// the bytes is the only party who knows what they are.
+#[test]
+fn a_host_supplied_hash_that_is_wrong_is_caught_by_the_reader() {
+    let mut host = Host::supplying_hash(5000, |mut hash| {
+        hash[0] ^= 1;
+        hash
+    });
+    let session = BuilderSession::new(settings(vec![], None));
+    let (asset, _) = host.build(session);
+
+    let parsed = read_back_with_manifest(&asset, host.manifest_range.unwrap());
+    assert_eq!(parsed.validation_state, Some(ValidationState::Invalid));
+}
+
+/// A digest the wrong length for the algorithm can only be a bug in the
+/// host, and is refused before anything is signed.
+#[test]
+fn a_host_supplied_hash_of_the_wrong_length_fails_the_session() {
+    let mut host = Host::supplying_hash(5000, |mut hash| {
+        hash.pop();
+        hash
+    });
+    let mut session = BuilderSession::new(settings(vec![], None));
+
+    session.advance().unwrap();
+    let request = session.outstanding_requests().to_vec().remove(0);
+    let reply = host.reply_to(&request.kind);
+    session.fulfill(request.id, reply).unwrap();
+
+    assert!(matches!(
+        session.advance(),
+        Err(contentauth_c2pa_builder::Error::AssetHashLengthMismatch {
+            expected: 32,
+            actual: 31
+        })
+    ));
 }
 
 #[test]
@@ -405,12 +499,13 @@ fn a_host_that_refuses_to_sign_fails_the_session() {
                     session
                         .fulfill(
                             request.id,
-                            BuilderHostReply::PlaceholderReserved(vec![
-                                contentauth_c2pa_builder::ByteRange {
+                            BuilderHostReply::PlaceholderReserved {
+                                exclusions: vec![contentauth_c2pa_builder::ByteRange {
                                     start: offset,
                                     len: placeholder.len() as u64,
-                                },
-                            ]),
+                                }],
+                                hash: None,
+                            },
                         )
                         .unwrap();
                 }
@@ -501,14 +596,15 @@ fn a_reservation_range_shorter_than_the_placeholder_is_rejected() {
                 session
                     .fulfill(
                         request.id,
-                        BuilderHostReply::PlaceholderReserved(vec![
-                            contentauth_c2pa_builder::ByteRange {
+                        BuilderHostReply::PlaceholderReserved {
+                            exclusions: vec![contentauth_c2pa_builder::ByteRange {
                                 start: offset,
                                 // One byte short of the placeholder that was
                                 // actually embedded.
                                 len: placeholder.len() as u64 - 1,
-                            },
-                        ]),
+                            }],
+                            hash: None,
+                        },
                     )
                     .unwrap();
             }
@@ -531,16 +627,19 @@ fn reservation_ranges_whose_lengths_overflow_are_rejected() {
     session
         .fulfill(
             request.id,
-            BuilderHostReply::PlaceholderReserved(vec![
-                contentauth_c2pa_builder::ByteRange {
-                    start: 0,
-                    len: u64::MAX,
-                },
-                contentauth_c2pa_builder::ByteRange {
-                    start: 0,
-                    len: u64::MAX,
-                },
-            ]),
+            BuilderHostReply::PlaceholderReserved {
+                exclusions: vec![
+                    contentauth_c2pa_builder::ByteRange {
+                        start: 0,
+                        len: u64::MAX,
+                    },
+                    contentauth_c2pa_builder::ByteRange {
+                        start: 0,
+                        len: u64::MAX,
+                    },
+                ],
+                hash: None,
+            },
         )
         .unwrap();
 
@@ -581,10 +680,13 @@ fn a_reservation_range_longer_than_the_placeholder_is_accepted() {
     session
         .fulfill(
             request.id,
-            BuilderHostReply::PlaceholderReserved(vec![contentauth_c2pa_builder::ByteRange {
-                start: range.0,
-                len: range.1,
-            }]),
+            BuilderHostReply::PlaceholderReserved {
+                exclusions: vec![contentauth_c2pa_builder::ByteRange {
+                    start: range.0,
+                    len: range.1,
+                }],
+                hash: None,
+            },
         )
         .unwrap();
 

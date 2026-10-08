@@ -12,7 +12,7 @@
 // each license.
 
 //! A synchronous [`FileBuilderSession`] host for callers with a plain
-//! `Read + Seek` source and a plain `Read + Write + Seek` output.
+//! `Read + Seek` source and a plain `Write + Seek` output.
 //!
 //! This is one possible host, not the only one: [`FileBuilderSession`]
 //! itself performs no I/O and never signs anything itself, so a host with
@@ -20,10 +20,10 @@
 //! going through this module. A [`FileBuilderRequest::Timestamp`] is
 //! answered by a caller-supplied function (the network round trip is the
 //! caller's; `contentauth_c2pa_primitives::tsa` encodes the request and
-//! unwraps the response), or refused if there is none. The output bound is `Read + Write + Seek`
-//! rather than `Write` alone because this session reads back whatever it
-//! has already written — to hash the asset for the hard binding, and
-//! again once the final manifest replaces the placeholder.
+//! unwraps the response), or refused if there is none. The output needs
+//! `Seek` as well as `Write` — the final manifest replaces the placeholder
+//! it wrote earlier — but not `Read`: the session hashes the asset for
+//! the hard binding as it writes it, and never reads it back.
 
 use std::io::{self, Read, Seek, SeekFrom, Write};
 
@@ -53,7 +53,7 @@ pub(crate) fn build<H, S, O>(
 where
     H: FormatHandler + Send,
     S: Read + Seek,
-    O: Read + Write + Seek,
+    O: Write + Seek,
 {
     let source_stream = FileBuilderSession::<H>::SOURCE_STREAM;
     let output_stream = FileBuilderSession::<H>::OUTPUT_STREAM;
@@ -77,17 +77,29 @@ where
             return session.finish();
         }
 
-        for request in session.outstanding_requests().to_vec() {
-            let reply = answer(
-                source_stream,
-                output_stream,
-                &mut source,
-                &mut output,
-                &mut signers,
-                &mut answer_timestamp,
-                &request.kind,
-            );
-            session.fulfill(request.id, reply)?;
+        // Answer every outstanding request while still borrowing them,
+        // and only then fulfill: cloning the requests to get past the
+        // borrow would copy every `Write`'s payload (up to 1 MiB each),
+        // which at the speed this session moves bytes is a measurable
+        // share of the time.
+        let replies: Vec<_> = session
+            .outstanding_requests()
+            .iter()
+            .map(|request| {
+                let reply = answer(
+                    source_stream,
+                    output_stream,
+                    &mut source,
+                    &mut output,
+                    &mut signers,
+                    &mut answer_timestamp,
+                    &request.kind,
+                );
+                (request.id, reply)
+            })
+            .collect();
+        for (id, reply) in replies {
+            session.fulfill(id, reply)?;
         }
     }
 }
@@ -105,7 +117,7 @@ impl<'a, 'b, F> Signers<'a, 'b, F> {
     }
 }
 
-fn answer<S: Read + Seek, O: Read + Write + Seek>(
+fn answer<S: Read + Seek, O: Write + Seek>(
     source_stream: StreamId,
     output_stream: StreamId,
     source: &mut S,
@@ -119,7 +131,9 @@ fn answer<S: Read + Seek, O: Read + Write + Seek>(
             let read = if *stream == source_stream {
                 read_range(source, *range)
             } else if *stream == output_stream {
-                read_range(output, *range)
+                return FileBuilderReply::Failed(HostError::new(
+                    "the output stream cannot be read: it is hashed as it is written",
+                ));
             } else {
                 return FileBuilderReply::Failed(HostError::new("unknown stream"));
             };
@@ -133,7 +147,9 @@ fn answer<S: Read + Seek, O: Read + Write + Seek>(
             let len = if *stream == source_stream {
                 stream_len(source)
             } else if *stream == output_stream {
-                stream_len(output)
+                return FileBuilderReply::Failed(HostError::new(
+                    "the output stream's length is not needed: it is hashed as it is written",
+                ));
             } else {
                 return FileBuilderReply::Failed(HostError::new("unknown stream"));
             };
@@ -425,7 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn a_read_past_the_end_of_the_output_is_reported_as_failed() {
+    fn a_read_of_the_output_is_refused_even_within_its_bounds() {
         let mut source = Cursor::new(Vec::<u8>::new());
         let mut output = Cursor::new(vec![1u8, 2, 3]);
         let reply = answer(
@@ -437,7 +453,29 @@ mod tests {
             &mut never_timestamps,
             &FileBuilderRequest::Read {
                 stream: output_stream(),
-                range: ByteRange { start: 0, len: 10 },
+                range: ByteRange { start: 0, len: 3 },
+            },
+        );
+
+        // The session hashes the output as it writes it and never reads
+        // it back, so a request to is a bug somewhere, not a read to
+        // serve.
+        assert!(matches!(reply, FileBuilderReply::Failed(_)), "{reply:?}");
+    }
+
+    #[test]
+    fn a_length_of_the_output_is_refused() {
+        let mut source = Cursor::new(Vec::<u8>::new());
+        let mut output = Cursor::new(vec![1u8, 2, 3]);
+        let reply = answer(
+            source_stream(),
+            output_stream(),
+            &mut source,
+            &mut output,
+            &mut Signers::new(never_signs, None),
+            &mut never_timestamps,
+            &FileBuilderRequest::Length {
+                stream: output_stream(),
             },
         );
 
@@ -502,7 +540,7 @@ mod tests {
     }
 
     #[test]
-    fn a_successful_write_is_acknowledged_and_readable_back() {
+    fn a_successful_write_is_acknowledged_in_place() {
         let mut source = Cursor::new(Vec::<u8>::new());
         let mut output = Cursor::new(vec![0u8; 4]);
 

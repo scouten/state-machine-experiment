@@ -11,7 +11,7 @@ flowchart LR
         direction TB
         d1["Read + validate: integrity, signature,<br/>trust, RFC 3161, OCSP, v1+v2 claims"]
         d2["Write: v2 claim, data hash, any signing alg,<br/>timestamp"]
-        d3["Formats: JPEG, TIFF/BigTIFF/DNG, registry"]
+        d3["Formats: JPEG, TIFF/BigTIFF/DNG,<br/>RIFF (WAV/AVI/WebP), registry"]
         d4["Bindings: rs / wasm / node, read and sign"]
         d5["Differential tests vs c2pa-rs"]
     end
@@ -45,8 +45,19 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 * **PNG** — chunks with CRCs, the first real use of `commit` patches.
 * **BMFF (HEIC/AVIF/MP4)** — box-hash binding; fragmented BMFF is also
   what `fromBlobFragment` needs (two `Blob`s).
-* **RIFF (WAV/WebP/AVI)** — rewrites an existing size field, which `Edit::Emit`
-  already anticipates.
+* **Hashing off the I/O thread.** A single-stream SHA-256 can't be split,
+  but it needn't share a thread with the copy: in `asset-io-comparison/`,
+  hashing on a second thread takes a 1 GiB read-hash-write loop from
+  about 1.2 s to 0.8 s (0.63–0.68×). The session can't spawn threads, so
+  the route is a request that hands the host the bytes to hash (and
+  collects the digest), which a host with threads answers on a worker. Only
+  BMFF's Merkle tree (`mdat` leaves) can be hashed *in parallel* per spec.
+* **BMFF with corrected offsets emitted by the plan.** Because the store's
+  length is known when the plan is made, so is the shift in every chunk
+  offset: a handler can read `moov` once and `Emit` it already corrected,
+  with no post-write patch pass. Needs `Edit` to say "hash this as the
+  8-byte output offset" for the v2/v3 `offset || data` hash.
+* **RF64/BW64** (RIFF past 4 GiB).
 * **PDF, sidecar/`.c2pa`, and others** — non-embedding or very different
   shapes.
 * **XMP remote-reference parsing** in the existing handlers.
