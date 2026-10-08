@@ -18,7 +18,7 @@
 //! `Reader::with_manifest_data_and_stream`, against a JPEG with no
 //! manifest of its own, trusting the sidecar's ephemeral CA by
 //! configuration — the same step a user of Gavin's sample is told to take
-//! with `c2patool trust --trust_anchors`.
+//! with `c2patool <asset> --external-manifest <sidecar> trust --trust_anchors <ca.pem>`.
 
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::panic)]
