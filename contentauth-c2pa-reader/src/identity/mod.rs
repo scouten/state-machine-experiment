@@ -416,11 +416,17 @@ fn check_references(
     }
 }
 
-/// Returns true if `url` names a hard binding assertion, as c2pa-rs's
-/// `is_hard_binding_label` does: `c2pa.hash.data`, `c2pa.hash.boxes`,
-/// `c2pa.hash.collection.data`, `c2pa.hash.multi-asset`, or a `c2pa.hash.bmff`
-/// of any version — whatever its `__n` instance suffix. Anything else under
-/// `c2pa.hash.` is not one, so a made-up label cannot satisfy the check.
+/// Returns true if `url` names a hard binding assertion — one of the
+/// "hard binding to content" assertions the C2PA specification's validation
+/// clause lists: `c2pa.hash.data`, `c2pa.hash.boxes`,
+/// `c2pa.hash.collection.data`, or a `c2pa.hash.bmff` of any version —
+/// whatever its `__n` instance suffix.
+///
+/// `c2pa.hash.multi-asset` is deliberately not one, though c2pa-rs's helper
+/// of the same purpose counts it: the specification treats it as a fallback
+/// consulted when a hard binding fails to match, not as a binding itself,
+/// so an identity that names only it ties its actor to no asset. Nor is any
+/// other `c2pa.hash.` label.
 fn is_hard_binding(url: &str) -> bool {
     let Some(label) = url.rsplit('/').next() else {
         return false;
@@ -436,10 +442,7 @@ fn is_hard_binding(url: &str) -> bool {
 
     bmff || matches!(
         label,
-        "c2pa.hash.data"
-            | "c2pa.hash.boxes"
-            | "c2pa.hash.collection.data"
-            | "c2pa.hash.multi-asset"
+        "c2pa.hash.data" | "c2pa.hash.boxes" | "c2pa.hash.collection.data"
     )
 }
 
@@ -866,7 +869,6 @@ mod tests {
             "c2pa.hash.bmff.v3__1",
             "c2pa.hash.boxes",
             "c2pa.hash.collection.data",
-            "c2pa.hash.multi-asset",
             "c2pa.hash.data__1",
         ] {
             let mut parts = IdentityParts::default();
@@ -893,6 +895,7 @@ mod tests {
     fn a_label_that_merely_starts_like_a_hard_binding_is_not_one() {
         for label in [
             "c2pa.hash.fake",
+            "c2pa.hash.multi-asset",
             "c2pa.hash.bmfffake",
             "c2pa.hash.bmff.vx",
             "c2pa.hash.bmff.v",
@@ -913,7 +916,7 @@ mod tests {
         parts.referenced.truncate(1);
         parts
             .referenced
-            .push(("c2pa.hash.fake".to_string(), vec![1]));
+            .push(("c2pa.hash.multi-asset".to_string(), vec![1]));
         parts.omit_from_claim.push("c2pa.hash.data".into());
         let manifest = identity_manifest_from(&parts, vec![identity_box("cawg.identity", &parts)]);
         assert!(
