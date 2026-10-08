@@ -35,7 +35,9 @@ flowchart TD
     F --> G[Trust: chain to anchors,<br/>C2PA cert profile]
     F --> H[RFC 3161 timestamp<br/>can rescue expired cert]
     G --> I[Revocation, spec §15.9:<br/>stapled OCSP, then online]
+    C --> J[CAWG identity assertions<br/>cawg.x509.cose, own anchors]
     D & E & G & H & I --> V{{"Report:<br/>Trusted / Valid / Invalid<br/>+ status codes"}}
+    J -.->|"scoped: never lowers the state"| V
 ```
 
 * **Integrity** — assertion hashes; the hard binding hashed in-crate from
@@ -47,6 +49,13 @@ flowchart TD
 * **Revocation** — OCSP only. Stapled first, then online (default on). An
   *unreachable* responder is fail-open; a response that is received and
   authenticated but doesn't affirmatively vouch counts as revoked.
+* **CAWG identity assertions** — structure, padding, and that what each one
+  vouches for is in the claim with the claim's hash, a hard binding among
+  it. The credential is dispatched on `sig_type`: `cawg.x509.cose` is
+  verified (a detached `COSE_Sign1` over the `signer_payload` bytes *as
+  signed*, chain judged against separate identity anchors, `cawg.*` status
+  codes); identity claims aggregation is recognised but not checked. A
+  failure is scoped to its own assertion and never lowers the store's state.
 * **v1 and v2 claims** decode into the same `Claim`; v2 required-field
   and self-redaction checks are enforced.
 

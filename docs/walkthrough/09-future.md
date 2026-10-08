@@ -73,7 +73,8 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 * **`Builder` surface parity** for the c2pa-rs shape beyond the baseline
   case; `from_stream` and other constructors.
 * **c2pa-node:** `fromManifestDataAndAsset`, `resourceToAsset`, signers,
-  identity assertions, Trustmark.
+  CAWG identity assertions (the X.509 type is done on the core read and
+  write paths; this is the bindings), Trustmark.
 * **Browser:** a `fetch`-backed OCSP `Platform`; actually *running* the
   `web` modules (there's no browser in CI today); a Worker-hosted session
   for hashing off the main thread.

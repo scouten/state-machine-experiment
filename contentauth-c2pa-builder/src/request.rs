@@ -24,6 +24,28 @@
 use contentauth_c2pa_primitives::{ByteRange, HashAlgorithm, HostError, SigningAlg, StreamId};
 use contentauth_state_machine::Request;
 
+/// What a [`BuilderRequest::Sign`] is a signature *for*.
+///
+/// The host answers a request with a signature whatever the purpose; the
+/// purpose exists so that it can pick the key.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum SignPurpose {
+    /// The claim signature, made with the key whose certificates are
+    /// [`BuilderSettings::certificates`](crate::BuilderSettings::certificates).
+    Claim,
+
+    /// The signature of a CAWG identity assertion, made with the key of
+    /// the credential in the matching
+    /// [`BuilderSettings::identities`](crate::BuilderSettings::identities)
+    /// entry.
+    Identity {
+        /// The identity assertion's label: `cawg.identity` for the first
+        /// entry, `cawg.identity__1` for the second, and so on.
+        label: String,
+    },
+}
+
 /// The operations a builder session may ask its host to perform.
 ///
 /// Each variant documents the [`BuilderHostReply`] variant that fulfills
@@ -90,6 +112,13 @@ pub enum BuilderRequest {
     /// RSASSA-PSS algorithm (see
     /// [`BuilderSettings::rsa_signature_len`](crate::BuilderSettings::rsa_signature_len)).
     Sign {
+        /// What is being signed, and so whose key is wanted.
+        ///
+        /// A host with a single key can ignore this. One that holds
+        /// several — an identity assertion's signer is generally not the
+        /// claim's — chooses by it.
+        purpose: SignPurpose,
+
         /// The algorithm to sign with.
         alg: SigningAlg,
 
@@ -222,6 +251,7 @@ mod tests {
             BuilderRequest::AssetLength { stream },
             BuilderRequest::AssetBytes { stream, range },
             BuilderRequest::Sign {
+                purpose: SignPurpose::Claim,
                 alg: SigningAlg::Es256,
                 data: vec![1, 2, 3],
             },

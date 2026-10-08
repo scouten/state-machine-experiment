@@ -28,7 +28,7 @@ use crate::{
     cert,
     chain::{self, Anchor, PendingChain, Trust},
     data_hash,
-    error::Error,
+    error::{AnchorKind, Error},
     hash_stream::{self, HashStream},
     manifest_store::{self, Manifest},
     ocsp,
@@ -103,6 +103,30 @@ pub struct ReadSettings {
     /// [`status_code::TIMESTAMP_TRUSTED`] status.
     pub timestamp_trust_lists: Vec<TrustList>,
 
+    /// DER-encoded certificates to treat as trust anchors for CAWG
+    /// identity assertions' X.509 credentials.
+    ///
+    /// A separate list from [`Self::trust_anchors`] because it answers a
+    /// different question: those say whose *claim signatures* you
+    /// believe, these whose *named actors* — the people and organisations
+    /// an identity assertion vouches for. C2PA and CAWG publish distinct
+    /// trust lists for the two, and an identity signer that chains to a
+    /// claim anchor but not an identity one is not thereby a trusted
+    /// identity.
+    ///
+    /// Leaving this empty means no identity credential is ever trusted;
+    /// the chain is still built and checked, and each assertion's
+    /// signature and references are still verified. Handled as
+    /// [`Self::trust_anchors`] is, including the error for an entry that
+    /// is not a certificate.
+    pub identity_trust_anchors: Vec<Vec<u8>>,
+
+    /// Named lists of identity trust anchors, as [`Self::trust_lists`]
+    /// is for claim signers: the URI is reported as
+    /// [`ValidationStatus::trust_list_uri`] on the
+    /// [`status_code::CAWG_X509_CREDENTIAL_TRUSTED`] status.
+    pub identity_trust_lists: Vec<TrustList>,
+
     /// Whether the session *desires to verify* a certificate's revocation
     /// status by querying an OCSP responder online (C2PA spec §15.9.2),
     /// when nothing already in the C2PA Manifest Store settled the
@@ -160,6 +184,8 @@ impl Default for ReadSettings {
             timestamp_trust_anchors: vec![],
             trust_lists: vec![],
             timestamp_trust_lists: vec![],
+            identity_trust_anchors: vec![],
+            identity_trust_lists: vec![],
             check_ocsp: true,
         }
     }
@@ -223,6 +249,9 @@ pub struct ReadSession {
     /// The same for [`ReadSettings::timestamp_trust_anchors`].
     timestamp_anchors: Vec<Anchor>,
 
+    /// The same for [`ReadSettings::identity_trust_anchors`].
+    identity_anchors: Vec<Anchor>,
+
     /// How far trust was established for the *active* manifest, which is
     /// what [`ValidationState`] describes. `None` until the evaluation
     /// runs, which is also the answer when it never does.
@@ -247,6 +276,7 @@ enum State {
     AwaitingSigningTime {
         request: RequestId,
         chains: Vec<PendingChain>,
+        identity_chains: Vec<PendingChain>,
         binding: Option<PendingBinding>,
     },
     AwaitingOcspResponses {
@@ -288,7 +318,7 @@ enum State {
 fn decode_anchors(
     lists: &[TrustList],
     anonymous: &[Vec<u8>],
-    timestamp: bool,
+    kind: AnchorKind,
 ) -> Result<Vec<Anchor>, Error> {
     let decode_all = |ders: &[Vec<u8>], uri: Option<&str>| {
         ders.iter()
@@ -302,7 +332,7 @@ fn decode_anchors(
                     .map_err(|source| Error::MalformedTrustAnchor {
                         index,
                         trust_list: uri.map(str::to_string),
-                        timestamp,
+                        kind,
                         source,
                     })
             })
@@ -421,6 +451,7 @@ impl ReadSession {
             state: State::Start,
             anchors: vec![],
             timestamp_anchors: vec![],
+            identity_anchors: vec![],
             trust: None,
             report: ReadReport {
                 manifest_store_found: false,
@@ -465,8 +496,9 @@ impl ReadSession {
                 State::AwaitingSigningTime {
                     request,
                     chains,
+                    identity_chains,
                     binding,
-                } => self.handle_awaiting_signing_time(request, chains, binding),
+                } => self.handle_awaiting_signing_time(request, chains, identity_chains, binding),
 
                 State::AwaitingOcspResponses { pending, binding } => {
                     self.handle_awaiting_ocsp_responses(pending, binding)
@@ -502,12 +534,17 @@ impl ReadSession {
         self.anchors = decode_anchors(
             &self.settings.trust_lists,
             &self.settings.trust_anchors,
-            false,
+            AnchorKind::Claim,
         )?;
         self.timestamp_anchors = decode_anchors(
             &self.settings.timestamp_trust_lists,
             &self.settings.timestamp_trust_anchors,
-            true,
+            AnchorKind::Timestamp,
+        )?;
+        self.identity_anchors = decode_anchors(
+            &self.settings.identity_trust_lists,
+            &self.settings.identity_trust_anchors,
+            AnchorKind::Identity,
         )?;
 
         let request = self.core.issue(ReadRequest::ManifestStore {
@@ -555,7 +592,7 @@ impl ReadSession {
                     statuses,
                 };
 
-                if parsed.chains.is_empty() {
+                if parsed.chains.is_empty() && parsed.identity_chains.is_empty() {
                     // Nothing to judge against a clock, so the
                     // host is never asked for one.
                     self.begin_binding(binding);
@@ -564,6 +601,7 @@ impl ReadSession {
                     self.state = State::AwaitingSigningTime {
                         request,
                         chains: parsed.chains,
+                        identity_chains: parsed.identity_chains,
                         binding,
                     };
                 }
@@ -598,6 +636,7 @@ impl ReadSession {
         &mut self,
         request: RequestId,
         chains: Vec<PendingChain>,
+        identity_chains: Vec<PendingChain>,
         binding: Option<PendingBinding>,
     ) -> Result<Option<Step>, Error> {
         match self.core.take_reply(request) {
@@ -605,12 +644,14 @@ impl ReadSession {
                 self.state = State::AwaitingSigningTime {
                     request,
                     chains,
+                    identity_chains,
                     binding,
                 };
                 return Ok(Some(Step::AwaitHost));
             }
 
             Some(ReadHostReply::CurrentDateTime(now)) => {
+                self.evaluate_identity_trust(&identity_chains, Some(now));
                 let pending_ocsp = self.evaluate_trust(&chains, Some(now));
                 self.proceed_after_trust(pending_ocsp, binding);
             }
@@ -620,6 +661,7 @@ impl ReadSession {
             // timestamp brings its own instant, and only the
             // ones that do not are left unevaluated.
             Some(ReadHostReply::Failed(_)) => {
+                self.evaluate_identity_trust(&identity_chains, None);
                 let pending_ocsp = self.evaluate_trust(&chains, None);
                 self.proceed_after_trust(pending_ocsp, binding);
             }
@@ -712,6 +754,61 @@ impl ReadSession {
         self.finish_report();
 
         Ok(None)
+    }
+
+    /// Validates each verified identity signature's certificate chain
+    /// against the configured identity anchors.
+    ///
+    /// The same rules as a claim signer's — profile, path, validity
+    /// windows judged at the trusted timestamp's instant where there is one
+    /// and `now` otherwise — under CAWG's own status codes, and with no
+    /// revocation check: CAWG's own status vocabulary has no revocation
+    /// codes, so there is nothing to report one under. No outcome here
+    /// changes the store's [`ValidationState`] (see
+    /// [`ValidationStatus::affects_validation_state`]).
+    fn evaluate_identity_trust(&mut self, chains: &[PendingChain], now: Option<i64>) {
+        for pending in chains {
+            let mut statuses = Vec::new();
+
+            let attested =
+                pending.timestamp.as_ref().and_then(|timestamp| {
+                    match timestamp::validate(
+                        timestamp,
+                        &self.timestamp_anchors,
+                        &pending.url,
+                        &mut statuses,
+                    ) {
+                        timestamp::Timestamped::Trusted(gen_time) => Some(gen_time),
+                        _ => None,
+                    }
+                });
+
+            match attested.or(now) {
+                Some(instant) => {
+                    chain::validate(
+                        &pending.certificates,
+                        &self.identity_anchors,
+                        instant,
+                        &pending.url,
+                        chain::CAWG_X509_SIGNER,
+                        &mut statuses,
+                    );
+                }
+
+                // As for a claim signer, nothing can be said about validity
+                // windows without an instant. Reported as untrusted, "a
+                // chain of trust could not be verified", rather than under
+                // `general.error`, which would leave the whole store
+                // `Incomplete` for a finding that is only this assertion's.
+                None => statuses.push(ValidationStatus::for_url(
+                    status_code::CAWG_X509_CREDENTIAL_UNTRUSTED,
+                    &pending.url,
+                    "no trusted timestamp and no current time, so the identity credential's certificate chain was not evaluated",
+                )),
+            }
+
+            self.report.statuses.append(&mut statuses);
+        }
     }
 
     /// Validates each verified claim signature's certificate chain against
@@ -1152,7 +1249,7 @@ impl ReadSession {
             .report
             .statuses
             .iter()
-            .any(ValidationStatus::is_failure)
+            .any(ValidationStatus::affects_validation_state)
         {
             Some(ValidationState::Invalid)
         } else if self

@@ -48,7 +48,11 @@ signing function. Both also take an optional function answering each RFC 3161
 timestamp request fails the build, so a manifest is never silently left
 untimestamped.
 `contentauth_c2pa_primitives::tsa` encodes the `TimeStampReq` and unwraps the
-`TimeStampResp`, leaving only the network exchange to the caller.
+`TimeStampResp`, leaving only the network exchange to the caller. A third
+optional function signs CAWG identity assertions
+(`BuilderSettings::identities`), told by label whose key is wanted, since an
+identity's credential is generally not the claim's; with `None`, such a
+request fails the build rather than being signed with the claim's key.
 `build_and_sign` never touches
 `output`'s physical length — it writes exactly the planned bytes and
 nothing else, so reusing a stream with old content past that point never

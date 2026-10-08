@@ -401,7 +401,10 @@ fn generator_info(value: &Value) -> Result<GeneratorInfo, ClaimError> {
 /// `assertions.*` names `hashed_uri` uses, regardless of which of the
 /// three top-level array fields it was decoded from: they identify the
 /// malformed hashed-URI shape, not which list it lives in.
-fn hashed_uri_array(value: &Value, field: &'static str) -> Result<Vec<HashedUri>, ClaimError> {
+pub(crate) fn hashed_uri_array(
+    value: &Value,
+    field: &'static str,
+) -> Result<Vec<HashedUri>, ClaimError> {
     let entries = value
         .as_array()
         .ok_or(ClaimError::UnexpectedType { field })?;

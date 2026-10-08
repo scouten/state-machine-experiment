@@ -25,8 +25,9 @@ use crate::{
     cose, data_hash,
     error::Error,
     hash_stream::{self, HashStream},
-    jumbf::{AssertionInput, ManifestBuilder, ManifestInputs},
-    request::{BuilderHostReply, BuilderRequest},
+    identity::{self, IdentitySettings},
+    jumbf::{AssertionInput, IdentityInput, ManifestBuilder, ManifestInputs},
+    request::{BuilderHostReply, BuilderRequest, SignPurpose},
 };
 
 /// Configuration for a [`BuilderSession`].
@@ -91,14 +92,24 @@ pub struct BuilderSettings {
     /// If set, this session requests an RFC 3161 timestamp for the claim
     /// signature.
     pub timestamp: Option<TimestampSettings>,
+
+    /// CAWG identity assertions to add, each a named actor vouching for
+    /// the manifest's assertions and its hard binding with a credential of
+    /// their own. See [`IdentitySettings`].
+    ///
+    /// Each is signed separately from the claim, so the host is asked to
+    /// sign once for the claim and once per identity, told which by
+    /// [`BuilderRequest::Sign`]'s `purpose`. They become the assertions
+    /// `cawg.identity`, `cawg.identity__1`, … in this order.
+    pub identities: Vec<IdentitySettings>,
 }
 
 impl BuilderSettings {
     /// Creates settings from the fields every manifest needs, with no
     /// title, no assertions beyond the hard binding this session adds
     /// itself, no RSA signature length (only meaningful for RSASSA-PSS
-    /// algorithms), and no timestamp — set the corresponding public field
-    /// afterward to change any of those.
+    /// algorithms), no timestamp, and no identity assertions — set the
+    /// corresponding public field afterward to change any of those.
     pub fn new(
         instance_id: impl Into<String>,
         manifest_label: impl Into<String>,
@@ -116,6 +127,7 @@ impl BuilderSettings {
             certificates,
             rsa_signature_len: None,
             timestamp: None,
+            identities: Vec::new(),
         }
     }
 }
@@ -288,6 +300,15 @@ enum State {
         manifest: Box<ManifestBuilder>,
         exclusions: Vec<ByteRange>,
     },
+    AwaitingIdentitySignature {
+        request: RequestId,
+        manifest: Box<ManifestBuilder>,
+        exclusions: Vec<ByteRange>,
+
+        /// Which of the manifest's identity assertions was sent to be
+        /// signed.
+        index: usize,
+    },
     AwaitingSignature {
         request: RequestId,
         manifest: Box<ManifestBuilder>,
@@ -359,6 +380,13 @@ impl BuilderSession {
                     exclusions,
                 } => self.handle_hashing_asset(stream, manifest, exclusions),
 
+                State::AwaitingIdentitySignature {
+                    request,
+                    manifest,
+                    exclusions,
+                    index,
+                } => self.handle_awaiting_identity_signature(request, manifest, exclusions, index),
+
                 State::AwaitingSignature {
                     request,
                     manifest,
@@ -401,6 +429,51 @@ impl BuilderSession {
             }
         }
 
+        // The labels this crate generates for identity assertions are as
+        // reserved as the hard binding's.
+        for index in 0..self.settings.identities.len() {
+            let label = identity::label_for(index);
+            if assertion_labels.contains(label.as_str()) {
+                return Err(Error::InvalidAssertionLabel(label));
+            }
+        }
+
+        let identity_inputs = self
+            .settings
+            .identities
+            .iter()
+            .map(|identity| {
+                let referenced = match &identity.referenced_assertions {
+                    None => self
+                        .settings
+                        .assertions
+                        .iter()
+                        .map(|a| a.label.as_str())
+                        .collect(),
+                    Some(labels) => {
+                        let mut seen = std::collections::HashSet::new();
+                        for label in labels {
+                            if !self.settings.assertions.iter().any(|a| &a.label == label) {
+                                return Err(Error::UnknownReferencedAssertion(label.clone()));
+                            }
+                            // Naming one twice would write an assertion the
+                            // reader reports as a duplicate reference.
+                            if !seen.insert(label.as_str()) {
+                                return Err(Error::DuplicateReferencedAssertion(label.clone()));
+                            }
+                        }
+                        labels.iter().map(String::as_str).collect()
+                    }
+                };
+
+                Ok(IdentityInput {
+                    credential: &identity.credential,
+                    roles: &identity.roles,
+                    referenced,
+                })
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+
         let signature_len =
             cose::signature_len(self.settings.signing_alg, self.settings.rsa_signature_len)?;
         let generator = &self.settings.claim_generator_info;
@@ -427,6 +500,7 @@ impl BuilderSession {
             certificates: &self.settings.certificates,
             signature_len,
             timestamp_reserve: self.settings.timestamp.map(|t| t.reserve_size),
+            identities: &identity_inputs,
         };
 
         let manifest = ManifestBuilder::build_placeholder(&inputs)?;
@@ -577,19 +651,99 @@ impl BuilderSession {
         }
 
         let hash = stream.finish()?;
-        let to_be_signed = manifest.apply_hard_binding(&exclusions, hash)?;
+        manifest.apply_hard_binding(&exclusions, hash)?;
 
-        let request = self.core.issue(BuilderRequest::Sign {
-            alg: self.settings.signing_alg,
-            data: to_be_signed,
-        });
-        self.state = State::AwaitingSignature {
-            request,
-            manifest,
-            exclusions,
-        };
+        self.begin_signing(manifest, exclusions, 0)?;
 
         Ok(Some(Step::AwaitHost))
+    }
+
+    /// Asks the host for the next signature the manifest needs: identity
+    /// assertion `next_identity`'s, if there is one, else the claim's.
+    ///
+    /// The claim comes last because it lists every assertion's hash, and
+    /// an identity assertion's hash is not known until it is signed.
+    fn begin_signing(
+        &mut self,
+        mut manifest: Box<ManifestBuilder>,
+        exclusions: Vec<ByteRange>,
+        next_identity: usize,
+    ) -> Result<(), Error> {
+        if next_identity < manifest.identity_count() {
+            let (label, alg, data) = manifest.identity_to_be_signed(next_identity)?;
+
+            let request = self.core.issue(BuilderRequest::Sign {
+                purpose: SignPurpose::Identity { label },
+                alg,
+                data,
+            });
+            self.state = State::AwaitingIdentitySignature {
+                request,
+                manifest,
+                exclusions,
+                index: next_identity,
+            };
+        } else {
+            let to_be_signed = manifest.apply_claim()?;
+
+            let request = self.core.issue(BuilderRequest::Sign {
+                purpose: SignPurpose::Claim,
+                alg: self.settings.signing_alg,
+                data: to_be_signed,
+            });
+            self.state = State::AwaitingSignature {
+                request,
+                manifest,
+                exclusions,
+            };
+        }
+
+        Ok(())
+    }
+
+    /// Handles [`State::AwaitingIdentitySignature`]: writes the identity
+    /// assertion the signature completes, then asks for whatever is signed
+    /// next.
+    fn handle_awaiting_identity_signature(
+        &mut self,
+        request: RequestId,
+        mut manifest: Box<ManifestBuilder>,
+        exclusions: Vec<ByteRange>,
+        index: usize,
+    ) -> Result<Option<Step>, Error> {
+        match self.core.take_reply(request) {
+            None => {
+                self.state = State::AwaitingIdentitySignature {
+                    request,
+                    manifest,
+                    exclusions,
+                    index,
+                };
+                return Ok(Some(Step::AwaitHost));
+            }
+
+            Some(BuilderHostReply::Signature(signature)) => {
+                manifest.apply_identity_signature(index, &signature)?;
+                self.begin_signing(manifest, exclusions, index + 1)?;
+            }
+
+            Some(BuilderHostReply::Failed(source)) => {
+                return Err(Error::HostFailure {
+                    id: request,
+                    source,
+                });
+            }
+
+            Some(_) => {
+                return Err(ProtocolError::ReplyMismatch {
+                    id: request,
+                    expected: "Signature",
+                }
+                .into());
+            }
+        }
+
+        Ok(None)
     }
 
     /// Handles [`State::AwaitingSignature`]: on a real signature, either
@@ -828,4 +982,96 @@ pub struct BuilderReport {
     /// carrying the manifest, framing included, and anything else the
     /// format's specification excludes.
     pub exclusions: Vec<ByteRange>,
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::panic)]
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    const CERT: &[u8] = include_bytes!("../tests/fixtures/test-signer.der");
+
+    /// Drives a session with one identity assertion to the point where it
+    /// has asked for that assertion's signature, and returns the session
+    /// and that request's id.
+    fn session_at_identity_signature() -> (BuilderSession, RequestId) {
+        let mut settings = BuilderSettings::new(
+            "xmp:iid:1",
+            "urn:uuid:1",
+            GeneratorInfo::new("test", "1"),
+            SigningAlg::Es256,
+            vec![CERT.to_vec()],
+        );
+        settings.identities = vec![IdentitySettings::x509(
+            SigningAlg::Es256,
+            vec![CERT.to_vec()],
+        )];
+
+        let mut session = BuilderSession::new(settings);
+        let mut asset = vec![0u8; 4000];
+
+        loop {
+            session.advance().unwrap();
+
+            for request in session.outstanding_requests().to_vec() {
+                let reply = match &request.kind {
+                    BuilderRequest::ReservePlaceholder { placeholder, .. } => {
+                        asset.splice(100..100, placeholder.iter().copied());
+                        BuilderHostReply::PlaceholderReserved(vec![ByteRange {
+                            start: 100,
+                            len: placeholder.len() as u64,
+                        }])
+                    }
+                    BuilderRequest::AssetLength { .. } => {
+                        BuilderHostReply::AssetLength(asset.len() as u64)
+                    }
+                    BuilderRequest::AssetBytes { range, .. } => {
+                        let start = range.start as usize;
+                        BuilderHostReply::AssetBytes(
+                            asset[start..start + range.len as usize].to_vec(),
+                        )
+                    }
+                    BuilderRequest::Sign { purpose, .. } => {
+                        assert!(matches!(purpose, SignPurpose::Identity { .. }));
+                        return (session, request.id);
+                    }
+                    other => panic!("unexpected request {other:?}"),
+                };
+                session.fulfill(request.id, reply).unwrap();
+            }
+        }
+    }
+
+    /// `fulfill` refuses a reply of the wrong kind, so the session's own
+    /// check — defence in depth against a bug in that gate — is reached by
+    /// going around it.
+    #[test]
+    fn a_reply_of_the_wrong_kind_to_an_identity_signature_request_is_refused() {
+        let (mut session, id) = session_at_identity_signature();
+
+        session
+            .core
+            .fulfill_unchecked(id, BuilderHostReply::ManifestCommitted);
+
+        assert!(matches!(
+            session.advance().unwrap_err(),
+            Error::Protocol(ProtocolError::ReplyMismatch {
+                expected: "Signature",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn a_session_whose_identity_signature_is_pending_waits_for_it() {
+        let (mut session, _id) = session_at_identity_signature();
+
+        assert_eq!(session.advance().unwrap(), Step::AwaitHost);
+        assert!(matches!(
+            session.state,
+            State::AwaitingIdentitySignature { index: 0, .. }
+        ));
+    }
 }

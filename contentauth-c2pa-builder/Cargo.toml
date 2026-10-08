@@ -18,6 +18,11 @@ contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
 # CBOR encoding for the claim and its assertions — the same encoder
 # contentauth-c2pa-reader uses to decode them.
 c2pa_cbor = "0.77.4"
+# Derives for the CAWG identity assertion's CBOR shapes, whose field order
+# (struct declaration order) is part of what its signature covers. Already
+# in the tree through c2pa_cbor.
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
 # JUMBF box assembly. This crate uses only the *builder* half; the reader
 # uses only the parser half.
 jumbf = "0.7.0"

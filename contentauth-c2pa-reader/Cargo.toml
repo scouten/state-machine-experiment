@@ -42,6 +42,9 @@ cms = { version = "0.2.3", default-features = false, features = ["alloc"] }
 # `c2pa_cbor::Value` (walked by hand in `claim.rs`) rather than serde
 # derives, so the set of claim fields this crate understands stays explicit.
 c2pa_cbor = "0.77.4"
+# The `Visitor`/`MapAccess` traits `identity/cbor.rs` uses to walk a map
+# with `c2pa_cbor`'s own decoder. Already in the tree through `c2pa_cbor`.
+serde = "1"
 # Zero-copy JUMBF parser. This crate only reads, so only the parser half of
 # the crate is used.
 jumbf = "0.7.0"
