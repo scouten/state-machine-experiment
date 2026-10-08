@@ -3,6 +3,10 @@
 **Status:** proposal for discussion between Eric and Gavin. Nothing here is
 committed work.
 
+**See also:** [`c2pa-core-review.md`](c2pa-core-review.md), a review of
+Gavin's second experiment (a `no_std` JUMBF/claim codec stack), whose
+hardening and streaming-writer ideas feed steps 2 and 3 below.
+
 **Basis:** a read-through of
 [`gpeacock/asset-io`](https://github.com/gpeacock/asset-io) at commit
 `d1be4bd` (a single-commit history, v0.1.0, ~15k lines of Rust). I read the
