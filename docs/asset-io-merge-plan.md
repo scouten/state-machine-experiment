@@ -391,11 +391,17 @@ from evidence. Effort is rough (S ≈ days, M ≈ 1–2 weeks, L ≈ several).
 
 1. **Baseline benchmarks (S).** Put asset-io and our `file-reader` /
    `file-builder` behind one benchmark harness (criterion; asset-io's
-   `benches/io.rs` is a start) on shared fixtures: a 22 MB JPEG, a large MOV,
-   a fragmented MP4. Measure parse time, peak RSS, copies per byte
-   (allocation counts), sign time, and hash throughput serial vs parallel.
-   *Exit:* we know the real gap, and §2's proposals are ranked by measured
-   cost. Gate for every later step: no regression, and the claimed win shows.
+   `benches/io.rs` is a start) on the formats **both sides handle today**:
+   JPEG (a 22 MB file, plus a synthetic multi-hundred-MB one) and TIFF
+   (a multi-GB file is realistic here and exercises the large-asset hashing
+   path). Measure parse time, peak RSS, copies per byte (allocation counts),
+   sign time, and hash throughput serial vs parallel. Record asset-io's own
+   video numbers (a large MOV, a fragmented MP4) separately as a reference;
+   the like-for-like video comparison can't exist until the BMFF handler
+   lands in step 8, so it is added there rather than blocking this gate.
+   *Exit:* we know the real gap on JPEG/TIFF, and §2's proposals are ranked
+   by measured cost. Gate for every later step: no regression, and the
+   claimed win shows.
 2. **Fuzzing, both sides (M, parallelizable with 1).** Port Gavin's
    `fuzz.sh`/corpus approach into this workspace; add the targets from §2.4
    (session-protocol, handler, differential) and a CI smoke job. Triage
@@ -434,7 +440,8 @@ from evidence. Effort is rough (S ≈ days, M ≈ 1–2 weeks, L ≈ several).
    store length, not post-write patches, since patches must stay inside the
    exclusions) and implement `c2pa.hash.bmff` including mdat hashing and
    fragment-aligned digest requests. The largest item and the biggest payoff
-   (video; the 6.7 GB case). *Exit:* round trips with c2pa-rs; fuzzed.
+   (video; the 6.7 GB case). *Exit:* round trips with c2pa-rs; fuzzed; the video benchmarks recorded
+   in step 1 are now compared like-for-like.
 9. **RIFF, then facade and metadata crates (M).** RIFF (rewrites an existing
    size field, which `Edit::Emit` anticipates); the `asset-io` facade over
    sessions; MiniXmp/EXIF/thumbnails as optional crates; XMP remote-reference
