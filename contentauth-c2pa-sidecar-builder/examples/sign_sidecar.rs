@@ -21,8 +21,12 @@
 //! writes `photo.c2pa` (the sidecar) and `photo.ca.pem` (the ephemeral CA).
 //! The CA is generated fresh on every run and anchored to nothing, so the
 //! result is not trusted by any verifier by default; tell one to trust the
-//! `.ca.pem` explicitly, for example
-//! `c2patool trust --trust_anchors photo.ca.pem`.
+//! `.ca.pem` explicitly. With c2patool (checked against 0.28.2; `trust` is a
+//! subcommand and comes after the asset and its options):
+//!
+//! ```sh
+//! c2patool photo.jpg --external-manifest photo.c2pa trust --trust_anchors photo.ca.pem
+//! ```
 //!
 //! Everything this program does that a sans-I/O session cannot — open the
 //! file, read ranges of it, draw random bytes, read the clock, hold the
@@ -129,8 +133,11 @@ fn run(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         report.manifest_store.len()
     );
     println!(
-        "wrote {} -- not a trusted CA; to validate with c2patool, run:\n  c2patool trust --trust_anchors {}",
+        "wrote {} -- not a trusted CA; to validate with c2patool, run:\n  \
+         c2patool {} --external-manifest {} trust --trust_anchors {}",
         ca_pem.display(),
+        path.display(),
+        sidecar.display(),
         ca_pem.display()
     );
     Ok(())

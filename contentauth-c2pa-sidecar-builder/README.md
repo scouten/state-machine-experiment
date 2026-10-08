@@ -14,7 +14,16 @@ generated CA + end-entity chain. Run it:
 ```sh
 cargo run -p contentauth-c2pa-sidecar-builder --example sign_sidecar -- photo.jpg
 # → photo.c2pa, photo.ca.pem  (the CA is anchored to nothing; trust it explicitly)
+
+# validate it with c2patool (checked against 0.28.2 → validation_state "Trusted");
+# `trust` is a subcommand, so it follows the asset and its options:
+c2patool photo.jpg --external-manifest photo.c2pa trust --trust_anchors photo.ca.pem
 ```
+
+Leave off `trust …` and c2patool reports `signingCredential.untrusted`, with
+everything else (claim signature, hashed URIs, `assertion.dataHash.match`)
+still valid. (The input should be an asset with no manifest of its own, or
+c2patool has two to choose between; `--external-manifest` overrides it.)
 
 ## Elements, not a monolith
 
