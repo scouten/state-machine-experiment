@@ -416,14 +416,36 @@ fn check_references(
     }
 }
 
-/// Returns true if `url` names a hard binding assertion: `c2pa.hash.data`,
-/// `c2pa.hash.bmff` and its versions, `c2pa.hash.boxes`,
-/// `c2pa.hash.collection.data` — all the `c2pa.hash.*` labels — whatever
-/// its `__n` instance suffix.
+/// Returns true if `url` names a hard binding assertion, as c2pa-rs's
+/// `is_hard_binding_label` does: `c2pa.hash.data`, `c2pa.hash.boxes`,
+/// `c2pa.hash.collection.data`, `c2pa.hash.multi-asset`, or a `c2pa.hash.bmff`
+/// of any version — whatever its `__n` instance suffix. Anything else under
+/// `c2pa.hash.` is not one, so a made-up label cannot satisfy the check.
 fn is_hard_binding(url: &str) -> bool {
-    url.rsplit('/')
-        .next()
-        .is_some_and(|label| label.starts_with("c2pa.hash."))
+    let Some(label) = url.rsplit('/').next() else {
+        return false;
+    };
+
+    // `__n` marks a further instance of the same assertion.
+    let label = label.split_once("__").map_or(label, |(base, _)| base);
+
+    // `.vN` is a version, which only the BMFF binding has had.
+    let bmff = label
+        .strip_prefix("c2pa.hash.bmff")
+        .is_some_and(|rest| rest.is_empty() || rest.strip_prefix(".v").is_some_and(is_number));
+
+    bmff || matches!(
+        label,
+        "c2pa.hash.data"
+            | "c2pa.hash.boxes"
+            | "c2pa.hash.collection.data"
+            | "c2pa.hash.multi-asset"
+    )
+}
+
+/// True for one or more ASCII digits.
+fn is_number(text: &str) -> bool {
+    !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit())
 }
 
 #[cfg(test)]
@@ -839,9 +861,13 @@ mod tests {
         );
 
         for label in [
+            "c2pa.hash.bmff",
             "c2pa.hash.bmff.v2",
+            "c2pa.hash.bmff.v3__1",
             "c2pa.hash.boxes",
             "c2pa.hash.collection.data",
+            "c2pa.hash.multi-asset",
+            "c2pa.hash.data__1",
         ] {
             let mut parts = IdentityParts::default();
             parts.referenced.truncate(1);
@@ -861,6 +887,38 @@ mod tests {
             .collect();
             assert!(codes.is_empty(), "{label}");
         }
+    }
+
+    #[test]
+    fn a_label_that_merely_starts_like_a_hard_binding_is_not_one() {
+        for label in [
+            "c2pa.hash.fake",
+            "c2pa.hash.bmfffake",
+            "c2pa.hash.bmff.vx",
+            "c2pa.hash.bmff.v",
+            "c2pa.hash.datax",
+            "c2pa.hash.",
+            "c2pa.actions",
+            "not.c2pa.hash.data",
+        ] {
+            assert!(
+                !is_hard_binding(&format!("self#jumbf=c2pa.assertions/{label}")),
+                "{label}"
+            );
+        }
+        assert!(!is_hard_binding(""));
+
+        // And an identity assertion naming only such a label is flagged.
+        let mut parts = IdentityParts::default();
+        parts.referenced.truncate(1);
+        parts
+            .referenced
+            .push(("c2pa.hash.fake".to_string(), vec![1]));
+        parts.omit_from_claim.push("c2pa.hash.data".into());
+        let manifest = identity_manifest_from(&parts, vec![identity_box("cawg.identity", &parts)]);
+        assert!(
+            identity_codes(&parse_one(manifest)).contains(&"cawg.identity.hard_binding_missing")
+        );
     }
 
     #[test]

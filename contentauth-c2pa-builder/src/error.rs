@@ -75,6 +75,14 @@ pub enum Error {
     )]
     UnknownReferencedAssertion(String),
 
+    /// An [`IdentitySettings::referenced_assertions`] entry names the same
+    /// assertion more than once, which a verifier rejects as a duplicate
+    /// reference.
+    ///
+    /// [`IdentitySettings::referenced_assertions`]: crate::IdentitySettings::referenced_assertions
+    #[error("an identity assertion references {0:?} more than once")]
+    DuplicateReferencedAssertion(String),
+
     /// The host returned a different number of bytes than the range it was
     /// asked for.
     ///

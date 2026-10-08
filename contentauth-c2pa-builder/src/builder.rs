@@ -451,9 +451,15 @@ impl BuilderSession {
                         .map(|a| a.label.as_str())
                         .collect(),
                     Some(labels) => {
+                        let mut seen = std::collections::HashSet::new();
                         for label in labels {
                             if !self.settings.assertions.iter().any(|a| &a.label == label) {
                                 return Err(Error::UnknownReferencedAssertion(label.clone()));
+                            }
+                            // Naming one twice would write an assertion the
+                            // reader reports as a duplicate reference.
+                            if !seen.insert(label.as_str()) {
+                                return Err(Error::DuplicateReferencedAssertion(label.clone()));
                             }
                         }
                         labels.iter().map(String::as_str).collect()

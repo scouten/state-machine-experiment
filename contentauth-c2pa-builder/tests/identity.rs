@@ -374,6 +374,21 @@ fn naming_an_assertion_that_does_not_exist_is_refused() {
 }
 
 #[test]
+fn naming_an_assertion_twice_is_refused() {
+    let mut identity = x509();
+    identity.referenced_assertions = Some(vec![
+        "c2pa.actions".to_string(),
+        "c2pa.metadata".to_string(),
+        "c2pa.actions".to_string(),
+    ]);
+
+    assert!(matches!(
+        start_error(settings(vec![identity])),
+        Error::DuplicateReferencedAssertion(label) if label == "c2pa.actions"
+    ));
+}
+
+#[test]
 fn a_host_assertion_cannot_take_an_identity_assertions_label() {
     let mut s = settings(vec![x509(), x509()]);
     s.assertions
