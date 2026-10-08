@@ -1,7 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
+    "contentauth-c2pa-assertion-actions",
+    "contentauth-c2pa-assertion-data-hash",
     "contentauth-c2pa-builder",
+    "contentauth-c2pa-claim",
+    "contentauth-c2pa-ephemeral-cert",
     "contentauth-c2pa-file-builder",
     "contentauth-c2pa-file-reader",
     "contentauth-c2pa-format",
@@ -14,6 +18,7 @@ members = [
     "contentauth-c2pa-node-compat-sign",
     "contentauth-c2pa-primitives",
     "contentauth-c2pa-reader",
+    "contentauth-c2pa-sidecar-builder",
     "contentauth-c2pa-sign-baseline",
     "contentauth-c2pa-rs-compat",
     "contentauth-c2pa-rs-compat-sign",

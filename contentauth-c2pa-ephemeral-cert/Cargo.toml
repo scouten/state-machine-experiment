@@ -1,0 +1,24 @@
+[package]
+name = "contentauth-c2pa-ephemeral-cert"
+version = "0.1.0"
+description = "Throwaway Ed25519 CA and end-entity certificate chain for local C2PA signing; clock and entropy are injected, so it is sans-I/O"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["c2pa", "content-credentials", "testing"]
+categories = ["cryptography"]
+publish = false
+
+[dependencies]
+contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
+# DER-writing for X.509 only: no `ring`/`aws-lc-rs`, no OpenSSL (so it stays
+# Wasm-buildable). rcgen's key traits let it write a correctly shaped
+# certificate around any signer handed to it; the Ed25519 key material and
+# signature are ours (adapted from Gavin Peacock's c2pa-core sample).
+rcgen = { version = "0.14", default-features = false, features = ["pem"] }
+ed25519-dalek = { version = "2", default-features = false }
+time = { version = "0.3", default-features = false }
+thiserror = "2.0.20"

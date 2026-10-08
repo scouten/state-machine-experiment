@@ -129,6 +129,35 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   `contentauth-c2pa-file-reader` and checks it reads back as `Trusted` —
   the two crates' only relationship is that both implement the
   `contentauth-c2pa-format` contract.
+- **`contentauth-c2pa-assertion-data-hash`**, **`-assertion-actions`**,
+  **`-claim`**, **`-ephemeral-cert`** — *independent elements*, the other
+  way to build a manifest: each knows one structure and nothing else, and
+  hands the rest of the system only plain data. An assertion crate's whole
+  output is `contentauth_c2pa_primitives::EncodedAssertion` (a label and
+  opaque CBOR — nothing downstream may depend on its fields);
+  `DataHashSession` is a sub-`Session` that hashes a streamed asset into
+  `c2pa.hash.data`; `-claim` encodes the v2 claim from `HashedUri`s (never
+  from assertions) and assembles the `COSE_Sign1` envelope, leaving the
+  signing to the host; `-ephemeral-cert` makes a throwaway Ed25519 CA +
+  signer chain (adapted from Gavin Peacock's `c2pa-core` sample) with
+  entropy and the clock passed in. `HashedUri` itself lives in
+  `contentauth-c2pa-primitives` (`hashed_uri`): it hashes a JUMBF box's
+  *contents*, stripping the 8/16-byte header itself.
+- **`contentauth-c2pa-sidecar-builder`** — `SidecarSession` composes those
+  elements into a sidecar `.c2pa` (the use case of Gavin's
+  `c2pa-sign-sample`): hard binding over the whole asset, claim, signature,
+  JUMBF via the `jumbf` crate — three host requests (`AssetLength`,
+  `AssetBytes`, `Sign`), no placeholder, no format handler. Each assertion
+  box is rendered once, hashed, and spliced into the store as-is. Validated
+  against the reader and the real c2pa-rs (see `c2pa-rs-compat-conformance`).
+  **TODO:** the claim's `instanceID` should be the asset's
+  `xmpMM:InstanceID` when it has XMP; no builder here, nor Gavin's sample,
+  does that yet.
+- **`c2pa-core-comparison`** — measures the hand-coded JUMBF in `c2pa-core`'s
+  `c2pa-store` against the `jumbf` crate (bytes identical; speed, peak
+  memory, allocations). Deliberately **not** a workspace member (own
+  `[workspace]`: git dependency on `c2pa-core`, and a counting global
+  allocator that needs `unsafe`); CI runs it in its own job.
 - **`contentauth-c2pa-rs-compat`** — an experimental compatibility layer
   reproducing a slice of [c2pa-rs](https://github.com/contentauth/c2pa-rs)'s
   own public `Reader` API — same method names and signatures where
