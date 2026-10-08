@@ -1,0 +1,25 @@
+[workspace]
+# Deliberately its own workspace, not a member of the root one: it depends on
+# Gavin Peacock's `c2pa-core` (a git dependency, pinned) and installs a
+# global allocator that needs `unsafe`, neither of which the root
+# workspace's checks (Wasm, MSRV, cargo-deny, `deny(unsafe_code)`) want
+# swept in. See the README.
+
+[package]
+name = "c2pa-core-comparison"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Hand-coded JUMBF (c2pa-core's c2pa-store) versus the `jumbf` crate: bytes, speed, and memory"
+
+[dependencies]
+# Gavin's hand-coded, zero-copy, no_std JUMBF reader and streaming writer.
+c2pa-store = { git = "https://github.com/gpeacock/c2pa-core", rev = "8f3e630cd61b6813668b2fbd9600f90dedd98116", features = ["write", "std"] }
+# The crate this workspace uses (builder: assembly; reader: parsing).
+jumbf = "0.7.0"
+# Hashing, so the comparison includes what a signer must do to every
+# assertion (c2pa-store hashes as it writes; jumbf does not).
+sha2 = "0.10"
+
+[profile.release]
+debug = false

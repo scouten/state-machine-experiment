@@ -1,0 +1,31 @@
+[package]
+name = "contentauth-c2pa-sidecar-builder"
+version = "0.1.0"
+description = "Builds and signs a sidecar C2PA manifest store (.c2pa) for an asset, by composing independent assertion, claim and hashed-URI elements in a sans-I/O session"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["c2pa", "content-credentials", "sidecar", "sans-io"]
+categories = ["api-bindings"]
+publish = false
+
+[dependencies]
+contentauth-state-machine = { path = "../contentauth-state-machine" }
+contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
+contentauth-c2pa-assertion-data-hash = { path = "../contentauth-c2pa-assertion-data-hash" }
+contentauth-c2pa-claim = { path = "../contentauth-c2pa-claim" }
+# JUMBF box assembly (the builder half only).
+jumbf = "0.7.0"
+thiserror = "2.0.20"
+
+[dev-dependencies]
+contentauth-c2pa-assertion-actions = { path = "../contentauth-c2pa-assertion-actions" }
+contentauth-c2pa-ephemeral-cert = { path = "../contentauth-c2pa-ephemeral-cert" }
+# Round trip: every sidecar built in the tests is read back by the
+# independently-written reader and must validate.
+contentauth-c2pa-reader = { path = "../contentauth-c2pa-reader" }
+# The example is a host, and a host owns entropy and the clock.
+getrandom = "0.3"

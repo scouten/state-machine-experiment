@@ -37,6 +37,36 @@ about C2PA itself.
 * **Asset-supplied URLs are an SSRF surface** the moment a host answers
   `Ocsp`; the policy belongs with the host that owns the network.
 
+## The sidecar experiment
+
+Reproducing Gavin Peacock's `c2pa-sign-sample` as independent elements
+taught a few things:
+
+* **The seams are cheap when the interface is dumb.** An assertion crate's
+  whole output is `EncodedAssertion` (label + CBOR); the claim holds
+  `HashedUri`s. Adding an assertion type touches neither the session nor
+  the claim.
+* **A sub-session composes like a crate.** `DataHashSession` is driven
+  inside `SidecarSession` by forwarding requests and replies — the same
+  move `FileReadSession` makes. Request-ID mapping is the only cost.
+* **`HashedUri` belonged in `primitives`.** It is shared by the claim,
+  identity assertions and (later) ingredients, and carries one subtlety —
+  hash the box *contents*, not its header — worth having once.
+* **Doing the obvious thing with `jumbf` was wasteful.** Render-to-hash
+  then render-again cost 2.3× `c2pa-store`'s time and 1.5× its peak on large
+  payloads; rendering once and splicing brought it to ~1.5× time. The two
+  JUMBF implementations emit identical bytes and parse each other's output
+  ([comparison](../../c2pa-core-comparison/README.md)).
+* **Entropy and the clock are inputs.** Gavin's ephemeral-cert code drew on
+  `getrandom` and `now_utc()`; taking both as parameters made it sans-I/O,
+  Wasm-clean and deterministic, so its output is testable.
+* **A spec discrepancy surfaced.** The claim's `signature` must be an
+  *absolute* URI; `contentauth-c2pa-builder` writes the relative form
+  (readers, c2pa-rs's included, accept both). The new claim crate writes the
+  absolute one.
+* **Neither project honors the XMP instance-ID "should".** The claim's
+  `instanceID` should be the asset's `xmpMM:InstanceID` when it has XMP.
+
 ## Things that were cheap *because* of the architecture
 
 * A Wasm build with no `cfg` gymnastics in the engine.
