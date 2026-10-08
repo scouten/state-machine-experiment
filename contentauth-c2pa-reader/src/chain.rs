@@ -113,7 +113,11 @@ pub(crate) struct Vocabulary {
     pub(crate) invalid: &'static str,
 
     /// Every certificate in the path was inside its validity window.
-    pub(crate) inside_validity: &'static str,
+    ///
+    /// `None` where the vocabulary has no success code for that on its
+    /// own (CAWG's does not: only a window *violation* is named), in which
+    /// case nothing is recorded.
+    pub(crate) inside_validity: Option<&'static str>,
 
     /// The credential at the bottom of the path was outside its window.
     pub(crate) outside_validity: &'static str,
@@ -131,7 +135,7 @@ pub(crate) struct Vocabulary {
 /// The vocabulary for a claim signature's own certificate chain.
 pub(crate) const CLAIM_SIGNER: Vocabulary = Vocabulary {
     invalid: status_code::SIGNING_CREDENTIAL_INVALID,
-    inside_validity: status_code::CLAIM_SIGNATURE_INSIDE_VALIDITY,
+    inside_validity: Some(status_code::CLAIM_SIGNATURE_INSIDE_VALIDITY),
     outside_validity: status_code::CLAIM_SIGNATURE_OUTSIDE_VALIDITY,
     expired: status_code::SIGNING_CREDENTIAL_EXPIRED,
     trusted: status_code::SIGNING_CREDENTIAL_TRUSTED,
@@ -147,11 +151,25 @@ pub(crate) const CLAIM_SIGNER: Vocabulary = Vocabulary {
 /// been established.
 pub(crate) const TIMESTAMP_AUTHORITY: Vocabulary = Vocabulary {
     invalid: status_code::TIMESTAMP_MALFORMED,
-    inside_validity: status_code::TIMESTAMP_VALIDATED,
+    inside_validity: Some(status_code::TIMESTAMP_VALIDATED),
     outside_validity: status_code::TIMESTAMP_OUTSIDE_VALIDITY,
     expired: status_code::TIMESTAMP_OUTSIDE_VALIDITY,
     trusted: status_code::TIMESTAMP_TRUSTED,
     untrusted: status_code::TIMESTAMP_UNTRUSTED,
+};
+
+/// The vocabulary for a CAWG identity assertion's X.509 credential.
+///
+/// A certificate profile violation is its own code, distinct from a chain
+/// that merely reaches no anchor, and a window violation anywhere in the
+/// path — the signer's or a CA's — reports as one code.
+pub(crate) const CAWG_X509_SIGNER: Vocabulary = Vocabulary {
+    invalid: status_code::CAWG_X509_CREDENTIAL_INVALID,
+    inside_validity: None,
+    outside_validity: status_code::CAWG_X509_SIGNATURE_OUTSIDE_VALIDITY,
+    expired: status_code::CAWG_X509_SIGNATURE_OUTSIDE_VALIDITY,
+    trusted: status_code::CAWG_X509_CREDENTIAL_TRUSTED,
+    untrusted: status_code::CAWG_X509_CREDENTIAL_UNTRUSTED,
 };
 
 /// A decoded trust anchor, remembering which configured list it came from.
@@ -283,11 +301,13 @@ pub(crate) fn validate(
         return Trust::Rejected;
     }
 
-    statuses.push(ValidationStatus::for_url(
-        status_code_vocabulary.inside_validity,
-        url,
-        "every certificate in the path was inside its validity window",
-    ));
+    if let Some(code) = status_code_vocabulary.inside_validity {
+        statuses.push(ValidationStatus::for_url(
+            code,
+            url,
+            "every certificate in the path was inside its validity window",
+        ));
+    }
 
     if let Some(anchor) = anchor {
         let mut status = ValidationStatus::for_url(

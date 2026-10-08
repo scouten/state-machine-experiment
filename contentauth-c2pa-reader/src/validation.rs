@@ -236,6 +236,65 @@ pub mod status_code {
     /// A check could not be carried out at all — for instance because the
     /// asset the hard binding covers was not available.
     pub const GENERAL_ERROR: &str = "general.error";
+
+    /// A CAWG identity assertion's CBOR could not be interpreted.
+    pub const CAWG_IDENTITY_CBOR_INVALID: &str = "cawg.identity.cbor.invalid";
+
+    /// A CAWG identity assertion's `pad1` or `pad2` holds a byte other
+    /// than zero.
+    pub const CAWG_IDENTITY_PAD_INVALID: &str = "cawg.identity.pad.invalid";
+
+    /// A CAWG identity assertion's `sig_type` is one this crate does not
+    /// recognise at all.
+    pub const CAWG_IDENTITY_SIG_TYPE_UNKNOWN: &str = "cawg.identity.sig_type.unknown";
+
+    /// A CAWG identity assertion's `sig_type` names a credential type the
+    /// CAWG specification defines but this crate cannot yet verify (today,
+    /// identity claims aggregation).
+    ///
+    /// **Not a code from the CAWG specification** — this crate's own, so
+    /// that "known, not checked" is not misreported as the spec's
+    /// "unknown". Informational, never a failure.
+    pub const CAWG_IDENTITY_SIG_TYPE_UNSUPPORTED: &str = "cawg.identity.sig_type.unsupported";
+
+    /// A CAWG identity assertion references an assertion the claim does not
+    /// list, or lists with a different hash.
+    pub const CAWG_IDENTITY_ASSERTION_MISMATCH: &str = "cawg.identity.assertion.mismatch";
+
+    /// A CAWG identity assertion references no hard binding assertion.
+    pub const CAWG_IDENTITY_HARD_BINDING_MISSING: &str = "cawg.identity.hard_binding_missing";
+
+    /// A CAWG identity assertion references the same assertion twice.
+    pub const CAWG_IDENTITY_ASSERTION_DUPLICATE: &str = "cawg.identity.assertion.duplicate";
+
+    /// A CAWG identity assertion passed every check of its own and its
+    /// credential's.
+    pub const CAWG_IDENTITY_WELL_FORMED: &str = "cawg.identity.well-formed";
+
+    /// The X.509 signature over a CAWG identity assertion verified.
+    pub const CAWG_X509_SIGNATURE_VALIDATED: &str = "cawg.x509.signature.validated";
+
+    /// The X.509 signature over a CAWG identity assertion did not verify.
+    pub const CAWG_X509_SIGNATURE_MISMATCH: &str = "cawg.x509.signature.mismatch";
+
+    /// A certificate in the identity signer's path was outside its
+    /// validity window at the instant of evaluation.
+    pub const CAWG_X509_SIGNATURE_OUTSIDE_VALIDITY: &str = "cawg.x509.signature.outside_validity";
+
+    /// The identity signer's certificate chains to a configured CAWG trust
+    /// anchor.
+    pub const CAWG_X509_CREDENTIAL_TRUSTED: &str = "cawg.x509.credential.trusted";
+
+    /// The identity signer's certificate does not chain to a configured
+    /// CAWG trust anchor — including because none are configured.
+    pub const CAWG_X509_CREDENTIAL_UNTRUSTED: &str = "cawg.x509.credential.untrusted";
+
+    /// The identity signer's certificate, or its chain, is outside the
+    /// certificate profile or cannot be interpreted.
+    pub const CAWG_X509_CREDENTIAL_INVALID: &str = "cawg.x509.credential.invalid";
+
+    /// The identity signature's algorithm has no validator in this build.
+    pub const CAWG_X509_ALGORITHM_UNSUPPORTED: &str = "cawg.x509.algorithm.unsupported";
 }
 
 /// Overall validation outcome for a manifest store.
@@ -396,7 +455,38 @@ impl ValidationStatus {
                 | status_code::SIGNING_CREDENTIAL_INVALID
                 | status_code::SIGNING_CREDENTIAL_EXPIRED
                 | status_code::SIGNING_CREDENTIAL_OCSP_REVOKED
+                | status_code::CAWG_IDENTITY_CBOR_INVALID
+                | status_code::CAWG_IDENTITY_PAD_INVALID
+                | status_code::CAWG_IDENTITY_SIG_TYPE_UNKNOWN
+                | status_code::CAWG_IDENTITY_ASSERTION_MISMATCH
+                | status_code::CAWG_IDENTITY_HARD_BINDING_MISSING
+                | status_code::CAWG_IDENTITY_ASSERTION_DUPLICATE
+                | status_code::CAWG_X509_SIGNATURE_MISMATCH
+                | status_code::CAWG_X509_SIGNATURE_OUTSIDE_VALIDITY
+                | status_code::CAWG_X509_CREDENTIAL_INVALID
         )
+    }
+
+    /// True if this status is a finding about a CAWG identity assertion
+    /// (`cawg.identity.*` or `cawg.x509.*`).
+    ///
+    /// A failure among these is scoped to the one identity assertion it
+    /// names: it says that named actor's claim is not to be believed, and
+    /// says nothing about the content credential itself, whose own
+    /// signature and hard binding are checked separately. It therefore
+    /// counts as a failure ([`Self::is_failure`]) but never lowers the
+    /// store's [`ValidationState`] — see [`Self::affects_validation_state`].
+    pub fn is_identity_finding(&self) -> bool {
+        self.code.starts_with("cawg.identity.") || self.code.starts_with("cawg.x509.")
+    }
+
+    /// True if this status, being a failure, takes the store's
+    /// [`ValidationState`] down to [`ValidationState::Invalid`].
+    ///
+    /// Every failure does except a CAWG identity finding, whose blast
+    /// radius is only its own assertion (the same rule c2pa-rs applies).
+    pub fn affects_validation_state(&self) -> bool {
+        self.is_failure() && !self.is_identity_finding()
     }
 
     /// True if this status records a check that could not be carried out.
@@ -500,14 +590,99 @@ pub(crate) fn check_claim_signature(
         }
     };
 
+    let verified = check_cose_signature(
+        &url,
+        claim_bytes,
+        signature,
+        &CLAIM_SIGNATURE_CODES,
+        statuses,
+    )?;
+
+    Some(PendingChain {
+        manifest_label: manifest_label.to_string(),
+        url,
+        certificates: verified.certificates,
+        timestamp: verified.timestamp,
+        rvals: verified.rvals,
+    })
+}
+
+/// The status vocabulary one detached-payload `COSE_Sign1` check reports
+/// under.
+///
+/// A claim signature and a CAWG identity assertion's X.509 signature are
+/// the same construction — a `COSE_Sign1` over a payload that lives
+/// elsewhere, signed by the first certificate of an `x5chain` — but the
+/// specifications name their findings differently, so the checks are
+/// shared and the codes are a parameter, as they are for
+/// [`crate::chain::Vocabulary`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SignatureCodes {
+    /// What the signature is a signature *of*, for explanations.
+    pub(crate) noun: &'static str,
+
+    /// The structure or certificates cannot be interpreted.
+    pub(crate) invalid: &'static str,
+
+    /// The signature verified.
+    pub(crate) validated: &'static str,
+
+    /// It did not.
+    pub(crate) mismatch: &'static str,
+
+    /// The algorithm has no validator in this build.
+    pub(crate) unsupported: &'static str,
+}
+
+/// The claim signature's vocabulary.
+const CLAIM_SIGNATURE_CODES: SignatureCodes = SignatureCodes {
+    noun: "claim signature",
+    invalid: status_code::SIGNING_CREDENTIAL_INVALID,
+    validated: status_code::CLAIM_SIGNATURE_VALIDATED,
+    mismatch: status_code::CLAIM_SIGNATURE_MISMATCH,
+    unsupported: status_code::ALGORITHM_UNSUPPORTED,
+};
+
+/// The CAWG X.509 identity signature's vocabulary.
+pub(crate) const CAWG_X509_SIGNATURE_CODES: SignatureCodes = SignatureCodes {
+    noun: "identity assertion signature",
+    invalid: status_code::CAWG_X509_CREDENTIAL_INVALID,
+    validated: status_code::CAWG_X509_SIGNATURE_VALIDATED,
+    mismatch: status_code::CAWG_X509_SIGNATURE_MISMATCH,
+    unsupported: status_code::CAWG_X509_ALGORITHM_UNSUPPORTED,
+};
+
+/// What a verified detached-payload `COSE_Sign1` leaves for the session to
+/// evaluate once it has a time.
+#[derive(Debug)]
+pub(crate) struct VerifiedSignature {
+    /// The decoded chain, signer first.
+    pub(crate) certificates: Vec<cert::Certificate>,
+
+    /// The RFC 3161 timestamp on the signature, if it carried a readable
+    /// one.
+    pub(crate) timestamp: Option<PendingTimestamp>,
+
+    /// Stapled OCSP responses from the `rVals` header.
+    pub(crate) rvals: Vec<Vec<u8>>,
+}
+
+/// Verifies a detached-payload `COSE_Sign1` against the public key in the
+/// first certificate of its `x5chain`, recording one status under `url`.
+///
+/// Returns the chain and timestamp only for a signature that verified; see
+/// [`check_claim_signature`] for why nothing is returned otherwise.
+pub(crate) fn check_cose_signature(
+    url: &str,
+    payload: &[u8],
+    signature: &[u8],
+    codes: &SignatureCodes,
+    statuses: &mut Vec<ValidationStatus>,
+) -> Option<VerifiedSignature> {
     let signature = match cose::parse(signature) {
         Ok(signature) => signature,
         Err(reason) => {
-            statuses.push(ValidationStatus::for_url(
-                status_code::SIGNING_CREDENTIAL_INVALID,
-                &url,
-                reason,
-            ));
+            statuses.push(ValidationStatus::for_url(codes.invalid, url, reason));
             return None;
         }
     };
@@ -522,8 +697,8 @@ pub(crate) fn check_claim_signature(
             Ok(certificate) => certificates.push(certificate),
             Err(error) => {
                 statuses.push(ValidationStatus::for_url(
-                    status_code::SIGNING_CREDENTIAL_INVALID,
-                    &url,
+                    codes.invalid,
+                    url,
                     // Position 0 is the signer's own certificate (RFC 9360
                     // §2); the rest are named by index so a report says
                     // which link of the chain is unreadable.
@@ -551,25 +726,25 @@ pub(crate) fn check_claim_signature(
         // `None` — and reporting that as "not checked" is the honest
         // answer, where reporting a mismatch would not be.
         statuses.push(ValidationStatus::for_url(
-            status_code::ALGORITHM_UNSUPPORTED,
-            &url,
+            codes.unsupported,
+            url,
             format!("no validator available for {:?}", signature.alg),
         ));
         return None;
     };
 
-    let to_be_signed = signature.to_be_signed(claim_bytes);
+    let to_be_signed = signature.to_be_signed(payload);
 
     match validator.validate(&signature.signature, &to_be_signed, &signer.public_key) {
         Ok(()) => {
             statuses.push(ValidationStatus::for_url(
-                status_code::CLAIM_SIGNATURE_VALIDATED,
-                &url,
-                "claim signature verified against the signer's certificate",
+                codes.validated,
+                url,
+                format!("{} verified against the signer's certificate", codes.noun),
             ));
 
             // The timestamp is taken off the header here, where the
-            // protected bucket and the claim are still in hand: what a
+            // protected bucket and the payload are still in hand: what a
             // token has to cover is built from both, and neither survives
             // to where the token is checked.
             let timestamp = match &signature.timestamp {
@@ -578,7 +753,7 @@ pub(crate) fn check_claim_signature(
                 TimestampHeader::Malformed(reason) => {
                     statuses.push(ValidationStatus::for_url(
                         status_code::TIMESTAMP_MALFORMED,
-                        &url,
+                        url,
                         *reason,
                     ));
                     None
@@ -587,13 +762,11 @@ pub(crate) fn check_claim_signature(
                 TimestampHeader::Present { token, storage } => Some(PendingTimestamp {
                     token: token.clone(),
                     storage: *storage,
-                    countersigned: signature.countersigned(claim_bytes, *storage),
+                    countersigned: signature.countersigned(payload, *storage),
                 }),
             };
 
-            Some(PendingChain {
-                manifest_label: manifest_label.to_string(),
-                url,
+            Some(VerifiedSignature {
                 certificates,
                 timestamp,
                 rvals: signature.rvals,
@@ -602,9 +775,12 @@ pub(crate) fn check_claim_signature(
 
         Err(_) => {
             statuses.push(ValidationStatus::for_url(
-                status_code::CLAIM_SIGNATURE_MISMATCH,
-                &url,
-                "claim signature does not verify against the signer's certificate",
+                codes.mismatch,
+                url,
+                format!(
+                    "{} does not verify against the signer's certificate",
+                    codes.noun
+                ),
             ));
             None
         }
@@ -731,7 +907,7 @@ fn assertion_payload<'a>(manifest: &SuperBox<'a>, url: &str) -> Option<&'a [u8]>
 /// (`self#jumbf=c2pa.assertions/<label>`) and the absolute form
 /// (`self#jumbf=/c2pa/<manifest>/c2pa.assertions/<label>`), by anchoring on
 /// the assertion store's label.
-fn assertion_path(url: &str) -> Option<&str> {
+pub(crate) fn assertion_path(url: &str) -> Option<&str> {
     let path = url.rsplit_once('=').map_or(url, |(_, path)| path);
     let start = path.find(ASSERTIONS_LABEL)?;
     Some(&path[start..])

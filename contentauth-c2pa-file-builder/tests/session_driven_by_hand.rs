@@ -92,7 +92,7 @@ fn answer(output: &mut Vec<u8>, request: &FileBuilderRequest) -> FileBuilderRepl
             output[start..end].copy_from_slice(bytes);
             FileBuilderReply::Written
         }
-        FileBuilderRequest::Sign { alg, data } => {
+        FileBuilderRequest::Sign { alg, data, .. } => {
             assert_eq!(*alg, SigningAlg::Es256);
             let signer = c2pa_raw_crypto::signer_from_private_key(
                 TEST_SIGNER_KEY,

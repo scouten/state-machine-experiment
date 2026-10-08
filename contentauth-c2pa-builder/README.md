@@ -80,6 +80,22 @@ and there is no `dc:format` or `claim_generator` — so
 what this crate builds. Not yet written: `redacted_assertions` (which
 has no use without ingredients) and a generator `icon`.
 
+`BuilderSettings::identities` adds CAWG identity assertions
+(`IdentitySettings`; the first is `cawg.identity`, then
+`cawg.identity__1`, …), each a named actor's X.509 credential vouching for
+some or all of the manifest's assertions — and always its hard binding —
+claiming optional roles. An identity assertion cannot be written until the
+asset has been hashed, so it is reserved in the placeholder like the claim
+signature, and after hashing the host is asked to sign each one
+(`BuilderRequest::Sign` with `purpose: SignPurpose::Identity { label }`, so
+a host holding several keys picks the right one) before the claim, which
+lists each one's hash, is signed. The credential type is
+`IdentityCredential`, today only `X509Cose` (`cawg.x509.cose`); another
+type is a new variant that decides the `sig_type`, the reserved signature's
+length and what the host signs. The `signer_payload` is encoded by hand in
+the field order c2pa-rs serialises it in, so a verifier that re-derives it
+from the decoded value agrees byte for byte.
+
 Each caller-supplied assertion carries an `AssertionKind` — `Created` or
 `Gathered` — that the host sets: the host supplies the assertion's
 content, so it is the one that knows whether this claim's generator
@@ -105,7 +121,7 @@ consequential to persist than an incomplete read report.
 | `ReservePlaceholder { stream, placeholder }` | the byte range of the container structure now carrying it, framing included | Host embeds a complete, zero-filled-where-pending manifest store into the asset (typically via a [`contentauth-c2pa-format`](../contentauth-c2pa-format) handler). |
 | `AssetLength { stream }` | total length in bytes | Needed to know what lies after the reserved placeholder. |
 | `AssetBytes { stream, range }` | bytes | Streams the asset (now containing the placeholder) into this crate's hashing, to compute the hard binding. |
-| `Sign { alg, data }` | raw signature bytes | Signs a COSE `Sig_structure`; mirrors `c2pa_raw_crypto::RawSigner::sign`. |
+| `Sign { purpose, alg, data }` | raw signature bytes | Signs a COSE `Sig_structure`; mirrors `c2pa_raw_crypto::RawSigner::sign`. `purpose` says whose key: the claim's, or the identity assertion with the given label. |
 | `Timestamp { digest, hash_alg }` | a bare `TimeStampToken` | Obtains an RFC 3161 countersignature; the host owns the TSA round trip. |
 | `CommitManifest { stream, range, manifest }` | acknowledgement | Replaces the reserved placeholder with the final manifest bytes — guaranteed byte-identical in length. |
 

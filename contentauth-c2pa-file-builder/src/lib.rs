@@ -94,8 +94,8 @@ use std::{
 };
 
 pub use contentauth_c2pa_builder::{
-    Assertion, AssertionKind, BuilderSettings, GeneratorInfo, HashAlgorithm, SigningAlg,
-    TimestampSettings,
+    Assertion, AssertionKind, BuilderSettings, GeneratorInfo, HashAlgorithm, IdentityCredential,
+    IdentitySettings, SignPurpose, SigningAlg, TimestampSettings,
 };
 pub use contentauth_c2pa_format::FormatHandler;
 pub use contentauth_c2pa_primitives::HostError;
@@ -106,6 +106,12 @@ pub use session::{FileBuilderReply, FileBuilderReport, FileBuilderRequest, FileB
 /// [`build_and_sign`] takes: the digest and the algorithm it was computed
 /// with in, the bare `TimeStampToken` out.
 pub type TimestampFn<'a> = dyn FnMut(HashAlgorithm, &[u8]) -> Result<Vec<u8>, HostError> + 'a;
+
+/// A function answering one identity assertion's signature request, as
+/// [`build_and_sign`] takes: the assertion's label (`cawg.identity`,
+/// `cawg.identity__1`, …, saying whose key is wanted), the algorithm, and
+/// the exact bytes to sign in; the raw signature out.
+pub type IdentitySignFn<'a> = dyn FnMut(&str, SigningAlg, &[u8]) -> Result<Vec<u8>, HostError> + 'a;
 
 /// Builds and signs a C2PA manifest store for `source`, per `settings`,
 /// writing the result to `output` and calling `sign` whenever the claim
@@ -135,6 +141,13 @@ pub type TimestampFn<'a> = dyn FnMut(HashAlgorithm, &[u8]) -> Result<Vec<u8>, Ho
 /// [`FileBuilderSession`] directly for source/output access that cannot be
 /// driven synchronously.
 ///
+/// `identity_sign` answers the signature request of each CAWG identity
+/// assertion ([`BuilderSettings::identities`]), told by label whose key is
+/// wanted: an identity's credential is generally not the claim's, so
+/// `sign` is never used for one. Pass `None` when the settings name no
+/// identities; if they do, the request then fails the build rather than
+/// signing with the wrong key.
+///
 /// This function never touches `output`'s physical length: it writes
 /// exactly the bytes the plan calls for and nothing else, so anything
 /// already there past the new content — from reusing a stream with old
@@ -157,13 +170,22 @@ pub fn build_and_sign<H, S, O>(
     settings: BuilderSettings,
     sign: impl FnMut(SigningAlg, &[u8]) -> Result<Vec<u8>, HostError>,
     timestamp: Option<&mut TimestampFn<'_>>,
+    identity_sign: Option<&mut IdentitySignFn<'_>>,
 ) -> Result<FileBuilderReport, Error>
 where
     H: FormatHandler + Send,
     S: Read + Seek,
     O: Read + Write + Seek,
 {
-    drive::build(handler, source, output, settings, sign, timestamp)
+    drive::build(
+        handler,
+        source,
+        output,
+        settings,
+        sign,
+        timestamp,
+        identity_sign,
+    )
 }
 
 /// Opens `source_path`, builds and signs a manifest for it as
@@ -183,6 +205,7 @@ pub fn build_and_sign_file<H>(
     settings: BuilderSettings,
     sign: impl FnMut(SigningAlg, &[u8]) -> Result<Vec<u8>, HostError>,
     timestamp: Option<&mut TimestampFn<'_>>,
+    identity_sign: Option<&mut IdentitySignFn<'_>>,
 ) -> Result<FileBuilderReport, Error>
 where
     H: FormatHandler + Send,
@@ -211,7 +234,15 @@ where
             source,
         })?;
 
-    let report = match build_and_sign(handler, source, temp_file, settings, sign, timestamp) {
+    let report = match build_and_sign(
+        handler,
+        source,
+        temp_file,
+        settings,
+        sign,
+        timestamp,
+        identity_sign,
+    ) {
         Ok(report) => report,
         Err(err) => {
             // Best effort: an inability to clean up the temporary file

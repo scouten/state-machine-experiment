@@ -15,7 +15,9 @@
 
 use std::collections::HashMap;
 
-use contentauth_c2pa_file_builder::{FileBuilderReply, FileBuilderRequest, FileBuilderSession};
+use contentauth_c2pa_file_builder::{
+    FileBuilderReply, FileBuilderRequest, FileBuilderSession, SignPurpose,
+};
 use contentauth_c2pa_format_jpeg::JpegFormat;
 use contentauth_c2pa_js_compat::{for_format, C2paError};
 use contentauth_c2pa_primitives::{
@@ -361,11 +363,21 @@ fn describe(
             offset: *offset,
             bytes: bytes.clone(),
         },
-        FileBuilderRequest::Sign { alg, data } => PendingRequest::Sign {
+        FileBuilderRequest::Sign {
+            purpose: SignPurpose::Claim,
+            alg,
+            data,
+        } => PendingRequest::Sign {
             id: handle,
             alg: alg_name(*alg)?,
             data: data.clone(),
         },
+        // No `BuildSettings` this wrapper accepts names an identity
+        // assertion, so none can be asked for; refused rather than
+        // answered with the claim's key if one ever were.
+        FileBuilderRequest::Sign { purpose, .. } => {
+            return Err(Error::Unsupported(format!("signing for {purpose:?}")))
+        }
         FileBuilderRequest::Timestamp { digest, hash_alg } => PendingRequest::Timestamp {
             id: handle,
             url: tsa_url
@@ -452,6 +464,7 @@ mod tests {
             describe(
                 4,
                 &FileBuilderRequest::Sign {
+                    purpose: SignPurpose::Claim,
                     alg: SigningAlg::Ps384,
                     data: vec![3]
                 },
@@ -464,6 +477,20 @@ mod tests {
                 data: vec![3]
             }
         );
+        assert!(matches!(
+            describe(
+                5,
+                &FileBuilderRequest::Sign {
+                    purpose: SignPurpose::Identity {
+                        label: "cawg.identity".to_string()
+                    },
+                    alg: SigningAlg::Es256,
+                    data: vec![3]
+                },
+                None
+            ),
+            Err(Error::Unsupported(_))
+        ));
     }
 
     fn timestamp_engine_request() -> FileBuilderRequest {

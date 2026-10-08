@@ -22,7 +22,12 @@ sequenceDiagram
     B->>H: AssetLength, AssetBytes (hash outside exclusions)
     H-->>B: bytes
     Note over B: patch real hash into placeholder
-    B->>H: Sign(alg, Sig_structure)
+    loop each CAWG identity assertion (optional)
+        B->>H: Sign(Identity{label}, alg, Sig_structure)
+        H-->>B: signature
+    end
+    Note over B: the claim lists each identity assertion's hash,<br/>so they are signed before it
+    B->>H: Sign(Claim, alg, Sig_structure)
     H-->>B: signature
     opt timestamp configured
         B->>H: Timestamp(digest)

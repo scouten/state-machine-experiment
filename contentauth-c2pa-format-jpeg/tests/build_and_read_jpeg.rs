@@ -103,7 +103,7 @@ impl Host {
                 self.asset[range.start as usize..][..range.len as usize].to_vec(),
             ),
 
-            BuilderRequest::Sign { alg, data } => {
+            BuilderRequest::Sign { alg, data, .. } => {
                 assert_eq!(*alg, SigningAlg::Es256);
                 let signer = c2pa_raw_crypto::signer_from_private_key(
                     TEST_SIGNER_KEY,

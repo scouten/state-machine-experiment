@@ -23,12 +23,20 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   (integrity, claim signature, trust chain, RFC 3161 timestamps, and OCSP
   revocation per the spec's §15.9 process — stapled response first, then
   an online query on by default; fail-open only when a responder cannot
-  be reached at all) and the full request-vocabulary table.
+  be reached at all), CAWG identity assertions (`src/identity/`: the
+  assertion's structure and references, then its credential dispatched on
+  `sig_type` — `cawg.x509.cose` implemented, others reported rather than
+  guessed at; judged against separate identity trust anchors, and a
+  failure is scoped to its own assertion, never lowering the store's
+  `ValidationState`) and the full request-vocabulary table.
 - **`contentauth-c2pa-builder`** — the write-side counterpart: generates
   and signs a manifest store (always a spec-conformant v2 claim — a
   single-map `claim_generator_info` with `specVersion`, no `dc:format`;
   the reader decodes both v1 and v2 claims and checks v2's required
-  fields) via a two-pass placeholder scheme
+  fields) via a two-pass placeholder scheme — plus optional CAWG identity
+  assertions (`BuilderSettings::identities`), each signed by the host,
+  told by `SignPurpose` whose key is wanted, after the asset is hashed and
+  before the claim is
   (`BuilderSession` in [`src/builder.rs`](contentauth-c2pa-builder/src/builder.rs);
   see its [README.md](contentauth-c2pa-builder/README.md)).
 - **`contentauth-c2pa-primitives`** — the narrow slice of vocabulary

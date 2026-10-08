@@ -27,7 +27,7 @@
 
 use std::io::{self, Read, Seek, SeekFrom, Write};
 
-use contentauth_c2pa_builder::BuilderSettings;
+use contentauth_c2pa_builder::{BuilderSettings, SignPurpose};
 use contentauth_c2pa_format::FormatHandler;
 use contentauth_c2pa_primitives::{ByteRange, HashAlgorithm, HostError, SigningAlg, StreamId};
 use contentauth_state_machine::{Session, Step};
@@ -35,7 +35,7 @@ use contentauth_state_machine::{Session, Step};
 use crate::{
     error::Error,
     session::{FileBuilderReply, FileBuilderReport, FileBuilderRequest, FileBuilderSession},
-    TimestampFn,
+    IdentitySignFn, TimestampFn,
 };
 
 /// Builds and signs a manifest for `source`, per `settings`, writing the
@@ -46,8 +46,9 @@ pub(crate) fn build<H, S, O>(
     mut source: S,
     mut output: O,
     settings: BuilderSettings,
-    mut sign: impl FnMut(SigningAlg, &[u8]) -> Result<Vec<u8>, HostError>,
+    sign: impl FnMut(SigningAlg, &[u8]) -> Result<Vec<u8>, HostError>,
     mut timestamp: Option<&mut TimestampFn<'_>>,
+    identity_sign: Option<&mut IdentitySignFn<'_>>,
 ) -> Result<FileBuilderReport, Error>
 where
     H: FormatHandler + Send,
@@ -69,6 +70,8 @@ where
         )),
     };
 
+    let mut signers = Signers::new(sign, identity_sign);
+
     loop {
         if session.advance()? == Step::Complete {
             return session.finish();
@@ -80,7 +83,7 @@ where
                 output_stream,
                 &mut source,
                 &mut output,
-                &mut sign,
+                &mut signers,
                 &mut answer_timestamp,
                 &request.kind,
             );
@@ -89,12 +92,25 @@ where
     }
 }
 
+/// The functions that answer a signature request: the claim's, and the
+/// identity assertions' if the caller has one.
+struct Signers<'a, 'b, F> {
+    claim: F,
+    identity: Option<&'a mut IdentitySignFn<'b>>,
+}
+
+impl<'a, 'b, F> Signers<'a, 'b, F> {
+    fn new(claim: F, identity: Option<&'a mut IdentitySignFn<'b>>) -> Self {
+        Self { claim, identity }
+    }
+}
+
 fn answer<S: Read + Seek, O: Read + Write + Seek>(
     source_stream: StreamId,
     output_stream: StreamId,
     source: &mut S,
     output: &mut O,
-    sign: &mut impl FnMut(SigningAlg, &[u8]) -> Result<Vec<u8>, HostError>,
+    signers: &mut Signers<'_, '_, impl FnMut(SigningAlg, &[u8]) -> Result<Vec<u8>, HostError>>,
     timestamp: &mut impl FnMut(HashAlgorithm, &[u8]) -> Result<Vec<u8>, HostError>,
     request: &FileBuilderRequest,
 ) -> FileBuilderReply {
@@ -134,10 +150,27 @@ fn answer<S: Read + Seek, O: Read + Write + Seek>(
             }
         }
 
-        FileBuilderRequest::Sign { alg, data } => match sign(*alg, data) {
-            Ok(signature) => FileBuilderReply::Signature(signature),
-            Err(err) => FileBuilderReply::Failed(err),
-        },
+        // A claim signature goes to `sign`. An identity assertion's signer
+        // is generally not the claim's, and handing its bytes to the
+        // claim's key would produce a signature that fails to verify, far
+        // from the cause; with no identity function, such a request fails
+        // the build instead.
+        FileBuilderRequest::Sign { purpose, alg, data } => {
+            let signed = match purpose {
+                SignPurpose::Identity { label } => match signers.identity.as_mut() {
+                    Some(identity_sign) => identity_sign(label, *alg, data),
+                    None => Err(HostError::new(format!(
+                        "this build has no way to sign the identity assertion {label:?}; \
+                         pass an identity signing function, or drive FileBuilderSession directly"
+                    ))),
+                },
+                _ => (signers.claim)(*alg, data),
+            };
+            match signed {
+                Ok(signature) => FileBuilderReply::Signature(signature),
+                Err(err) => FileBuilderReply::Failed(err),
+            }
+        }
 
         FileBuilderRequest::Timestamp { digest, hash_alg } => match timestamp(*hash_alg, digest) {
             Ok(token) => FileBuilderReply::Timestamp(token),
@@ -266,6 +299,88 @@ mod tests {
         Err(HostError::new("should not be asked to sign in this test"))
     }
 
+    fn identity_request(label: &str) -> FileBuilderRequest {
+        FileBuilderRequest::Sign {
+            purpose: SignPurpose::Identity {
+                label: label.to_string(),
+            },
+            alg: SigningAlg::Es256,
+            data: vec![1, 2, 3],
+        }
+    }
+
+    #[test]
+    fn an_identity_request_goes_to_the_identity_signer_and_never_the_claims() {
+        let mut source = Cursor::new(Vec::<u8>::new());
+        let mut output = Cursor::new(Vec::<u8>::new());
+        let mut seen = Vec::new();
+        let mut identity = |label: &str, _alg: SigningAlg, data: &[u8]| {
+            seen.push(label.to_string());
+            Ok(data.iter().rev().copied().collect())
+        };
+
+        let reply = answer(
+            source_stream(),
+            output_stream(),
+            &mut source,
+            &mut output,
+            &mut Signers::new(never_signs, Some(&mut identity)),
+            &mut never_timestamps,
+            &identity_request("cawg.identity__1"),
+        );
+
+        assert!(
+            matches!(&reply, FileBuilderReply::Signature(sig) if sig == &[3, 2, 1]),
+            "{reply:?}"
+        );
+        assert_eq!(seen, ["cawg.identity__1"]);
+    }
+
+    #[test]
+    fn a_failing_identity_signer_is_reported_as_failed() {
+        let mut source = Cursor::new(Vec::<u8>::new());
+        let mut output = Cursor::new(Vec::<u8>::new());
+        let mut identity =
+            |_: &str, _: SigningAlg, _: &[u8]| Err(HostError::new("identity key unavailable"));
+
+        let reply = answer(
+            source_stream(),
+            output_stream(),
+            &mut source,
+            &mut output,
+            &mut Signers::new(never_signs, Some(&mut identity)),
+            &mut never_timestamps,
+            &identity_request("cawg.identity"),
+        );
+
+        assert!(matches!(reply, FileBuilderReply::Failed(_)), "{reply:?}");
+    }
+
+    #[test]
+    fn an_identity_request_with_no_identity_signer_fails_naming_the_assertion() {
+        let mut source = Cursor::new(Vec::<u8>::new());
+        let mut output = Cursor::new(Vec::<u8>::new());
+
+        // A claim signer that would happily sign anything: it must not be
+        // handed the identity assertion's bytes.
+        let sign = |_: SigningAlg, data: &[u8]| Ok(data.to_vec());
+
+        let reply = answer(
+            source_stream(),
+            output_stream(),
+            &mut source,
+            &mut output,
+            &mut Signers::new(sign, None),
+            &mut never_timestamps,
+            &identity_request("cawg.identity"),
+        );
+
+        assert!(
+            matches!(&reply, FileBuilderReply::Failed(err) if err.to_string().contains("\"cawg.identity\"")),
+            "{reply:?}"
+        );
+    }
+
     /// Every other test passes [`never_signs`] as a signer that must not be
     /// called at all; this one proves what it actually does when it is.
     #[test]
@@ -277,9 +392,10 @@ mod tests {
             output_stream(),
             &mut source,
             &mut output,
-            &mut never_signs,
+            &mut Signers::new(never_signs, None),
             &mut never_timestamps,
             &FileBuilderRequest::Sign {
+                purpose: SignPurpose::Claim,
                 alg: SigningAlg::Es256,
                 data: vec![1, 2, 3],
             },
@@ -297,7 +413,7 @@ mod tests {
             output_stream(),
             &mut source,
             &mut output,
-            &mut never_signs,
+            &mut Signers::new(never_signs, None),
             &mut never_timestamps,
             &FileBuilderRequest::Read {
                 stream: source_stream(),
@@ -317,7 +433,7 @@ mod tests {
             output_stream(),
             &mut source,
             &mut output,
-            &mut never_signs,
+            &mut Signers::new(never_signs, None),
             &mut never_timestamps,
             &FileBuilderRequest::Read {
                 stream: output_stream(),
@@ -336,7 +452,7 @@ mod tests {
             output_stream(),
             &mut AlwaysFails,
             &mut output,
-            &mut never_signs,
+            &mut Signers::new(never_signs, None),
             &mut never_timestamps,
             &FileBuilderRequest::Length {
                 stream: source_stream(),
@@ -354,7 +470,7 @@ mod tests {
             output_stream(),
             &mut AlwaysFails,
             &mut output,
-            &mut never_signs,
+            &mut Signers::new(never_signs, None),
             &mut never_timestamps,
             &FileBuilderRequest::Read {
                 stream: source_stream(),
@@ -373,7 +489,7 @@ mod tests {
             output_stream(),
             &mut source,
             &mut AlwaysFails,
-            &mut never_signs,
+            &mut Signers::new(never_signs, None),
             &mut never_timestamps,
             &FileBuilderRequest::Write {
                 stream: output_stream(),
@@ -395,7 +511,7 @@ mod tests {
             output_stream(),
             &mut source,
             &mut output,
-            &mut never_signs,
+            &mut Signers::new(never_signs, None),
             &mut never_timestamps,
             &FileBuilderRequest::Write {
                 stream: output_stream(),
@@ -418,7 +534,7 @@ mod tests {
             output_stream(),
             &mut FailsAfterSeek,
             &mut output,
-            &mut never_signs,
+            &mut Signers::new(never_signs, None),
             &mut never_timestamps,
             &FileBuilderRequest::Read {
                 stream: source_stream(),
@@ -438,7 +554,7 @@ mod tests {
             output_stream(),
             &mut source,
             &mut FailsAfterSeek,
-            &mut never_signs,
+            &mut Signers::new(never_signs, None),
             &mut never_timestamps,
             &FileBuilderRequest::Write {
                 stream: output_stream(),
@@ -463,7 +579,7 @@ mod tests {
             output_stream(),
             &mut source,
             &mut output,
-            &mut never_signs,
+            &mut Signers::new(never_signs, None),
             &mut never_timestamps,
             &FileBuilderRequest::Read {
                 stream: unknown,
@@ -477,7 +593,7 @@ mod tests {
             output_stream(),
             &mut source,
             &mut output,
-            &mut never_signs,
+            &mut Signers::new(never_signs, None),
             &mut never_timestamps,
             &FileBuilderRequest::Length { stream: unknown },
         );
@@ -488,7 +604,7 @@ mod tests {
     fn a_failing_signer_is_reported_as_failed() {
         let mut source = Cursor::new(Vec::<u8>::new());
         let mut output = Cursor::new(Vec::<u8>::new());
-        let mut sign = |_alg: SigningAlg, _data: &[u8]| -> Result<Vec<u8>, HostError> {
+        let sign = |_alg: SigningAlg, _data: &[u8]| -> Result<Vec<u8>, HostError> {
             Err(HostError::new("no key available"))
         };
 
@@ -497,9 +613,10 @@ mod tests {
             output_stream(),
             &mut source,
             &mut output,
-            &mut sign,
+            &mut Signers::new(sign, None),
             &mut never_timestamps,
             &FileBuilderRequest::Sign {
+                purpose: SignPurpose::Claim,
                 alg: SigningAlg::Es256,
                 data: vec![1, 2, 3],
             },
@@ -512,7 +629,7 @@ mod tests {
     fn a_successful_signer_answers_with_its_signature() {
         let mut source = Cursor::new(Vec::<u8>::new());
         let mut output = Cursor::new(Vec::<u8>::new());
-        let mut sign =
+        let sign =
             |_alg: SigningAlg, data: &[u8]| -> Result<Vec<u8>, HostError> { Ok(data.to_vec()) };
 
         let reply = answer(
@@ -520,9 +637,10 @@ mod tests {
             output_stream(),
             &mut source,
             &mut output,
-            &mut sign,
+            &mut Signers::new(sign, None),
             &mut never_timestamps,
             &FileBuilderRequest::Sign {
+                purpose: SignPurpose::Claim,
                 alg: SigningAlg::Es256,
                 data: vec![1, 2, 3],
             },
@@ -553,7 +671,7 @@ mod tests {
             output_stream(),
             &mut source,
             &mut output,
-            &mut never_signs,
+            &mut Signers::new(never_signs, None),
             &mut timestamp,
             &timestamp_request(),
         );
@@ -572,7 +690,7 @@ mod tests {
             output_stream(),
             &mut source,
             &mut output,
-            &mut never_signs,
+            &mut Signers::new(never_signs, None),
             &mut never_timestamps,
             &timestamp_request(),
         );

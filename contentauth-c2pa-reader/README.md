@@ -64,6 +64,31 @@ decoding, report population) and verifies:
   was actually zeroed (`assertion.notRedacted`), which needs ingredient
   manifests.
 
+* **CAWG identity assertions** — `cawg.identity` (and `cawg.identity__N`)
+  assertions are decoded into `Manifest::identity_assertions` and
+  verified: the assertion's structure and zeroed padding; that each
+  assertion it vouches for is in the claim, with the claim's hash, and
+  that a hard binding is among them and nothing is named twice; and then
+  the credential itself, dispatched on `sig_type` in
+  [`src/identity/mod.rs`](src/identity/mod.rs). Today that is
+  **`cawg.x509.cose`** — a detached-payload `COSE_Sign1` over the
+  `signer_payload` exactly as encoded (found by byte span, never decoded
+  and re-encoded), whose certificate chain is judged like a claim
+  signer's but against its own anchors,
+  `ReadSettings::identity_trust_anchors` / `identity_trust_lists` (CAWG
+  publishes its trust list separately from C2PA's), with CAWG's own
+  `cawg.identity.*` and `cawg.x509.*` status codes. Revocation is not
+  checked: CAWG's vocabulary has no codes for it. `cawg.identity_claims_aggregation`
+  is recognised and reported `cawg.identity.sig_type.unsupported` (this
+  crate's own code, informational) — it needs the network to resolve a
+  DID, and will bring request variants of its own; any other `sig_type`
+  is `cawg.identity.sig_type.unknown`. **Failures here are scoped to the
+  one assertion**: they are failures (`ValidationStatus::is_failure`) but
+  never lower the store's `ValidationState`
+  (`ValidationStatus::affects_validation_state`), which is how c2pa-rs
+  treats them too. Not yet done: `expected_*` fields of the
+  `signer_payload`, which a signer may add to constrain the claim.
+
 A report can reach `Trusted` or `Valid`. Not yet checked, and able to
 change a verdict: ingredient manifests and remote manifest retrieval.
 

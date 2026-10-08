@@ -69,6 +69,12 @@
 //!   reads as revoked rather than merely inconclusive. See
 //!   [`ReadSettings::check_ocsp`] and [`ReadRequest::Ocsp`].
 //!
+//! * CAWG identity assertions are read and verified ([`identity`]): their
+//!   structure and references, then the credential each carries — today
+//!   X.509 (`cawg.x509.cose`), judged against
+//!   [`ReadSettings::identity_trust_anchors`]. A failure there is scoped to
+//!   that one assertion and never lowers the store's [`ValidationState`].
+//!
 //! [c2pa-rs]: https://github.com/contentauth/c2pa-rs
 
 #![deny(clippy::expect_used)]
@@ -84,6 +90,7 @@ pub(crate) mod cose;
 pub mod data_hash;
 pub mod error;
 pub(crate) mod hash_stream;
+pub mod identity;
 pub mod manifest_store;
 pub(crate) mod ocsp;
 pub mod read;
@@ -100,6 +107,7 @@ pub use contentauth_c2pa_primitives::{ByteRange, HashAlgorithm, HostError, Signi
 pub use contentauth_state_machine::{HostRequest, ProtocolError, RequestId, Session};
 pub use data_hash::DataHash;
 pub use error::Error;
+pub use identity::{IdentityAssertion, IdentityCredential};
 pub use manifest_store::Manifest;
 pub use read::{ReadReport, ReadSession, ReadSettings, ReadStep, TrustList};
 pub use request::{ReadHostReply, ReadRequest};

@@ -60,7 +60,9 @@
 //! marked [`AssertionKind::Created`] or [`AssertionKind::Gathered`] by
 //! the host, landing in the claim's `created_assertions` or
 //! `gathered_assertions` accordingly — every C2PA-permitted signing
-//! algorithm, and an optional RFC 3161 timestamp. Every manifest this
+//! algorithm, an optional RFC 3161 timestamp, and optional CAWG identity
+//! assertions ([`IdentitySettings`], signed by the host under a
+//! [`SignPurpose::Identity`]). Every manifest this
 //! crate builds is exercised, in its own test suite, by round-tripping it
 //! through `contentauth-c2pa-reader` and checking that it reads back as
 //! [`ValidationState::Trusted`].
@@ -86,6 +88,7 @@ mod cose;
 mod data_hash;
 mod error;
 mod hash_stream;
+mod identity;
 mod jumbf;
 mod request;
 
@@ -97,4 +100,5 @@ pub use contentauth_c2pa_primitives::{ByteRange, HashAlgorithm, HostError, Signi
 pub use contentauth_state_machine::{HostRequest, ProtocolError, RequestId, Session};
 pub use data_hash::MAX_EXCLUSIONS;
 pub use error::Error;
-pub use request::{BuilderHostReply, BuilderRequest};
+pub use identity::{IdentityCredential, IdentitySettings};
+pub use request::{BuilderHostReply, BuilderRequest, SignPurpose};
