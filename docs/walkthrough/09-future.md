@@ -13,6 +13,7 @@ flowchart LR
         d2["Write: v2 claim, data hash, any signing alg,<br/>timestamp"]
         d3["Formats: JPEG, TIFF/BigTIFF/DNG, registry"]
         d4["Bindings: rs / wasm / node, read and sign"]
+        d6["Sidecar manifests from independent elements"]
         d5["Differential tests vs c2pa-rs"]
     end
     subgraph next["Next"]
@@ -57,6 +58,25 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 
 ## 3. Write-side breadth
 
+* **TODO — claim `instanceID` should match the asset's XMP
+  `xmpMM:InstanceID`** when the asset has XMP (the spec's "should"). Neither
+  the embedding builder, the sidecar builder, nor Gavin's `c2pa-sign-sample`
+  does. The format handlers already locate the XMP packet for remote-manifest
+  references; the file-level builders are the natural place to read it and
+  pass it in.
+* **Move `contentauth-c2pa-builder` onto the elements** — its own claim and
+  hashed-URI encoders duplicate `contentauth-c2pa-claim` and
+  `primitives::HashedUri` — and make its claim `signature` URI absolute, as
+  the spec requires. The placeholder scheme's padding needs may argue for
+  keeping its data-hash encoder separate.
+* **Sidecar breadth:** gathered assertions, timestamps, CAWG identity;
+  a `.c2pa` "format" so the file-level sessions can read/write sidecars;
+  linking an asset to its sidecar (XMP `dcterms:provenance` remote
+  reference).
+* **A streaming JUMBF writer** if multi-megabyte assertions arrive:
+  `c2pa-store`'s seek-and-backpatch writer hashes while it writes
+  ([measurements](../../c2pa-core-comparison/README.md)).
+
 * **Ingredients and update manifests** (the builder's biggest gap;
   `redacted_assertions` has no use without them).
 * **Policy for already-signed assets**: `plan_embed` always replaces;
@@ -96,7 +116,8 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 * **Fuzzing** the parsers (JUMBF, COSE, TIFF graph walks) — they already
   refuse hostile input by design, but nothing yet hammers that.
 * **Benchmarks** against c2pa-rs for large assets (the Node numbers are
-  encouraging but not comparative).
+  encouraging but not comparative). A first, narrower one exists:
+  hand-coded JUMBF vs the `jumbf` crate in `c2pa-core-comparison`.
 
 ## Questions for discussion
 

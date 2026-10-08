@@ -31,6 +31,7 @@ c2pa = { version = "0.91", default-features = false, features = [
 ] }
 
 [dev-dependencies]
+serde_json = "1"
 # The write side, for the other direction of the interop checks: sign with
 # this workspace's builder, read with the real `c2pa::Reader`.
 contentauth-c2pa-rs-compat-sign = { path = "../contentauth-c2pa-rs-compat-sign" }
@@ -56,3 +57,10 @@ contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline", f
 # Reads back the hard binding c2pa-rs wrote, to compare the exclusions the
 # TIFF handler reports against the ones c2pa-rs recorded.
 contentauth-c2pa-file-reader = { path = "../contentauth-c2pa-file-reader" }
+# The sidecar experiment: a `.c2pa` built from independent assertion, claim
+# and ephemeral-certificate elements, validated by the real c2pa-rs.
+contentauth-c2pa-sidecar-builder = { path = "../contentauth-c2pa-sidecar-builder" }
+contentauth-c2pa-assertion-actions = { path = "../contentauth-c2pa-assertion-actions" }
+contentauth-c2pa-claim = { path = "../contentauth-c2pa-claim" }
+contentauth-c2pa-ephemeral-cert = { path = "../contentauth-c2pa-ephemeral-cert" }
+contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }

@@ -17,6 +17,12 @@ reimplement on its own:
   operation.
 - `SigningAlg` — the C2PA-permitted signature algorithms, their COSE
   algorithm-ID mapping (RFC 9053), and their paired hash algorithm.
+- `HashedUri` — the `{url, alg?, hash}` reference a claim, an identity
+  assertion, or an ingredient makes to a JUMBF box. `HashedUri::from_box`
+  hashes a box's *contents* (stripping the 8/16-byte header itself, so no
+  caller can hash the wrong span); it builds no JUMBF and does no I/O.
+- `EncodedAssertion` — the opaque (label, CBOR) pair independent
+  assertion crates hand to the rest of the system.
 - `HostError` — the "the host couldn't do it" wrapper every sans-I/O
   session's reply vocabulary needs.
 - `cbor::sig_structure` — the COSE `Sig_structure` (RFC 9052) a claim
