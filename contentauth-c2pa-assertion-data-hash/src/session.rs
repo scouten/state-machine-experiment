@@ -193,7 +193,7 @@ impl DataHashSession {
                 }
                 Some(DataHashReply::AssetLength(len)) => {
                     let ranges = included_ranges(len, &self.settings.exclusions)?;
-                    self.state = State::Hashing(Box::new(Chunks::new(self.settings.alg, &ranges)));
+                    self.state = State::Hashing(Box::new(Chunks::new(self.settings.alg, ranges)));
                     Ok(None)
                 }
                 Some(DataHashReply::Failed(e)) => Err(e.into()),
@@ -302,60 +302,88 @@ fn included_ranges(len: u64, exclusions: &[ByteRange]) -> Result<Vec<ByteRange>,
 }
 
 /// Windowed, order-restoring chunk hashing.
+///
+/// Chunk ranges are produced lazily from a cursor over the included ranges
+/// as the window advances, so the state held is the window plus the
+/// (exclusion-count-sized) range list — never one entry per chunk of the
+/// asset.
 #[derive(Debug)]
 struct Chunks {
     hasher: Hasher,
-    chunks: Vec<ByteRange>,
-    next_to_issue: usize,
-    next_to_fold: usize,
-    outstanding: Vec<(RequestId, usize)>,
+
+    /// The ranges to hash, in order.
+    ranges: Vec<ByteRange>,
+
+    /// Which of `ranges` the cursor is in, and how far into it.
+    range_index: usize,
+    offset_in_range: u64,
+
+    /// Chunks issued so far; the next chunk's index.
+    issued: usize,
+
+    /// Chunks folded into the hasher so far; the next one due.
+    folded: usize,
+
+    /// Requests the host has not yet answered: id, chunk index, length.
+    outstanding: Vec<(RequestId, usize, u64)>,
+
+    /// Chunks that arrived before their turn.
     buffered: HashMap<usize, Vec<u8>>,
 }
 
 impl Chunks {
-    fn new(alg: HashAlgorithm, ranges: &[ByteRange]) -> Self {
-        let mut chunks = Vec::new();
-        for range in ranges {
-            let mut offset = range.start;
-            let end = range.start + range.len;
-            while offset < end {
-                let len = CHUNK_SIZE.min(end - offset);
-                chunks.push(ByteRange { start: offset, len });
-                offset += len;
-            }
-        }
+    fn new(alg: HashAlgorithm, ranges: Vec<ByteRange>) -> Self {
         Self {
             hasher: Hasher::new(alg),
-            chunks,
-            next_to_issue: 0,
-            next_to_fold: 0,
+            ranges,
+            range_index: 0,
+            offset_in_range: 0,
+            issued: 0,
+            folded: 0,
             outstanding: Vec::new(),
             buffered: HashMap::new(),
         }
     }
 
+    /// The next chunk of the asset, advancing the cursor; `None` when every
+    /// included byte has been assigned to a chunk.
+    fn next_chunk(&mut self) -> Option<ByteRange> {
+        loop {
+            let range = self.ranges.get(self.range_index)?;
+            let remaining = range.len - self.offset_in_range;
+            if remaining == 0 {
+                self.range_index += 1;
+                self.offset_in_range = 0;
+                continue;
+            }
+            let len = CHUNK_SIZE.min(remaining);
+            let chunk = ByteRange {
+                start: range.start + self.offset_in_range,
+                len,
+            };
+            self.offset_in_range += len;
+            return Some(chunk);
+        }
+    }
+
     fn issue(&mut self, core: &mut SessionCore<DataHashRequest>, stream: StreamId) {
-        while self.next_to_issue < self.chunks.len()
-            && self.next_to_issue - self.next_to_fold < WINDOW
-        {
-            let index = self.next_to_issue;
-            let id = core.issue(DataHashRequest::AssetBytes {
-                stream,
-                range: self.chunks[index],
-            });
-            self.outstanding.push((id, index));
-            self.next_to_issue += 1;
+        while self.issued - self.folded < WINDOW {
+            let Some(range) = self.next_chunk() else {
+                return;
+            };
+            let id = core.issue(DataHashRequest::AssetBytes { stream, range });
+            self.outstanding.push((id, self.issued, range.len));
+            self.issued += 1;
         }
     }
 
     fn absorb(&mut self, core: &mut SessionCore<DataHashRequest>) -> Result<(), Error> {
         let mut i = 0;
         while i < self.outstanding.len() {
-            let (id, index) = self.outstanding[i];
+            let (id, index, expected) = self.outstanding[i];
             match core.take_reply(id) {
                 None => i += 1,
                 Some(DataHashReply::AssetBytes(bytes)) => {
-                    let expected = self.chunks[index].len;
                     if bytes.len() as u64 != expected {
                         return Err(Error::ShortRead {
                             expected,
@@ -369,15 +397,30 @@ impl Chunks {
                 Some(_) => return Err(ProtocolError::SessionFailed.into()),
             }
         }
-        while let Some(bytes) = self.buffered.remove(&self.next_to_fold) {
+        while let Some(bytes) = self.buffered.remove(&self.folded) {
             self.hasher.update(&bytes);
-            self.next_to_fold += 1;
+            self.folded += 1;
         }
         Ok(())
     }
 
-    fn is_finished(&self) -> bool {
-        self.next_to_fold == self.chunks.len()
+    /// True once every chunk has been issued and folded.
+    fn is_finished(&mut self) -> bool {
+        self.folded == self.issued && self.next_chunk_is_exhausted()
+    }
+
+    fn next_chunk_is_exhausted(&mut self) -> bool {
+        // Peek without consuming: exhausted when no range has bytes left.
+        let mut index = self.range_index;
+        let mut offset = self.offset_in_range;
+        while let Some(range) = self.ranges.get(index) {
+            if range.len > offset {
+                return false;
+            }
+            index += 1;
+            offset = 0;
+        }
+        true
     }
 
     fn finish(self) -> Vec<u8> {
@@ -467,6 +510,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(digest_of(&a), HashAlgorithm::Sha256.digest(&[]));
+    }
+
+    /// A terabyte-scale asset must cost a window of requests, not a chunk
+    /// list: only `WINDOW` reads are outstanding, whatever the length.
+    #[test]
+    fn memory_is_bounded_by_the_window_not_the_asset() {
+        let mut s = DataHashSession::new(DataHashSettings::whole_asset(
+            StreamId::new(0),
+            HashAlgorithm::Sha256,
+        ));
+        assert_eq!(s.advance().unwrap(), Step::AwaitHost);
+        let id = s.outstanding_requests()[0].id;
+        s.fulfill(id, DataHashReply::AssetLength(1 << 40)).unwrap();
+        assert_eq!(s.advance().unwrap(), Step::AwaitHost);
+        assert_eq!(s.outstanding_requests().len(), WINDOW);
     }
 
     #[test]
