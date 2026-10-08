@@ -13,7 +13,7 @@ categories = ["api-bindings"]
 publish = false
 
 [features]
-default = ["jpeg", "tiff"]
+default = ["jpeg", "tiff", "riff"]
 
 # `Registry::standard()` includes the named format. Each is an optional
 # dependency on purpose: this crate is the one place a host's choice of
@@ -21,6 +21,7 @@ default = ["jpeg", "tiff"]
 # build — or only its own handlers — turns the others off.
 jpeg = ["dep:contentauth-c2pa-format-jpeg"]
 tiff = ["dep:contentauth-c2pa-format-tiff"]
+riff = ["dep:contentauth-c2pa-format-riff"]
 
 [dependencies]
 # The contract: `FormatHandler`, `FormatDescriptor`. Nothing else from
@@ -31,6 +32,7 @@ contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
 
 contentauth-c2pa-format-jpeg = { path = "../contentauth-c2pa-format-jpeg", optional = true }
 contentauth-c2pa-format-tiff = { path = "../contentauth-c2pa-format-tiff", optional = true }
+contentauth-c2pa-format-riff = { path = "../contentauth-c2pa-format-riff", optional = true }
 
 [dev-dependencies]
 # The conformance suite, run against a handler that has been through the

@@ -509,6 +509,7 @@ impl BuilderSession {
         let request = self.core.issue(BuilderRequest::ReservePlaceholder {
             stream: Self::PRIMARY_STREAM,
             placeholder,
+            hash_alg: self.settings.signing_alg.claim_hash_algorithm(),
         });
         self.state = State::AwaitingPlaceholderReserved {
             request,
@@ -530,7 +531,7 @@ impl BuilderSession {
                 return Ok(Some(Step::AwaitHost));
             }
 
-            Some(BuilderHostReply::PlaceholderReserved(exclusions)) => {
+            Some(BuilderHostReply::PlaceholderReserved { exclusions, hash }) => {
                 // The container's framing around the placeholder (a
                 // JPEG's APP11 segment headers, say) belongs inside the
                 // exclusions, so they may total more than the
@@ -545,6 +546,27 @@ impl BuilderSession {
                     return Err(Error::PlaceholderRangeInvalid(
                         "the reserved ranges are shorter than the placeholder that was embedded",
                     ));
+                }
+
+                // A host that hashed the asset as it wrote it has already
+                // done what the next two states exist to do.
+                if let Some(hash) = hash {
+                    let expected = self
+                        .settings
+                        .signing_alg
+                        .claim_hash_algorithm()
+                        .digest_len();
+                    if hash.len() != expected {
+                        return Err(Error::AssetHashLengthMismatch {
+                            expected,
+                            actual: hash.len(),
+                        });
+                    }
+
+                    let mut manifest = manifest;
+                    manifest.apply_hard_binding(&exclusions, hash)?;
+                    self.begin_signing(manifest, exclusions, 0)?;
+                    return Ok(Some(Step::AwaitHost));
                 }
 
                 let request = self.core.issue(BuilderRequest::AssetLength {
@@ -1019,10 +1041,13 @@ mod tests {
                 let reply = match &request.kind {
                     BuilderRequest::ReservePlaceholder { placeholder, .. } => {
                         asset.splice(100..100, placeholder.iter().copied());
-                        BuilderHostReply::PlaceholderReserved(vec![ByteRange {
-                            start: 100,
-                            len: placeholder.len() as u64,
-                        }])
+                        BuilderHostReply::PlaceholderReserved {
+                            exclusions: vec![ByteRange {
+                                start: 100,
+                                len: placeholder.len() as u64,
+                            }],
+                            hash: None,
+                        }
                     }
                     BuilderRequest::AssetLength { .. } => {
                         BuilderHostReply::AssetLength(asset.len() as u64)

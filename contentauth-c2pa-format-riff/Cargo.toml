@@ -1,0 +1,26 @@
+[package]
+name = "contentauth-c2pa-format-riff"
+version = "0.1.0"
+description = "RIFF container support (WAV, AVI, WebP) for the sans-I/O C2PA sessions: locating and embedding manifest stores as a trailing C2PA chunk"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["c2pa", "content-credentials", "sans-io", "riff", "wav"]
+categories = ["api-bindings", "multimedia::audio"]
+publish = false
+
+[dependencies]
+# The contract this crate implements — the only crate in the workspace a
+# format handler needs to know about.
+contentauth-c2pa-format = { path = "../contentauth-c2pa-format" }
+contentauth-state-machine = { path = "../contentauth-state-machine" }
+contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
+
+[dev-dependencies]
+# The conformance suite every format handler runs against itself.
+contentauth-c2pa-format = { path = "../contentauth-c2pa-format", features = [
+    "test-util",
+] }

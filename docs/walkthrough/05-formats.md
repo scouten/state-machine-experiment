@@ -53,6 +53,28 @@ The rewritten pointer sits *outside* the exclusion, so it is hashed into
 the binding — redirecting it to hide the store breaks the signature
 (tested).
 
+## A third, chosen for size: RIFF
+
+JPEG and TIFF are small. RIFF (WAV, AVI, WebP) is where files get large,
+and it is the simplest container to embed in: the store goes in a `C2PA`
+chunk appended as the last sub-chunk of the RIFF chunk, nothing already in
+the file moves, and the only byte outside the new chunk that changes is the
+12-byte header's size field — which depends on the store's *length*, known
+from the moment the placeholder is chosen. `plan_embed` is therefore a
+rewritten header, `Copy` edits for every existing chunk, and the new chunk;
+`commit` has nothing to patch.
+
+Two details the real c2pa-rs taught us, and the conformance tests pin:
+
+* The exclusion is the `C2PA` chunk's **8-byte header and its data**, but
+  *not* the pad byte after odd-sized data. A data-only exclusion (header
+  hashed) reads as `Invalid` in c2pa-rs.
+* Trailing bytes after the RIFF chunk (a tag some writers append) are kept,
+  after the new chunk, and left outside the size field.
+
+Scanning is a few reads: chunk headers are read a 4 KiB window at a time, so
+a file of thousands of tiny chunks is not a round trip each.
+
 ## What TIFF taught the contract
 
 `EmbedPlan` originally had **one** exclusion range. TIFF's spec excludes

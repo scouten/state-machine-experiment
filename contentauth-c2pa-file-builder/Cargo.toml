@@ -37,6 +37,9 @@ thiserror = "2.0.20"
 [dev-dependencies]
 # The JPEG handler this crate's own tests exercise.
 contentauth-c2pa-format-jpeg = { path = "../contentauth-c2pa-format-jpeg" }
+# The RIFF handler: the large-file, flat-hash container the one-pass tests
+# use, since nothing in it moves when a store is added.
+contentauth-c2pa-format-riff = { path = "../contentauth-c2pa-format-riff" }
 # Reads a built asset back to prove it is actually valid, exactly as
 # `contentauth-c2pa-builder`'s own tests round-trip through
 # `contentauth-c2pa-reader` directly.

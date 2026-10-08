@@ -1,0 +1,39 @@
+[workspace]
+# Deliberately its own workspace, not a member of the root one: it takes a
+# pinned git dependency on Gavin Peacock's `asset-io`, which the root
+# workspace's checks (Wasm, MSRV, cargo-deny's source allow-list) do not want
+# swept in. See the README.
+
+[package]
+name = "asset-io-comparison"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "One-pass signing of large RIFF files: this workspace's FileBuilderSession against asset-io's write_with_processing, and against its own two-pass shape"
+
+[dependencies]
+# Gavin Peacock's streaming asset I/O: the performance bar. Only its RIFF
+# handler is built; its own `c2pa` dependency is not enabled.
+asset-io = { git = "https://github.com/gpeacock/asset-io", rev = "d1be4bdfb376648a6f96c3fe390e3e609ac201be", default-features = false, features = ["riff", "jpeg"] }
+# Hashing for the asset-io variant and the floors (asset-io leaves the
+# hashing to its caller).
+sha2 = "0.10"
+
+# This workspace.
+contentauth-c2pa-builder = { path = "../contentauth-c2pa-builder" }
+contentauth-c2pa-file-builder = { path = "../contentauth-c2pa-file-builder" }
+contentauth-c2pa-file-reader = { path = "../contentauth-c2pa-file-reader" }
+contentauth-c2pa-format = { path = "../contentauth-c2pa-format" }
+contentauth-c2pa-format-riff = { path = "../contentauth-c2pa-format-riff" }
+contentauth-c2pa-reader = { path = "../contentauth-c2pa-reader" }
+contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
+contentauth-state-machine = { path = "../contentauth-state-machine" }
+c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
+    "rust_native_crypto",
+] }
+
+[profile.release]
+debug = false
+
+[lib]
+name = "asset_io_comparison"

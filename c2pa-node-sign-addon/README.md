@@ -42,8 +42,8 @@ const { manifest, exclusions } = native.buildFinish(session);
 ```
 
 That is `drive` in `index.mjs`. Streams are `"source"` (read-only) and
-`"output"` (written, then read back: the engine hashes what it has written
-for the hard binding). The Rust side, `contentauth-c2pa-node-compat-sign`,
+`"output"` (written only: the engine hashes the asset as it writes it, for
+the hard binding, and never asks to read it back). The Rust side, `contentauth-c2pa-node-compat-sign`,
 never buffers either asset and never sees a key.
 
 ## Output atomicity

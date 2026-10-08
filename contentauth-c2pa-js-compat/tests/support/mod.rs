@@ -144,7 +144,10 @@ pub fn build_and_embed(source: &[u8]) -> (EmbedPlan, Vec<u8>) {
                     asset = embed_plan.materialize(source, placeholder).unwrap();
                     let exclusions = embed_plan.exclusions.clone();
                     plan = Some(embed_plan);
-                    BuilderHostReply::PlaceholderReserved(exclusions)
+                    BuilderHostReply::PlaceholderReserved {
+                        exclusions,
+                        hash: None,
+                    }
                 }
 
                 BuilderRequest::AssetLength { .. } => {

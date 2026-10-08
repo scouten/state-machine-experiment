@@ -7,6 +7,7 @@ members = [
     "contentauth-c2pa-format",
     "contentauth-c2pa-format-jpeg",
     "contentauth-c2pa-format-registry",
+    "contentauth-c2pa-format-riff",
     "contentauth-c2pa-format-tiff",
     "contentauth-c2pa-js-compat",
     "contentauth-c2pa-js-compat-sign",

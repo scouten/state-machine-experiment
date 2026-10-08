@@ -118,9 +118,9 @@ consequential to persist than an incomplete read report.
 
 | Request | Answered with | Purpose |
 |---|---|---|
-| `ReservePlaceholder { stream, placeholder }` | the byte range of the container structure now carrying it, framing included | Host embeds a complete, zero-filled-where-pending manifest store into the asset (typically via a [`contentauth-c2pa-format`](../contentauth-c2pa-format) handler). |
-| `AssetLength { stream }` | total length in bytes | Needed to know what lies after the reserved placeholder. |
-| `AssetBytes { stream, range }` | bytes | Streams the asset (now containing the placeholder) into this crate's hashing, to compute the hard binding. |
+| `ReservePlaceholder { stream, placeholder, hash_alg }` | the byte ranges of the container structure now carrying it, framing included — and, optionally, the digest (under `hash_alg`) of the rest of the asset | Host embeds a complete, zero-filled-where-pending manifest store into the asset (typically via a [`contentauth-c2pa-format`](../contentauth-c2pa-format) handler). A host that hashes the asset as it writes it supplies the digest and spares the session a second pass; otherwise the next two requests follow. |
+| `AssetLength { stream }` | total length in bytes | Only when the host did not supply the hash: needed to know what lies after the reserved placeholder. |
+| `AssetBytes { stream, range }` | bytes | Only when the host did not supply the hash: streams the asset (now containing the placeholder) into this crate's hashing, to compute the hard binding. |
 | `Sign { purpose, alg, data }` | raw signature bytes | Signs a COSE `Sig_structure`; mirrors `c2pa_raw_crypto::RawSigner::sign`. `purpose` says whose key: the claim's, or the identity assertion with the given label. |
 | `Timestamp { digest, hash_alg }` | a bare `TimeStampToken` | Obtains an RFC 3161 countersignature; the host owns the TSA round trip. |
 | `CommitManifest { stream, range, manifest }` | acknowledgement | Replaces the reserved placeholder with the final manifest bytes — guaranteed byte-identical in length. |

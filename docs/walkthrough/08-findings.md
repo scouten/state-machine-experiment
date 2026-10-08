@@ -37,6 +37,22 @@ about C2PA itself.
 * **Asset-supplied URLs are an SSRF surface** the moment a host answers
   `Ocsp`; the policy belongs with the host that owns the network.
 
+* **The plan makes one pass possible.** The old shape wrote the output and
+  then read it back to hash it. Because an `EmbedPlan` describes the whole
+  output up front, the hash can be folded in as each piece is produced
+  (RIFF: the only manifest-dependent byte outside the new chunk is a size
+  field computed from the store's length). Measured against Gavin
+  Peacock's `asset-io` (`asset-io-comparison/`), the one-pass build runs
+  at the speed of a bare read-hash-write loop — a few percent *ahead* of
+  `asset-io`'s own `write_with_processing` — while the read-back shape
+  costs about 20% more. The first version was slower than the read-back
+  one, for an unexpected reason: the host loop cloned every outstanding
+  request, copying each 1 MiB `Write` payload once more, which cost about
+  half again as much time until it answered requests while borrowing them.
+* **A data-only exclusion is not what c2pa-rs wants for RIFF.** asset-io
+  hashes the `C2PA` chunk's header and excludes data plus pad; c2pa-rs
+  excludes header plus data. Only the real validator could say.
+
 ## Things that were cheap *because* of the architecture
 
 * A Wasm build with no `cfg` gymnastics in the engine.

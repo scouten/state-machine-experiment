@@ -51,6 +51,8 @@ impl Registry {
         registry.register(contentauth_c2pa_format_jpeg::JpegFormat);
         #[cfg(feature = "tiff")]
         registry.register(contentauth_c2pa_format_tiff::TiffFormat);
+        #[cfg(feature = "riff")]
+        registry.register(contentauth_c2pa_format_riff::RiffFormat);
         registry
     }
 
