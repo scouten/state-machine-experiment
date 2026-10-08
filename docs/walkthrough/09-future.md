@@ -104,6 +104,8 @@ A proposal for combining this work with Gavin Peacock's
 writes, parallel and box hashing, fuzzing) is in
 [`../asset-io-merge-plan.md`](../asset-io-merge-plan.md), including an
 analysis of where its callback-based APIs conflict with the sans-I/O model.
+A companion review of his `c2pa-core` experiment is in
+[`../c2pa-core-review.md`](../c2pa-core-review.md).
 
 ## Questions for discussion
 
