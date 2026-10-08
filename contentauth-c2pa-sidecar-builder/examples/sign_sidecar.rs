@@ -106,6 +106,20 @@ fn run(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
     let sidecar = path.with_extension("c2pa");
     let ca_pem = path.with_extension("ca.pem");
+
+    // Never write over the asset that was just hashed: `photo.c2pa` or
+    // `photo.ca.pem` given as the input would otherwise be replaced by the
+    // output derived from it, leaving a manifest that matches nothing.
+    let input = path.canonicalize()?;
+    for output in [&sidecar, &ca_pem] {
+        if output == &path || output.canonicalize().is_ok_and(|o| o == input) {
+            return Err(format!(
+                "refusing to overwrite the input {}: the output would replace it",
+                path.display()
+            )
+            .into());
+        }
+    }
     std::fs::write(&sidecar, &report.manifest_store)?;
     std::fs::write(&ca_pem, &chain.ca_pem)?;
 
