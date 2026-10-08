@@ -35,6 +35,14 @@ the sibling crate it depends on via a plain path dependency.
   the real c2pa-rs signs a TIFF (its own layout, which differs from
   `contentauth-c2pa-format-tiff`'s), and this workspace's TIFF handler
   reads it to the same answer c2pa-rs gives, `Valid` included.
+* `tests/compare_riff.rs` — a third container format, both directions: a WAV
+  signed by c2pa-rs is read by this workspace's RIFF handler to the same
+  answer (`Valid`), with the same hard-binding exclusions (checked at both
+  parities of the store's length, since RIFF pads odd data and the pad byte
+  is *not* excluded); and a WAV signed here — plain, with odd-sized audio,
+  with a trailing chunk, and re-signed over a c2pa-rs store — is validated by
+  c2pa-rs as `Valid`. This is where the exclusion convention was settled: a
+  data-only exclusion, with the chunk header hashed, reads as `Invalid`.
 * `tests/compare_tiff.rs` — the other direction: a TIFF signed here is
   read by c2pa-rs and the compat reader to the same answer, `Valid`
   included — so c2pa-rs accepts the hard binding's two exclusions (the

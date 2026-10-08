@@ -92,7 +92,10 @@ impl Host {
                 self.asset = plan.materialize(&self.source, placeholder).unwrap();
                 let exclusions = plan.exclusions.clone();
                 self.plan = Some(plan);
-                BuilderHostReply::PlaceholderReserved(exclusions)
+                BuilderHostReply::PlaceholderReserved {
+                    exclusions,
+                    hash: None,
+                }
             }
 
             BuilderRequest::AssetLength { .. } => {

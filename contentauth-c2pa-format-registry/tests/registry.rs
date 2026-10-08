@@ -56,6 +56,11 @@ fn content_names_the_format() {
         "BigTIFF"
     );
 
+    assert_eq!(
+        name_of(registry.detect(b"RIFF\x04\0\0\0WAVE")),
+        Some("riff")
+    );
+
     assert_eq!(name_of(registry.detect(b"\x89PNG\r\n\x1a\n")), None);
     assert_eq!(name_of(registry.detect(b"")), None);
     assert_eq!(name_of(registry.detect(b"II")), None);
@@ -86,9 +91,13 @@ fn hints_name_the_format_without_reading() {
     for ext in ["tif", "TIFF", "dng"] {
         assert_eq!(name_of(registry.by_extension(ext)), Some("tiff"), "{ext}");
     }
+    for ext in ["wav", "AVI", ".webp"] {
+        assert_eq!(name_of(registry.by_extension(ext)), Some("riff"), "{ext}");
+    }
     assert_eq!(name_of(registry.by_extension("png")), None);
 
     assert_eq!(name_of(registry.by_mime("image/jpeg")), Some("jpeg"));
+    assert_eq!(name_of(registry.by_mime("audio/x-wav")), Some("riff"));
     assert_eq!(name_of(registry.by_mime("IMAGE/TIFF")), Some("tiff"));
     assert_eq!(name_of(registry.by_mime("image/x-adobe-dng")), Some("tiff"));
     assert_eq!(name_of(registry.by_mime("image/png")), None);
@@ -99,9 +108,9 @@ fn lists_what_it_can_handle() {
     let registry = Registry::standard();
     assert_eq!(
         registry.extensions().collect::<Vec<_>>(),
-        ["jpg", "jpeg", "tif", "tiff", "dng"]
+        ["jpg", "jpeg", "tif", "tiff", "dng", "wav", "avi", "webp"]
     );
-    assert_eq!(registry.formats().len(), 2);
+    assert_eq!(registry.formats().len(), 3);
 }
 
 #[test]
@@ -189,6 +198,20 @@ fn an_any_format_is_a_format_handler_that_names_itself() {
 fn lists_the_media_types_it_can_handle() {
     assert_eq!(
         Registry::standard().mime_types().collect::<Vec<_>>(),
-        ["image/jpeg", "image/tiff", "image/dng", "image/x-adobe-dng"]
+        [
+            "image/jpeg",
+            "image/tiff",
+            "image/dng",
+            "image/x-adobe-dng",
+            "audio/wav",
+            "audio/x-wav",
+            "audio/wave",
+            "audio/vnd.wave",
+            "image/webp",
+            "video/avi",
+            "video/msvideo",
+            "video/x-msvideo",
+            "application/x-troff-msvideo",
+        ]
     );
 }

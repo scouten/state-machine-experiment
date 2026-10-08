@@ -245,6 +245,34 @@ jobs:
       - name: Run tests
         run: cargo test --manifest-path c2pa-rs-compat-conformance/Cargo.toml
 
+  asset-io-comparison:
+    name: asset-io-comparison tests
+    runs-on: ubuntu-latest
+
+    # Its own Cargo workspace, like compat-conformance above: it takes a
+    # pinned git dependency on Gavin Peacock's asset-io, which the root
+    # workspace's checks (Wasm, MSRV, cargo-deny's source allow-list) do
+    # not want swept in. The test asserts the timed variants write the
+    # same bytes (asset-io's output matches this workspace's outside the
+    # manifest) and that ours read back as trusted; the timings are
+    # `cargo run --release`, not CI.
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master@2026-06-30
+        with:
+          toolchain: stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: asset-io-comparison -> target
+
+      - name: Run tests
+        run: cargo test --manifest-path asset-io-comparison/Cargo.toml
+
   node-addon:
     name: c2pa-node-compat-addon tests (real Node)
     runs-on: ubuntu-latest

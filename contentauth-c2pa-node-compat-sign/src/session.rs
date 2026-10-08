@@ -36,7 +36,8 @@ type Engine = FileBuilderSession<JpegFormat>;
 pub enum Stream {
     /// The asset being signed. Read-only.
     Source,
-    /// The asset being assembled. Written, then read back for hashing.
+    /// The asset being assembled. Written only: the engine hashes it as it
+    /// writes it and never reads it back.
     Output,
 }
 

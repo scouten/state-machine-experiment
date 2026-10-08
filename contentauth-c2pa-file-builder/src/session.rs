@@ -28,12 +28,20 @@
 //! [`FileBuilderRequest::Write`] against
 //! [`FileBuilderSession::OUTPUT_STREAM`] for every byte it produces —
 //! never holding the source or the output it is assembling in memory.
-//! `BuilderSession`'s own `AssetBytes` (needed to hash the output for the
-//! hard binding) is forwarded the same way, as a plain read against the
-//! output stream once it has been written; `AssetLength` is answered from
-//! the plan's own known output length instead, so a host's stream being
-//! longer than the new content can never leak stale bytes into the hash.
-//! Only `Sign` and `Timestamp` — the two things nothing in this workspace
+//!
+//! # One pass
+//!
+//! The plan describes the whole output before any of it exists, and the
+//! edits are walked in output order, so the hard binding's digest can be
+//! accumulated *as the output is produced*: a copied range is folded in as
+//! soon as its source read returns, framing the handler emits as it is
+//! written, and the manifest's own slot (inside the plan's exclusions) not
+//! at all. The digest rides back to the `BuilderSession` in its
+//! `PlaceholderReserved` reply, so it never asks for `AssetLength` or
+//! `AssetBytes`: the output is not read back, and a host's output stream
+//! need not be readable. The digest covers exactly the plan's bytes, so a
+//! stream that was longer than the new content can never leak stale bytes
+//! into it. Only `Sign` and `Timestamp` — the two things nothing in this workspace
 //! can do on a host's behalf — ever reach this session's own host as
 //! themselves.
 
@@ -43,7 +51,9 @@ use contentauth_c2pa_builder::{
     BuilderHostReply, BuilderRequest, BuilderSession, BuilderSettings, SignPurpose,
 };
 use contentauth_c2pa_format::{Edit, EmbedPlan, FormatHandler, IoReply, IoRequest};
-use contentauth_c2pa_primitives::{ByteRange, HashAlgorithm, HostError, SigningAlg, StreamId};
+use contentauth_c2pa_primitives::{
+    hash::Hasher, ByteRange, HashAlgorithm, HostError, SigningAlg, StreamId,
+};
 use contentauth_state_machine::{
     HostRequest, ProtocolError, Request, RequestId, Session, SessionCore, Step,
 };
@@ -64,7 +74,7 @@ const OUTPUT: StreamId = StreamId::new(1);
 /// `Read`/`Length`/`Write` each name which physical destination they
 /// concern via `stream`: [`FileBuilderSession::SOURCE_STREAM`] (read-only —
 /// the asset being signed) or [`FileBuilderSession::OUTPUT_STREAM`]
-/// (write-then-read-back — the asset this session assembles). `Sign` and
+/// (write-only — the asset this session assembles). `Sign` and
 /// `Timestamp` are forwarded verbatim from the [`BuilderSession`] this
 /// composes.
 #[derive(Clone, Debug)]
@@ -73,11 +83,11 @@ pub enum FileBuilderRequest {
     /// Read a range of bytes from `stream`. Reply with
     /// [`FileBuilderReply::Bytes`], carrying exactly `range.len` bytes.
     ///
-    /// Issued against [`FileBuilderSession::SOURCE_STREAM`] while copying
-    /// source bytes through to the output, and against
-    /// [`FileBuilderSession::OUTPUT_STREAM`] while hashing the output for
-    /// the hard binding — so an [`FileBuilderSession::OUTPUT_STREAM`] host
-    /// must be able to read back what it has already been asked to write.
+    /// Issued against [`FileBuilderSession::SOURCE_STREAM`] — to copy
+    /// source bytes through to the output, and to let the handler scan the
+    /// source. Never against [`FileBuilderSession::OUTPUT_STREAM`]: the
+    /// hard binding is hashed as the output is written, so the output is
+    /// never read back.
     Read {
         /// The stream to read from.
         stream: StreamId,
@@ -94,8 +104,10 @@ pub enum FileBuilderRequest {
     },
 
     /// Write `bytes` at `offset` of [`FileBuilderSession::OUTPUT_STREAM`].
-    /// Reply with [`FileBuilderReply::Written`] once durable enough to be
-    /// read back by a later [`Self::Read`].
+    /// Reply with [`FileBuilderReply::Written`] once the bytes are
+    /// written. The last writes replace the manifest's placeholder with the
+    /// final store at offsets already written, so the output must support
+    /// writing at an earlier offset; it never needs to be read.
     ///
     /// Every byte of the output this session assembles arrives through
     /// exactly one of these — nothing here is ever collected into a
@@ -268,6 +280,7 @@ enum Sub<H: FormatHandler> {
     Planning {
         op: H::PlanEmbed,
         placeholder: Vec<u8>,
+        hash_alg: HashAlgorithm,
         request: RequestId,
         pending: HashMap<RequestId, RequestId>,
     },
@@ -282,6 +295,7 @@ enum Sub<H: FormatHandler> {
     Validating {
         plan: EmbedPlan,
         placeholder: Vec<u8>,
+        hash_alg: HashAlgorithm,
         request: RequestId,
         length_request: RequestId,
     },
@@ -293,6 +307,11 @@ enum Sub<H: FormatHandler> {
         inflight: Option<Inflight>,
         request: RequestId,
         then: WriteThen,
+
+        /// The hard binding's digest, accumulated as each piece of the
+        /// output is produced; `None` when rewriting a placeholder with
+        /// the final manifest, which changes nothing the hash covers.
+        hash: Option<Box<OutputHash>>,
     },
 }
 
@@ -329,7 +348,7 @@ enum Phase<H: FormatHandler> {
 ///
 /// See the crate-level docs for why this exists alongside
 /// [`crate::build_and_sign`]: a host with only synchronous, local
-/// `Read + Seek` / `Read + Write + Seek` access (and a plain signing
+/// `Read + Seek` / `Write + Seek` access (and a plain signing
 /// function) can use that convenience function instead of driving this
 /// session by hand.
 pub struct FileBuilderSession<H: FormatHandler + Send> {
@@ -349,10 +368,11 @@ pub struct FileBuilderSession<H: FormatHandler + Send> {
 
 impl<H: FormatHandler + Send> FileBuilderSession<H> {
     /// The stream id this session uses on its own `Read`/`Length`/`Write`
-    /// requests for the asset it is assembling. A host must be able to
-    /// read back whatever it has already been asked to write here: the
-    /// hard binding is hashed from these reads once the placeholder or
-    /// final manifest has been written.
+    /// requests for the asset it is assembling. Write-only: the hard
+    /// binding is hashed as the output is written, so a host never has to
+    /// read back what it has been asked to write here — only to accept a
+    /// later write at an earlier offset, when the final manifest replaces
+    /// the placeholder.
     pub const OUTPUT_STREAM: StreamId = OUTPUT;
     /// The stream id this session uses on its own `Read`/`Length`
     /// requests for the source asset — read-only, and never written to.
@@ -429,12 +449,19 @@ impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
                         Some(Sub::Planning {
                             op,
                             placeholder,
+                            hash_alg,
                             request,
                             pending,
                         }),
                 }) => {
-                    let result =
-                        step_planning::<H>(&mut self.core, op, placeholder, request, pending);
+                    let result = step_planning::<H>(
+                        &mut self.core,
+                        op,
+                        placeholder,
+                        hash_alg,
+                        request,
+                        pending,
+                    );
                     match self.poisoning(result)? {
                         PlanningStep::AwaitHost(sub) => {
                             self.phase = Some(Phase::Building {
@@ -448,6 +475,7 @@ impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
                         PlanningStep::Done {
                             plan,
                             placeholder,
+                            hash_alg,
                             request,
                         } => {
                             let length_request = self
@@ -456,6 +484,7 @@ impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
                             let sub = Some(Sub::Validating {
                                 plan,
                                 placeholder,
+                                hash_alg,
                                 request,
                                 length_request,
                             });
@@ -476,6 +505,7 @@ impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
                         Some(Sub::Validating {
                             plan,
                             placeholder,
+                            hash_alg,
                             request,
                             length_request,
                         }),
@@ -484,6 +514,7 @@ impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
                         &mut self.core,
                         plan,
                         placeholder,
+                        hash_alg,
                         request,
                         length_request,
                     );
@@ -500,6 +531,7 @@ impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
                         ValidatingStep::Done {
                             plan: embed_plan,
                             tasks,
+                            hash,
                             request,
                             exclusions,
                         } => {
@@ -509,6 +541,7 @@ impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
                                 inflight: None,
                                 request,
                                 then: WriteThen::PlaceholderReserved { exclusions },
+                                hash: Some(hash),
                             });
                             self.phase = Some(Phase::Building { session, plan, sub });
                             continue;
@@ -525,9 +558,11 @@ impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
                             inflight,
                             request,
                             then,
+                            hash,
                         }),
                 }) => {
-                    let result = step_writing::<H>(&mut self.core, tasks, inflight, request, then);
+                    let result =
+                        step_writing::<H>(&mut self.core, tasks, inflight, request, then, hash);
                     match self.poisoning(result)? {
                         WritingStep::AwaitHost(sub) => {
                             self.phase = Some(Phase::Building {
@@ -538,10 +573,14 @@ impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
                             return Ok(Step::AwaitHost);
                         }
 
-                        WritingStep::Done { request, then } => {
+                        WritingStep::Done {
+                            request,
+                            then,
+                            hash,
+                        } => {
                             let reply = match then {
                                 WriteThen::PlaceholderReserved { exclusions } => {
-                                    BuilderHostReply::PlaceholderReserved(exclusions)
+                                    BuilderHostReply::PlaceholderReserved { exclusions, hash }
                                 }
                                 WriteThen::ManifestCommitted => BuilderHostReply::ManifestCommitted,
                             };
@@ -589,48 +628,22 @@ impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
                         }
 
                         match &request.kind {
-                            BuilderRequest::ReservePlaceholder { placeholder, .. } => {
+                            BuilderRequest::ReservePlaceholder {
+                                placeholder,
+                                hash_alg,
+                                ..
+                            } => {
                                 let op = self.handler.plan_embed(SOURCE, placeholder.len() as u64);
                                 sub = Some(Sub::Planning {
                                     op,
                                     placeholder: placeholder.clone(),
+                                    hash_alg: *hash_alg,
                                     request: request.id,
                                     pending: HashMap::new(),
                                 });
                                 answered_internally = true;
                                 // `ReservePlaceholder` is always issued alone.
                                 break;
-                            }
-
-                            // Answered from the plan itself, not the host:
-                            // an output length only this session already
-                            // knows for certain is the length the hard
-                            // binding must cover, whatever the host's
-                            // stream happens to physically be — asking the
-                            // host instead would let a stream reused (or
-                            // simply longer than needed) from an earlier
-                            // build leak trailing bytes into the hash.
-                            BuilderRequest::AssetLength { .. } => {
-                                let result =
-                                    plan.as_ref()
-                                        .and_then(EmbedPlan::output_len)
-                                        .ok_or(Error::Invariant(
-                                        "AssetLength asked for before ReservePlaceholder, or the \
-                                         plan's output length overflows",
-                                    ));
-                                let len = self.poisoning(result)?;
-                                let result =
-                                    session.fulfill(request.id, BuilderHostReply::AssetLength(len));
-                                self.poisoning(result)?;
-                                answered_internally = true;
-                            }
-
-                            BuilderRequest::AssetBytes { range, .. } => {
-                                let outer = self.core.issue(FileBuilderRequest::Read {
-                                    stream: OUTPUT,
-                                    range: *range,
-                                });
-                                self.pending.insert(outer, request.id);
                             }
 
                             BuilderRequest::Sign { purpose, alg, data } => {
@@ -663,6 +676,7 @@ impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
                                     inflight: None,
                                     request: request.id,
                                     then: WriteThen::ManifestCommitted,
+                                    hash: None,
                                 });
                                 answered_internally = true;
                                 // `CommitManifest` is always issued alone.
@@ -730,6 +744,7 @@ enum PlanningStep<H: FormatHandler> {
     Done {
         plan: EmbedPlan,
         placeholder: Vec<u8>,
+        hash_alg: HashAlgorithm,
         request: RequestId,
     },
 }
@@ -741,6 +756,7 @@ fn step_planning<H: FormatHandler>(
     core: &mut SessionCore<FileBuilderRequest>,
     mut op: H::PlanEmbed,
     placeholder: Vec<u8>,
+    hash_alg: HashAlgorithm,
     request: RequestId,
     mut pending: HashMap<RequestId, RequestId>,
 ) -> Result<PlanningStep<H>, Error> {
@@ -765,6 +781,7 @@ fn step_planning<H: FormatHandler>(
         return Ok(PlanningStep::Done {
             plan: embed_plan,
             placeholder,
+            hash_alg,
             request,
         });
     }
@@ -802,6 +819,7 @@ fn step_planning<H: FormatHandler>(
     Ok(PlanningStep::AwaitHost(Sub::Planning {
         op,
         placeholder,
+        hash_alg,
         request,
         pending,
     }))
@@ -817,6 +835,7 @@ enum ValidatingStep<H: FormatHandler> {
     Done {
         plan: EmbedPlan,
         tasks: VecDeque<WriteTask>,
+        hash: Box<OutputHash>,
         request: RequestId,
         exclusions: Vec<ByteRange>,
     },
@@ -831,6 +850,7 @@ fn step_validating<H: FormatHandler>(
     core: &mut SessionCore<FileBuilderRequest>,
     plan: EmbedPlan,
     placeholder: Vec<u8>,
+    hash_alg: HashAlgorithm,
     request: RequestId,
     length_request: RequestId,
 ) -> Result<ValidatingStep<H>, Error> {
@@ -838,6 +858,7 @@ fn step_validating<H: FormatHandler>(
         return Ok(ValidatingStep::AwaitHost(Sub::Validating {
             plan,
             placeholder,
+            hash_alg,
             request,
             length_request,
         }));
@@ -847,9 +868,11 @@ fn step_validating<H: FormatHandler>(
 
     let exclusions = plan.exclusions.clone();
     let tasks = tasks_for_edits(&plan.edits, &placeholder)?;
+    let hash = Box::new(OutputHash::new(hash_alg, &plan.exclusions));
     Ok(ValidatingStep::Done {
         plan,
         tasks,
+        hash,
         request,
         exclusions,
     })
@@ -860,18 +883,107 @@ enum WritingStep<H: FormatHandler> {
     /// Still in progress; this is the sub-operation's next state.
     AwaitHost(Sub<H>),
 
-    /// Every task is written.
-    Done { request: RequestId, then: WriteThen },
+    /// Every task is written. `hash` is the finished digest of the output,
+    /// if one was being accumulated.
+    Done {
+        request: RequestId,
+        then: WriteThen,
+        hash: Option<Vec<u8>>,
+    },
+}
+
+/// The hard binding's digest, accumulated as the output is produced rather
+/// than by reading it back afterwards.
+///
+/// Every piece of the output passes through [`Self::absorb`] exactly once
+/// and in order — [`step_writing`] walks the plan's edits in output order,
+/// one at a time — so the digest is of the output's bytes outside the
+/// plan's exclusions, which is what the hard binding covers. Bytes inside
+/// an exclusion (the placeholder, and the container's framing around it)
+/// are skipped.
+struct OutputHash {
+    hasher: Hasher,
+
+    /// The plan's exclusions: ascending and not overlapping, as
+    /// [`EmbedPlan::check`] verified.
+    exclusions: Vec<ByteRange>,
+
+    /// The output offset the next absorbed bytes must land at.
+    next_offset: u64,
+}
+
+impl OutputHash {
+    fn new(alg: HashAlgorithm, exclusions: &[ByteRange]) -> Self {
+        Self {
+            hasher: Hasher::new(alg),
+            exclusions: exclusions.to_vec(),
+            next_offset: 0,
+        }
+    }
+
+    /// Folds `bytes`, which land at `output_offset` of the output, into the
+    /// digest, leaving out whatever part of them lies inside an exclusion.
+    fn absorb(&mut self, output_offset: u64, bytes: &[u8]) -> Result<(), Error> {
+        if output_offset != self.next_offset {
+            return Err(Error::Invariant(
+                "output reached the hash out of order or with a gap",
+            ));
+        }
+        let end = output_offset
+            .checked_add(bytes.len() as u64)
+            .ok_or(Error::Invariant("output offset overflows"))?;
+        self.next_offset = end;
+
+        let mut cursor = output_offset;
+        for exclusion in &self.exclusions {
+            let exclusion_end = exclusion.start.saturating_add(exclusion.len);
+            if exclusion_end <= cursor {
+                continue;
+            }
+            if exclusion.start >= end {
+                break;
+            }
+            if exclusion.start > cursor {
+                self.hasher
+                    .update(piece(bytes, output_offset, cursor, exclusion.start));
+            }
+            cursor = cursor.max(exclusion_end);
+        }
+        if cursor < end {
+            self.hasher.update(piece(bytes, output_offset, cursor, end));
+        }
+
+        Ok(())
+    }
+
+    fn finish(self) -> Vec<u8> {
+        self.hasher.finish()
+    }
+}
+
+/// The part of `bytes` (which start at output offset `base`) between output
+/// offsets `from` and `to`. Callers pass offsets within `bytes`.
+fn piece(bytes: &[u8], base: u64, from: u64, to: u64) -> &[u8] {
+    // Both differences are at most `bytes.len()`, so they fit `usize`.
+    let start = (from - base) as usize;
+    let end = (to - base) as usize;
+    bytes.get(start..end).unwrap_or(&[])
 }
 
 /// Drives one round of [`Sub::Writing`]: resolves whatever request is
 /// currently inflight, then issues the next task's request.
+///
+/// While `hash` is present, every piece of the output is folded into it as
+/// it is produced — a copied range as soon as the source read returns, and
+/// bytes already in hand as their write is issued — so the host is never
+/// asked to read the output back.
 fn step_writing<H: FormatHandler>(
     core: &mut SessionCore<FileBuilderRequest>,
     mut tasks: VecDeque<WriteTask>,
     inflight: Option<Inflight>,
     request: RequestId,
     then: WriteThen,
+    mut hash: Option<Box<OutputHash>>,
 ) -> Result<WritingStep<H>, Error> {
     match inflight {
         // A task's `Read` has resolved: issue the `Write` it feeds and
@@ -892,8 +1004,12 @@ fn step_writing<H: FormatHandler>(
                     }),
                     request,
                     then,
+                    hash,
                 })),
                 Some(bytes) => {
+                    if let Some(hash) = hash.as_mut() {
+                        hash.absorb(output_offset, &bytes)?;
+                    }
                     let write_id = core.issue(FileBuilderRequest::Write {
                         stream: OUTPUT,
                         offset: output_offset,
@@ -904,6 +1020,7 @@ fn step_writing<H: FormatHandler>(
                         inflight: Some(Inflight::Write { id: write_id }),
                         request,
                         then,
+                        hash,
                     }))
                 }
             };
@@ -917,6 +1034,7 @@ fn step_writing<H: FormatHandler>(
                 inflight: Some(Inflight::Write { id }),
                 request,
                 then,
+                hash,
             }));
         }
         Some(Inflight::Write { .. }) => {}
@@ -926,7 +1044,11 @@ fn step_writing<H: FormatHandler>(
     }
 
     match tasks.pop_front() {
-        None => Ok(WritingStep::Done { request, then }),
+        None => Ok(WritingStep::Done {
+            request,
+            then,
+            hash: hash.map(|hash| hash.finish()),
+        }),
 
         Some(WriteTask::CopyFromSource {
             output_offset,
@@ -945,6 +1067,7 @@ fn step_writing<H: FormatHandler>(
                 }),
                 request,
                 then,
+                hash,
             }))
         }
 
@@ -952,6 +1075,9 @@ fn step_writing<H: FormatHandler>(
             output_offset,
             bytes,
         }) => {
+            if let Some(hash) = hash.as_mut() {
+                hash.absorb(output_offset, &bytes)?;
+            }
             let id = core.issue(FileBuilderRequest::Write {
                 stream: OUTPUT,
                 offset: output_offset,
@@ -962,6 +1088,7 @@ fn step_writing<H: FormatHandler>(
                 inflight: Some(Inflight::Write { id }),
                 request,
                 then,
+                hash,
             }))
         }
     }
@@ -1130,20 +1257,17 @@ fn to_io_reply(reply: FileBuilderReply) -> IoReply {
 
 fn to_builder_host_reply(reply: FileBuilderReply) -> BuilderHostReply {
     match reply {
-        // Answers a forwarded `AssetBytes` — the output stream, read back
-        // after being written.
-        FileBuilderReply::Bytes(bytes) => BuilderHostReply::AssetBytes(bytes),
-
         FileBuilderReply::Signature(sig) => BuilderHostReply::Signature(sig),
         FileBuilderReply::Timestamp(ts) => BuilderHostReply::Timestamp(ts),
         FileBuilderReply::Failed(err) => BuilderHostReply::Failed(err),
 
-        // Neither ever answers a forwarded `BuilderRequest`: `AssetLength`
-        // is answered directly from the plan rather than forwarded (see
-        // `advance`), and `ReservePlaceholder`/`CommitManifest` are
-        // answered once their own `Sub::Writing` finishes, not through
-        // this path — kept for exhaustiveness.
-        FileBuilderReply::Length(_) | FileBuilderReply::Written => {
+        // None of these ever answers a forwarded `BuilderRequest`: this
+        // session hands the `BuilderSession` the hard binding's digest
+        // itself, so it never asks for `AssetLength`/`AssetBytes`, and
+        // `ReservePlaceholder`/`CommitManifest` are answered once their
+        // own `Sub::Writing` finishes, not through this path — kept for
+        // exhaustiveness.
+        FileBuilderReply::Bytes(_) | FileBuilderReply::Length(_) | FileBuilderReply::Written => {
             BuilderHostReply::Failed(HostError::new("unexpected reply shape"))
         }
     }
@@ -1295,10 +1419,6 @@ mod tests {
     #[test]
     fn replies_translate_to_builder_host_replies() {
         assert!(matches!(
-            to_builder_host_reply(FileBuilderReply::Bytes(vec![1])),
-            BuilderHostReply::AssetBytes(bytes) if bytes == [1]
-        ));
-        assert!(matches!(
             to_builder_host_reply(FileBuilderReply::Signature(vec![1])),
             BuilderHostReply::Signature(bytes) if bytes == [1]
         ));
@@ -1311,9 +1431,14 @@ mod tests {
             BuilderHostReply::Failed(_)
         ));
 
-        // Neither `Length` (`AssetLength` is answered from the plan, not
-        // forwarded) nor `Written` ever reaches this function in
-        // practice — kept for exhaustiveness.
+        // None of `Bytes`, `Length`, or `Written` ever reaches this
+        // function in practice — the session hashes the output itself, so
+        // nothing forwarded to its host is a read or a length — kept for
+        // exhaustiveness.
+        assert!(matches!(
+            to_builder_host_reply(FileBuilderReply::Bytes(vec![1])),
+            BuilderHostReply::Failed(_)
+        ));
         assert!(matches!(
             to_builder_host_reply(FileBuilderReply::Length(4)),
             BuilderHostReply::Failed(_)
@@ -1653,6 +1778,7 @@ mod tests {
             None,
             outer_request,
             WriteThen::ManifestCommitted,
+            None,
         )
         .unwrap();
         let sub = match step {
@@ -1676,6 +1802,7 @@ mod tests {
             inflight,
             outer_request,
             WriteThen::ManifestCommitted,
+            None,
         )
         .unwrap();
         match step {
@@ -1707,6 +1834,7 @@ mod tests {
             None,
             outer_request,
             WriteThen::ManifestCommitted,
+            None,
         )
         .unwrap();
         let sub = match step {
@@ -1730,6 +1858,7 @@ mod tests {
             inflight,
             outer_request,
             WriteThen::ManifestCommitted,
+            None,
         )
         .unwrap();
         match step {
@@ -1739,6 +1868,48 @@ mod tests {
             }) => assert_eq!(id, first_id),
             _ => panic!("expected the same write still pending, unchanged"),
         }
+    }
+
+    /// The digest covers exactly the output outside the exclusions, in
+    /// order, however the output is cut into pieces — including pieces
+    /// that straddle an exclusion's edge.
+    #[test]
+    fn output_hash_skips_exclusions_however_the_output_is_cut() {
+        let output: Vec<u8> = (0..100u8).collect();
+        let exclusions = [
+            ByteRange { start: 10, len: 20 },
+            ByteRange { start: 60, len: 1 },
+        ];
+        let expected = {
+            let mut included = output[..10].to_vec();
+            included.extend_from_slice(&output[30..60]);
+            included.extend_from_slice(&output[61..]);
+            HashAlgorithm::Sha256.digest(&included)
+        };
+
+        for cut in [1usize, 3, 7, 10, 25, 100] {
+            let mut hash = OutputHash::new(HashAlgorithm::Sha256, &exclusions);
+            for (index, piece) in output.chunks(cut).enumerate() {
+                hash.absorb((index * cut) as u64, piece).unwrap();
+            }
+            assert_eq!(hash.finish(), expected, "pieces of {cut}");
+        }
+    }
+
+    #[test]
+    fn output_hash_with_no_exclusions_is_the_digest_of_the_output() {
+        let mut hash = OutputHash::new(HashAlgorithm::Sha384, &[]);
+        hash.absorb(0, b"hello ").unwrap();
+        hash.absorb(6, b"world").unwrap();
+        assert_eq!(hash.finish(), HashAlgorithm::Sha384.digest(b"hello world"));
+    }
+
+    #[test]
+    fn output_hash_refuses_bytes_out_of_order_or_with_a_gap() {
+        let mut hash = OutputHash::new(HashAlgorithm::Sha256, &[]);
+        hash.absorb(0, b"abcd").unwrap();
+        assert!(matches!(hash.absorb(5, b"x"), Err(Error::Invariant(_))));
+        assert!(matches!(hash.absorb(2, b"x"), Err(Error::Invariant(_))));
     }
 
     /// A plan `plan_embed` returned unchecked — one with a `Copy` edit
@@ -1764,8 +1935,14 @@ mod tests {
             None,
         );
 
-        let result =
-            step_validating::<JpegFormat>(&mut core, plan, vec![], request, length_request);
+        let result = step_validating::<JpegFormat>(
+            &mut core,
+            plan,
+            vec![],
+            HashAlgorithm::Sha256,
+            request,
+            length_request,
+        );
         assert!(matches!(result, Err(Error::Format(_))));
     }
 
@@ -1781,8 +1958,15 @@ mod tests {
 
         let plan = EmbedPlan::new(vec![], 0, vec![ByteRange { start: 0, len: 0 }], None);
 
-        let step = step_validating::<JpegFormat>(&mut core, plan, vec![], request, length_request)
-            .unwrap();
+        let step = step_validating::<JpegFormat>(
+            &mut core,
+            plan,
+            vec![],
+            HashAlgorithm::Sha256,
+            request,
+            length_request,
+        )
+        .unwrap();
         assert!(matches!(
             step,
             ValidatingStep::AwaitHost(Sub::Validating { .. })

@@ -18,9 +18,11 @@ sequenceDiagram
     participant H as Host
     participant B as BuilderSession
     B->>H: ReservePlaceholder(zero-filled store)
-    H-->>B: exclusion ranges (container framing included)
-    B->>H: AssetLength, AssetBytes (hash outside exclusions)
-    H-->>B: bytes
+    H-->>B: exclusion ranges (container framing included)<br/>+ the asset's hash, if the host computed it while writing
+    opt host did not supply the hash
+        B->>H: AssetLength, AssetBytes (hash outside exclusions)
+        H-->>B: bytes
+    end
     Note over B: patch real hash into placeholder
     loop each CAWG identity assertion (optional)
         B->>H: Sign(Identity{label}, alg, Sig_structure)
@@ -57,10 +59,13 @@ flowchart TB
         PE["handler.plan_embed(len)<br/>→ EmbedPlan"]
         CK["EmbedPlan::check<br/><i>re-verify, don't trust the handler</i>"]
         W["walk plan edits:<br/>Copy ranges → Read SOURCE, Write OUTPUT<br/>Emit framing → Write OUTPUT<br/>Placeholder → Write OUTPUT"]
-        BS["BuilderSession<br/><i>ReservePlaceholder, CommitManifest,<br/>AssetBytes, AssetLength</i>"]
+        HS["hash outside the exclusions<br/><i>as each piece is produced</i>"]
+        BS["BuilderSession<br/><i>ReservePlaceholder, CommitManifest</i>"]
         CM["handler.commit(plan, store)<br/>→ Patches"]
         PE --> CK --> W
+        W --> HS
         BS <--> W
+        HS -->|digest in the reply| BS
         BS --> CM
     end
     Host["Host: Read, Write, Sign, Timestamp"] <--> FBS
@@ -72,10 +77,22 @@ Design decisions worth discussing:
   (the in-memory reference implementation); large `Copy` edits are chunked.
 * **Doesn't trust the handler.** The plan is re-checked against a freshly
   asked source length.
-* **`AssetLength` is answered from the plan**, not the host, so a reused,
-  longer output stream can't leak stale trailing bytes into the hash
-  (they are still physically in the file; pass an empty stream if that
-  matters).
+* **One pass.** The plan describes the whole output before any of it
+  exists and its edits are walked in output order, so the hard binding's
+  digest is accumulated *as the output is produced* — a copied range as
+  soon as its source read returns, framing as it is emitted, the manifest's
+  slot not at all — and rides back in `ReservePlaceholder`'s reply. The
+  session never asks for `AssetLength`/`AssetBytes`, the output is never
+  read back (a write-only stream will do), and a reused, longer output
+  stream can't leak stale trailing bytes into the hash (they are still
+  physically in the file; pass an empty stream if that matters). A host
+  that can't hash as it goes leaves `hash` empty and answers
+  `AssetBytes` as before; `BuilderSession` supports both.
+* **Why this works for RIFF and not (yet) for everything.** It needs every
+  byte outside the exclusions to be known when it is written. RIFF's only
+  manifest-dependent byte outside the new chunk is the header's size
+  field, which depends on the store's *length*; BMFF's chunk offsets also
+  shift, which is [future work](09-future.md).
 * **Only `Sign` and `Timestamp` reach the host as themselves** — nothing
   here can sign for a host.
 * **`build_and_sign_file` is safe by construction:** exclusive-create

@@ -53,6 +53,19 @@ pub enum Error {
     #[error("host-reported range is unusable: {0}")]
     PlaceholderRangeInvalid(&'static str),
 
+    /// The host supplied the asset's hash with
+    /// [`BuilderHostReply::PlaceholderReserved`](crate::BuilderHostReply::PlaceholderReserved)
+    /// but it is not as long as a digest of the algorithm the request
+    /// named.
+    #[error("host-supplied asset hash is {actual} bytes; the hash algorithm produces {expected}")]
+    AssetHashLengthMismatch {
+        /// The length of the algorithm's digest.
+        expected: usize,
+
+        /// The length of the hash the host supplied.
+        actual: usize,
+    },
+
     /// [`BuilderSettings::assertions`](crate::BuilderSettings::assertions)
     /// used the same label twice, or used the label this crate reserves
     /// for the hard binding assertion it appends
