@@ -366,14 +366,15 @@ mod tests {
                 { "relationship": "parentOf", "title": "source.jpg",
                   "format": "image/jpeg", "instance_id": "xmp:iid:s",
                   "label": "src", "informational_URI": "https://example.com/s" },
-                { "title": "logo.png", "is_created": true }
+                { "title": "logo.png", "is_created": true },
+                { "relationship": "inputTo", "title": "model" }
               ], "title""#,
         );
 
         let settings = settings(&json).unwrap();
 
-        let [parent, logo] = settings.ingredients.as_slice() else {
-            panic!("expected two ingredients");
+        let [parent, logo, input] = settings.ingredients.as_slice() else {
+            panic!("expected three ingredients");
         };
         assert_eq!(parent.relationship, Relationship::ParentOf);
         assert_eq!(parent.label.as_deref(), Some("src"));
@@ -387,6 +388,7 @@ mod tests {
         // c2pa-rs's default relationship.
         assert_eq!(logo.relationship, Relationship::ComponentOf);
         assert!(logo.created);
+        assert_eq!(input.relationship, Relationship::InputTo);
     }
 
     #[test]

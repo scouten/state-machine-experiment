@@ -354,17 +354,21 @@ fn missing_actions(
     new_actions
 }
 
+/// The map an actions assertion is, or why it is not one.
+fn assertion_map(assertion: &mut Value) -> Result<&mut BTreeMap<Value, Value>, Error> {
+    match assertion {
+        Value::Map(map) => Ok(map),
+        _ => Err(Error::InvalidActions("the assertion is not a map")),
+    }
+}
+
 /// Adds `new_actions` to an actions assertion: an opening action goes
 /// first, as the specification requires of the inception action, and the
 /// rest follow the existing ones.
 fn add_actions(assertion: &mut Value, new_actions: Vec<Value>) -> Result<(), Error> {
-    let Value::Map(map) = assertion else {
-        return Err(Error::InvalidActions("the assertion is not a map"));
-    };
-    let list = match map.entry(text("actions")) {
-        std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
-        std::collections::btree_map::Entry::Vacant(entry) => entry.insert(Value::Array(vec![])),
-    };
+    let list = assertion_map(assertion)?
+        .entry(text("actions"))
+        .or_insert_with(|| Value::Array(vec![]));
     let Value::Array(list) = list else {
         return Err(Error::InvalidActions("`actions` is not an array"));
     };
@@ -380,31 +384,16 @@ fn add_actions(assertion: &mut Value, new_actions: Vec<Value>) -> Result<(), Err
 /// The URLs every `c2pa.placed` action in `assertions` (and `first`)
 /// already references.
 fn placed_urls<'a>(first: &'a Value, rest: impl Iterator<Item = &'a Value>) -> HashSet<String> {
-    let mut urls = HashSet::new();
-    for assertion in std::iter::once(first).chain(rest) {
-        for action in action_list(assertion).unwrap_or(&[]) {
-            if action_name(action) != Some("c2pa.placed") {
-                continue;
-            }
-            let referenced = match action {
-                Value::Map(m) => m.get(&text("parameters")),
-                _ => None,
-            };
-            let Some(Value::Map(parameters)) = referenced else {
-                continue;
-            };
-            if let Some(Value::Array(refs)) = parameters.get(&text("ingredients")) {
-                for reference in refs {
-                    if let Value::Map(m) = reference {
-                        if let Some(Value::Text(url)) = m.get(&text("url")) {
-                            urls.insert(url.clone());
-                        }
-                    }
-                }
-            }
-        }
-    }
-    urls
+    std::iter::once(first)
+        .chain(rest)
+        .flat_map(|assertion| action_list(assertion).unwrap_or(&[]))
+        .filter(|action| action_name(action) == Some("c2pa.placed"))
+        .filter_map(|action| entry(action, "parameters"))
+        .filter_map(|parameters| entry(parameters, "ingredients")?.as_array())
+        .flatten()
+        .filter_map(|reference| entry(reference, "url")?.as_str())
+        .map(str::to_string)
+        .collect()
 }
 
 /// Replaces each action's `parameters.ingredientIds` with
@@ -413,10 +402,7 @@ fn resolve_ingredient_ids(
     assertion: &mut Value,
     by_id: &[(&str, &Reference)],
 ) -> Result<(), Error> {
-    let Value::Map(map) = assertion else {
-        return Err(Error::InvalidActions("the assertion is not a map"));
-    };
-    let Some(Value::Array(list)) = map.get_mut(&text("actions")) else {
+    let Some(Value::Array(list)) = assertion_map(assertion)?.get_mut(&text("actions")) else {
         return Ok(());
     };
 
@@ -432,6 +418,7 @@ fn resolve_ingredient_ids(
             return Err(Error::InvalidActions("`ingredientIds` is not an array"));
         };
 
+        // Any references the host already wrote stay.
         let mut resolved = match parameters.remove(&text("ingredients")) {
             Some(Value::Array(existing)) => existing,
             _ => Vec::new(),
@@ -465,22 +452,17 @@ fn action(name: &str, reference: &Reference) -> Value {
     ]))
 }
 
+/// The value under `key`, if `value` is a map that has one.
+fn entry<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
+    value.as_map()?.get(&text(key))
+}
+
 fn action_list(assertion: &Value) -> Option<&[Value]> {
-    let Value::Map(map) = assertion else {
-        return None;
-    };
-    match map.get(&text("actions")) {
-        Some(Value::Array(list)) => Some(list),
-        _ => None,
-    }
+    entry(assertion, "actions")?.as_array().map(Vec::as_slice)
 }
 
 fn action_name(action: &Value) -> Option<&str> {
-    let Value::Map(map) = action else { return None };
-    match map.get(&text("action")) {
-        Some(Value::Text(name)) => Some(name),
-        _ => None,
-    }
+    entry(action, "action")?.as_str()
 }
 
 fn text(s: &str) -> Value {
@@ -767,5 +749,123 @@ mod tests {
             action_names(find(&assertions, "c2pa.actions.v2__1")),
             ["c2pa.opened"]
         );
+    }
+    /// A settings with `value` as its only assertion, `c2pa.actions.v2`.
+    fn settings_with_actions(value: &Value, ingredient: IngredientSettings) -> BuilderSettings {
+        let mut settings = settings();
+        settings.assertions = vec![Assertion::new(
+            "c2pa.actions.v2",
+            c2pa_cbor::to_vec(value).unwrap(),
+        )];
+        settings.ingredients = vec![ingredient];
+        settings
+    }
+
+    fn map_of(entries: Vec<(&str, Value)>) -> Value {
+        Value::Map(entries.into_iter().map(|(k, v)| (text(k), v)).collect())
+    }
+
+    #[test]
+    fn an_input_needs_no_action_so_none_is_made_up() {
+        let mut settings = settings();
+        settings.ingredients = vec![IngredientSettings::new(Relationship::InputTo)];
+
+        let assertions = resolved(&settings).unwrap();
+
+        assert_eq!(assertions.len(), 1);
+        assert_eq!(assertions[0].label, "c2pa.ingredient.v3");
+        assert_eq!(assertions[0].kind, AssertionKind::Gathered);
+    }
+
+    #[test]
+    fn an_actions_assertion_that_is_not_a_map_cannot_be_linked() {
+        let settings = settings_with_actions(
+            &Value::Array(vec![]),
+            IngredientSettings::new(Relationship::ParentOf),
+        );
+        assert!(matches!(
+            resolved(&settings),
+            Err(Error::InvalidActions("the assertion is not a map"))
+        ));
+    }
+
+    #[test]
+    fn an_actions_field_that_is_not_an_array_cannot_take_new_actions() {
+        let settings = settings_with_actions(
+            &map_of(vec![("actions", text("nope"))]),
+            IngredientSettings::new(Relationship::ParentOf),
+        );
+        assert!(matches!(
+            resolved(&settings),
+            Err(Error::InvalidActions("`actions` is not an array"))
+        ));
+    }
+
+    #[test]
+    fn ingredient_ids_must_be_an_array_of_text() {
+        for (ids, reason) in [
+            (text("logo"), "`ingredientIds` is not an array"),
+            (
+                Value::Array(vec![Value::Bool(true)]),
+                "an ingredient id is not text",
+            ),
+        ] {
+            let action = map_of(vec![
+                ("action", text("c2pa.placed")),
+                ("parameters", map_of(vec![("ingredientIds", ids)])),
+            ]);
+            let settings = settings_with_actions(
+                &map_of(vec![("actions", Value::Array(vec![action]))]),
+                IngredientSettings::new(Relationship::ComponentOf),
+            );
+            assert!(
+                matches!(resolved(&settings), Err(Error::InvalidActions(r)) if r == reason),
+                "{reason}"
+            );
+        }
+    }
+
+    #[test]
+    fn hosts_own_references_survive_and_odd_actions_are_tolerated() {
+        // One `c2pa.placed` already names the component by hash (so none
+        // is added), beside actions that have no parameters, parameters
+        // without ids, and references that are not hashed URIs at all.
+        let mut logo = IngredientSettings::new(Relationship::ComponentOf);
+        logo.label = Some("logo".into());
+        let junk = Value::Array(vec![text("junk"), map_of(vec![("url", Value::Bool(true))])]);
+        let actions = map_of(vec![(
+            "actions",
+            Value::Array(vec![
+                text("not an action"),
+                map_of(vec![("action", text("c2pa.placed"))]),
+                map_of(vec![
+                    ("action", text("c2pa.placed")),
+                    ("parameters", map_of(vec![("ingredients", junk)])),
+                ]),
+                map_of(vec![
+                    ("action", text("c2pa.placed")),
+                    (
+                        "parameters",
+                        map_of(vec![
+                            ("ingredientIds", Value::Array(vec![text("logo")])),
+                            ("ingredients", Value::Array(vec![text("kept")])),
+                        ]),
+                    ),
+                ]),
+            ]),
+        )]);
+
+        let assertions = resolved(&settings_with_actions(&actions, logo)).unwrap();
+
+        // The existing reference is still there, with the resolved one after it.
+        let decoded = decode(find(&assertions, "c2pa.actions.v2"));
+        let list = action_list(&decoded).unwrap();
+        assert_eq!(list.len(), 4, "no action was added");
+        let kept = entry(entry(&list[3], "parameters").unwrap(), "ingredients")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[0], text("kept"));
     }
 }

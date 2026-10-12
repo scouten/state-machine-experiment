@@ -655,11 +655,27 @@ mod tests {
 
     /// A v2 manifest with these assertions (all created) and redactions.
     fn manifest(label: &str, assertions: Vec<(&str, Value)>, redacted: &[&str]) -> Vec<u8> {
-        let boxes: Vec<_> = assertions.iter().map(|(l, v)| assertion(l, v)).collect();
-        let refs = assertions
+        manifest_of_boxes(
+            label,
+            assertions
+                .iter()
+                .map(|(l, v)| (*l, assertion(l, v)))
+                .collect(),
+            redacted,
+        )
+    }
+
+    /// As [`manifest`], from assertion boxes already built — so a box can
+    /// hold bytes that are not CBOR at all.
+    fn manifest_of_boxes(
+        label: &str,
+        labelled_boxes: Vec<(&str, Vec<u8>)>,
+        redacted: &[&str],
+    ) -> Vec<u8> {
+        let boxes: Vec<_> = labelled_boxes.iter().map(|(_, b)| b.clone()).collect();
+        let refs = labelled_boxes
             .iter()
-            .zip(&boxes)
-            .map(|((l, _), b)| hashed_uri(l, b))
+            .map(|(l, b)| hashed_uri(l, b))
             .collect();
 
         let mut fields = v2_required_fields();
@@ -962,6 +978,136 @@ mod tests {
         let parsed = parse(&[manifest_with_claim("B", &boxes, claim)]);
 
         assert!(failures(&parsed).is_empty(), "{:?}", parsed.statuses);
+    }
+
+    #[test]
+    fn an_ingredient_assertion_that_cannot_be_read_or_is_incomplete_is_malformed() {
+        let not_a_map = assertion("c2pa.ingredient.v3", &Value::Array(vec![]));
+        let no_relationship =
+            assertion("c2pa.ingredient.v3__1", &map(vec![("dc:title", text("x"))]));
+        let parsed = parse(&[manifest_of_boxes(
+            "B",
+            vec![
+                ("c2pa.ingredient.v3", not_a_map),
+                ("c2pa.ingredient.v3__1", no_relationship),
+            ],
+            &[],
+        )]);
+
+        assert_eq!(
+            failures(&parsed),
+            [
+                status_code::ASSERTION_INGREDIENT_MALFORMED,
+                status_code::ASSERTION_INGREDIENT_MALFORMED
+            ]
+        );
+        // The unreadable one is left out; the incomplete one is kept.
+        let labels: Vec<_> = parsed.manifests[0]
+            .ingredients
+            .iter()
+            .map(|i| i.label.as_str())
+            .collect();
+        assert_eq!(labels, ["c2pa.ingredient.v3__1"]);
+    }
+
+    #[test]
+    fn an_actions_assertion_that_is_not_cbor_is_left_to_the_hash_checks() {
+        let garbage = superbox(
+            type_uuid(*b"cbor"),
+            "c2pa.actions.v2",
+            &[boxed(b"cbor", &[0xff, 0xff])],
+        );
+        let parsed = parse(&[manifest_of_boxes(
+            "B",
+            vec![("c2pa.actions.v2", garbage)],
+            &[],
+        )]);
+
+        // Nothing here to say about ingredients.
+        assert!(failures(&parsed).is_empty(), "{:?}", parsed.statuses);
+    }
+
+    #[test]
+    fn a_v2_action_may_name_its_ingredient_with_the_singular_field() {
+        let ingredient = ingredient_assertion("parentOf", None);
+        let hash = Sha256::digest(&assertion("c2pa.ingredient.v3", &ingredient)[8..]).to_vec();
+        let opened = map(vec![
+            ("action", text("c2pa.opened")),
+            (
+                "parameters",
+                map(vec![(
+                    "ingredient",
+                    reference("self#jumbf=c2pa.assertions/c2pa.ingredient.v3", hash),
+                )]),
+            ),
+        ]);
+        let parsed = parse(&[manifest(
+            "B",
+            vec![
+                (
+                    "c2pa.actions.v2",
+                    map(vec![("actions", Value::Array(vec![opened]))]),
+                ),
+                ("c2pa.ingredient.v3", ingredient),
+            ],
+            &[],
+        )]);
+
+        assert!(failures(&parsed).is_empty(), "{:?}", parsed.statuses);
+    }
+
+    #[test]
+    fn an_action_naming_an_ingredient_the_manifest_does_not_have_is_a_mismatch() {
+        let placed = action("c2pa.placed", "c2pa.ingredient.v3__9", vec![0; 32]);
+        let parsed = parse(&[manifest(
+            "B",
+            vec![
+                (
+                    "c2pa.actions.v2",
+                    map(vec![("actions", Value::Array(vec![placed]))]),
+                ),
+                (
+                    "c2pa.ingredient.v3",
+                    ingredient_assertion("componentOf", None),
+                ),
+            ],
+            &[],
+        )]);
+
+        assert_eq!(
+            failures(&parsed),
+            [status_code::ASSERTION_ACTION_INGREDIENT_MISMATCH]
+        );
+    }
+
+    #[test]
+    fn a_reference_in_an_algorithm_this_crate_cannot_compute_is_not_judged() {
+        let a = manifest("A", vec![], &[]);
+        let unsupported = |label: &str| {
+            map(vec![
+                ("url", text(label)),
+                ("hash", Value::Bytes(vec![0; 32])),
+                ("alg", text("sha999")),
+            ])
+        };
+        let ingredient = map(vec![
+            ("relationship", text("parentOf")),
+            ("activeManifest", unsupported("self#jumbf=/c2pa/A")),
+            (
+                "claimSignature",
+                unsupported("self#jumbf=/c2pa/A/c2pa.signature"),
+            ),
+            ("validationResults", map(vec![])),
+        ]);
+        let b = manifest("B", vec![("c2pa.ingredient.v3", ingredient)], &[]);
+
+        let parsed = parse(&[a, b]);
+
+        // Neither validated nor failed: the check simply was not made.
+        let codes = codes(&parsed);
+        assert!(failures(&parsed).is_empty(), "{:?}", parsed.statuses);
+        assert!(!codes.contains(&status_code::INGREDIENT_MANIFEST_VALIDATED));
+        assert!(!codes.contains(&status_code::INGREDIENT_CLAIM_SIGNATURE_VALIDATED));
     }
 
     #[test]
