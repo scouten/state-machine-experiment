@@ -260,7 +260,7 @@ pub(crate) fn resolve(
         .collect();
     let mut decoded: Vec<Option<Value>> = Vec::with_capacity(assertions.len());
     for assertion in &mut assertions {
-        if assertion.label != ACTIONS_LABEL {
+        if !is_actions_label(&assertion.label) {
             decoded.push(None);
             continue;
         }
@@ -281,7 +281,7 @@ pub(crate) fn resolve(
         let mut actions = existing.unwrap_or_else(|| Value::Map(BTreeMap::new()));
 
         let placed = placed_urls(&actions, decoded.iter().flatten());
-        let new_actions = missing_actions(ingredients, &references, &actions, &placed);
+        let new_actions = missing_actions(ingredients, &references, &actions, &placed)?;
         if new_actions.is_empty() {
             // Nothing to add: an assertion we made up is not worth writing.
             synthesized = false;
@@ -332,13 +332,25 @@ fn missing_actions(
     references: &[Reference],
     designated: &Value,
     placed: &HashSet<String>,
-) -> Vec<Value> {
+) -> Result<Vec<Value>, Error> {
     let mut new_actions = Vec::new();
 
-    let has_inception = action_list(designated).is_some_and(|list| {
-        list.iter()
-            .any(|a| matches!(action_name(a), Some("c2pa.created" | "c2pa.opened")))
-    });
+    // Where the host's own actions put their inception action, if any. A
+    // parent's `c2pa.opened` must be the *first* action, so one further
+    // down is not merely missing — and is not ours to reorder.
+    let inception = action_list(designated)
+        .unwrap_or(&[])
+        .iter()
+        .position(|a| matches!(action_name(a), Some("c2pa.created" | "c2pa.opened")));
+    let has_parent = ingredients
+        .iter()
+        .any(|i| i.relationship == Relationship::ParentOf);
+    if has_parent && inception.is_some_and(|position| position > 0) {
+        return Err(Error::InvalidActions(
+            "`c2pa.opened` (or `c2pa.created`) must be the first action",
+        ));
+    }
+    let has_inception = inception.is_some();
 
     for (ingredient, reference) in ingredients.iter().zip(references) {
         match ingredient.relationship {
@@ -351,7 +363,17 @@ fn missing_actions(
             _ => {}
         }
     }
-    new_actions
+    Ok(new_actions)
+}
+
+/// True for `c2pa.actions.v2` and its numbered repeats
+/// (`c2pa.actions.v2__1`, …).
+fn is_actions_label(label: &str) -> bool {
+    label == ACTIONS_LABEL
+        || label
+            .strip_prefix(ACTIONS_LABEL)
+            .and_then(|rest| rest.strip_prefix("__"))
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// The map an actions assertion is, or why it is not one.
@@ -867,5 +889,77 @@ mod tests {
             .unwrap();
         assert_eq!(kept.len(), 2);
         assert_eq!(kept[0], text("kept"));
+    }
+    #[test]
+    fn a_numbered_actions_assertion_is_linked_like_any_other() {
+        let placed = map_of(vec![
+            ("action", text("c2pa.placed")),
+            (
+                "parameters",
+                map_of(vec![("ingredientIds", Value::Array(vec![text("logo")]))]),
+            ),
+        ]);
+        let mut logo = IngredientSettings::new(Relationship::ComponentOf);
+        logo.label = Some("logo".into());
+        let mut settings = settings();
+        settings.assertions = vec![Assertion::new(
+            "c2pa.actions.v2__1",
+            c2pa_cbor::to_vec(&map_of(vec![("actions", Value::Array(vec![placed]))])).unwrap(),
+        )];
+        settings.ingredients = vec![logo];
+
+        let assertions = resolved(&settings).unwrap();
+
+        let decoded = decode(find(&assertions, "c2pa.actions.v2__1"));
+        let first = &action_list(&decoded).unwrap()[0];
+        let parameters = entry(first, "parameters").unwrap();
+        assert!(entry(parameters, "ingredientIds").is_none());
+        assert!(entry(parameters, "ingredients").is_some());
+        // And it counts as the placement, so none is added beside it.
+        assert!(assertions.iter().all(|a| a.label != "c2pa.actions.v2"));
+    }
+
+    #[test]
+    fn only_numbered_repeats_of_the_actions_label_are_actions_labels() {
+        for label in [
+            "c2pa.actions.v2",
+            "c2pa.actions.v2__1",
+            "c2pa.actions.v2__12",
+        ] {
+            assert!(is_actions_label(label), "{label}");
+        }
+        for label in [
+            "c2pa.actions",
+            "c2pa.actions.v2__",
+            "c2pa.actions.v2__x",
+            "c2pa.actions.v2.extra",
+            "c2pa.ingredient.v3",
+        ] {
+            assert!(!is_actions_label(label), "{label}");
+        }
+    }
+
+    #[test]
+    fn an_opening_that_is_not_the_first_action_is_refused_not_accepted_or_moved() {
+        let opened = map_of(vec![
+            ("action", text("c2pa.opened")),
+            (
+                "parameters",
+                map_of(vec![("ingredientIds", Value::Array(vec![text("source")]))]),
+            ),
+        ]);
+        let cropped = map_of(vec![("action", text("c2pa.cropped"))]);
+        let mut source = IngredientSettings::new(Relationship::ParentOf);
+        source.label = Some("source".into());
+
+        let settings = settings_with_actions(
+            &map_of(vec![("actions", Value::Array(vec![cropped, opened]))]),
+            source,
+        );
+
+        assert!(matches!(
+            resolved(&settings),
+            Err(Error::InvalidActions(reason)) if reason.contains("first action")
+        ));
     }
 }

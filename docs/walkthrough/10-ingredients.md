@@ -103,7 +103,9 @@ request:
   instead of treating it as opaque CBOR, justified because only the builder
   knows the hash;
 * with `auto_ingredient_actions` (on by default, as in c2pa-rs), adds the
-  `c2pa.opened` / `c2pa.placed` actions that are missing.
+  `c2pa.opened` / `c2pa.placed` actions that are missing. It does not
+  reorder the host's own: a parent's `c2pa.opened` that is not the first
+  action is refused, since the specification makes it the first.
 
 An ingredient assertion's hashed URI depends only on its own bytes, never on
 the hard binding, so it is final when the placeholder is built. The
@@ -133,8 +135,9 @@ For every manifest in a store (not only the active one):
 | Assertion has a valid `relationship`, not both `activeManifest` and `digitalSourceType`, and (v3) `validationResults` with `activeManifest` | `assertion.ingredient.malformed` |
 | At most one `parentOf` | `manifest.multipleParents` |
 | `activeManifest` is in the store and hashes as recorded | `ingredient.manifest.validated` / `.mismatch` / `.missing` |
-| `claimSignature` likewise; alone, where an assertion in that manifest was redacted | `ingredient.claimSignature.*` |
-| In a **v2** claim, `c2pa.opened` names exactly one `parentOf` ingredient of the same manifest, `c2pa.placed` one or more `componentOf`, and the references hash as recorded | `assertion.action.ingredientMismatch`, `assertion.hashedURI.mismatch` |
+| `claimSignature` likewise; alone, where an assertion in that manifest was redacted (and with none to fall back on, that is a failure). A reference must name exactly the manifest, or exactly its signature box — not something inside it | `ingredient.claimSignature.*` |
+| A reference in a hash algorithm this crate cannot compute is reported, so the store cannot be called valid on hashes that were never checked | `algorithm.unsupported` |
+| In a **v2** claim, `c2pa.opened` names exactly one `parentOf` ingredient of the *same* manifest, `c2pa.placed` one or more `componentOf`, and the references hash as recorded | `assertion.action.ingredientMismatch`, `assertion.hashedURI.mismatch` |
 | No manifest, and not `inputTo` | `ingredient.unknownProvenance` (informational) |
 
 Older claims are not held to the action rules, as in c2pa-rs outside its

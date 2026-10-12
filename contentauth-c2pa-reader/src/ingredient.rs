@@ -49,7 +49,7 @@ use jumbf::parser::{DataBox, SuperBox};
 use crate::{
     claim::{hashed_uri_array, Claim, ClaimVersion, HashedUri},
     manifest_store::{child_superboxes, content, CBOR, SIGNATURE_UUID},
-    validation::{assertion_path, assertion_payload, status_code, ValidationStatus},
+    validation::{assertion_payload, status_code, ValidationStatus},
 };
 
 /// Label prefix shared by every version of the ingredient assertion.
@@ -158,13 +158,19 @@ pub(crate) fn read(
         };
         let url = assertion_url(manifest_label, label);
 
-        let Some(ingredient) = content(assertion, CBOR).and_then(|cbor| decode(label, cbor)) else {
-            statuses.push(ValidationStatus::for_url(
-                status_code::ASSERTION_INGREDIENT_MALFORMED,
-                &url,
-                "ingredient assertion could not be interpreted",
-            ));
-            continue;
+        let decoded = content(assertion, CBOR)
+            .ok_or("ingredient assertion has no CBOR content")
+            .and_then(|cbor| decode(label, cbor));
+        let ingredient = match decoded {
+            Ok(ingredient) => ingredient,
+            Err(problem) => {
+                statuses.push(ValidationStatus::for_url(
+                    status_code::ASSERTION_INGREDIENT_MALFORMED,
+                    &url,
+                    problem,
+                ));
+                continue;
+            }
         };
 
         if let Some(problem) = problem_with(&ingredient) {
@@ -194,10 +200,16 @@ fn problem_with(ingredient: &Ingredient) -> Option<&'static str> {
     }
 }
 
-/// Decodes one ingredient assertion's CBOR. `None` if it is not a map.
-fn decode(label: &str, cbor: &[u8]) -> Option<Ingredient> {
-    let value: Value = c2pa_cbor::from_slice(cbor).ok()?;
-    let map = value.as_map()?;
+/// Decodes one ingredient assertion's CBOR, or says why it cannot be: it is
+/// not a map, or a reference it carries is present but unreadable (which
+/// must not pass for an absent one, since an ingredient with no manifest
+/// is held to different checks).
+fn decode(label: &str, cbor: &[u8]) -> Result<Ingredient, &'static str> {
+    let value: Value =
+        c2pa_cbor::from_slice(cbor).map_err(|_| "ingredient assertion is not valid CBOR")?;
+    let map = value
+        .as_map()
+        .ok_or("ingredient assertion is not a CBOR map")?;
 
     let get = |key: &str| {
         map.iter()
@@ -205,13 +217,18 @@ fn decode(label: &str, cbor: &[u8]) -> Option<Ingredient> {
             .map(|(_, v)| v)
     };
     let text = |key: &str| get(key).and_then(|v| v.as_str()).map(str::to_string);
-    let reference = |key: &str| {
-        get(key)
-            .and_then(|v| hashed_uri_array(&Value::Array(vec![v.clone()]), "ingredient").ok())
-            .and_then(|mut refs| refs.pop())
+    let reference = |key: &str| -> Result<Option<HashedUri>, &'static str> {
+        match get(key) {
+            None => Ok(None),
+            Some(v) => hashed_uri_array(&Value::Array(vec![v.clone()]), "ingredient")
+                .ok()
+                .and_then(|mut refs| refs.pop())
+                .map(Some)
+                .ok_or("a hashed-URI reference in the ingredient assertion cannot be read"),
+        }
     };
 
-    Some(Ingredient {
+    Ok(Ingredient {
         label: label.to_string(),
         relationship: match get("relationship").and_then(|v| v.as_str()) {
             Some("parentOf") => Some(Relationship::ParentOf),
@@ -222,8 +239,11 @@ fn decode(label: &str, cbor: &[u8]) -> Option<Ingredient> {
         title: text("dc:title"),
         format: text("dc:format"),
         instance_id: text("instanceID"),
-        active_manifest: reference("activeManifest").or_else(|| reference("c2pa_manifest")),
-        claim_signature: reference("claimSignature"),
+        active_manifest: match reference("activeManifest")? {
+            Some(reference) => Some(reference),
+            None => reference("c2pa_manifest")?,
+        },
+        claim_signature: reference("claimSignature")?,
         digital_source_type: text("digitalSourceType"),
         has_validation_results: get("validationResults").is_some()
             || get("validationStatus").is_some(),
@@ -361,8 +381,7 @@ fn check_actions(
             }
 
             for reference in &references {
-                let target = assertion_path(&reference.url)
-                    .and_then(|path| path.strip_prefix("c2pa.assertions/"))
+                let target = local_assertion(&reference.url, manifest_label)
                     .and_then(|label| ingredients.iter().find(|i| i.label == label));
                 let Some(target) = target else {
                     statuses.push(fails(
@@ -420,10 +439,10 @@ pub(crate) fn check_store(entries: &[StoreEntry<'_, '_>], statuses: &mut Vec<Val
             };
 
             if let Some(reference) = &ingredient.active_manifest {
-                let target = target_label(&reference.url)
-                    .and_then(|label| entries.iter().find(|e| e.label == label));
-                let was_redacted = target_label(&reference.url)
-                    .is_some_and(|label| redacted.iter().any(|r| mentions_manifest(r, label)));
+                let label = manifest_reference(&reference.url);
+                let target = label.and_then(|label| entries.iter().find(|e| e.label == label));
+                let was_redacted =
+                    label.is_some_and(|label| redacted.iter().any(|r| mentions_manifest(r, label)));
 
                 match (target, algorithm_for(reference)) {
                     (None, _) => statuses.push(ValidationStatus::for_url(
@@ -431,7 +450,18 @@ pub(crate) fn check_store(entries: &[StoreEntry<'_, '_>], statuses: &mut Vec<Val
                         &url,
                         "the ingredient's manifest is not in the store",
                     )),
-                    (Some(_), _) if was_redacted => {}
+                    // The manifest's box changed with the redaction, so
+                    // only the claim signature can still bind it.
+                    (Some(_), _) if was_redacted => {
+                        if ingredient.claim_signature.is_none() {
+                            statuses.push(ValidationStatus::for_url(
+                                status_code::INGREDIENT_CLAIM_SIGNATURE_MISSING,
+                                &url,
+                                "the manifest was redacted, so only its claim signature can \
+                                 bind it, and the ingredient names none",
+                            ));
+                        }
+                    }
                     (Some(target), Some(alg)) => {
                         statuses.push(compare(
                             payload(target.sbox).map(|p| alg.digest(p)),
@@ -442,12 +472,12 @@ pub(crate) fn check_store(entries: &[StoreEntry<'_, '_>], statuses: &mut Vec<Val
                             "the ingredient's manifest",
                         ));
                     }
-                    (Some(_), None) => {}
+                    (Some(_), None) => statuses.push(unsupported(&url, reference)),
                 }
             }
 
             if let Some(reference) = &ingredient.claim_signature {
-                let target = target_label(&reference.url)
+                let target = signature_reference(&reference.url)
                     .and_then(|label| entries.iter().find(|e| e.label == label));
                 let signature = target.and_then(|t| {
                     child_superboxes(t.sbox).find(|b| b.desc.uuid == &SIGNATURE_UUID)
@@ -469,11 +499,25 @@ pub(crate) fn check_store(entries: &[StoreEntry<'_, '_>], statuses: &mut Vec<Val
                             "the ingredient's claim signature",
                         ));
                     }
-                    (Some(_), None) => {}
+                    (Some(_), None) => statuses.push(unsupported(&url, reference)),
                 }
             }
         }
     }
+}
+
+/// The status for a reference in a hash algorithm this crate cannot
+/// compute: the check was not made, which keeps the store from being
+/// called valid.
+fn unsupported(url: &str, reference: &HashedUri) -> ValidationStatus {
+    ValidationStatus::for_url(
+        status_code::ALGORITHM_UNSUPPORTED,
+        url,
+        format!(
+            "hash algorithm {:?} is not supported",
+            reference.alg.as_deref().unwrap_or_default()
+        ),
+    )
 }
 
 /// A status saying whether `actual` is the `recorded` hash.
@@ -511,7 +555,49 @@ fn payload<'a>(sbox: &SuperBox<'a>) -> Option<&'a [u8]> {
     Some(boxx.data)
 }
 
-/// The label of the manifest a reference names: the segment after `/c2pa/`.
+/// The segments of a JUMBF URI's path, with the `self#jumbf=` prefix and
+/// any leading `/` removed: `self#jumbf=/c2pa/A/c2pa.signature` is
+/// `["c2pa", "A", "c2pa.signature"]`.
+fn path_segments(url: &str) -> Vec<&str> {
+    url.rsplit_once('=')
+        .map_or(url, |(_, path)| path)
+        .trim_start_matches('/')
+        .split('/')
+        .collect()
+}
+
+/// The manifest an `activeManifest` reference names — and only that: a
+/// reference to anything inside a manifest does not name the manifest.
+fn manifest_reference(url: &str) -> Option<&str> {
+    match path_segments(url).as_slice() {
+        ["c2pa", label] if !label.is_empty() => Some(label),
+        _ => None,
+    }
+}
+
+/// The manifest a `claimSignature` reference names, if it names that
+/// manifest's claim signature box and nothing else.
+fn signature_reference(url: &str) -> Option<&str> {
+    match path_segments(url).as_slice() {
+        ["c2pa", label, "c2pa.signature"] if !label.is_empty() => Some(label),
+        _ => None,
+    }
+}
+
+/// The label of the assertion, in manifest `manifest_label`'s own assertion
+/// store, that `url` names — relative (`self#jumbf=c2pa.assertions/x`) or
+/// absolute — or `None` if it names anything else, another manifest's
+/// assertion included.
+fn local_assertion<'a>(url: &'a str, manifest_label: &str) -> Option<&'a str> {
+    match path_segments(url).as_slice() {
+        ["c2pa.assertions", label] => Some(label),
+        ["c2pa", manifest, "c2pa.assertions", label] if *manifest == manifest_label => Some(label),
+        _ => None,
+    }
+}
+
+/// The label of the manifest a URI points into: the segment after
+/// `/c2pa/`, whatever follows.
 fn target_label(url: &str) -> Option<&str> {
     let path = url.rsplit_once('=').map_or(url, |(_, path)| path);
     path.trim_start_matches('/')
@@ -1103,11 +1189,167 @@ mod tests {
 
         let parsed = parse(&[a, b]);
 
-        // Neither validated nor failed: the check simply was not made.
+        // Neither validated nor failed — but the check not being made is
+        // said, once per reference, so the store cannot be called valid.
         let codes = codes(&parsed);
         assert!(failures(&parsed).is_empty(), "{:?}", parsed.statuses);
         assert!(!codes.contains(&status_code::INGREDIENT_MANIFEST_VALIDATED));
         assert!(!codes.contains(&status_code::INGREDIENT_CLAIM_SIGNATURE_VALIDATED));
+        let unchecked: Vec<_> = parsed
+            .statuses
+            .iter()
+            .filter(|s| s.is_unchecked())
+            .map(|s| s.code.as_str())
+            .collect();
+        assert_eq!(
+            unchecked,
+            [
+                status_code::ALGORITHM_UNSUPPORTED,
+                status_code::ALGORITHM_UNSUPPORTED
+            ]
+        );
+    }
+
+    #[test]
+    fn a_reference_that_is_present_but_unreadable_is_malformed_not_absent() {
+        // A text `hash`: not a manifest-less ingredient, so neither
+        // `unknownProvenance` nor silence.
+        let broken = map(vec![
+            ("url", text("self#jumbf=/c2pa/A")),
+            ("hash", text("not bytes")),
+        ]);
+        let ingredient = map(vec![
+            ("relationship", text("parentOf")),
+            ("activeManifest", broken),
+            ("validationResults", map(vec![])),
+        ]);
+        let parsed = parse(&[manifest("B", vec![("c2pa.ingredient.v3", ingredient)], &[])]);
+
+        assert_eq!(
+            failures(&parsed),
+            [status_code::ASSERTION_INGREDIENT_MALFORMED]
+        );
+        assert!(!codes(&parsed).contains(&status_code::INGREDIENT_UNKNOWN_PROVENANCE));
+    }
+
+    #[test]
+    fn redaction_with_no_claim_signature_to_fall_back_on_is_a_failure() {
+        // The manifest hash is waived for a redacted manifest, so with no
+        // `claimSignature` either, nothing would bind the ingredient.
+        let parsed = store_over_a(
+            |_, _| {
+                map(vec![
+                    ("relationship", text("parentOf")),
+                    (
+                        "activeManifest",
+                        reference("self#jumbf=/c2pa/A", vec![0; 32]),
+                    ),
+                    ("validationResults", map(vec![])),
+                ])
+            },
+            &["self#jumbf=/c2pa/A/c2pa.assertions/c2pa.thumbnail.claim.jpeg"],
+        );
+
+        assert_eq!(
+            failures(&parsed),
+            [status_code::INGREDIENT_CLAIM_SIGNATURE_MISSING]
+        );
+    }
+
+    #[test]
+    fn a_reference_to_something_inside_a_manifest_does_not_name_the_manifest() {
+        // The right hash for the right box, but under a URL that names a
+        // child that is not there.
+        let parsed = store_over_a(
+            |m, s| {
+                map(vec![
+                    ("relationship", text("parentOf")),
+                    (
+                        "activeManifest",
+                        reference("self#jumbf=/c2pa/A/c2pa.claim.v2", m),
+                    ),
+                    (
+                        "claimSignature",
+                        reference("self#jumbf=/c2pa/A/c2pa.nothing", s),
+                    ),
+                    ("validationResults", map(vec![])),
+                ])
+            },
+            &[],
+        );
+
+        assert_eq!(
+            failures(&parsed),
+            [
+                status_code::INGREDIENT_MANIFEST_MISSING,
+                status_code::INGREDIENT_CLAIM_SIGNATURE_MISSING
+            ]
+        );
+    }
+
+    #[test]
+    fn an_action_may_not_reach_into_another_manifests_assertion() {
+        // `B`'s `c2pa.opened` names `A`'s ingredient assertion by absolute
+        // URI. `B` has one of that label too, with the right relationship,
+        // so reducing the URL to its last segment would accept it.
+        let ingredient = ingredient_assertion("parentOf", None);
+        let hash = Sha256::digest(&assertion("c2pa.ingredient.v3", &ingredient)[8..]).to_vec();
+        let opened = map(vec![
+            ("action", text("c2pa.opened")),
+            (
+                "parameters",
+                map(vec![(
+                    "ingredients",
+                    Value::Array(vec![reference(
+                        "self#jumbf=/c2pa/A/c2pa.assertions/c2pa.ingredient.v3",
+                        hash,
+                    )]),
+                )]),
+            ),
+        ]);
+        let b = manifest(
+            "B",
+            vec![
+                (
+                    "c2pa.actions.v2",
+                    map(vec![("actions", Value::Array(vec![opened]))]),
+                ),
+                ("c2pa.ingredient.v3", ingredient),
+            ],
+            &[],
+        );
+        let parsed = parse(&[manifest("A", vec![], &[]), b]);
+
+        assert_eq!(
+            failures(&parsed),
+            [status_code::ASSERTION_ACTION_INGREDIENT_MISMATCH]
+        );
+    }
+
+    #[test]
+    fn uris_are_resolved_by_whole_path() {
+        assert_eq!(manifest_reference("self#jumbf=/c2pa/A"), Some("A"));
+        assert_eq!(
+            manifest_reference("self#jumbf=/c2pa/A/c2pa.signature"),
+            None
+        );
+        assert_eq!(
+            signature_reference("self#jumbf=/c2pa/A/c2pa.signature"),
+            Some("A")
+        );
+        assert_eq!(signature_reference("self#jumbf=/c2pa/A"), None);
+        assert_eq!(
+            local_assertion("self#jumbf=c2pa.assertions/x", "B"),
+            Some("x")
+        );
+        assert_eq!(
+            local_assertion("self#jumbf=/c2pa/B/c2pa.assertions/x", "B"),
+            Some("x")
+        );
+        assert_eq!(
+            local_assertion("self#jumbf=/c2pa/A/c2pa.assertions/x", "B"),
+            None
+        );
     }
 
     #[test]
