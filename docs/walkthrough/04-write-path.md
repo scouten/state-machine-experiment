@@ -87,7 +87,12 @@ Design decisions worth discussing:
 One manifest, v2 claim only (v1 is read-only — the spec forbids generators
 writing it), `c2pa.hash.data`, caller-supplied assertions marked `Created`
 or `Gathered`, all C2PA signing algorithms, optional RFC 3161 timestamp.
-Out of scope: ingredients, update manifests, BMFF/box hashes, cert
-validation (host vouches for the chain).
+Ingredients with no manifest of their own are supported too
+(`BuilderSettings::ingredients`): the builder writes the
+`c2pa.ingredient.v3` assertions and adds the actions that name them. The
+plan for the rest is on the [Ingredients](10-ingredients.md) page.
+
+Out of scope: ingredients that carry a manifest, update manifests,
+BMFF/box hashes, cert validation (host vouches for the chain).
 
 **Next:** [Container formats →](05-formats.md)

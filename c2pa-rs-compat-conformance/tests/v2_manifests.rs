@@ -232,3 +232,157 @@ fn a_manifest_the_workspace_builder_wrote_is_a_valid_v2_claim_to_c2pa_rs() {
         "{successes:?}"
     );
 }
+
+/// A definition that opens a source (the parent) and places a logo, in
+/// the JSON both c2pa-rs's `Builder` and this workspace's `Definition`
+/// accept. The `ingredients` have no manifest of their own, which is all
+/// this workspace's builder writes so far.
+const INGREDIENTS_DEFINITION: &str = r#"{
+    "title": "edited.jpg",
+    "instance_id": "xmp:iid:00000000-0000-4000-8000-000000000001",
+    "label": "urn:uuid:00000000-0000-4000-8000-000000000002",
+    "claim_generator_info": [{ "name": "conformance", "version": "1.0" }],
+    "ingredients": [
+        { "relationship": "parentOf", "title": "source.jpg", "format": "image/jpeg",
+          "instance_id": "xmp:iid:source", "label": "source" },
+        { "relationship": "componentOf", "title": "logo.png", "format": "image/png",
+          "instance_id": "xmp:iid:logo" }
+    ],
+    "assertions": [{
+        "label": "c2pa.actions.v2",
+        "data": { "actions": [
+            { "action": "c2pa.opened", "parameters": { "ingredientIds": ["source"] } },
+            { "action": "c2pa.cropped" }
+        ] }
+    }]
+}"#;
+
+/// Ingredients this workspace's builder writes — the assertions, and the
+/// `c2pa.opened`/`c2pa.placed` actions naming them by hashed URI — are
+/// read by real c2pa-rs as the same two ingredients, with no failure but
+/// the test signer's untrusted chain.
+#[test]
+fn ingredients_the_workspace_builder_wrote_are_ingredients_to_c2pa_rs() {
+    let mut signed = Cursor::new(Vec::new());
+    contentauth_c2pa_rs_compat_sign::Builder::from_json(INGREDIENTS_DEFINITION)
+        .expect("a valid definition")
+        .sign(
+            &WorkspaceSigner,
+            "image/jpeg",
+            Cursor::new(unsigned_jpeg()),
+            &mut signed,
+        )
+        .expect("the workspace builder signs the JPEG");
+    let path = write_temp("workspace_built_ingredients.jpg", &signed.into_inner());
+
+    let reader = c2pa::Reader::from_context(c2pa::Context::new())
+        .with_file(&path)
+        .expect("c2pa-rs reads the workspace-built manifest");
+    let active = reader.active_manifest().expect("an active manifest");
+
+    let ingredients = active.ingredients();
+    assert_eq!(ingredients.len(), 2, "{}", reader.json());
+    let parent = ingredients
+        .iter()
+        .find(|i| i.is_parent())
+        .expect("one ingredient is the parent");
+    assert_eq!(parent.title(), Some("source.jpg"));
+    assert_eq!(parent.instance_id(), "xmp:iid:source");
+    assert!(ingredients
+        .iter()
+        .any(|i| i.title() == Some("logo.png") && !i.is_parent()));
+
+    // The actions c2pa-rs finds are the ones that were written, the
+    // opening one first and the placement the builder added.
+    let json: serde_json::Value = serde_json::from_str(&reader.json()).expect("json");
+    let actions = json["manifests"][reader.active_label().expect("label")]["assertions"]
+        .as_array()
+        .expect("assertions")
+        .iter()
+        .find(|a| {
+            a["label"]
+                .as_str()
+                .is_some_and(|l| l.starts_with("c2pa.actions"))
+        })
+        .expect("an actions assertion")["data"]["actions"]
+        .as_array()
+        .expect("actions")
+        .iter()
+        .map(|a| a["action"].as_str().unwrap_or_default().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(actions, ["c2pa.opened", "c2pa.cropped", "c2pa.placed"]);
+
+    let results = reader
+        .validation_results()
+        .and_then(|results| results.active_manifest())
+        .expect("c2pa-rs validated the active manifest");
+    let failures: Vec<&str> = results.failure().iter().map(|s| s.code()).collect();
+    assert_eq!(failures, ["signingCredential.untrusted"], "{failures:?}");
+}
+
+/// The other direction: a parent and a component that c2pa-rs wrote read
+/// back in this workspace's reader as ingredients that pass every check it
+/// makes — including that the `c2pa.opened` and `c2pa.placed` actions
+/// c2pa-rs wrote name the right ingredient assertions, by hash.
+#[test]
+fn ingredients_c2pa_rs_wrote_pass_the_workspace_readers_checks() {
+    let signer = c2pa::create_signer::from_keys(
+        &cert_pem(SIGNER_CERT_DER),
+        SIGNER_KEY_PEM,
+        SigningAlg::Es256,
+        None,
+    )
+    .expect("the test signer is usable");
+    let context = c2pa::Context::new()
+        .with_settings(r#"{ "verify": { "verify_after_sign": false } }"#)
+        .expect("valid settings");
+
+    // c2pa-rs's own spelling: no `instance_id`/`label` of the manifest, and
+    // it names the opening ingredient by `ingredientIds` just the same.
+    let definition = INGREDIENTS_DEFINITION
+        .replace(
+            r#""instance_id": "xmp:iid:00000000-0000-4000-8000-000000000001",
+    "label": "urn:uuid:00000000-0000-4000-8000-000000000002","#,
+            "",
+        )
+        .replace(
+            r#""title": "edited.jpg","#,
+            r#""title": "edited.jpg", "claim_version": 2,"#,
+        );
+    let mut builder = c2pa::Builder::from_context(context)
+        .with_definition(definition)
+        .expect("a valid definition");
+    let mut out = Cursor::new(Vec::new());
+    builder
+        .sign(
+            &*signer,
+            "image/jpeg",
+            &mut Cursor::new(unsigned_jpeg()),
+            &mut out,
+        )
+        .expect("c2pa-rs signs the JPEG");
+    let path = write_temp("c2pa_rs_ingredients.jpg", &out.into_inner());
+
+    let reader = Reader::from_context(Context::new())
+        .with_file(&path)
+        .expect("the compat reader reads a c2pa-rs-signed manifest with ingredients");
+
+    let statuses = reader.validation_status().unwrap_or_default();
+    for status in &statuses {
+        let code = status.code();
+        for bad in ["ingredient", "Mismatch", "malformed", "multipleParents"] {
+            assert!(
+                !code.contains(bad) || code == "ingredient.unknownProvenance",
+                "{code}: {:?}",
+                status.explanation()
+            );
+        }
+    }
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|s| s.code() == "ingredient.unknownProvenance")
+            .count(),
+        2
+    );
+}

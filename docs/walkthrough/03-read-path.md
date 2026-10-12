@@ -59,8 +59,13 @@ flowchart TD
 * **v1 and v2 claims** decode into the same `Claim`; v2 required-field
   and self-redaction checks are enforced.
 
-Not yet checked: ingredient manifests, remote manifest retrieval,
-`assertion.notRedacted`.
+* **Ingredients** are decoded (`Manifest::ingredients`) and checked against
+  the store: well-formedness, one `parentOf`, `activeManifest` and
+  `claimSignature` hashes, and the `c2pa.opened`/`c2pa.placed` actions that
+  name them in a v2 claim. See [Ingredients](10-ingredients.md).
+
+Not yet checked: recursing into an ingredient's own ingredients and its
+`validationResults`, remote manifest retrieval, `assertion.notRedacted`.
 
 ## Request vocabulary (reader)
 

@@ -26,6 +26,7 @@ use crate::{
     error::Error,
     hash_stream::{self, HashStream},
     identity::{self, IdentitySettings},
+    ingredient::{self, IngredientSettings},
     jumbf::{AssertionInput, IdentityInput, ManifestBuilder, ManifestInputs},
     request::{BuilderHostReply, BuilderRequest, SignPurpose},
 };
@@ -102,13 +103,28 @@ pub struct BuilderSettings {
     /// [`BuilderRequest::Sign`]'s `purpose`. They become the assertions
     /// `cawg.identity`, `cawg.identity__1`, … in this order.
     pub identities: Vec<IdentitySettings>,
+
+    /// The asset's ingredients, each described by an
+    /// `c2pa.ingredient.v3` assertion. See [`IngredientSettings`].
+    ///
+    /// **Temporary limit:** only ingredients with no manifest of their own
+    /// can be described so far.
+    pub ingredients: Vec<IngredientSettings>,
+
+    /// Whether to add the `c2pa.opened` and `c2pa.placed` actions the
+    /// specification requires for a `parentOf` and each `componentOf`
+    /// ingredient, if the host's own actions do not already provide them.
+    /// On by default, as in c2pa-rs. Set it to `false` to supply every
+    /// action yourself.
+    pub auto_ingredient_actions: bool,
 }
 
 impl BuilderSettings {
     /// Creates settings from the fields every manifest needs, with no
     /// title, no assertions beyond the hard binding this session adds
     /// itself, no RSA signature length (only meaningful for RSASSA-PSS
-    /// algorithms), no timestamp, and no identity assertions — set the
+    /// algorithms), no timestamp, no identity assertions, and no ingredients —
+    /// set the
     /// corresponding public field afterward to change any of those.
     pub fn new(
         instance_id: impl Into<String>,
@@ -128,6 +144,8 @@ impl BuilderSettings {
             rsa_signature_len: None,
             timestamp: None,
             identities: Vec::new(),
+            ingredients: Vec::new(),
+            auto_ingredient_actions: true,
         }
     }
 }
@@ -422,8 +440,14 @@ impl BuilderSession {
             return Err(Error::NoCertificates);
         }
 
+        // The host's assertions plus whatever its ingredients add (see
+        // `ingredient::resolve`): everything below works on this list, not
+        // on `settings.assertions`.
+        let hash_alg = self.settings.signing_alg.claim_hash_algorithm();
+        let all_assertions = ingredient::resolve(&self.settings, hash_alg)?;
+
         let mut assertion_labels = std::collections::HashSet::from([data_hash::LABEL]);
-        for assertion in &self.settings.assertions {
+        for assertion in &all_assertions {
             if !assertion_labels.insert(assertion.label.as_str()) {
                 return Err(Error::InvalidAssertionLabel(assertion.label.clone()));
             }
@@ -444,16 +468,11 @@ impl BuilderSession {
             .iter()
             .map(|identity| {
                 let referenced = match &identity.referenced_assertions {
-                    None => self
-                        .settings
-                        .assertions
-                        .iter()
-                        .map(|a| a.label.as_str())
-                        .collect(),
+                    None => all_assertions.iter().map(|a| a.label.as_str()).collect(),
                     Some(labels) => {
                         let mut seen = std::collections::HashSet::new();
                         for label in labels {
-                            if !self.settings.assertions.iter().any(|a| &a.label == label) {
+                            if !all_assertions.iter().any(|a| &a.label == label) {
                                 return Err(Error::UnknownReferencedAssertion(label.clone()));
                             }
                             // Naming one twice would write an assertion the
@@ -478,9 +497,7 @@ impl BuilderSession {
             cose::signature_len(self.settings.signing_alg, self.settings.rsa_signature_len)?;
         let generator = &self.settings.claim_generator_info;
 
-        let assertions: Vec<AssertionInput<'_>> = self
-            .settings
-            .assertions
+        let assertions: Vec<AssertionInput<'_>> = all_assertions
             .iter()
             .map(|a| AssertionInput {
                 label: &a.label,

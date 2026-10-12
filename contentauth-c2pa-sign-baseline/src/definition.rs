@@ -11,7 +11,9 @@
 // specific language governing permissions and limitations under
 // each license.
 
-use contentauth_c2pa_builder::{Assertion, BuilderSettings, GeneratorInfo, TimestampSettings};
+use contentauth_c2pa_builder::{
+    Assertion, BuilderSettings, GeneratorInfo, IngredientSettings, Relationship, TimestampSettings,
+};
 use contentauth_c2pa_primitives::SigningAlg;
 use serde::Deserialize;
 
@@ -68,6 +70,16 @@ pub struct Definition {
     #[serde(default)]
     pub assertions: Vec<AssertionDefinition>,
 
+    /// The asset's ingredients, in c2pa-rs's `Ingredient` JSON shape.
+    ///
+    /// **Temporary limit:** only ingredients with no manifest of their own
+    /// can be described so far, so a field that belongs to one with a
+    /// manifest or a thumbnail is an error like any other outside the
+    /// supported subset. An action names an ingredient by its `label`
+    /// under `parameters.ingredientIds`, as in c2pa-rs.
+    #[serde(default)]
+    pub ingredients: Vec<IngredientDefinition>,
+
     /// The URL of an RFC 3161 time-stamp authority (c2pa-rs
     /// spells the field `ta_url`). Present means the claim signature is countersigned with
     /// a timestamp: [`Definition::into_settings`] then sets
@@ -88,6 +100,90 @@ pub struct ClaimGenerator {
 
     /// Its version.
     pub version: String,
+}
+
+/// One ingredient, spelled as c2pa-rs's `Ingredient` JSON spells it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct IngredientDefinition {
+    /// `parentOf`, `componentOf` (the default, as in c2pa-rs) or
+    /// `inputTo`.
+    #[serde(default = "component_of")]
+    pub relationship: RelationshipDefinition,
+
+    /// A name for linking an action to this ingredient; never written to
+    /// the manifest.
+    #[serde(default)]
+    pub label: Option<String>,
+
+    /// The ingredient's human-readable name.
+    #[serde(default)]
+    pub title: Option<String>,
+
+    /// The ingredient's media type.
+    #[serde(default)]
+    pub format: Option<String>,
+
+    /// The ingredient's identifier. Like the manifest's own, the engine
+    /// has no RNG to make one up, so it is only written if given.
+    #[serde(default)]
+    pub instance_id: Option<String>,
+
+    /// What the ingredient is, or is used for.
+    #[serde(default)]
+    pub description: Option<String>,
+
+    /// A page of information about the ingredient (c2pa-rs's spelling).
+    #[serde(default, rename = "informational_URI")]
+    pub informational_uri: Option<String>,
+
+    /// One of the digital source types the specification allows.
+    #[serde(default)]
+    pub digital_source_type: Option<String>,
+
+    /// Whether the ingredient assertion is a created assertion rather
+    /// than a gathered one. Ignored for a parent.
+    #[serde(default)]
+    pub is_created: bool,
+}
+
+fn component_of() -> RelationshipDefinition {
+    RelationshipDefinition::ComponentOf
+}
+
+/// An ingredient's `relationship`, as c2pa-rs's JSON spells it.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+pub enum RelationshipDefinition {
+    /// `parentOf`.
+    #[serde(rename = "parentOf")]
+    ParentOf,
+
+    /// `componentOf`.
+    #[serde(rename = "componentOf")]
+    ComponentOf,
+
+    /// `inputTo`.
+    #[serde(rename = "inputTo")]
+    InputTo,
+}
+
+impl From<IngredientDefinition> for IngredientSettings {
+    fn from(definition: IngredientDefinition) -> Self {
+        let mut ingredient = IngredientSettings::new(match definition.relationship {
+            RelationshipDefinition::ParentOf => Relationship::ParentOf,
+            RelationshipDefinition::ComponentOf => Relationship::ComponentOf,
+            RelationshipDefinition::InputTo => Relationship::InputTo,
+        });
+        ingredient.label = definition.label;
+        ingredient.title = definition.title;
+        ingredient.format = definition.format;
+        ingredient.instance_id = definition.instance_id;
+        ingredient.description = definition.description;
+        ingredient.informational_uri = definition.informational_uri;
+        ingredient.digital_source_type = definition.digital_source_type;
+        ingredient.created = definition.is_created;
+        ingredient
+    }
 }
 
 /// One assertion: a label and its JSON `data`.
@@ -153,6 +249,8 @@ impl Definition {
             settings.timestamp = Some(TimestampSettings::default());
         }
 
+        settings.ingredients = self.ingredients.into_iter().map(Into::into).collect();
+
         for assertion in self.assertions {
             let cbor = c2pa_cbor::to_vec(&assertion.data).map_err(|err| Error::Assertion {
                 label: assertion.label.clone(),
@@ -170,7 +268,7 @@ impl Definition {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use contentauth_c2pa_builder::AssertionKind;
 
@@ -248,7 +346,55 @@ mod tests {
 
     #[test]
     fn a_field_outside_the_supported_subset_is_an_error_not_ignored() {
-        let json = BASELINE_DEFINITION.replace("\"title\"", "\"ingredients\": [], \"title\"");
+        let json = BASELINE_DEFINITION.replace("\"title\"", "\"thumbnail\": {}, \"title\"");
+        assert!(matches!(settings(&json), Err(Error::BadDefinition(_))));
+
+        // Likewise inside an ingredient: a thumbnail needs resources this
+        // definition cannot carry yet.
+        let json = BASELINE_DEFINITION.replace(
+            "\"title\"",
+            "\"ingredients\": [{ \"thumbnail\": {} }], \"title\"",
+        );
+        assert!(matches!(settings(&json), Err(Error::BadDefinition(_))));
+    }
+
+    #[test]
+    fn ingredients_become_engine_ingredients_in_c2pa_rs_shape() {
+        let json = BASELINE_DEFINITION.replace(
+            "\"title\"",
+            r#""ingredients": [
+                { "relationship": "parentOf", "title": "source.jpg",
+                  "format": "image/jpeg", "instance_id": "xmp:iid:s",
+                  "label": "src", "informational_URI": "https://example.com/s" },
+                { "title": "logo.png", "is_created": true }
+              ], "title""#,
+        );
+
+        let settings = settings(&json).unwrap();
+
+        let [parent, logo] = settings.ingredients.as_slice() else {
+            panic!("expected two ingredients");
+        };
+        assert_eq!(parent.relationship, Relationship::ParentOf);
+        assert_eq!(parent.label.as_deref(), Some("src"));
+        assert_eq!(parent.title.as_deref(), Some("source.jpg"));
+        assert_eq!(parent.format.as_deref(), Some("image/jpeg"));
+        assert_eq!(parent.instance_id.as_deref(), Some("xmp:iid:s"));
+        assert_eq!(
+            parent.informational_uri.as_deref(),
+            Some("https://example.com/s")
+        );
+        // c2pa-rs's default relationship.
+        assert_eq!(logo.relationship, Relationship::ComponentOf);
+        assert!(logo.created);
+    }
+
+    #[test]
+    fn a_misspelled_relationship_is_an_error() {
+        let json = BASELINE_DEFINITION.replace(
+            "\"title\"",
+            r#""ingredients": [{ "relationship": "siblingOf" }], "title""#,
+        );
         assert!(matches!(settings(&json), Err(Error::BadDefinition(_))));
     }
 

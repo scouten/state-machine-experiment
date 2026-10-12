@@ -54,7 +54,7 @@
 //!
 //! Experimental, and incomplete by design — mirroring
 //! `contentauth-c2pa-reader`'s own posture. What works today: a single
-//! manifest (no ingredients, no update manifests) built as a C2PA v2
+//! manifest (no update manifests) built as a C2PA v2
 //! claim, a `c2pa.hash.data` hard binding (the only binding the reader
 //! crate validates today), caller-supplied opaque assertions — each
 //! marked [`AssertionKind::Created`] or [`AssertionKind::Gathered`] by
@@ -62,15 +62,18 @@
 //! `gathered_assertions` accordingly — every C2PA-permitted signing
 //! algorithm, an optional RFC 3161 timestamp, and optional CAWG identity
 //! assertions ([`IdentitySettings`], signed by the host under a
-//! [`SignPurpose::Identity`]). Every manifest this
+//! [`SignPurpose::Identity`]), and ingredients that have no manifest of
+//! their own ([`IngredientSettings`]: the `c2pa.ingredient.v3` assertions,
+//! and the `c2pa.opened`/`c2pa.placed` actions that name them). Every manifest this
 //! crate builds is exercised, in its own test suite, by round-tripping it
 //! through `contentauth-c2pa-reader` and checking that it reads back as
 //! [`ValidationState::Trusted`].
 //!
 //! This crate never builds a v1 claim — v1 is a read-only concern.
 //!
-//! Deliberately out of scope for now: ingredients and update manifests,
-//! BMFF/box-hash hard bindings, OCSP, and certificate decoding or
+//! Deliberately out of scope for now: ingredients that carry a manifest of
+//! their own (**temporary**: see the walkthrough's *Ingredients* page for
+//! the plan), update manifests, BMFF/box-hash hard bindings, OCSP, and certificate decoding or
 //! validation (certificates are passed through opaquely into the COSE
 //! `x5chain`; the host vouches for them).
 //!
@@ -89,6 +92,7 @@ mod data_hash;
 mod error;
 mod hash_stream;
 mod identity;
+mod ingredient;
 mod jumbf;
 mod request;
 
@@ -101,4 +105,5 @@ pub use contentauth_state_machine::{HostRequest, ProtocolError, RequestId, Sessi
 pub use data_hash::MAX_EXCLUSIONS;
 pub use error::Error;
 pub use identity::{IdentityCredential, IdentitySettings};
+pub use ingredient::{IngredientSettings, Relationship};
 pub use request::{BuilderHostReply, BuilderRequest, SignPurpose};

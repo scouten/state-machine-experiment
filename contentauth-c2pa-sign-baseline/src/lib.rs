@@ -28,8 +28,9 @@
 //!
 //! That is deliberately *all*: no ingredients, thumbnails, timestamp, or
 //! second assertion. (A definition may opt in to a timestamp with c2pa-rs's
-//! `tsa_url`; that is the one extension every binding offers, and it is
-//! not part of the baseline bar.) What it exercises is every seam a signing binding
+//! `tsa_url`, and to ingredients that have no manifest of their own with
+//! c2pa-rs's `ingredients`; those are the extensions every binding offers,
+//! and neither is part of the baseline bar.) What it exercises is every seam a signing binding
 //! has — definition in, a host-held signing key reached through whatever
 //! asynchrony the binding's language imposes, an asset in, an asset out —
 //! so the differences between bindings are the differences that matter.
@@ -62,5 +63,8 @@ mod error;
 pub mod fixtures;
 
 pub use contentauth_c2pa_builder::{BuilderSettings, SigningAlg};
-pub use definition::{AssertionDefinition, ClaimGenerator, Definition, BASELINE_DEFINITION};
+pub use definition::{
+    AssertionDefinition, ClaimGenerator, Definition, IngredientDefinition, RelationshipDefinition,
+    BASELINE_DEFINITION,
+};
 pub use error::Error;

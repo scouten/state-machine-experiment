@@ -50,7 +50,8 @@ about C2PA itself.
 * Matching c2pa-rs's JSON/error contracts exactly (it's a moving target;
   the repo already tracked c2pa-rs 0.91's trust-anchor and revocation
   changes).
-* Keeping a from-scratch validator aligned with the spec: ingredients,
-  redaction and remote manifests are all still open.
+* Keeping a from-scratch validator aligned with the spec: ingredients are
+  partly done ([page 10](10-ingredients.md)); redaction and remote
+  manifests are still open.
 
 **Next:** [Future directions →](09-future.md)

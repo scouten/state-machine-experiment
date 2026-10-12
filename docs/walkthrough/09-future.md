@@ -30,8 +30,8 @@ flowchart LR
 
 | Item | Why it matters |
 |---|---|
-| **Ingredients / parent manifests** | Largest functional gap. Needs the reader to recurse over manifests; likely new request shape for ingredient assets. |
-| **Redaction checks** (`assertion.notRedacted`) | Depends on ingredients. |
+| **Ingredients / parent manifests** | Partly done — see [Ingredients](10-ingredients.md). The reader decodes ingredient assertions and checks their manifest/claim-signature hashes, parent count and action references. Still to do: recursing into an ingredient's own ingredients (`ingredientDeltas`) and comparing `validationResults`. No new request shape needed: an ingredient is read by its own session. |
+| **Redaction checks** (`assertion.notRedacted`) | Depends on the recursion above. |
 | **Remote manifest retrieval** | `ReadSettings::fetch_remote_manifests` is documented but nothing issues the request: needs an `HttpFetch`-style request. A natural test of "the host owns the network". |
 | **CRLs** | Outside the spec §15.9 OCSP-only process the engine follows, but real certs use them. |
 | **Other hard bindings** (box hash, BMFF) | Only `c2pa.hash.data` is validated. |
@@ -57,13 +57,20 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 
 ## 3. Write-side breadth
 
-* **Ingredients and update manifests** (the builder's biggest gap;
-  `redacted_assertions` has no use without them).
+* **Ingredients** — the plan and progress are on [their own page](10-ingredients.md).
+  Done: ingredients with no manifest of their own, with the actions that
+  name them. Next: thumbnails and data, then ingredients *with* a manifest
+  (an intake session per ingredient, copying its store), then re-labelling
+  and redaction (`redacted_assertions` has no use without them).
+* **Update manifests**, a separate item.
 * **Policy for already-signed assets**: `plan_embed` always replaces;
   whether to carry the old store forward as a parent is the caller's call —
-  currently nobody makes it.
-* **An orchestrator** that can juggle more than source and output streams
-  (ingredient assets) — what the file-builder/file-reader READMEs point to.
+  the same intake step, run on the source, makes it possible; nobody makes
+  the call yet.
+* **No orchestrator needed for ingredients** after all: reading each
+  ingredient is its own session (see [Ingredients](10-ingredients.md)), so
+  the file-builder/file-reader READMEs' "juggle more than two streams"
+  worry does not arise.
 * **Box-hash / BMFF bindings, certificate decoding/validation** on the
   write side (today the host vouches for the chain).
 * **Generator `icon`**, richer assertion helpers.
@@ -105,6 +112,7 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 2. Should this stay a compat layer, or inform a change in how c2pa-rs
    itself exposes its I/O?
 3. Which of the above would *change the architecture* if tackled (we think:
-   ingredients, remote manifests) versus merely extend it (formats)?
+   remote manifests; ingredients turned out not to, see
+   [page 10](10-ingredients.md)) versus merely extend it (formats)?
 4. Is the `Session` contract the right granularity, or should a coarser
    "run to completion with this host trait" API sit on top for most users?

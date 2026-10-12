@@ -71,6 +71,27 @@ const ASSERTIONS_LABEL: &str = "c2pa.assertions";
 const CLAIM_LABEL: &str = "c2pa.claim.v2";
 const SIGNATURE_LABEL: &str = "c2pa.signature";
 
+/// The relative JUMBF URI of the assertion labelled `label` in a manifest's
+/// own assertion store, as a claim or another assertion refers to it.
+pub(crate) fn assertion_uri(label: &str) -> String {
+    format!("self#jumbf={ASSERTIONS_LABEL}/{label}")
+}
+
+/// The hash a claim records for an assertion whose box holds `cbor`:
+/// over the box's rendered payload, not its header.
+pub(crate) fn assertion_digest(
+    hash_alg: HashAlgorithm,
+    label: &str,
+    cbor: &[u8],
+) -> Result<Vec<u8>, Error> {
+    let sbox = SuperBoxBuilder::new(&ASSERTION_UUID)
+        .set_label(label)
+        .add_child_box(DataBoxBuilder::from_owned(CBOR_BOX_TYPE, cbor.to_vec()));
+    let mut rendered = Cursor::new(Vec::new());
+    sbox.write_jumbf(&mut rendered)?;
+    Ok(hash_alg.digest(&rendered.into_inner()[8..]))
+}
+
 /// A hashed-URI reference to an assertion, as `(url, hash)` — what
 /// `claim::encode` takes for each of `created_assertions` and
 /// `gathered_assertions`.
@@ -197,7 +218,7 @@ impl ManifestBuilder {
             let rendered = rendered.into_inner();
 
             assertion_refs.push((
-                format!("self#jumbf=c2pa.assertions/{}", assertion.label),
+                assertion_uri(assertion.label),
                 hash_alg.digest(&rendered[8..]),
                 assertion.kind,
             ));
