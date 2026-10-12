@@ -82,10 +82,13 @@ impl Host {
                     placeholder.iter().copied(),
                 );
                 self.manifest_range = Some((offset, placeholder.len() as u64));
-                BuilderHostReply::PlaceholderReserved(vec![ByteRange {
-                    start: offset,
-                    len: placeholder.len() as u64,
-                }])
+                BuilderHostReply::PlaceholderReserved {
+                    exclusions: vec![ByteRange {
+                        start: offset,
+                        len: placeholder.len() as u64,
+                    }],
+                    hash: None,
+                }
             }
 
             BuilderRequest::AssetLength { .. } => {

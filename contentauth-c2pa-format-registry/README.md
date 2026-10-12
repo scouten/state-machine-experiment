@@ -38,7 +38,7 @@ host hands them. This crate is the host's half of that bargain.
   and no other format crate changed to make TIFF selectable. Adding a
   format is a crate implementing the contract plus a registration — in
   `Registry::standard`, or a `register` call in the host that wants it.
-* **Formats are features.** `jpeg` and `tiff` are optional dependencies,
+* **Formats are features.** `jpeg`, `tiff` and `riff` are optional dependencies,
   so a host picks what it ships, and this is the only crate that names more
   than one format.
 

@@ -19,6 +19,7 @@ flowchart BT
 
     JP["c2pa-format-jpeg"]
     TF["c2pa-format-tiff"]
+    RF["c2pa-format-riff"]
     RG["c2pa-format-registry"]
 
     FR["c2pa-file-reader"]
@@ -38,7 +39,8 @@ flowchart BT
     FM --> SM & PR
     JP --> FM
     TF --> FM
-    RG --> FM & JP & TF
+    RF --> FM
+    RG --> FM & JP & TF & RF
     FR --> RD & FM
     FB --> BD & FM
     RSC --> FR & RG
@@ -56,7 +58,7 @@ flowchart BT
     classDef bind fill:#fee2e2,stroke:#dc2626,color:#000
     class SM,PR engine
     class RD,BD core
-    class FM,JP,TF,RG fmt
+    class FM,JP,TF,RF,RG fmt
     class FR,FB glue
     class RSC,JSC,NDC,SB,RSS,JSS,NDS bind
 ```
@@ -78,7 +80,7 @@ flowchart TB
     end
     subgraph L3["Formats — plain-data contract + one crate per format"]
         direction LR
-        f1[format] ~~~ f2[jpeg] ~~~ f3[tiff] ~~~ f4[registry]
+        f1[format] ~~~ f2[jpeg] ~~~ f3[tiff] ~~~ f5[riff] ~~~ f4[registry]
     end
     subgraph L2["Workflows — C2PA, no container knowledge"]
         direction LR
@@ -103,6 +105,7 @@ flowchart TB
 | `contentauth-c2pa-format` | Format | `FormatHandler` trait, `FormatDescriptor`, `IoRequest`, `EmbedPlan`/`Patch`, test kit + conformance suite. |
 | `…-format-jpeg` | Format | APP11 segments; byte-compatible with c2pa-rs. The template for other handlers. |
 | `…-format-tiff` | Format | TIFF/BigTIFF/DNG; the format that forced `exclusions` to become a list. |
+| `…-format-riff` | Format | RIFF (WAV/AVI/WebP); the large-file format: nothing moves, so the output is a pure function of the source and the store's length, and can be hashed as it is written. |
 | `…-format-registry` | Format (host side) | Detect by content / extension / MIME; type-erased `AnyFormat`. |
 | `…-file-reader` | Orchestration | `FileReadSession`: `locate` + `ReadSession`; plus a blocking `Read + Seek` host. |
 | `…-file-builder` | Orchestration | `FileBuilderSession`: `plan_embed`/`commit` + `BuilderSession`, never buffering the asset; plus blocking hosts. |
@@ -112,6 +115,7 @@ flowchart TB
 | `…-sign-baseline` | Binding | The baseline signing case (JSON definition → `BuilderSettings`) every write binding is held to. |
 | `…-rs/js/node-compat-sign` (+ `c2pa-node-sign-addon`) | Binding | The baseline case through each binding. `rs-compat-sign` is the other crate with a network dependency (`reqwest` for RFC 3161 timestamps). |
 | `c2pa-rs-compat-conformance` | Test | Separate workspace; differential tests against the real `c2pa` crate. |
+| `asset-io-comparison` | Test | Separate workspace; times signing large WAVs against Gavin Peacock's `asset-io` and this workspace's own two-pass shape. |
 
 ## Rules of the road
 

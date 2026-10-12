@@ -30,19 +30,28 @@ for turning a plan into bytes); instead it walks a plan's edits directly,
 issuing a `FileBuilderRequest::Read` against `SOURCE_STREAM` for each
 range it needs to copy through (in bounded chunks, for a single large
 range) and a `FileBuilderRequest::Write` against `OUTPUT_STREAM` for
-every byte it produces. `AssetBytes` — needed to hash the output for the
-hard binding — is forwarded the same way, as a plain read of the output
-stream once it has been written; `AssetLength` is answered from the
-plan's own known output length instead of asking the host, so a reused
-or longer-than-needed output stream can never leak stale trailing bytes
-into the hash. Only `Sign` and `Timestamp` ever reach the host as
-themselves: a signing key and an RFC 3161 authority round trip are not
+every byte it produces.
+
+The hard binding is hashed **as the output is produced**, in one pass: a
+plan describes the whole output before any of it exists and its edits are
+walked in output order, so each copied range is folded into the digest as
+soon as its source read returns, each piece of framing as it is emitted, and
+the manifest's own slot (inside the plan's exclusions) not at all. The
+digest rides back to the `BuilderSession` in its `ReservePlaceholder`
+reply, so it never asks for `AssetLength` or `AssetBytes`: the output is
+never read back, and a host's output stream need not be readable. The
+digest covers exactly the plan's bytes, so a reused or longer-than-needed
+output stream can never leak stale trailing bytes into it. (For RIFF,
+`asset-io-comparison/` measures this against Gavin Peacock's `asset-io`
+and against the read-back shape this replaced.) Only `Sign` and `Timestamp`
+ever reach the host as themselves: a signing key and an RFC 3161 authority round trip are not
 things this crate, or any format handler, can stand in for.
 
 `build_and_sign` and `build_and_sign_file` are a host for exactly that
 session, for the common case: a caller with plain, synchronous
-`Read + Seek` access to the source asset, `Read + Write + Seek` access to
-write the output (read-back is needed for the hashing above), and a plain
+`Read + Seek` access to the source asset, `Write + Seek` access to write
+the output (`Seek` because the final manifest replaces the placeholder
+written earlier; no `Read`, since nothing is read back), and a plain
 signing function. Both also take an optional function answering each RFC 3161
 `Timestamp` request — digest in, bare `TimeStampToken` out; with `None`, a
 timestamp request fails the build, so a manifest is never silently left

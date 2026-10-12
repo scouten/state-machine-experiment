@@ -63,6 +63,22 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   rewritten), and the specification's hash exclusions are two separate
   ranges, the entry's `count` field and the store — which is what made
   `EmbedPlan::exclusion` a list (see its README for the finding).
+- **`contentauth-c2pa-format-riff`** — the third handler, chosen for
+  *size*: RIFF (WAV, AVI, WebP), where files are large and the store is
+  the data of a `C2PA` chunk appended as the last sub-chunk of the RIFF
+  chunk. Nothing already in the file moves, and the only byte outside the
+  new chunk that changes is the 12-byte header's size field, which
+  depends on the store's *length* — so `plan_embed` is a rewritten header,
+  `Copy` edits for the existing chunks, and the new chunk, and the whole
+  output is a pure function of the source and the length (the property
+  `FileBuilderSession`'s one-pass hashing needs). `commit` patches
+  nothing. The hard binding excludes the chunk's header *and* data but
+  not the pad byte after odd data — c2pa-rs's convention, and the one it
+  validates against (a data-only exclusion reads as `Invalid`); the
+  conformance harness holds it to that. Chunk headers are read a 4 KiB
+  window at a time, so a file of thousands of tiny chunks is not a round
+  trip each. Bytes after the RIFF chunk survive an embed, after the new
+  chunk. 32-bit sizes mean 4 GiB at most (RF64/BW64 unsupported).
 - **`contentauth-c2pa-format-registry`** — the *host's* half of choosing a
   format: a `Registry` (detect by content via descriptors' signatures, or
   by extension / MIME type) and `AnyFormat`, a type-erased handler that
@@ -97,22 +113,32 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   `FileBuilderRequest::Read` against `SOURCE_STREAM` and
   `FileBuilderRequest::Write` against `OUTPUT_STREAM` for each edit, in
   bounded chunks for a large `Edit::Copy` rather than one host round trip
-  sized to the whole range; forwards `AssetBytes` as plain reads of the
-  output stream once it has been written (hashing it for the hard binding
-  without holding it in memory), but answers `AssetLength` from the
-  plan's own known output length rather than asking the host, so a
-  reused, longer-than-needed output stream can never leak stale trailing
-  bytes into the hash — though those bytes are still physically present
-  in `output` afterward for anyone who reads it back directly rather than
-  trusting only what the manifest declares; `build_and_sign`'s own doc
-  comment tells a caller who cares to pass a stream that starts empty —
-  and only `Sign`/`Timestamp` ever reach the host as themselves, since
-  nothing in this workspace can sign or timestamp on a host's behalf.
+  sized to the whole range. It hashes the hard binding *as the output is
+  produced*, in one pass — a plan describes the whole output up front and
+  its edits are walked in output order, so each copied range is folded
+  into the digest as its source read returns, each emitted piece of
+  framing as it is written, and the manifest's slot (inside the plan's
+  exclusions) not at all — and returns the digest in
+  `BuilderHostReply::PlaceholderReserved`, so `BuilderSession` never asks
+  for `AssetLength`/`AssetBytes` and the output is never read back. The
+  digest covers exactly the plan's bytes, so a reused, longer-than-needed
+  output stream can never leak stale trailing bytes into it — though those
+  bytes are still physically present in `output` afterward for anyone who
+  reads it back directly rather than trusting only what the manifest
+  declares; `build_and_sign`'s own doc comment tells a caller who cares to
+  pass a stream that starts empty — and only `Sign`/`Timestamp` ever
+  reach the host as themselves, since nothing in this workspace can sign
+  or timestamp on a host's behalf.
   `build_and_sign`/`build_and_sign_file` (`src/drive.rs`) are one such
   host, for a caller with plain synchronous `Read + Seek` source access,
-  `Read + Write + Seek` output access (read-back is needed for the
-  hashing above), and a plain signing function; a host with async or
-  network-backed access drives `FileBuilderSession` directly.
+  `Write + Seek` output access (`Seek` because the final manifest
+  replaces the placeholder written earlier; no `Read`, since nothing is
+  read back), and a plain signing function; a host with async or
+  network-backed access drives `FileBuilderSession` directly. Such a host
+  should answer outstanding requests while still borrowing them rather
+  than cloning them first: a clone copies every `Write`'s payload (up to
+  1 MiB), which `build_and_sign` measured at about half again as much
+  time before it stopped.
   Both also take an optional function answering each `Timestamp` request
   (digest in, bare `TimeStampToken` out); with `None`, a request fails the
   build rather than silently produce an untimestamped manifest. The shared
@@ -129,12 +155,24 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   `contentauth-c2pa-file-reader` and checks it reads back as `Trusted` —
   the two crates' only relationship is that both implement the
   `contentauth-c2pa-format` contract.
+- **`asset-io-comparison`** — times signing large WAVs: this workspace's
+  one-pass `FileBuilderSession`, the two-pass shape it replaced (hash read
+  back from the output), Gavin Peacock's
+  [`asset-io`](https://github.com/gpeacock/asset-io)
+  `write_with_processing`, and a bare read-hash-write loop as the floor
+  (plus the same loop with hashing on a second thread, to size what
+  overlapping the two could buy a single-stream digest). Deliberately
+  **not** a workspace member (own `[workspace]`, a pinned git dependency
+  on `asset-io`): its own CI job runs its tests, which check that the
+  variants write the same bytes — `asset-io`'s output matches this
+  workspace's outside the manifest's data — and that ours read back
+  `Trusted`; the timings are `cargo run --release`, not CI.
 - **`contentauth-c2pa-rs-compat`** — an experimental compatibility layer
   reproducing a slice of [c2pa-rs](https://github.com/contentauth/c2pa-rs)'s
   own public `Reader` API — same method names and signatures where
   Rust's ownership rules allow it, same `Error::JumbfNotFound`/JSON
   contracts — on top of `contentauth-c2pa-file-reader` and
-  `contentauth-c2pa-format-registry` (JPEG and TIFF), instead of this workspace's own
+  `contentauth-c2pa-format-registry` (JPEG, TIFF and RIFF), instead of this workspace's own
   `Session` interaction contract. One use case only: `Context` (trust
   anchors) and `Reader::from_context(context).with_file(path)` on a local
   JPEG or TIFF — the preferred shape, mirroring what c2pa-rs's own docs now
@@ -238,7 +276,11 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   second container format to the real thing: a TIFF signed by c2pa-rs is
   read by this workspace's TIFF handler to the same answer, and c2pa-rs
   reads and validates a TIFF signed here to the same answer as the
-  workspace's reader. Deliberately
+  workspace's reader. The third, RIFF, is held to it too — a WAV signed by
+  c2pa-rs reads to the same answer here, with the same exclusions (both
+  parities of the store's length, since RIFF pads odd data), and c2pa-rs
+  validates a WAV signed here, re-signed, or carrying a trailing chunk.
+  Deliberately
   **not** a member of this workspace (it has its own `[workspace]` in its
   `Cargo.toml`) — see its own README: the real `c2pa` crate is heavy and
   under no obligation to satisfy this workspace's Wasm/MSRV/`cargo-deny`

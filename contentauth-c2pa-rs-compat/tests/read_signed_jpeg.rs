@@ -84,7 +84,10 @@ fn build_and_embed(source: &[u8]) -> (EmbedPlan, Vec<u8>) {
                     asset = embed_plan.materialize(source, placeholder).unwrap();
                     let exclusions = embed_plan.exclusions.clone();
                     plan = Some(embed_plan);
-                    BuilderHostReply::PlaceholderReserved(exclusions)
+                    BuilderHostReply::PlaceholderReserved {
+                        exclusions,
+                        hash: None,
+                    }
                 }
 
                 BuilderRequest::AssetLength { .. } => {
@@ -395,7 +398,7 @@ fn without_a_trust_anchor_the_same_manifest_reads_back_only_as_valid() {
 fn supported_extensions_lists_every_registered_format() {
     assert_eq!(
         Reader::supported_extensions(),
-        ["jpg", "jpeg", "tif", "tiff", "dng"]
+        ["jpg", "jpeg", "tif", "tiff", "dng", "wav", "avi", "webp"]
     );
 }
 
