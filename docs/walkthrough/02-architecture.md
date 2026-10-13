@@ -32,6 +32,7 @@ flowchart BT
     RSS["rs-compat-sign"]
     JSS["js-compat-sign"]
     NDS["node-compat-sign"]
+    CAPI["c2pa-c-api<br/><i>C ABI for FFI</i>"]
 
     RD --> SM & PR
     BD --> SM & PR
@@ -48,6 +49,7 @@ flowchart BT
     RSS --> SB & FB & JP
     JSS --> SB & FB & JSC
     NDS --> SB & FB & JSC
+    CAPI --> FR & FB & RG
 
     classDef engine fill:#dbeafe,stroke:#2563eb,color:#000
     classDef core fill:#dcfce7,stroke:#16a34a,color:#000
@@ -58,7 +60,7 @@ flowchart BT
     class RD,BD core
     class FM,JP,TF,RG fmt
     class FR,FB glue
-    class RSC,JSC,NDC,SB,RSS,JSS,NDS bind
+    class RSC,JSC,NDC,SB,RSS,JSS,NDS,CAPI bind
 ```
 
 (Edges to `primitives` and `state-machine` from most crates are omitted
@@ -68,9 +70,9 @@ where they would only add noise; every session crate depends on both.)
 
 ```mermaid
 flowchart TB
-    subgraph L5["Bindings — c2pa-rs / c2pa-wasm / c2pa-node shaped APIs"]
+    subgraph L5["Bindings — c2pa-rs / c2pa-wasm / c2pa-node shaped APIs and C ABI"]
         direction LR
-        b1[rs-compat] ~~~ b2[js-compat] ~~~ b3[node-compat] ~~~ b4["*-compat-sign"]
+        b1[rs-compat] ~~~ b2[js-compat] ~~~ b3[node-compat] ~~~ b4["*-compat-sign"] ~~~ b5[c-api]
     end
     subgraph L4["Orchestration — compose a format with a session"]
         direction LR
@@ -111,6 +113,7 @@ flowchart TB
 | `…-node-compat` (+ `c2pa-node-compat-addon`) | Binding | Purely synchronous `NodeSession`; Node owns all async. Addon is a separate Neon workspace. |
 | `…-sign-baseline` | Binding | The baseline signing case (JSON definition → `BuilderSettings`) every write binding is held to. |
 | `…-rs/js/node-compat-sign` (+ `c2pa-node-sign-addon`) | Binding | The baseline case through each binding. `rs-compat-sign` is the other crate with a network dependency (`reqwest` for RFC 3161 timestamps). |
+| `…-c-api` | Binding | Thread-free, callback-free C ABI (`c2pa_sm_*`) wrapping read and build sessions; cimpl-tracked handles and cbindgen-generated header. |
 | `c2pa-rs-compat-conformance` | Test | Separate workspace; differential tests against the real `c2pa` crate. |
 
 ## Rules of the road
