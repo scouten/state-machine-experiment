@@ -5,17 +5,6 @@ documentation = true
 style = "both"
 no_includes = false
 cpp_compat = true
-after_includes = """
-#ifndef C2PA_SM_NO_DEFAULT_FEATURES
-#define C2PA_SM_FEATURE_READ
-#define C2PA_SM_FEATURE_BUILD
-#endif
-"""
-
-[defines]
-"feature = read" = "C2PA_SM_FEATURE_READ"
-"feature = build" = "C2PA_SM_FEATURE_BUILD"
-
 [parse]
 parse_deps = false
 

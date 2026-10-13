@@ -59,18 +59,10 @@ Key characteristics:
 The generated C header is located in
 [`include/contentauth_c2pa_c_api.h`](include/contentauth_c2pa_c_api.h);
 `build.rs` regenerates it from the exported Rust API. The committed header
-supports every feature combination with conditional declarations, so its
+declares both APIs unconditionally, so its
 contents do not depend on the features used to generate it.
 
-By default the header exposes both APIs, matching Cargo's defaults. For a
-reduced-feature library, define `C2PA_SM_NO_DEFAULT_FEATURES` and the
-corresponding `C2PA_SM_FEATURE_READ` and/or `C2PA_SM_FEATURE_BUILD` before
-including the header (or pass them as compiler `-D` flags). These macros
-only select declarations; they must match the features used to build the
-Rust library.
-
-```c
-#define C2PA_SM_NO_DEFAULT_FEATURES
-#define C2PA_SM_FEATURE_READ
-#include "contentauth_c2pa_c_api.h"
-```
+Unused declarations emit no code and require no linked symbol. Cargo
+features still control which functions the Rust library exports: calling
+an API disabled in that library fails at link time. No C feature macros
+are needed. The header retains its include guard and C++ linkage guards.
