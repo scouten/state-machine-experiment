@@ -48,8 +48,7 @@ use crate::error::Error;
 const SIGNATURE_URI: &str = "self#jumbf=c2pa.signature";
 
 /// The version of the C2PA specification this encoder follows, written as
-/// the generator's `specVersion` (SemVer, per the specification). Matches
-/// the snapshot under `reference/c2pa-spec`.
+/// the generator's `specVersion` (SemVer, per the specification).
 const SPEC_VERSION: &str = "2.4.0";
 
 /// The subset of a [`BuilderSettings`](crate::BuilderSettings) that

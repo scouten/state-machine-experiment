@@ -42,8 +42,6 @@ These pages are a map, not the territory. The authoritative detail is in:
 
 * [`CLAUDE.md`](../../CLAUDE.md) — the full crate-by-crate description.
 * Each crate's own `README.md` and rustdoc.
-* [`reference/c2pa-spec`](../../reference/c2pa-spec) — a pinned snapshot of
-  the C2PA specification (2.4) the code is written against.
 
 ## Keeping this current
 

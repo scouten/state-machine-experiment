@@ -266,14 +266,6 @@ the crate table and dependency graph in `02-architecture.md`, and the
 lands; add items a PR reveals). Diagrams are Mermaid so GitHub renders them;
 when a diagram and the code disagree, the code wins — fix the diagram.
 
-## Specification reference
-
-[`reference/c2pa-spec`](reference/c2pa-spec) holds a pinned
-snapshot of the C2PA Technical Specification's `.adoc` source (currently
-version `2.4`), for reference only — nothing in this workspace builds or
-depends on it. See its own README for provenance and license (CC-BY-4.0,
-distinct from the rest of this repository's MIT OR Apache-2.0 terms).
-
 ## Stability
 
 This is a very experimental prototype, not a shipping product: nothing
