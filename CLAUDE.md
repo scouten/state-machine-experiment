@@ -266,6 +266,19 @@ the crate table and dependency graph in `02-architecture.md`, and the
 lands; add items a PR reveals). Diagrams are Mermaid so GitHub renders them;
 when a diagram and the code disagree, the code wins — fix the diagram.
 
+## C FFI bindings
+
+If a binding needs a C-language FFI, build it on the
+[`cimpl`](https://github.com/contentauth/cimpl) crate rather than
+hand-rolling `extern "C"` functions, pointer handling, and error plumbing.
+Consult cimpl's own documentation for its API. As with the sans-I/O
+sessions, keep the FFI layer thin: the host (C caller) owns I/O and drives
+`advance`/`fulfill`/`finish`. Any `unsafe` that cimpl cannot absorb stays
+confined to that binding crate; the engine, reader, and builder crates keep
+denying `unsafe_code`. Such a crate is subject to the same CI constraints
+as other members (or must justify living outside the workspace, as the
+Neon addons do).
+
 ## Stability
 
 This is a very experimental prototype, not a shipping product: nothing

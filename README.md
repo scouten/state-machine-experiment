@@ -90,6 +90,12 @@ Outside the workspace (see its own README for why):
   seam (`examples/compare_corpus.rs`) for running that comparison across a
   whole directory of assets rather than one fixture.
 
+## C FFI
+
+Bindings that expose a C API should be built on the
+[`cimpl`](https://github.com/contentauth/cimpl) crate rather than a
+hand-rolled C FFI. No such binding exists yet.
+
 ## Building
 
 This repo is a Cargo workspace; the usual commands run across all members
