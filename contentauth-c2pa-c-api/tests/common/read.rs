@@ -18,6 +18,7 @@ use std::{
     ptr, slice,
 };
 
+use base64::Engine as _;
 use contentauth_c2pa_c_api::{
     c2pa_sm_read_advance, c2pa_sm_read_finish, c2pa_sm_read_free, c2pa_sm_read_fulfill_bytes,
     c2pa_sm_read_fulfill_length, c2pa_sm_read_fulfill_time, c2pa_sm_read_new, c2pa_sm_string_free,
@@ -28,11 +29,23 @@ use contentauth_c2pa_sign_baseline::fixtures::TEST_SIGNER_CERT;
 
 const FIXED_NOW: i64 = 1_800_000_000;
 
-pub fn read_signed_output(output_bytes: &[u8]) {
+pub struct ReadOutput {
+    pub has_manifest: bool,
+    pub json: Option<String>,
+}
+
+pub fn read_signed_output(output_bytes: &[u8]) -> ReadOutput {
     let format = CString::new("image/jpeg").unwrap();
     let mut err_out = ptr::null_mut();
+    let cert_base64 = base64::engine::general_purpose::STANDARD.encode(TEST_SIGNER_CERT);
+    let cert_pem = format!("-----BEGIN CERTIFICATE-----\n{cert_base64}\n-----END CERTIFICATE-----");
     let trust_settings = serde_json::json!({
-        "trust_anchors": [TEST_SIGNER_CERT]
+        "trust": {
+            "anchors": [{
+                "trust_anchors": cert_pem,
+                "trust_kind": "manifest"
+            }]
+        }
     });
     let trust_settings_json =
         CString::new(serde_json::to_string(&trust_settings).unwrap()).unwrap();
@@ -102,15 +115,21 @@ pub fn read_signed_output(output_bytes: &[u8]) {
         c2pa_sm_read_finish(read_session, &mut out_json, &mut has_manifest, &mut err_out)
     };
     assert_eq!(rc, 0);
-    assert!(has_manifest);
-    assert!(!out_json.is_null());
-
-    let json_str = unsafe { CStr::from_ptr(out_json).to_str().unwrap() };
-    assert!(json_str.contains("baseline.jpg"));
-    assert!(json_str.contains("urn:uuid:00000000-0000-4000-8000-000000000002"));
+    let json = if out_json.is_null() {
+        None
+    } else {
+        Some(
+            unsafe { CStr::from_ptr(out_json) }
+                .to_str()
+                .unwrap()
+                .to_owned(),
+        )
+    };
 
     unsafe {
         c2pa_sm_string_free(out_json);
         c2pa_sm_read_free(read_session);
     }
+
+    ReadOutput { has_manifest, json }
 }

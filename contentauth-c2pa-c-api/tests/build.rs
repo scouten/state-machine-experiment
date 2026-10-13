@@ -18,5 +18,21 @@ mod build_host;
 
 #[test]
 fn build_manifest() {
-    assert!(!build_host::build_signed_asset().is_empty());
+    let output = build_host::build_signed_asset();
+
+    assert!(!output.asset.is_empty());
+    assert!(!output.manifest.is_empty());
+    assert!(
+        output
+            .asset
+            .windows(output.manifest.len())
+            .any(|bytes| bytes == output.manifest),
+        "the returned manifest must be embedded in the output asset"
+    );
+    assert!(!output.exclusions.is_empty());
+    for range in &output.exclusions {
+        assert!(range.len > 0);
+        assert!(range.start <= output.asset.len() as u64);
+        assert!(range.len <= output.asset.len() as u64 - range.start);
+    }
 }

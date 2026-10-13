@@ -61,6 +61,7 @@ thiserror = "2.0.21"
 cbindgen = "0.27"
 
 [dev-dependencies]
+base64 = "0.22"
 c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
     "rust_native_crypto",
 ] }

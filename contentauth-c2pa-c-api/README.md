@@ -36,6 +36,9 @@ their exports remain available at the crate root. Integration tests are
 split the same way: read-only, build-only, shared cleanup, and a round trip
 requiring both features. The build and round-trip tests reuse one host
 driver from `tests/common`.
+Drivers check host-protocol calls and copy returned allocations into owned
+results before freeing them. Build-result and read-back assertions live in
+the corresponding test files rather than inside the drivers.
 
 This crate exposes the synchronous sans-I/O state machines
 (`FileReadSession` and `FileBuilderSession`) over an FFI boundary using

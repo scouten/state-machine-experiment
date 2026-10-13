@@ -19,13 +19,19 @@ use contentauth_c2pa_c_api::{
     c2pa_sm_build_advance, c2pa_sm_build_finish, c2pa_sm_build_free, c2pa_sm_build_fulfill_bytes,
     c2pa_sm_build_fulfill_length, c2pa_sm_build_fulfill_signature, c2pa_sm_build_fulfill_written,
     c2pa_sm_build_new, c2pa_sm_bytes_free, c2pa_sm_exclusions_data, c2pa_sm_exclusions_free,
-    C2paSmBuildRequest, C2paSmExclusionList, C2PA_SM_BUILD_REQ_LENGTH, C2PA_SM_BUILD_REQ_READ,
-    C2PA_SM_BUILD_REQ_SIGN, C2PA_SM_BUILD_REQ_WRITE, C2PA_SM_STEP_COMPLETE, C2PA_SM_STEP_PENDING,
-    C2PA_SM_STREAM_OUTPUT, C2PA_SM_STREAM_SOURCE,
+    C2paSmBuildRequest, C2paSmExclusion, C2paSmExclusionList, C2PA_SM_BUILD_REQ_LENGTH,
+    C2PA_SM_BUILD_REQ_READ, C2PA_SM_BUILD_REQ_SIGN, C2PA_SM_BUILD_REQ_WRITE, C2PA_SM_STEP_COMPLETE,
+    C2PA_SM_STEP_PENDING, C2PA_SM_STREAM_OUTPUT, C2PA_SM_STREAM_SOURCE,
 };
 use contentauth_c2pa_sign_baseline::{fixtures::*, BASELINE_DEFINITION};
 
-pub fn build_signed_asset() -> Vec<u8> {
+pub struct BuildOutput {
+    pub asset: Vec<u8>,
+    pub manifest: Vec<u8>,
+    pub exclusions: Vec<C2paSmExclusion>,
+}
+
+pub fn build_signed_asset() -> BuildOutput {
     let signer = c2pa_raw_crypto::signer_from_private_key(
         TEST_SIGNER_KEY_PEM,
         c2pa_raw_crypto::SigningAlg::Es256,
@@ -163,17 +169,12 @@ pub fn build_signed_asset() -> Vec<u8> {
     assert_eq!(rc, 0);
     assert!(err_out.is_null());
     assert!(!manifest_ptr.is_null());
-    assert!(manifest_len > 0);
     assert!(!exclusions_ptr.is_null());
-    assert!(exclusions_count > 0);
     let exclusions_data = unsafe { c2pa_sm_exclusions_data(exclusions_ptr, &mut err_out) };
     assert!(err_out.is_null());
     assert!(!exclusions_data.is_null());
-    assert!(
-        unsafe { slice::from_raw_parts(exclusions_data, exclusions_count) }
-            .iter()
-            .all(|range| range.len > 0)
-    );
+    let manifest = unsafe { slice::from_raw_parts(manifest_ptr, manifest_len) }.to_vec();
+    let exclusions = unsafe { slice::from_raw_parts(exclusions_data, exclusions_count) }.to_vec();
 
     unsafe {
         c2pa_sm_bytes_free(manifest_ptr, manifest_len);
@@ -181,5 +182,9 @@ pub fn build_signed_asset() -> Vec<u8> {
         c2pa_sm_build_free(build_session);
     }
 
-    output_bytes
+    BuildOutput {
+        asset: output_bytes,
+        manifest,
+        exclusions,
+    }
 }
