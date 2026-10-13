@@ -37,7 +37,7 @@ flowchart LR
 | Concern | c2pa-rs and its bindings | This project |
 |---|---|---|
 | **Who performs I/O** | The library, through `Read + Seek` / `Write`, its own HTTP stack, system clock | The host, always. The engine has no I/O, clock, RNG, thread, or runtime |
-| **Sync vs async** | One core, synchronous at heart, with async variants (`with_stream_async`) for the parts that may hit the network | One core that is neither; async-ness is whatever the host wraps around the loop |
+| **Sync vs async** | One core, synchronous at heart, with async variants (`with_stream_async`) for the parts that may hit the network | The core is purely synchronous; clients may add asynchronous behavior in their host implementation |
 | **Asset bytes** | Must arrive as a synchronous `Read + Seek` stream | Arrive as *replies to range requests*, which can be answered asynchronously, out of order, or from a cache |
 | **c2pa-wasm** | `BlobStream` over `FileReaderSync` → reader must live in a Web Worker | `Blob.slice().arrayBuffer()` awaited per request → works on the main thread, and two reads interleave at request boundaries (tested) |
 | **c2pa-node** | Whole reads run on a process-wide tokio pool behind `Mutex<Reader>`; JS thread blocks on sync accessors | Rust is only ever *called* synchronously; Node owns `fs`/`fetch` and the event loop; no threads, locks, or `futures` in the addon |
