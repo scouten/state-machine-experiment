@@ -15,6 +15,18 @@ publish = false
 [lib]
 crate-type = ["staticlib", "rlib"]
 
+[[test]]
+name = "read"
+required-features = ["read"]
+
+[[test]]
+name = "build"
+required-features = ["build"]
+
+[[test]]
+name = "roundtrip"
+required-features = ["read", "build"]
+
 [features]
 default = ["read", "build"]
 read = [

@@ -97,40 +97,6 @@ typedef struct C2paSmExclusionList C2paSmExclusionList;
 typedef struct C2paSmReadSession C2paSmReadSession;
 
 /**
- * C representation of a read request.
- */
-typedef struct C2paSmReadRequest {
-  /**
-   * Unique handle for fulfillment.
-   */
-  uint64_t id;
-  /**
-   * Request kind: `C2PA_SM_READ_REQ_*`.
-   */
-  uint32_t kind;
-  /**
-   * Offset for `READ`.
-   */
-  uint64_t start;
-  /**
-   * Byte length for `READ`.
-   */
-  uint64_t len;
-  /**
-   * URL for `OCSP`, or null.
-   */
-  const char *url;
-  /**
-   * OCSP request DER bytes, or null.
-   */
-  const uint8_t *request_der;
-  /**
-   * Byte length of `request_der`.
-   */
-  uintptr_t request_der_len;
-} C2paSmReadRequest;
-
-/**
  * C representation of a build request.
  */
 typedef struct C2paSmBuildRequest {
@@ -186,112 +152,51 @@ typedef struct C2paSmExclusion {
   uint64_t len;
 } C2paSmExclusion;
 
+/**
+ * C representation of a read request.
+ */
+typedef struct C2paSmReadRequest {
+  /**
+   * Unique handle for fulfillment.
+   */
+  uint64_t id;
+  /**
+   * Request kind: `C2PA_SM_READ_REQ_*`.
+   */
+  uint32_t kind;
+  /**
+   * Offset for `READ`.
+   */
+  uint64_t start;
+  /**
+   * Byte length for `READ`.
+   */
+  uint64_t len;
+  /**
+   * URL for `OCSP`, or null.
+   */
+  const char *url;
+  /**
+   * OCSP request DER bytes, or null.
+   */
+  const uint8_t *request_der;
+  /**
+   * Byte length of `request_der`.
+   */
+  uintptr_t request_der_len;
+} C2paSmReadRequest;
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
 
 /**
- * Creates a new sans-I/O read session.
+ * Frees a string allocated by this library.
  *
  * # Safety
- * `format` and non-null `settings_json` must be valid null-terminated C strings.
- * A non-null `err_out` must point to writable storage.
+ * `string` must be null or an allocation returned by this library.
  */
-struct C2paSmReadSession *c2pa_sm_read_new(const char *format,
-                                           const char *settings_json,
-                                           char **err_out);
-
-/**
- * Advances the read session.
- *
- * # Safety
- * `session`, `out_requests`, and `out_count` must be valid pointers; a non-null
- * `err_out` must point to writable storage.
- */
-int32_t c2pa_sm_read_advance(struct C2paSmReadSession *session,
-                             const struct C2paSmReadRequest **out_requests,
-                             uintptr_t *out_count,
-                             char **err_out);
-
-/**
- * Fulfills a read request with bytes.
- *
- * # Safety
- * `session` must be a live session. For nonzero `len`, `bytes` must be valid
- * for reads of `len` bytes. A non-null `err_out` must point to writable storage.
- */
-int32_t c2pa_sm_read_fulfill_bytes(struct C2paSmReadSession *session,
-                                   uint64_t id,
-                                   const uint8_t *bytes,
-                                   uintptr_t len,
-                                   char **err_out);
-
-/**
- * Fulfills a length request.
- *
- * # Safety
- * `session` must be a live session. A non-null `err_out` must point to writable storage.
- */
-int32_t c2pa_sm_read_fulfill_length(struct C2paSmReadSession *session,
-                                    uint64_t id,
-                                    uint64_t length,
-                                    char **err_out);
-
-/**
- * Fulfills a current-time request with UTC epoch seconds.
- *
- * # Safety
- * `session` must be a live session. A non-null `err_out` must point to writable storage.
- */
-int32_t c2pa_sm_read_fulfill_time(struct C2paSmReadSession *session,
-                                  uint64_t id,
-                                  int64_t epoch_secs,
-                                  char **err_out);
-
-/**
- * Fulfills an OCSP request with response DER bytes.
- *
- * # Safety
- * `session` must be live. For nonzero `len`, `bytes` must be valid for reads
- * of `len` bytes. A non-null `err_out` must point to writable storage.
- */
-int32_t c2pa_sm_read_fulfill_ocsp(struct C2paSmReadSession *session,
-                                  uint64_t id,
-                                  const uint8_t *bytes,
-                                  uintptr_t len,
-                                  char **err_out);
-
-/**
- * Fulfills a read request with a host failure.
- *
- * # Safety
- * `session` must be live and `msg` a valid null-terminated C string. A
- * non-null `err_out` must point to writable storage.
- */
-int32_t c2pa_sm_read_fulfill_failed(struct C2paSmReadSession *session,
-                                    uint64_t id,
-                                    const char *msg,
-                                    char **err_out);
-
-/**
- * Finishes a read session and retrieves its JSON report.
- *
- * # Safety
- * `session`, `out_json`, and `out_has_manifest` must be valid pointers. A
- * non-null `err_out` must point to writable storage.
- */
-int32_t c2pa_sm_read_finish(struct C2paSmReadSession *session,
-                            char **out_json,
-                            bool *out_has_manifest,
-                            char **err_out);
-
-/**
- * Frees a read session, including a partially driven or cancelled session.
- *
- * # Safety
- * `session` must be null or a live pointer returned by [`c2pa_sm_read_new`].
- */
-void c2pa_sm_read_free(struct C2paSmReadSession *session);
+void c2pa_sm_string_free(char *string);
 
 /**
  * Creates a new sans-I/O build session.
@@ -429,14 +334,6 @@ const struct C2paSmExclusion *c2pa_sm_exclusions_data(struct C2paSmExclusionList
 void c2pa_sm_build_free(struct C2paSmBuildSession *session);
 
 /**
- * Frees a string allocated by this library.
- *
- * # Safety
- * `string` must be null or an allocation returned by this library.
- */
-void c2pa_sm_string_free(char *string);
-
-/**
  * Frees manifest bytes allocated by this library.
  *
  * `len` is retained for ABI clarity; cimpl tracks the allocation's size.
@@ -453,6 +350,109 @@ void c2pa_sm_bytes_free(uint8_t *bytes, uintptr_t _len);
  * `exclusions` must be null or a live handle returned by this library.
  */
 void c2pa_sm_exclusions_free(struct C2paSmExclusionList *exclusions);
+
+/**
+ * Creates a new sans-I/O read session.
+ *
+ * # Safety
+ * `format` and non-null `settings_json` must be valid null-terminated C strings.
+ * A non-null `err_out` must point to writable storage.
+ */
+struct C2paSmReadSession *c2pa_sm_read_new(const char *format,
+                                           const char *settings_json,
+                                           char **err_out);
+
+/**
+ * Advances the read session.
+ *
+ * # Safety
+ * `session`, `out_requests`, and `out_count` must be valid pointers; a non-null
+ * `err_out` must point to writable storage.
+ */
+int32_t c2pa_sm_read_advance(struct C2paSmReadSession *session,
+                             const struct C2paSmReadRequest **out_requests,
+                             uintptr_t *out_count,
+                             char **err_out);
+
+/**
+ * Fulfills a read request with bytes.
+ *
+ * # Safety
+ * `session` must be a live session. For nonzero `len`, `bytes` must be valid
+ * for reads of `len` bytes. A non-null `err_out` must point to writable storage.
+ */
+int32_t c2pa_sm_read_fulfill_bytes(struct C2paSmReadSession *session,
+                                   uint64_t id,
+                                   const uint8_t *bytes,
+                                   uintptr_t len,
+                                   char **err_out);
+
+/**
+ * Fulfills a length request.
+ *
+ * # Safety
+ * `session` must be a live session. A non-null `err_out` must point to writable storage.
+ */
+int32_t c2pa_sm_read_fulfill_length(struct C2paSmReadSession *session,
+                                    uint64_t id,
+                                    uint64_t length,
+                                    char **err_out);
+
+/**
+ * Fulfills a current-time request with UTC epoch seconds.
+ *
+ * # Safety
+ * `session` must be a live session. A non-null `err_out` must point to writable storage.
+ */
+int32_t c2pa_sm_read_fulfill_time(struct C2paSmReadSession *session,
+                                  uint64_t id,
+                                  int64_t epoch_secs,
+                                  char **err_out);
+
+/**
+ * Fulfills an OCSP request with response DER bytes.
+ *
+ * # Safety
+ * `session` must be live. For nonzero `len`, `bytes` must be valid for reads
+ * of `len` bytes. A non-null `err_out` must point to writable storage.
+ */
+int32_t c2pa_sm_read_fulfill_ocsp(struct C2paSmReadSession *session,
+                                  uint64_t id,
+                                  const uint8_t *bytes,
+                                  uintptr_t len,
+                                  char **err_out);
+
+/**
+ * Fulfills a read request with a host failure.
+ *
+ * # Safety
+ * `session` must be live and `msg` a valid null-terminated C string. A
+ * non-null `err_out` must point to writable storage.
+ */
+int32_t c2pa_sm_read_fulfill_failed(struct C2paSmReadSession *session,
+                                    uint64_t id,
+                                    const char *msg,
+                                    char **err_out);
+
+/**
+ * Finishes a read session and retrieves its JSON report.
+ *
+ * # Safety
+ * `session`, `out_json`, and `out_has_manifest` must be valid pointers. A
+ * non-null `err_out` must point to writable storage.
+ */
+int32_t c2pa_sm_read_finish(struct C2paSmReadSession *session,
+                            char **out_json,
+                            bool *out_has_manifest,
+                            char **err_out);
+
+/**
+ * Frees a read session, including a partially driven or cancelled session.
+ *
+ * # Safety
+ * `session` must be null or a live pointer returned by [`c2pa_sm_read_new`].
+ */
+void c2pa_sm_read_free(struct C2paSmReadSession *session);
 
 #ifdef __cplusplus
 }  // extern "C"

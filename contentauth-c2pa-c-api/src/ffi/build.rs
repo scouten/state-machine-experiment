@@ -11,32 +11,20 @@
 // specific language governing permissions and limitations under
 // each license.
 
-//! C FFI exports, using cimpl for pointer validation and owned allocations.
+//! Build-session C exports and build-result allocation cleanup.
 
-#[cfg(any(feature = "read", feature = "build"))]
-use std::ptr;
-#[cfg(feature = "build")]
-use std::slice;
 use std::{
     ffi::{c_char, c_void},
-    panic::{catch_unwind, AssertUnwindSafe},
+    ptr, slice,
 };
 
-#[cfg(feature = "build")]
-use crate::build::{BuildSession, C2paSmBuildRequest, C2paSmExclusion};
-use crate::error::Error;
-#[cfg(feature = "read")]
-use crate::read::{C2paSmReadRequest, ReadSession};
-#[cfg(any(feature = "read", feature = "build"))]
-use crate::C2PA_SM_STEP_ERROR;
+use super::{ffi_call, ffi_call_without_error_output};
+use crate::{
+    build::{BuildSession, C2paSmBuildRequest, C2paSmExclusion},
+    C2PA_SM_STEP_ERROR,
+};
 
-/// Opaque read-session handle exposed to C.
-#[cfg(feature = "read")]
-pub struct C2paSmReadSession {
-    inner: ReadSession,
-}
 /// Opaque build-session handle exposed to C.
-#[cfg(feature = "build")]
 pub struct C2paSmBuildSession {
     inner: BuildSession,
 }
@@ -45,259 +33,8 @@ pub struct C2paSmBuildSession {
 ///
 /// Obtain the borrowed range pointer with [`c2pa_sm_exclusions_data`] and
 /// release this owner with [`c2pa_sm_exclusions_free`].
-#[cfg(feature = "build")]
 pub struct C2paSmExclusionList {
     entries: Vec<C2paSmExclusion>,
-}
-
-#[cfg(any(feature = "read", feature = "build"))]
-fn store_error(err_out: *mut *mut c_char, message: &str) {
-    if !err_out.is_null() {
-        let message = cimpl::to_c_string(message.to_owned());
-        // SAFETY: the caller guarantees a valid writable output pointer when non-null.
-        unsafe { *err_out = message };
-    }
-}
-
-#[cfg(any(feature = "read", feature = "build"))]
-fn ffi_call<T>(err_out: *mut *mut c_char, fallback: T, f: impl FnOnce() -> T) -> T {
-    let _ = cimpl::Error::take_last();
-    match catch_unwind(AssertUnwindSafe(f)) {
-        Ok(value) => {
-            if let Some(error) = cimpl::Error::take_last() {
-                store_error(err_out, error.message());
-            }
-            value
-        }
-        Err(_) => {
-            cimpl::Error::from(Error::Panic(
-                "panic caught at the C ABI boundary".to_owned(),
-            ))
-            .set_last();
-            if let Some(error) = cimpl::Error::take_last() {
-                store_error(err_out, error.message());
-            }
-            fallback
-        }
-    }
-}
-
-fn ffi_call_without_error_output(f: impl FnOnce()) {
-    let _ = cimpl::Error::take_last();
-    if catch_unwind(AssertUnwindSafe(f)).is_err() {
-        cimpl::Error::from(Error::Panic(
-            "panic caught at the C ABI boundary".to_owned(),
-        ))
-        .set_last();
-    }
-}
-
-/// Creates a new sans-I/O read session.
-///
-/// # Safety
-/// `format` and non-null `settings_json` must be valid null-terminated C strings.
-/// A non-null `err_out` must point to writable storage.
-#[no_mangle]
-#[cfg(feature = "read")]
-pub unsafe extern "C" fn c2pa_sm_read_new(
-    format: *const c_char,
-    settings_json: *const c_char,
-    err_out: *mut *mut c_char,
-) -> *mut C2paSmReadSession {
-    ffi_call(err_out, ptr::null_mut(), || {
-        let format = cimpl::cstr_or_return_null!(format);
-        let settings = if settings_json.is_null() {
-            None
-        } else {
-            Some(cimpl::cstr_or_return_null!(settings_json))
-        };
-        let session = cimpl::ok_or_return_null!(ReadSession::new(&format, settings.as_deref()));
-        cimpl::box_tracked!(C2paSmReadSession { inner: session })
-    })
-}
-
-/// Advances the read session.
-///
-/// # Safety
-/// `session`, `out_requests`, and `out_count` must be valid pointers; a non-null
-/// `err_out` must point to writable storage.
-#[no_mangle]
-#[cfg(feature = "read")]
-pub unsafe extern "C" fn c2pa_sm_read_advance(
-    session: *mut C2paSmReadSession,
-    out_requests: *mut *const C2paSmReadRequest,
-    out_count: *mut usize,
-    err_out: *mut *mut c_char,
-) -> i32 {
-    ffi_call(err_out, C2PA_SM_STEP_ERROR, || {
-        let mut session = cimpl::deref_mut_or_return_int!(session, C2paSmReadSession);
-        cimpl::ptr_or_return_int!(out_requests);
-        cimpl::ptr_or_return_int!(out_count);
-
-        let step = cimpl::ok_or_return_int!(session.inner.advance());
-        let requests = session.inner.current_requests();
-        // SAFETY: both output pointers were checked above.
-        unsafe {
-            *out_requests = requests.as_ptr();
-            *out_count = requests.len();
-        }
-        step
-    })
-}
-
-/// Fulfills a read request with bytes.
-///
-/// # Safety
-/// `session` must be a live session. For nonzero `len`, `bytes` must be valid
-/// for reads of `len` bytes. A non-null `err_out` must point to writable storage.
-#[no_mangle]
-#[cfg(feature = "read")]
-pub unsafe extern "C" fn c2pa_sm_read_fulfill_bytes(
-    session: *mut C2paSmReadSession,
-    id: u64,
-    bytes: *const u8,
-    len: usize,
-    err_out: *mut *mut c_char,
-) -> i32 {
-    ffi_call(err_out, -1, || {
-        let mut session = cimpl::deref_mut_or_return_int!(session, C2paSmReadSession);
-        let bytes = cimpl::bytes_or_return_int!(bytes, len, "bytes");
-        cimpl::ok_or_return_int!(session.inner.fulfill_bytes(id, bytes));
-        0
-    })
-}
-
-/// Fulfills a length request.
-///
-/// # Safety
-/// `session` must be a live session. A non-null `err_out` must point to writable storage.
-#[no_mangle]
-#[cfg(feature = "read")]
-pub unsafe extern "C" fn c2pa_sm_read_fulfill_length(
-    session: *mut C2paSmReadSession,
-    id: u64,
-    length: u64,
-    err_out: *mut *mut c_char,
-) -> i32 {
-    ffi_call(err_out, -1, || {
-        let mut session = cimpl::deref_mut_or_return_int!(session, C2paSmReadSession);
-        cimpl::ok_or_return_int!(session.inner.fulfill_length(id, length));
-        0
-    })
-}
-
-/// Fulfills a current-time request with UTC epoch seconds.
-///
-/// # Safety
-/// `session` must be a live session. A non-null `err_out` must point to writable storage.
-#[no_mangle]
-#[cfg(feature = "read")]
-pub unsafe extern "C" fn c2pa_sm_read_fulfill_time(
-    session: *mut C2paSmReadSession,
-    id: u64,
-    epoch_secs: i64,
-    err_out: *mut *mut c_char,
-) -> i32 {
-    ffi_call(err_out, -1, || {
-        let mut session = cimpl::deref_mut_or_return_int!(session, C2paSmReadSession);
-        cimpl::ok_or_return_int!(session.inner.fulfill_time(id, epoch_secs));
-        0
-    })
-}
-
-/// Fulfills an OCSP request with response DER bytes.
-///
-/// # Safety
-/// `session` must be live. For nonzero `len`, `bytes` must be valid for reads
-/// of `len` bytes. A non-null `err_out` must point to writable storage.
-#[no_mangle]
-#[cfg(feature = "read")]
-pub unsafe extern "C" fn c2pa_sm_read_fulfill_ocsp(
-    session: *mut C2paSmReadSession,
-    id: u64,
-    bytes: *const u8,
-    len: usize,
-    err_out: *mut *mut c_char,
-) -> i32 {
-    ffi_call(err_out, -1, || {
-        let mut session = cimpl::deref_mut_or_return_int!(session, C2paSmReadSession);
-        let bytes = cimpl::bytes_or_return_int!(bytes, len, "bytes");
-        cimpl::ok_or_return_int!(session.inner.fulfill_ocsp(id, bytes));
-        0
-    })
-}
-
-/// Fulfills a read request with a host failure.
-///
-/// # Safety
-/// `session` must be live and `msg` a valid null-terminated C string. A
-/// non-null `err_out` must point to writable storage.
-#[no_mangle]
-#[cfg(feature = "read")]
-pub unsafe extern "C" fn c2pa_sm_read_fulfill_failed(
-    session: *mut C2paSmReadSession,
-    id: u64,
-    msg: *const c_char,
-    err_out: *mut *mut c_char,
-) -> i32 {
-    ffi_call(err_out, -1, || {
-        let mut session = cimpl::deref_mut_or_return_int!(session, C2paSmReadSession);
-        let msg = cimpl::cstr_or_return_int!(msg);
-        cimpl::ok_or_return_int!(session.inner.fulfill_failed(id, &msg));
-        0
-    })
-}
-
-/// Finishes a read session and retrieves its JSON report.
-///
-/// # Safety
-/// `session`, `out_json`, and `out_has_manifest` must be valid pointers. A
-/// non-null `err_out` must point to writable storage.
-#[no_mangle]
-#[cfg(feature = "read")]
-pub unsafe extern "C" fn c2pa_sm_read_finish(
-    session: *mut C2paSmReadSession,
-    out_json: *mut *mut c_char,
-    out_has_manifest: *mut bool,
-    err_out: *mut *mut c_char,
-) -> i32 {
-    ffi_call(err_out, -1, || {
-        let mut session = cimpl::deref_mut_or_return_int!(session, C2paSmReadSession);
-        cimpl::ptr_or_return_int!(out_json);
-        cimpl::ptr_or_return_int!(out_has_manifest);
-
-        let (json, found) = cimpl::ok_or_return_int!(session.inner.finish());
-        let json_ptr = match json {
-            Some(json) => {
-                let ptr = cimpl::to_c_string(json);
-                if ptr.is_null() {
-                    return -1;
-                }
-                ptr
-            }
-            None => ptr::null_mut(),
-        };
-        // SAFETY: both output pointers were checked above.
-        unsafe {
-            *out_json = json_ptr;
-            *out_has_manifest = found;
-        }
-        0
-    })
-}
-
-/// Frees a read session, including a partially driven or cancelled session.
-///
-/// # Safety
-/// `session` must be null or a live pointer returned by [`c2pa_sm_read_new`].
-#[no_mangle]
-#[cfg(feature = "read")]
-pub unsafe extern "C" fn c2pa_sm_read_free(session: *mut C2paSmReadSession) {
-    ffi_call_without_error_output(|| {
-        if !session.is_null() {
-            let _ = cimpl::cimpl_free(session.cast::<c_void>());
-        }
-    });
 }
 
 /// Creates a new sans-I/O build session.
@@ -308,7 +45,6 @@ pub unsafe extern "C" fn c2pa_sm_read_free(session: *mut C2paSmReadSession) {
 /// certificate buffer must be valid. A non-null `err_out` must point to
 /// writable storage.
 #[no_mangle]
-#[cfg(feature = "build")]
 pub unsafe extern "C" fn c2pa_sm_build_new(
     format: *const c_char,
     definition_json: *const c_char,
@@ -363,7 +99,6 @@ pub unsafe extern "C" fn c2pa_sm_build_new(
 /// `session`, `out_requests`, and `out_count` must be valid pointers. A
 /// non-null `err_out` must point to writable storage.
 #[no_mangle]
-#[cfg(feature = "build")]
 pub unsafe extern "C" fn c2pa_sm_build_advance(
     session: *mut C2paSmBuildSession,
     out_requests: *mut *const C2paSmBuildRequest,
@@ -392,7 +127,6 @@ pub unsafe extern "C" fn c2pa_sm_build_advance(
 /// `session` must be live. For nonzero `len`, `bytes` must be valid for reads
 /// of `len` bytes. A non-null `err_out` must point to writable storage.
 #[no_mangle]
-#[cfg(feature = "build")]
 pub unsafe extern "C" fn c2pa_sm_build_fulfill_bytes(
     session: *mut C2paSmBuildSession,
     id: u64,
@@ -413,7 +147,6 @@ pub unsafe extern "C" fn c2pa_sm_build_fulfill_bytes(
 /// # Safety
 /// `session` must be live. A non-null `err_out` must point to writable storage.
 #[no_mangle]
-#[cfg(feature = "build")]
 pub unsafe extern "C" fn c2pa_sm_build_fulfill_length(
     session: *mut C2paSmBuildSession,
     id: u64,
@@ -432,7 +165,6 @@ pub unsafe extern "C" fn c2pa_sm_build_fulfill_length(
 /// # Safety
 /// `session` must be live. A non-null `err_out` must point to writable storage.
 #[no_mangle]
-#[cfg(feature = "build")]
 pub unsafe extern "C" fn c2pa_sm_build_fulfill_written(
     session: *mut C2paSmBuildSession,
     id: u64,
@@ -451,7 +183,6 @@ pub unsafe extern "C" fn c2pa_sm_build_fulfill_written(
 /// `session` must be live. For nonzero `sig_len`, `sig` must be valid for reads
 /// of `sig_len` bytes. A non-null `err_out` must point to writable storage.
 #[no_mangle]
-#[cfg(feature = "build")]
 pub unsafe extern "C" fn c2pa_sm_build_fulfill_signature(
     session: *mut C2paSmBuildSession,
     id: u64,
@@ -473,7 +204,6 @@ pub unsafe extern "C" fn c2pa_sm_build_fulfill_signature(
 /// `session` must be live. For nonzero `resp_len`, `resp` must be valid for
 /// reads of `resp_len` bytes. A non-null `err_out` must point to writable storage.
 #[no_mangle]
-#[cfg(feature = "build")]
 pub unsafe extern "C" fn c2pa_sm_build_fulfill_timestamp(
     session: *mut C2paSmBuildSession,
     id: u64,
@@ -495,7 +225,6 @@ pub unsafe extern "C" fn c2pa_sm_build_fulfill_timestamp(
 /// `session` must be live and `msg` a valid null-terminated C string. A
 /// non-null `err_out` must point to writable storage.
 #[no_mangle]
-#[cfg(feature = "build")]
 pub unsafe extern "C" fn c2pa_sm_build_fulfill_failed(
     session: *mut C2paSmBuildSession,
     id: u64,
@@ -516,7 +245,6 @@ pub unsafe extern "C" fn c2pa_sm_build_fulfill_failed(
 /// All output pointers and `session` must be valid. A non-null `err_out` must
 /// point to writable storage.
 #[no_mangle]
-#[cfg(feature = "build")]
 pub unsafe extern "C" fn c2pa_sm_build_finish(
     session: *mut C2paSmBuildSession,
     out_manifest_ptr: *mut *mut u8,
@@ -565,7 +293,6 @@ pub unsafe extern "C" fn c2pa_sm_build_finish(
 /// `exclusions` must be a live list returned by [`c2pa_sm_build_finish`]. A
 /// non-null `err_out` must point to writable storage.
 #[no_mangle]
-#[cfg(feature = "build")]
 pub unsafe extern "C" fn c2pa_sm_exclusions_data(
     exclusions: *mut C2paSmExclusionList,
     err_out: *mut *mut c_char,
@@ -581,24 +308,10 @@ pub unsafe extern "C" fn c2pa_sm_exclusions_data(
 /// # Safety
 /// `session` must be null or a live pointer returned by [`c2pa_sm_build_new`].
 #[no_mangle]
-#[cfg(feature = "build")]
 pub unsafe extern "C" fn c2pa_sm_build_free(session: *mut C2paSmBuildSession) {
     ffi_call_without_error_output(|| {
         if !session.is_null() {
             let _ = cimpl::cimpl_free(session.cast::<c_void>());
-        }
-    });
-}
-
-/// Frees a string allocated by this library.
-///
-/// # Safety
-/// `string` must be null or an allocation returned by this library.
-#[no_mangle]
-pub unsafe extern "C" fn c2pa_sm_string_free(string: *mut c_char) {
-    ffi_call_without_error_output(|| {
-        if !string.is_null() {
-            let _ = cimpl::cimpl_free(string.cast::<c_void>());
         }
     });
 }
@@ -610,7 +323,6 @@ pub unsafe extern "C" fn c2pa_sm_string_free(string: *mut c_char) {
 /// # Safety
 /// `bytes` must be null or an allocation returned by this library.
 #[no_mangle]
-#[cfg(feature = "build")]
 pub unsafe extern "C" fn c2pa_sm_bytes_free(bytes: *mut u8, _len: usize) {
     ffi_call_without_error_output(|| {
         if !bytes.is_null() {
@@ -624,7 +336,6 @@ pub unsafe extern "C" fn c2pa_sm_bytes_free(bytes: *mut u8, _len: usize) {
 /// # Safety
 /// `exclusions` must be null or a live handle returned by this library.
 #[no_mangle]
-#[cfg(feature = "build")]
 pub unsafe extern "C" fn c2pa_sm_exclusions_free(exclusions: *mut C2paSmExclusionList) {
     ffi_call_without_error_output(|| {
         if !exclusions.is_null() {

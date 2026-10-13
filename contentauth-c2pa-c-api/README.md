@@ -30,6 +30,13 @@ cargo build -p contentauth-c2pa-c-api --no-default-features --features build
 
 ## Architecture
 
+`src/ffi/mod.rs` owns shared error/panic handling and string cleanup.
+Its `read` and `build` modules are gated at the module boundary, while
+their exports remain available at the crate root. Integration tests are
+split the same way: read-only, build-only, shared cleanup, and a round trip
+requiring both features. The build and round-trip tests reuse one host
+driver from `tests/common`.
+
 This crate exposes the synchronous sans-I/O state machines
 (`FileReadSession` and `FileBuilderSession`) over an FFI boundary using
 opaque pointers, non-owning request arrays, and plain integer request IDs.
