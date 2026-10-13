@@ -14,6 +14,8 @@ flowchart LR
         d3["Formats: JPEG, TIFF/BigTIFF/DNG, registry"]
         d4["Bindings: rs / wasm / node, read and sign"]
         d5["Differential tests vs c2pa-rs"]
+        d6["JS migration M0: pinned contract<br/>and legacy Chromium oracle"]
+        d7["JS migration M1: real inline Wasm<br/>JPEG read/sign, three browsers"]
     end
     subgraph next["Next"]
         direction TB
@@ -70,14 +72,18 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 
 ## 4. Bindings and hosts
 
+See the [JS migration implementation and proof plan](../js-migration-plan.md)
+for the staged browser/Node parity work and compatibility-shim rollout.
+
 * **`Builder` surface parity** for the c2pa-rs shape beyond the baseline
   case; `from_stream` and other constructors.
 * **c2pa-node:** `fromManifestDataAndAsset`, `resourceToAsset`, signers,
   CAWG identity assertions (the X.509 type is done on the core read and
   write paths; this is the bindings), Trustmark.
-* **Browser:** a `fetch`-backed OCSP `Platform`; actually *running* the
-  `web` modules (there's no browser in CI today); a Worker-hosted session
-  for hashing off the main thread.
+* **Browser:** a `fetch`-backed OCSP `Platform`; a Worker-hosted session for
+  hashing off the main thread; full reporting/settings/resources and published
+  packaging. M1 now runs the real read/sign adapters inline in three browsers;
+  five upstream cases pass, with 244 declarations still unported.
 * **Other host languages** — Python, Swift, Kotlin, .NET: the Node binding
   shows the minimal shape (a handful of synchronous functions plus a host
   loop). Each is a good test of whether the flattened `PendingRequest`/

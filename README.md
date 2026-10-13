@@ -21,6 +21,11 @@ experiment grows.
 
 ## Walkthrough
 
+For the browser migration experiment, see
+[`c2pa-js-state-machine`](c2pa-js-state-machine/README.md): an inline JPEG
+read/sign prototype with real Wasm, a pinned c2pa-js oracle, and proofs in
+Chromium, Firefox, and WebKit. It is not yet a full replacement SDK.
+
 New here? [`docs/walkthrough`](docs/walkthrough/README.md) is a guided tour —
 how this differs from c2pa-rs and its bindings, the architecture, and
 where it could go next — written in Markdown with Mermaid diagrams.

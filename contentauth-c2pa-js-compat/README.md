@@ -70,6 +70,8 @@ The pieces, bottom up:
 * **`Reader`** — `WasmReader`, method for method. `Error` reproduces
   c2pa-wasm's error-string contract (`format!("{err:?}")`) down to the
   `C2pa(JumbfNotFound)` string c2pa-web's `reader.ts` turns into `null`.
+  Missing/unsupported active claim hash algorithms reject with
+  `C2pa(UnknownAlgorithm)`, matching legacy rather than the core's default.
   `context_json` is c2pa-rs settings JSON; the slice recognized is
   documented on `Context::from_json` (trust anchors as PEM, and
   `ocsp_fetch`, which takes c2pa-rs's off-by-default when absent rather
@@ -79,8 +81,7 @@ The pieces, bottom up:
   `Blob` for `web_sys::Blob`, `WebPlatform`, and a
   `#[wasm_bindgen]`-exported `WasmReader` whose JavaScript surface
   (`fromBlob`, `activeLabel`, `manifestStore`, `activeManifest`, `json`)
-  is c2pa-wasm's own. This is the one module in the workspace that names
-  a wasm-bindgen type; its dependencies are declared for that target
+  is c2pa-wasm's own. Its dependencies are declared for that target
   alone, so the feature is a no-op everywhere else and nothing below this
   crate changes.
 
@@ -129,10 +130,12 @@ produce, including the exact `C2pa(JumbfNotFound)` string.
   whose `ocsp` posts through `fetch`. `WebPlatform` declines OCSP today
   (fail-open, and off by default here as in c2pa-rs); a host that wants
   it implements `Platform` itself and opts in with `"ocsp_fetch": true`.
-* **Running the `web` module** — there is no browser in CI. It is held
-  to `cargo check --all-features --target wasm32-unknown-unknown`, which
-  CI runs, and to the shape of the code it delegates to, all of which is
-  tested natively.
+
+The [M1 browser prototype](../c2pa-js-state-machine) now executes this adapter
+through the combined [browser packaging crate](../contentauth-c2pa-web-bindings)
+in Chromium, Firefox, and WebKit. Its five unchanged upstream cases and
+read/sign proofs supplement the native suites and portable target checks;
+they do not establish full c2pa-web reporting or Worker parity.
 
 ## Building
 

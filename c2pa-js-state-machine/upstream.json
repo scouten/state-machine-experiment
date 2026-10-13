@@ -1,0 +1,16 @@
+{
+  "repository": "contentauth/c2pa-js",
+  "commit": "3c642db3e566f20ede9442090d1d414f424bcea1",
+  "archiveSha256": "d85100dd5a9bd9caff51e994c6aafadd49feb36ee26c8711a1fb1932ad2c7567",
+  "legacyPackage": "@contentauth/c2pa-web",
+  "legacyVersion": "0.15.3",
+  "legacyIntegrity": "sha512-dpNW5CSWyN4kPkB3vb+7IWc0qfF87brxMDCZcIJqa110GjNE+xBWm3AhgXgegniYmArOS7cnkhTmG1ZP09mYOg==",
+  "packages": ["c2pa-web", "c2pa-node", "c2pa-types", "c2pa-utilities"],
+  "oracleTests": [
+    "should return null when reading an asset with no C2PA data",
+    "should throw AssetTooLargeError when the blob exceeds the max size",
+    "should report c2pa-rs errors correctly",
+    "should be freeable",
+    "does not expose its internal worker/id via enumeration or serialization"
+  ]
+}

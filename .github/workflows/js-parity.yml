@@ -1,0 +1,55 @@
+name: JS migration oracle
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  js-oracle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: c2pa-js-state-machine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: c2pa-js-state-machine/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - run: npm ci --ignore-scripts
+      - run: npm run prepare:upstream
+      - run: npm run inventory:check
+      - name: Build browser bindings with the matching CLI
+        run: |
+          cargo generate-lockfile --manifest-path ../Cargo.toml
+          version="$(node -e 'const fs=require("node:fs"); const lock=fs.readFileSync("../Cargo.lock","utf8"); const match=lock.match(/name = "wasm-bindgen"\nversion = "([^"]+)"/); if (!match) process.exit(1); process.stdout.write(match[1]);')"
+          cargo install wasm-bindgen-cli --version "$version" --locked --root .cache/tools
+          npm run build:wasm
+      - run: npx --no-install playwright install --with-deps chromium firefox webkit
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_GC: '1'
+      - run: npm run typecheck && npm test
+      - run: npm run test:oracle
+      - run: npm run test:m1
+      - if: always()
+        run: npm run report:parity
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: js-migration-oracle
+          path: c2pa-js-state-machine/results/

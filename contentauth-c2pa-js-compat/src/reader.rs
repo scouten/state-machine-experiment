@@ -83,6 +83,9 @@ impl Reader {
     /// with [`C2paError::UnsupportedType`] for a `format` no handler in
     /// this build recognizes, and [`C2paError::BadParam`] for
     /// `context_json` that cannot be understood.
+    /// A missing or unsupported active claim hash algorithm is
+    /// [`C2paError::UnknownAlgorithm`], matching c2pa-js rather than the
+    /// underlying engine's SHA-256 default.
     ///
     /// The returned future suspends whenever `blob` or `platform` does —
     /// see [`crate::read_manifest`] for exactly when that is.
@@ -123,6 +126,24 @@ impl Reader {
 
         if !report.manifest_store_found {
             return Err(C2paError::JumbfNotFound.into());
+        }
+
+        if let Some(active) = report
+            .manifests
+            .iter()
+            .find(|manifest| Some(&manifest.label) == report.active_manifest.as_ref())
+        {
+            // c2pa-js requires an explicit claim algorithm; the core engine
+            // instead supports the specification's SHA-256 default.
+            if active
+                .claim
+                .alg
+                .as_deref()
+                .and_then(contentauth_c2pa_reader::HashAlgorithm::from_c2pa_name)
+                .is_none()
+            {
+                return Err(C2paError::UnknownAlgorithm.into());
+            }
         }
 
         Ok(Self { report })

@@ -6,7 +6,8 @@ and the reader, builder and format handlers know nothing about each other.**
 
 ## Dependency graph
 
-Arrows point from a crate to what it depends on (workspace crates only).
+Arrows point from a crate to what it depends on. The dashed edge is standalone
+JS test tooling, not a Rust workspace dependency.
 
 ```mermaid
 flowchart BT
@@ -32,6 +33,9 @@ flowchart BT
     RSS["rs-compat-sign"]
     JSS["js-compat-sign"]
     NDS["node-compat-sign"]
+    WEB["c2pa-web-bindings<br/><i>combined browser cdylib</i>"]
+    JSP["c2pa-js-state-machine<br/><i>M1 inline prototype + proof</i>"]
+    ORC["pinned c2pa-js<br/><i>legacy test oracle</i>"]
 
     RD --> SM & PR
     BD --> SM & PR
@@ -48,6 +52,9 @@ flowchart BT
     RSS --> SB & FB & JP
     JSS --> SB & FB & JSC
     NDS --> SB & FB & JSC
+    WEB --> JSC & JSS
+    JSP --> WEB
+    JSP -.-> ORC
 
     classDef engine fill:#dbeafe,stroke:#2563eb,color:#000
     classDef core fill:#dcfce7,stroke:#16a34a,color:#000
@@ -58,7 +65,7 @@ flowchart BT
     class RD,BD core
     class FM,JP,TF,RG fmt
     class FR,FB glue
-    class RSC,JSC,NDC,SB,RSS,JSS,NDS bind
+    class RSC,JSC,NDC,SB,RSS,JSS,NDS,WEB bind
 ```
 
 (Edges to `primitives` and `state-machine` from most crates are omitted
@@ -111,7 +118,9 @@ flowchart TB
 | `…-node-compat` (+ `c2pa-node-compat-addon`) | Binding | Purely synchronous `NodeSession`; Node owns all async. Addon is a separate Neon workspace. |
 | `…-sign-baseline` | Binding | The baseline signing case (JSON definition → `BuilderSettings`) every write binding is held to. |
 | `…-rs/js/node-compat-sign` (+ `c2pa-node-sign-addon`) | Binding | The baseline case through each binding. `rs-compat-sign` is the other crate with a network dependency (`reqwest` for RFC 3161 timestamps). |
+| `…-web-bindings` | Binding | Combined browser `cdylib` delegating to the existing JS read/sign adapters; target-only browser dependencies. |
 | `c2pa-rs-compat-conformance` | Test | Separate workspace; differential tests against the real `c2pa` crate. |
+| `c2pa-js-state-machine` (JS package) | Binding / Test | Source-only inline read/sign facade, pinned legacy oracle, and real Chromium/Firefox/WebKit proof; full SDK parity remains future work. |
 
 ## Rules of the road
 

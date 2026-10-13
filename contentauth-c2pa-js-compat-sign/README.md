@@ -25,8 +25,10 @@ host answer.
 With the `web` feature (compiled only for `wasm32-unknown-unknown`)
 `src/web.rs` exports `WasmBuilder` — `fromJson(json)` and
 `await sign({ alg, certs, sign }, format, blob)` →
-`{ asset, manifest }` — over a JavaScript signer object. **Not run in a
-browser** (there isn't one here): it is held to
+`{ asset, manifest }` — over a JavaScript signer object. The
+[M1 prototype](../c2pa-js-state-machine) now runs it in Chromium, Firefox, and
+WebKit through [the combined cdylib](../contentauth-c2pa-web-bindings), proving
+WebCrypto signing, trusted read-back, interleaving, and failures. It is also held to
 `cargo check --all-features --target wasm32-unknown-unknown`, like
 `contentauth-c2pa-js-compat`'s `web` module.
 
