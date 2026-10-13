@@ -16,12 +16,12 @@
 use std::{collections::HashMap, ffi::CString};
 
 use contentauth_c2pa_file_reader::{FileReadReply, FileReadRequest, FileReadSession, ReadReport};
-use contentauth_c2pa_format_registry::{AnyFormat, Registry};
+use contentauth_c2pa_format_registry::AnyFormat;
 use contentauth_c2pa_js_compat::{Context, ManifestStore};
 use contentauth_c2pa_primitives::HostError;
 use contentauth_state_machine::{RequestId, Session};
 
-use crate::error::Error;
+use crate::{error::Error, format::resolve_format, C2PA_SM_STEP_COMPLETE, C2PA_SM_STEP_PENDING};
 
 /// Request to read bytes from asset.
 pub const C2PA_SM_READ_REQ_READ: u32 = 0;
@@ -31,13 +31,6 @@ pub const C2PA_SM_READ_REQ_LENGTH: u32 = 1;
 pub const C2PA_SM_READ_REQ_CURRENT_DATE_TIME: u32 = 2;
 /// Request to perform an OCSP POST and return response DER.
 pub const C2PA_SM_READ_REQ_OCSP: u32 = 3;
-
-/// Session is parked waiting for requests to be fulfilled.
-pub const C2PA_SM_STEP_PENDING: i32 = 0;
-/// Session has completed successfully.
-pub const C2PA_SM_STEP_COMPLETE: i32 = 1;
-/// An error occurred during advance.
-pub const C2PA_SM_STEP_ERROR: i32 = -1;
 
 /// C representation of a read request.
 #[repr(C)]
@@ -264,18 +257,4 @@ fn describe_request(handle: u64, req: &FileReadRequest) -> Result<PendingRequest
             "unsupported read request variant".to_string(),
         )),
     }
-}
-
-pub(crate) fn resolve_format(format_str: &str) -> Result<AnyFormat, Error> {
-    let registry = Registry::standard();
-    let lower = format_str.to_ascii_lowercase();
-    let normalized = match lower.as_str() {
-        "image/jpg" => "image/jpeg",
-        other => other,
-    };
-    registry
-        .by_mime(normalized)
-        .or_else(|| registry.by_extension(normalized))
-        .cloned()
-        .ok_or_else(|| Error::Format(format!("unsupported format: {format_str}")))
 }

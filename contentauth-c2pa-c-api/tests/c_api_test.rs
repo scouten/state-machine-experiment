@@ -17,27 +17,51 @@
 
 #![allow(clippy::unwrap_used)]
 
-use std::{
-    ffi::{CStr, CString},
-    ptr, slice,
-};
+use std::{ffi::CStr, ptr};
+#[cfg(any(feature = "read", feature = "build"))]
+use std::{ffi::CString, slice};
 
+use contentauth_c2pa_c_api::c2pa_sm_string_free;
+#[cfg(feature = "build")]
 use contentauth_c2pa_c_api::{
     c2pa_sm_build_advance, c2pa_sm_build_finish, c2pa_sm_build_free, c2pa_sm_build_fulfill_bytes,
     c2pa_sm_build_fulfill_length, c2pa_sm_build_fulfill_signature, c2pa_sm_build_fulfill_written,
     c2pa_sm_build_new, c2pa_sm_bytes_free, c2pa_sm_exclusions_data, c2pa_sm_exclusions_free,
-    c2pa_sm_read_advance, c2pa_sm_read_finish, c2pa_sm_read_free, c2pa_sm_read_fulfill_bytes,
-    c2pa_sm_read_fulfill_length, c2pa_sm_read_fulfill_time, c2pa_sm_read_new, c2pa_sm_string_free,
-    C2paSmBuildRequest, C2paSmExclusionList, C2paSmReadRequest, C2PA_SM_BUILD_REQ_LENGTH,
-    C2PA_SM_BUILD_REQ_READ, C2PA_SM_BUILD_REQ_SIGN, C2PA_SM_BUILD_REQ_WRITE,
-    C2PA_SM_READ_REQ_CURRENT_DATE_TIME, C2PA_SM_READ_REQ_LENGTH, C2PA_SM_READ_REQ_OCSP,
-    C2PA_SM_READ_REQ_READ, C2PA_SM_STEP_COMPLETE, C2PA_SM_STEP_PENDING, C2PA_SM_STREAM_OUTPUT,
-    C2PA_SM_STREAM_SOURCE,
+    C2paSmBuildRequest, C2paSmExclusionList, C2PA_SM_BUILD_REQ_LENGTH, C2PA_SM_BUILD_REQ_READ,
+    C2PA_SM_BUILD_REQ_SIGN, C2PA_SM_BUILD_REQ_WRITE, C2PA_SM_STREAM_OUTPUT, C2PA_SM_STREAM_SOURCE,
 };
-use contentauth_c2pa_sign_baseline::{fixtures::*, BASELINE_DEFINITION};
+#[cfg(feature = "read")]
+use contentauth_c2pa_c_api::{
+    c2pa_sm_read_advance, c2pa_sm_read_finish, c2pa_sm_read_free, c2pa_sm_read_fulfill_bytes,
+    c2pa_sm_read_fulfill_length, c2pa_sm_read_fulfill_time, c2pa_sm_read_new, C2paSmReadRequest,
+    C2PA_SM_READ_REQ_CURRENT_DATE_TIME, C2PA_SM_READ_REQ_LENGTH, C2PA_SM_READ_REQ_OCSP,
+    C2PA_SM_READ_REQ_READ,
+};
+#[cfg(any(feature = "read", feature = "build"))]
+use contentauth_c2pa_c_api::{C2PA_SM_STEP_COMPLETE, C2PA_SM_STEP_PENDING};
+#[cfg(any(feature = "read", feature = "build"))]
+use contentauth_c2pa_sign_baseline::fixtures::*;
+#[cfg(feature = "build")]
+use contentauth_c2pa_sign_baseline::BASELINE_DEFINITION;
 
+#[cfg(feature = "read")]
 const FIXED_NOW: i64 = 1_800_000_000;
 
+#[test]
+fn test_shared_string_cleanup() {
+    let string = cimpl::to_c_string("shared allocation".to_owned());
+    assert!(!string.is_null());
+    assert_eq!(
+        unsafe { CStr::from_ptr(string) }.to_bytes(),
+        b"shared allocation"
+    );
+    unsafe {
+        c2pa_sm_string_free(string);
+        c2pa_sm_string_free(ptr::null_mut());
+    }
+}
+
+#[cfg(feature = "read")]
 #[test]
 fn test_cimpl_error_is_returned_as_tracked_string() {
     let mut err_out: *mut std::ffi::c_char = ptr::null_mut();
@@ -51,6 +75,7 @@ fn test_cimpl_error_is_returned_as_tracked_string() {
     unsafe { c2pa_sm_string_free(err_out) };
 }
 
+#[cfg(feature = "read")]
 #[test]
 fn test_c_api_read_existing_manifest() {
     let format = CString::new("image/jpeg").unwrap();
@@ -137,8 +162,9 @@ fn test_c_api_read_existing_manifest() {
     }
 }
 
+#[cfg(feature = "build")]
 #[test]
-fn test_c_api_build_and_read_roundtrip() {
+fn test_c_api_build_manifest() {
     let signer = c2pa_raw_crypto::signer_from_private_key(
         TEST_SIGNER_KEY_PEM,
         c2pa_raw_crypto::SigningAlg::Es256,
@@ -294,7 +320,14 @@ fn test_c_api_build_and_read_roundtrip() {
         c2pa_sm_build_free(build_session);
     }
 
-    // Now read back the signed output bytes!
+    #[cfg(feature = "read")]
+    read_signed_output(&output_bytes);
+}
+
+#[cfg(all(feature = "read", feature = "build"))]
+fn read_signed_output(output_bytes: &[u8]) {
+    let format = CString::new("image/jpeg").unwrap();
+    let mut err_out = ptr::null_mut();
     let trust_settings = serde_json::json!({
         "trust_anchors": [TEST_SIGNER_CERT]
     });

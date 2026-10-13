@@ -49,7 +49,7 @@ flowchart BT
     RSS --> SB & FB & JP
     JSS --> SB & FB & JSC
     NDS --> SB & FB & JSC
-    CAPI --> FR & FB & RG
+    CAPI --> FR & FB & RG & JSC & SB
 
     classDef engine fill:#dbeafe,stroke:#2563eb,color:#000
     classDef core fill:#dcfce7,stroke:#16a34a,color:#000
@@ -65,6 +65,9 @@ flowchart BT
 
 (Edges to `primitives` and `state-machine` from most crates are omitted
 where they would only add noise; every session crate depends on both.)
+The C API's `read` feature enables its file-reader and JS-compat edges;
+`build` enables its file-builder and sign-baseline edges. Both are on by
+default, but a downstream client can select either workflow independently.
 
 ## Layers
 
@@ -113,7 +116,7 @@ flowchart TB
 | `…-node-compat` (+ `c2pa-node-compat-addon`) | Binding | Purely synchronous `NodeSession`; Node owns all async. Addon is a separate Neon workspace. |
 | `…-sign-baseline` | Binding | The baseline signing case (JSON definition → `BuilderSettings`) every write binding is held to. |
 | `…-rs/js/node-compat-sign` (+ `c2pa-node-sign-addon`) | Binding | The baseline case through each binding. `rs-compat-sign` is the other crate with a network dependency (`reqwest` for RFC 3161 timestamps). |
-| `…-c-api` | Binding | Thread-free, callback-free C ABI (`c2pa_sm_*`) wrapping read and build sessions; cimpl-tracked handles and cbindgen-generated header. |
+| `…-c-api` | Binding | Thread-free, callback-free C ABI (`c2pa_sm_*`); independently selectable `read`/`build` features, cimpl-tracked handles and a conditional cbindgen-generated header. |
 | `c2pa-rs-compat-conformance` | Test | Separate workspace; differential tests against the real `c2pa` crate. |
 
 ## Rules of the road

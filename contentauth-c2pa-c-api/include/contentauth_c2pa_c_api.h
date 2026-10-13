@@ -7,61 +7,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#ifndef C2PA_SM_NO_DEFAULT_FEATURES
+#define C2PA_SM_FEATURE_READ
+#define C2PA_SM_FEATURE_BUILD
+#endif
 
-/**
- * Input source stream identifier.
- */
-#define C2PA_SM_STREAM_SOURCE 0
-
-/**
- * Output destination stream identifier.
- */
-#define C2PA_SM_STREAM_OUTPUT 1
-
-/**
- * Request to read bytes from source or output.
- */
-#define C2PA_SM_BUILD_REQ_READ 0
-
-/**
- * Request for length of source stream.
- */
-#define C2PA_SM_BUILD_REQ_LENGTH 1
-
-/**
- * Request to write bytes to output stream.
- */
-#define C2PA_SM_BUILD_REQ_WRITE 2
-
-/**
- * Request for host cryptographic signature over digest.
- */
-#define C2PA_SM_BUILD_REQ_SIGN 3
-
-/**
- * Request for RFC 3161 TSA timestamp over token request.
- */
-#define C2PA_SM_BUILD_REQ_TIMESTAMP 4
-
-/**
- * Request to read bytes from asset.
- */
-#define C2PA_SM_READ_REQ_READ 0
-
-/**
- * Request for asset total length.
- */
-#define C2PA_SM_READ_REQ_LENGTH 1
-
-/**
- * Request for current UTC time in epoch seconds.
- */
-#define C2PA_SM_READ_REQ_CURRENT_DATE_TIME 2
-
-/**
- * Request to perform an OCSP POST and return response DER.
- */
-#define C2PA_SM_READ_REQ_OCSP 3
 
 /**
  * Session is parked waiting for requests to be fulfilled.
@@ -78,11 +28,91 @@
  */
 #define C2PA_SM_STEP_ERROR -1
 
+#if defined(C2PA_SM_FEATURE_BUILD)
+/**
+ * Input source stream identifier.
+ */
+#define C2PA_SM_STREAM_SOURCE 0
+#endif
+
+#if defined(C2PA_SM_FEATURE_BUILD)
+/**
+ * Output destination stream identifier.
+ */
+#define C2PA_SM_STREAM_OUTPUT 1
+#endif
+
+#if defined(C2PA_SM_FEATURE_BUILD)
+/**
+ * Request to read bytes from source or output.
+ */
+#define C2PA_SM_BUILD_REQ_READ 0
+#endif
+
+#if defined(C2PA_SM_FEATURE_BUILD)
+/**
+ * Request for length of source stream.
+ */
+#define C2PA_SM_BUILD_REQ_LENGTH 1
+#endif
+
+#if defined(C2PA_SM_FEATURE_BUILD)
+/**
+ * Request to write bytes to output stream.
+ */
+#define C2PA_SM_BUILD_REQ_WRITE 2
+#endif
+
+#if defined(C2PA_SM_FEATURE_BUILD)
+/**
+ * Request for host cryptographic signature over digest.
+ */
+#define C2PA_SM_BUILD_REQ_SIGN 3
+#endif
+
+#if defined(C2PA_SM_FEATURE_BUILD)
+/**
+ * Request for RFC 3161 TSA timestamp over token request.
+ */
+#define C2PA_SM_BUILD_REQ_TIMESTAMP 4
+#endif
+
+#if defined(C2PA_SM_FEATURE_READ)
+/**
+ * Request to read bytes from asset.
+ */
+#define C2PA_SM_READ_REQ_READ 0
+#endif
+
+#if defined(C2PA_SM_FEATURE_READ)
+/**
+ * Request for asset total length.
+ */
+#define C2PA_SM_READ_REQ_LENGTH 1
+#endif
+
+#if defined(C2PA_SM_FEATURE_READ)
+/**
+ * Request for current UTC time in epoch seconds.
+ */
+#define C2PA_SM_READ_REQ_CURRENT_DATE_TIME 2
+#endif
+
+#if defined(C2PA_SM_FEATURE_READ)
+/**
+ * Request to perform an OCSP POST and return response DER.
+ */
+#define C2PA_SM_READ_REQ_OCSP 3
+#endif
+
+#if defined(C2PA_SM_FEATURE_BUILD)
 /**
  * Opaque build-session handle exposed to C.
  */
 typedef struct C2paSmBuildSession C2paSmBuildSession;
+#endif
 
+#if defined(C2PA_SM_FEATURE_BUILD)
 /**
  * Opaque owner for a finished build's exclusion ranges.
  *
@@ -90,12 +120,16 @@ typedef struct C2paSmBuildSession C2paSmBuildSession;
  * release this owner with [`c2pa_sm_exclusions_free`].
  */
 typedef struct C2paSmExclusionList C2paSmExclusionList;
+#endif
 
+#if defined(C2PA_SM_FEATURE_READ)
 /**
  * Opaque read-session handle exposed to C.
  */
 typedef struct C2paSmReadSession C2paSmReadSession;
+#endif
 
+#if defined(C2PA_SM_FEATURE_READ)
 /**
  * C representation of a read request.
  */
@@ -129,7 +163,9 @@ typedef struct C2paSmReadRequest {
    */
   uintptr_t request_der_len;
 } C2paSmReadRequest;
+#endif
 
+#if defined(C2PA_SM_FEATURE_BUILD)
 /**
  * C representation of a build request.
  */
@@ -171,7 +207,9 @@ typedef struct C2paSmBuildRequest {
    */
   const char *url;
 } C2paSmBuildRequest;
+#endif
 
+#if defined(C2PA_SM_FEATURE_BUILD)
 /**
  * C exclusion structure.
  */
@@ -185,11 +223,13 @@ typedef struct C2paSmExclusion {
    */
   uint64_t len;
 } C2paSmExclusion;
+#endif
 
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
 
+#if defined(C2PA_SM_FEATURE_READ)
 /**
  * Creates a new sans-I/O read session.
  *
@@ -200,7 +240,9 @@ extern "C" {
 struct C2paSmReadSession *c2pa_sm_read_new(const char *format,
                                            const char *settings_json,
                                            char **err_out);
+#endif
 
+#if defined(C2PA_SM_FEATURE_READ)
 /**
  * Advances the read session.
  *
@@ -212,7 +254,9 @@ int32_t c2pa_sm_read_advance(struct C2paSmReadSession *session,
                              const struct C2paSmReadRequest **out_requests,
                              uintptr_t *out_count,
                              char **err_out);
+#endif
 
+#if defined(C2PA_SM_FEATURE_READ)
 /**
  * Fulfills a read request with bytes.
  *
@@ -225,7 +269,9 @@ int32_t c2pa_sm_read_fulfill_bytes(struct C2paSmReadSession *session,
                                    const uint8_t *bytes,
                                    uintptr_t len,
                                    char **err_out);
+#endif
 
+#if defined(C2PA_SM_FEATURE_READ)
 /**
  * Fulfills a length request.
  *
@@ -236,7 +282,9 @@ int32_t c2pa_sm_read_fulfill_length(struct C2paSmReadSession *session,
                                     uint64_t id,
                                     uint64_t length,
                                     char **err_out);
+#endif
 
+#if defined(C2PA_SM_FEATURE_READ)
 /**
  * Fulfills a current-time request with UTC epoch seconds.
  *
@@ -247,7 +295,9 @@ int32_t c2pa_sm_read_fulfill_time(struct C2paSmReadSession *session,
                                   uint64_t id,
                                   int64_t epoch_secs,
                                   char **err_out);
+#endif
 
+#if defined(C2PA_SM_FEATURE_READ)
 /**
  * Fulfills an OCSP request with response DER bytes.
  *
@@ -260,7 +310,9 @@ int32_t c2pa_sm_read_fulfill_ocsp(struct C2paSmReadSession *session,
                                   const uint8_t *bytes,
                                   uintptr_t len,
                                   char **err_out);
+#endif
 
+#if defined(C2PA_SM_FEATURE_READ)
 /**
  * Fulfills a read request with a host failure.
  *
@@ -272,7 +324,9 @@ int32_t c2pa_sm_read_fulfill_failed(struct C2paSmReadSession *session,
                                     uint64_t id,
                                     const char *msg,
                                     char **err_out);
+#endif
 
+#if defined(C2PA_SM_FEATURE_READ)
 /**
  * Finishes a read session and retrieves its JSON report.
  *
@@ -284,7 +338,9 @@ int32_t c2pa_sm_read_finish(struct C2paSmReadSession *session,
                             char **out_json,
                             bool *out_has_manifest,
                             char **err_out);
+#endif
 
+#if defined(C2PA_SM_FEATURE_READ)
 /**
  * Frees a read session, including a partially driven or cancelled session.
  *
@@ -292,7 +348,9 @@ int32_t c2pa_sm_read_finish(struct C2paSmReadSession *session,
  * `session` must be null or a live pointer returned by [`c2pa_sm_read_new`].
  */
 void c2pa_sm_read_free(struct C2paSmReadSession *session);
+#endif
 
+#if defined(C2PA_SM_FEATURE_BUILD)
 /**
  * Creates a new sans-I/O build session.
  *
@@ -309,7 +367,9 @@ struct C2paSmBuildSession *c2pa_sm_build_new(const char *format,
                                              const uintptr_t *cert_lens,
                                              uintptr_t cert_count,
                                              char **err_out);
+#endif
 
+#if defined(C2PA_SM_FEATURE_BUILD)
 /**
  * Advances the build session.
  *
@@ -321,7 +381,9 @@ int32_t c2pa_sm_build_advance(struct C2paSmBuildSession *session,
                               const struct C2paSmBuildRequest **out_requests,
                               uintptr_t *out_count,
                               char **err_out);
+#endif
 
+#if defined(C2PA_SM_FEATURE_BUILD)
 /**
  * Fulfills a build read request with bytes.
  *
@@ -334,7 +396,9 @@ int32_t c2pa_sm_build_fulfill_bytes(struct C2paSmBuildSession *session,
                                     const uint8_t *bytes,
                                     uintptr_t len,
                                     char **err_out);
+#endif
 
+#if defined(C2PA_SM_FEATURE_BUILD)
 /**
  * Fulfills a build length request.
  *
@@ -345,7 +409,9 @@ int32_t c2pa_sm_build_fulfill_length(struct C2paSmBuildSession *session,
                                      uint64_t id,
                                      uint64_t length,
                                      char **err_out);
+#endif
 
+#if defined(C2PA_SM_FEATURE_BUILD)
 /**
  * Fulfills a build write request once the host has written the requested bytes.
  *
@@ -355,7 +421,9 @@ int32_t c2pa_sm_build_fulfill_length(struct C2paSmBuildSession *session,
 int32_t c2pa_sm_build_fulfill_written(struct C2paSmBuildSession *session,
                                       uint64_t id,
                                       char **err_out);
+#endif
 
+#if defined(C2PA_SM_FEATURE_BUILD)
 /**
  * Fulfills a signing request with signature bytes.
  *
@@ -368,7 +436,9 @@ int32_t c2pa_sm_build_fulfill_signature(struct C2paSmBuildSession *session,
                                         const uint8_t *sig,
                                         uintptr_t sig_len,
                                         char **err_out);
+#endif
 
+#if defined(C2PA_SM_FEATURE_BUILD)
 /**
  * Fulfills a timestamp request with DER `TimeStampResp` bytes.
  *
@@ -381,7 +451,9 @@ int32_t c2pa_sm_build_fulfill_timestamp(struct C2paSmBuildSession *session,
                                         const uint8_t *resp,
                                         uintptr_t resp_len,
                                         char **err_out);
+#endif
 
+#if defined(C2PA_SM_FEATURE_BUILD)
 /**
  * Fulfills a build request with a host failure.
  *
@@ -393,7 +465,9 @@ int32_t c2pa_sm_build_fulfill_failed(struct C2paSmBuildSession *session,
                                      uint64_t id,
                                      const char *msg,
                                      char **err_out);
+#endif
 
+#if defined(C2PA_SM_FEATURE_BUILD)
 /**
  * Finishes the build and returns tracked manifest bytes and an exclusion-list handle.
  *
@@ -407,7 +481,9 @@ int32_t c2pa_sm_build_finish(struct C2paSmBuildSession *session,
                              struct C2paSmExclusionList **out_exclusions_ptr,
                              uintptr_t *out_exclusions_count,
                              char **err_out);
+#endif
 
+#if defined(C2PA_SM_FEATURE_BUILD)
 /**
  * Returns a borrowed pointer to an exclusion list's entries.
  *
@@ -419,7 +495,9 @@ int32_t c2pa_sm_build_finish(struct C2paSmBuildSession *session,
  */
 const struct C2paSmExclusion *c2pa_sm_exclusions_data(struct C2paSmExclusionList *exclusions,
                                                       char **err_out);
+#endif
 
+#if defined(C2PA_SM_FEATURE_BUILD)
 /**
  * Frees a build session.
  *
@@ -427,6 +505,7 @@ const struct C2paSmExclusion *c2pa_sm_exclusions_data(struct C2paSmExclusionList
  * `session` must be null or a live pointer returned by [`c2pa_sm_build_new`].
  */
 void c2pa_sm_build_free(struct C2paSmBuildSession *session);
+#endif
 
 /**
  * Frees a string allocated by this library.
@@ -436,6 +515,7 @@ void c2pa_sm_build_free(struct C2paSmBuildSession *session);
  */
 void c2pa_sm_string_free(char *string);
 
+#if defined(C2PA_SM_FEATURE_BUILD)
 /**
  * Frees manifest bytes allocated by this library.
  *
@@ -445,7 +525,9 @@ void c2pa_sm_string_free(char *string);
  * `bytes` must be null or an allocation returned by this library.
  */
 void c2pa_sm_bytes_free(uint8_t *bytes, uintptr_t _len);
+#endif
 
+#if defined(C2PA_SM_FEATURE_BUILD)
 /**
  * Frees an exclusion-list handle returned by [`c2pa_sm_build_finish`].
  *
@@ -453,6 +535,7 @@ void c2pa_sm_bytes_free(uint8_t *bytes, uintptr_t _len);
  * `exclusions` must be null or a live handle returned by this library.
  */
 void c2pa_sm_exclusions_free(struct C2paSmExclusionList *exclusions);
+#endif
 
 #ifdef __cplusplus
 }  // extern "C"

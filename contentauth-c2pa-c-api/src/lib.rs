@@ -14,8 +14,14 @@
 //! C API for synchronous, sans-I/O C2PA reading and signing workflows.
 //!
 //! Exposes a callback-free, thread-free, runtime-free C ABI over
-//! [`FileReadSession`](contentauth_c2pa_file_reader::FileReadSession) and
-//! [`FileBuilderSession`](contentauth_c2pa_file_builder::FileBuilderSession).
+//! `FileReadSession` and `FileBuilderSession`.
+//!
+//! # Features
+//!
+//! `read` exposes the reader API and its settings/JSON compatibility layer.
+//! `build` exposes the builder API and its baseline manifest-definition parser.
+//! Both are enabled by default. Disable default features to select either
+//! independently; with neither enabled, only shared allocation cleanup remains.
 //!
 //! # Architecture
 //!
@@ -36,11 +42,16 @@
 #![deny(clippy::unwrap_used)]
 #![deny(missing_docs)]
 
+#[cfg(feature = "build")]
 pub mod build;
 pub mod error;
 pub mod ffi;
+#[cfg(any(feature = "read", feature = "build"))]
+mod format;
+#[cfg(feature = "read")]
 pub mod read;
 
+#[cfg(feature = "build")]
 pub use build::{
     BuildSession, C2paSmBuildRequest, C2paSmExclusion, C2PA_SM_BUILD_REQ_LENGTH,
     C2PA_SM_BUILD_REQ_READ, C2PA_SM_BUILD_REQ_SIGN, C2PA_SM_BUILD_REQ_TIMESTAMP,
@@ -48,8 +59,15 @@ pub use build::{
 };
 pub use error::Error;
 pub use ffi::*;
+#[cfg(feature = "read")]
 pub use read::{
     C2paSmReadRequest, ReadSession, C2PA_SM_READ_REQ_CURRENT_DATE_TIME, C2PA_SM_READ_REQ_LENGTH,
-    C2PA_SM_READ_REQ_OCSP, C2PA_SM_READ_REQ_READ, C2PA_SM_STEP_COMPLETE, C2PA_SM_STEP_ERROR,
-    C2PA_SM_STEP_PENDING,
+    C2PA_SM_READ_REQ_OCSP, C2PA_SM_READ_REQ_READ,
 };
+
+/// Session is parked waiting for requests to be fulfilled.
+pub const C2PA_SM_STEP_PENDING: i32 = 0;
+/// Session has completed successfully.
+pub const C2PA_SM_STEP_COMPLETE: i32 = 1;
+/// An error occurred during advance.
+pub const C2PA_SM_STEP_ERROR: i32 = -1;

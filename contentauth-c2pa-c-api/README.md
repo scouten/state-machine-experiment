@@ -5,6 +5,29 @@ with [`cimpl`](https://github.com/contentauth/cimpl) for tracked handles,
 pointer validation, error conversion, and allocation ownership. Its header
 is generated from the Rust API by cbindgen.
 
+## Features
+
+The default build enables both `read` and `build`. Downstream Cargo users
+can set `default-features = false` and enable only the API they need:
+
+| Feature | Exported API | Optional subordinate crates |
+|---|---|---|
+| `read` | `c2pa_sm_read_*`, read requests and session handle | `contentauth-c2pa-file-reader`, `contentauth-c2pa-js-compat` (settings and report JSON) |
+| `build` | `c2pa_sm_build_*`, build requests, manifest buffers and exclusion handles | `contentauth-c2pa-file-builder`, `contentauth-c2pa-sign-baseline` (manifest definitions) |
+
+Both use the format registry, primitives, and state-machine engine. A
+read-only build does not include the builder or baseline definition parser;
+a build-only build does not include the reader or JS compatibility layer.
+These features select cohesive workflows, not independently usable parser
+or reporting APIs. With neither feature enabled, only the shared step
+constants, error vocabulary, and string-allocation cleanup remain.
+Test fixtures may pull additional crates into test builds.
+
+```sh
+cargo build -p contentauth-c2pa-c-api --no-default-features --features read
+cargo build -p contentauth-c2pa-c-api --no-default-features --features build
+```
+
 ## Architecture
 
 This crate exposes the synchronous sans-I/O state machines
@@ -35,5 +58,19 @@ Key characteristics:
 
 The generated C header is located in
 [`include/contentauth_c2pa_c_api.h`](include/contentauth_c2pa_c_api.h);
-`build.rs` regenerates it from the exported Rust API. The Swift package
-contains a copy of this generated header for Swift Package Manager.
+`build.rs` regenerates it from the exported Rust API. The committed header
+supports every feature combination with conditional declarations, so its
+contents do not depend on the features used to generate it.
+
+By default the header exposes both APIs, matching Cargo's defaults. For a
+reduced-feature library, define `C2PA_SM_NO_DEFAULT_FEATURES` and the
+corresponding `C2PA_SM_FEATURE_READ` and/or `C2PA_SM_FEATURE_BUILD` before
+including the header (or pass them as compiler `-D` flags). These macros
+only select declarations; they must match the features used to build the
+Rust library.
+
+```c
+#define C2PA_SM_NO_DEFAULT_FEATURES
+#define C2PA_SM_FEATURE_READ
+#include "contentauth_c2pa_c_api.h"
+```

@@ -234,7 +234,9 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   `FileBuilderSession`; it uses `cimpl` for tracked handles, pointer
   validation, and allocation ownership, with cbindgen generating the C
   header. Its handle registry serializes borrows, so a host must drive each
-  session from one task at a time.
+  session from one task at a time. Default-enabled `read` and `build`
+  features independently select the exported workflows and their
+  subordinate crates; header feature macros must match the library build.
 - **`c2pa-rs-compat-conformance`** — a differential test harness for the
   crate above, proving the same client code gets the same answer reading
   a file through the real `c2pa` crate as through

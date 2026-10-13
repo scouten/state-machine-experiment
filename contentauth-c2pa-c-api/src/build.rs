@@ -26,10 +26,7 @@ use contentauth_c2pa_primitives::{
 use contentauth_c2pa_sign_baseline::Definition;
 use contentauth_state_machine::{RequestId, Session};
 
-use crate::{
-    error::Error,
-    read::{resolve_format, C2PA_SM_STEP_COMPLETE, C2PA_SM_STEP_PENDING},
-};
+use crate::{error::Error, format::resolve_format, C2PA_SM_STEP_COMPLETE, C2PA_SM_STEP_PENDING};
 
 /// Input source stream identifier.
 pub const C2PA_SM_STREAM_SOURCE: u32 = 0;

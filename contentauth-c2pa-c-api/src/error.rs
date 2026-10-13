@@ -35,22 +35,27 @@ pub enum Error {
     Format(String),
 
     /// Reader engine error.
+    #[cfg(feature = "read")]
     #[error("reader error: {0}")]
     Reader(#[from] contentauth_c2pa_file_reader::Error),
 
     /// Builder engine error.
+    #[cfg(feature = "build")]
     #[error("builder error: {0}")]
     Builder(#[from] contentauth_c2pa_file_builder::Error),
 
     /// Baseline definition error.
+    #[cfg(feature = "build")]
     #[error("definition error: {0}")]
     Baseline(#[from] contentauth_c2pa_sign_baseline::Error),
 
     /// JSON serialization/deserialization error.
+    #[cfg(feature = "read")]
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
 
     /// Compatibility layer error.
+    #[cfg(feature = "read")]
     #[error("compat error: {0}")]
     JsCompat(#[from] contentauth_c2pa_js_compat::C2paError),
 
