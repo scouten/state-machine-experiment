@@ -89,10 +89,10 @@
 //! * **Every format but JPEG** — `src/format.rs` is the seam, exactly as
 //!   it is in `contentauth-c2pa-rs-compat`.
 //! * **The full `@contentauth/c2pa-types` `ManifestStore` shape** —
-//!   ingredients, decoded assertion values, thumbnails. [`ManifestStore`]
-//!   carries the top-level contract (a map of manifests keyed by label, an
-//!   active label, validation state and status) populated with what the
-//!   engine reports today; the rest grows as the engine decodes more.
+//!   ingredient relationships, signature metadata, thumbnails, resources,
+//!   and complete validation-result buckets remain absent. The reader now
+//!   decodes CBOR assertion payloads and created relationships, but only
+//!   reports fields it can derive from parsed JUMBF and claim data.
 //! * **A real `fetch`-backed OCSP transport for the browser** — a
 //!   [`Platform`] whose `ocsp` posts through `fetch`. `WebPlatform`
 //!   declines OCSP today (fail-open, per the engine's own rules); a host

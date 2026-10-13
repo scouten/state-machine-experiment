@@ -252,6 +252,29 @@ impl WasmBuilder {
         }
         Ok(out.into())
     }
+
+    /// Signs a Blob into a detached manifest store, leaving the asset
+    /// unchanged.
+    #[wasm_bindgen(js_name = signDetached)]
+    pub async fn sign_detached(
+        &self,
+        signer: JsValue,
+        blob: &web_sys::Blob,
+    ) -> Result<JsValue, JsString> {
+        let signer = JsSigner::from_js(&signer)?;
+        let signed = self.inner.sign_detached(&signer, blob).await?;
+
+        let out = Object::new();
+        for (name, bytes) in [("asset", &signed.asset), ("manifest", &signed.manifest)] {
+            Reflect::set(
+                &out,
+                &JsValue::from_str(name),
+                &Uint8Array::from(&bytes[..]),
+            )
+            .map_err(|_| JsString::from("could not build the result object"))?;
+        }
+        Ok(out.into())
+    }
 }
 
 /// A best-effort rendering of a JavaScript exception value.

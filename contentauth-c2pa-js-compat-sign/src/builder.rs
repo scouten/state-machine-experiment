@@ -10,11 +10,15 @@
 // implied. See the LICENSE-MIT and LICENSE-APACHE files for the
 // specific language governing permissions and limitations under
 // each license.
-use contentauth_c2pa_file_builder::TimestampSettings;
+use contentauth_c2pa_file_builder::{BuilderSettings, TimestampSettings};
 use contentauth_c2pa_js_compat::{for_format, Blob};
 use contentauth_c2pa_sign_baseline::Definition;
 
-use crate::{drive::build, error::Error, signer::AsyncSigner};
+use crate::{
+    drive::{build, build_detached},
+    error::Error,
+    signer::AsyncSigner,
+};
 
 /// A signed asset and the manifest store inside it.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -23,7 +27,8 @@ pub struct SignedAsset {
     /// The complete signed asset.
     pub asset: Vec<u8>,
 
-    /// The manifest store alone, as embedded in `asset`.
+    /// The manifest store. `sign` embeds it in `asset`; `sign_detached`
+    /// returns it separately and leaves `asset` unchanged.
     pub manifest: Vec<u8>,
 }
 
@@ -60,6 +65,25 @@ impl Builder {
         S: AsyncSigner + ?Sized,
     {
         let handler = for_format(format).map_err(|_| Error::UnsupportedType)?;
+        let (settings, tsa_url) = self.settings(signer)?;
+        build(handler, source, signer, settings, tsa_url.as_deref()).await
+    }
+
+    /// Signs `source` into a detached manifest store. The hard binding
+    /// covers every byte of the unchanged asset.
+    pub async fn sign_detached<B, S>(&self, signer: &S, source: &B) -> Result<SignedAsset, Error>
+    where
+        B: Blob + ?Sized,
+        S: AsyncSigner + ?Sized,
+    {
+        let (settings, tsa_url) = self.settings(signer)?;
+        build_detached(source, signer, settings, tsa_url.as_deref()).await
+    }
+
+    fn settings<S: AsyncSigner + ?Sized>(
+        &self,
+        signer: &S,
+    ) -> Result<(BuilderSettings, Option<String>), Error> {
         let tsa_url = self
             .definition
             .tsa_url
@@ -72,6 +96,6 @@ impl Builder {
         if tsa_url.is_some() && settings.timestamp.is_none() {
             settings.timestamp = Some(TimestampSettings::default());
         }
-        build(handler, source, signer, settings, tsa_url.as_deref()).await
+        Ok((settings, tsa_url))
     }
 }

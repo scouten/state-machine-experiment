@@ -31,21 +31,50 @@ if (m1 && (m1.backend !== "state-machine" ||
 if (m1) {
   const required = [
     ...inventory.tests.filter((test) => test.file === "packages/c2pa-web/src/lib/reader.spec.ts" && pin.oracleTests.includes(test.title)),
-    ...extractTests(readFileSync(join(root, "browser/m1.spec.ts"), "utf8"), "browser/m1.spec.ts"),
+    ...["m1", "m2", "m3"].flatMap((name) => {
+      const file = `browser/${name}.spec.ts`;
+      return extractTests(readFileSync(join(root, file), "utf8"), file);
+    }),
   ].map((test) => test.id);
   for (const run of m1.runs) {
     const ids = run.outcomes.map((outcome) => outcome.id);
     if (ids.length !== required.length || new Set(ids).size !== required.length ||
         !required.every((id) => ids.includes(id)))
-      throw new Error(`Missing, duplicate, or unexpected M1 evidence for ${run.browser}`);
+      throw new Error(`Missing, duplicate, or unexpected milestone evidence for ${run.browser}`);
   }
 }
+const m1Ids = new Set([
+  ...inventory.tests.filter((test) => test.file === "packages/c2pa-web/src/lib/reader.spec.ts" && pin.oracleTests.includes(test.title)),
+  ...extractTests(readFileSync(join(root, "browser/m1.spec.ts"), "utf8"), "browser/m1.spec.ts"),
+].map((test) => test.id));
+const m2Tests = extractTests(readFileSync(join(root, "browser/m2.spec.ts"), "utf8"), "browser/m2.spec.ts");
+const m3Tests = extractTests(readFileSync(join(root, "browser/m3.spec.ts"), "utf8"), "browser/m3.spec.ts");
 const milestone = m1 ? {
   browsers: m1.browsers,
-  passed: m1.runs.every((run) => run.exit === 0 && run.outcomes.every((o) => o.status === "passed")),
-  executions: m1.runs.reduce((count, run) => count + run.outcomes.length, 0),
+  passed: m1.runs.every((run) => run.exit === 0 && run.outcomes
+    .filter((outcome) => m1Ids.has(outcome.id)).every((outcome) => outcome.status === "passed")),
+  executions: m1.runs.reduce((count, run) => count + run.outcomes
+    .filter((outcome) => m1Ids.has(outcome.id)).length, 0),
 } : { passed: false, blocker: "M1 browser proof has not run" };
-const completeReport = { ...report, m1: milestone };
+const m2 = m1 ? {
+  browsers: m1.browsers,
+  passed: m1.runs.every((run) => run.exit === 0 && run.outcomes
+    .filter((outcome) => m2Tests.some((test) => test.id === outcome.id))
+    .every((outcome) => outcome.status === "passed")),
+  executions: m1.runs.reduce((count, run) => count + run.outcomes
+    .filter((outcome) => m2Tests.some((test) => test.id === outcome.id)).length, 0),
+  scope: "CBOR assertion payloads, validation-result buckets, CAWG trust anchors, unsupported verifyTrust rejection",
+} : { passed: false, blocker: "M2 browser proof has not run" };
+const m3 = m1 ? {
+  browsers: m1.browsers,
+  passed: m1.runs.every((run) => run.exit === 0 && run.outcomes
+    .filter((outcome) => m3Tests.some((test) => test.id === outcome.id))
+    .every((outcome) => outcome.status === "passed")),
+  executions: m1.runs.reduce((count, run) => count + run.outcomes
+    .filter((outcome) => m3Tests.some((test) => test.id === outcome.id)).length, 0),
+  scope: "Detached reader input and signing output; full-asset hard binding, unchanged store-free asset, mismatch, and malformed-store rejection",
+} : { passed: false, blocker: "M3 browser proof has not run" };
+const completeReport = { ...report, m1: milestone, m2, m3 };
 mkdirSync(join(root, "results"), { recursive: true });
 writeFileSync(join(root, "results/parity.json"), JSON.stringify(completeReport, null, 2) + "\n");
 console.log(JSON.stringify({
@@ -55,5 +84,7 @@ console.log(JSON.stringify({
   stateMachine: report.stateMachine,
   fullParity: report.fullParity,
   m1: milestone,
+  m2,
+  m3,
 }, null, 2));
 if (process.argv.includes("--require-parity") && !report.fullParity) process.exitCode = 1;

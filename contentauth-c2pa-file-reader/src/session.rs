@@ -13,7 +13,9 @@
 
 //! [`FileReadSession`]: a sans-I/O session that composes a
 //! [`FormatHandler`]'s `locate` operation with a [`ReadSession`], so a host
-//! never has to know that two separate sessions are involved.
+//! never has to know that two separate sessions are involved. It can also
+//! validate caller-supplied detached manifest bytes or surface a reported
+//! remote manifest URL to its host.
 //!
 //! Neither inner session performs I/O itself — that is the whole point of
 //! the pattern this workspace builds on (see the root README). This crate's
@@ -85,6 +87,13 @@ pub enum FileReadRequest {
         /// The DER-encoded `OCSPRequest` to send, exactly as built.
         request_der: Vec<u8>,
     },
+
+    /// Fetch a manifest store referenced by the asset. The URL is untrusted
+    /// input; the host must enforce its own destination policy.
+    RemoteManifest {
+        /// URL reported by the format handler.
+        url: String,
+    },
 }
 
 impl Request for FileReadRequest {
@@ -96,6 +105,7 @@ impl Request for FileReadRequest {
             Self::Length { .. } => "Length",
             Self::CurrentDateTime => "CurrentDateTime",
             Self::Ocsp { .. } => "OcspResponse",
+            Self::RemoteManifest { .. } => "ManifestStore",
         }
     }
 
@@ -107,6 +117,7 @@ impl Request for FileReadRequest {
                 | (Self::Length { .. }, FileReadReply::Length(_))
                 | (Self::CurrentDateTime, FileReadReply::CurrentDateTime(_))
                 | (Self::Ocsp { .. }, FileReadReply::OcspResponse(_))
+                | (Self::RemoteManifest { .. }, FileReadReply::ManifestStore(_))
         )
     }
 }
@@ -130,6 +141,10 @@ pub enum FileReadReply {
     /// bytes, exactly as the responder returned them.
     OcspResponse(Vec<u8>),
 
+    /// Answers [`FileReadRequest::RemoteManifest`]: the remote manifest
+    /// store's exact bytes.
+    ManifestStore(Vec<u8>),
+
     /// Reports that the host could not perform the requested operation.
     /// Valid for any request.
     Failed(HostError),
@@ -147,6 +162,11 @@ enum Phase<H: FormatHandler> {
         /// [`ReadRequest::ManifestStore`] without ever surfacing it to this
         /// session's own host.
         manifest_store: Option<Vec<u8>>,
+
+        /// Remote URL used only when no local store is available and
+        /// `fetch_remote_manifests` is enabled.
+        remote_manifest_url: Option<String>,
+
         session: Box<ReadSession>,
     },
 
@@ -159,9 +179,12 @@ enum Phase<H: FormatHandler> {
 ///
 /// Two sessions run in sequence under one interface: `handler`'s `locate`
 /// operation finds the manifest store, then a [`ReadSession`] validates it.
-/// Both speak to this session's host through one merged vocabulary,
-/// [`FileReadRequest`] — [`ReadRequest::ManifestStore`] is answered
-/// internally, from `locate`'s result, and never reaches the host at all.
+/// Both speak through one merged vocabulary, [`FileReadRequest`]. Embedded
+/// or detached bytes answer [`ReadRequest::ManifestStore`] internally. If
+/// only a remote URL is available and
+/// [`ReadSettings::fetch_remote_manifests`] is enabled, the session asks its
+/// host to fetch the store. The host must apply destination policy because
+/// the URL is untrusted input.
 ///
 /// See the crate-level docs for why this exists alongside
 /// [`crate::read_manifest`]: a host with only synchronous, local access can
@@ -175,6 +198,7 @@ pub struct FileReadSession<H: FormatHandler> {
 
     phase: Option<Phase<H>>,
     settings: Option<ReadSettings>,
+    detached_manifest: Option<Vec<u8>>,
 }
 
 impl<H: FormatHandler> FileReadSession<H> {
@@ -186,7 +210,15 @@ impl<H: FormatHandler> FileReadSession<H> {
             pending: HashMap::new(),
             phase: Some(Phase::Locating(handler.locate(ReadSession::PRIMARY_STREAM))),
             settings: Some(settings),
+            detached_manifest: None,
         }
+    }
+
+    /// Uses caller-supplied detached manifest-store bytes instead of locating
+    /// a store in the asset. Call before the first `advance`.
+    pub fn with_detached_manifest(mut self, manifest_store: Vec<u8>) -> Self {
+        self.detached_manifest = Some(manifest_store);
+        self
     }
 
     /// Removes and returns every reply this session's host has provided for
@@ -247,6 +279,18 @@ impl<H: FormatHandler> Session for FileReadSession<H> {
     type Request = FileReadRequest;
 
     fn advance(&mut self) -> Result<Step, Error> {
+        if let Some(manifest_store) = self.detached_manifest.take() {
+            let Some(settings) = self.settings.take() else {
+                self.core.mark_failed();
+                return Err(ProtocolError::SessionFailed.into());
+            };
+            self.phase = Some(Phase::Reading {
+                manifest_store: Some(manifest_store),
+                remote_manifest_url: None,
+                session: Box::new(ReadSession::new(settings)),
+            });
+        }
+
         loop {
             match self.phase.take() {
                 None => {
@@ -281,11 +325,21 @@ impl<H: FormatHandler> Session for FileReadSession<H> {
                             }
                         };
 
+                        let settings = self.settings.take().ok_or_else(|| {
+                            self.core.mark_failed();
+                            Error::from(ProtocolError::SessionFailed)
+                        })?;
+                        let manifest_store = location.embedded.map(|manifest| manifest.jumbf);
+                        let remote_manifest_url =
+                            if manifest_store.is_none() && settings.fetch_remote_manifests {
+                                location.remote
+                            } else {
+                                None
+                            };
                         self.phase = Some(Phase::Reading {
-                            manifest_store: location.embedded.map(|manifest| manifest.jumbf),
-                            session: Box::new(ReadSession::new(
-                                self.settings.take().unwrap_or_default(),
-                            )),
+                            manifest_store,
+                            remote_manifest_url,
+                            session: Box::new(ReadSession::new(settings)),
                         });
                         continue;
                     }
@@ -331,6 +385,7 @@ impl<H: FormatHandler> Session for FileReadSession<H> {
 
                 Some(Phase::Reading {
                     manifest_store,
+                    remote_manifest_url,
                     mut session,
                 }) => {
                     for (id, reply) in self.ready_replies() {
@@ -370,12 +425,26 @@ impl<H: FormatHandler> Session for FileReadSession<H> {
                         }
 
                         if let ReadRequest::ManifestStore { .. } = request.kind {
-                            self.checked_fulfill(
-                                &mut *session,
-                                request.id,
-                                ReadHostReply::ManifestStore(manifest_store.clone()),
-                            )?;
-                            answered_internally = true;
+                            if let Some(bytes) = &manifest_store {
+                                self.checked_fulfill(
+                                    &mut *session,
+                                    request.id,
+                                    ReadHostReply::ManifestStore(Some(bytes.clone())),
+                                )?;
+                                answered_internally = true;
+                            } else if let Some(url) = &remote_manifest_url {
+                                let outer_id = self
+                                    .core
+                                    .issue(FileReadRequest::RemoteManifest { url: url.clone() });
+                                self.pending.insert(outer_id, request.id);
+                            } else {
+                                self.checked_fulfill(
+                                    &mut *session,
+                                    request.id,
+                                    ReadHostReply::ManifestStore(None),
+                                )?;
+                                answered_internally = true;
+                            }
                             continue;
                         }
 
@@ -404,6 +473,7 @@ impl<H: FormatHandler> Session for FileReadSession<H> {
 
                     self.phase = Some(Phase::Reading {
                         manifest_store,
+                        remote_manifest_url,
                         session,
                     });
 
@@ -453,10 +523,9 @@ fn from_io_request(request: &IoRequest) -> Option<FileReadRequest> {
     }
 }
 
-/// Translates every [`ReadRequest`] kind this session's host answers
-/// directly. [`ReadRequest::ManifestStore`] is not among them — the caller
-/// answers it itself, from `locate`'s result, before this function ever
-/// sees it.
+/// Translates [`ReadRequest`] kinds that map directly to host requests.
+/// [`ReadRequest::ManifestStore`] is handled separately because the result
+/// may come from embedded, detached, or remote bytes.
 fn from_read_request(request: &ReadRequest) -> Option<FileReadRequest> {
     match request {
         ReadRequest::AssetBytes { stream, range } => Some(FileReadRequest::Read {
@@ -484,6 +553,9 @@ fn to_io_reply(reply: FileReadReply) -> IoReply {
         FileReadReply::OcspResponse(_) => {
             IoReply::Failed(HostError::new("locate never asks for an OCSP response"))
         }
+        FileReadReply::ManifestStore(_) => {
+            IoReply::Failed(HostError::new("locate never asks for a remote manifest"))
+        }
     }
 }
 
@@ -493,6 +565,7 @@ fn to_read_host_reply(reply: FileReadReply) -> ReadHostReply {
         FileReadReply::Length(len) => ReadHostReply::AssetLength(len),
         FileReadReply::CurrentDateTime(time) => ReadHostReply::CurrentDateTime(time),
         FileReadReply::OcspResponse(bytes) => ReadHostReply::Ocsp(bytes),
+        FileReadReply::ManifestStore(bytes) => ReadHostReply::ManifestStore(Some(bytes)),
         FileReadReply::Failed(err) => ReadHostReply::Failed(err),
     }
 }
@@ -523,6 +596,9 @@ mod tests {
                 url: "http://ocsp.example/".to_string(),
                 request_der: vec![1, 2, 3],
             },
+            FileReadRequest::RemoteManifest {
+                url: "https://manifests.example/store".to_string(),
+            },
         ]
     }
 
@@ -535,8 +611,144 @@ mod tests {
                 "CurrentDateTime",
             ),
             (FileReadReply::OcspResponse(vec![4, 5, 6]), "OcspResponse"),
+            (FileReadReply::ManifestStore(vec![7, 8, 9]), "ManifestStore"),
             (FileReadReply::Failed(HostError::new("nope")), ""),
         ]
+    }
+
+    struct RemoteFormat;
+
+    struct RemoteLocate {
+        core: SessionCore<IoRequest>,
+        complete: bool,
+    }
+
+    impl Session for RemoteLocate {
+        type Error = contentauth_c2pa_format::FormatError;
+        type Output = contentauth_c2pa_format::ManifestLocation;
+        type Request = IoRequest;
+
+        fn advance(&mut self) -> Result<Step, Self::Error> {
+            if !self.complete {
+                self.core.mark_complete();
+                self.complete = true;
+            }
+            Ok(Step::Complete)
+        }
+
+        fn outstanding_requests(&self) -> &[HostRequest<IoRequest>] {
+            self.core.outstanding_requests()
+        }
+
+        fn fulfill(&mut self, id: RequestId, reply: IoReply) -> Result<(), Self::Error> {
+            Ok(self.core.fulfill(id, reply)?)
+        }
+
+        fn finish(self) -> Result<Self::Output, Self::Error> {
+            self.core.finish_check()?;
+            Ok(contentauth_c2pa_format::ManifestLocation::remote(
+                "https://manifests.example/store",
+            ))
+        }
+    }
+
+    impl FormatHandler for RemoteFormat {
+        type Locate = RemoteLocate;
+        type PlanEmbed = <JpegFormat as FormatHandler>::PlanEmbed;
+
+        fn descriptor(&self) -> &contentauth_c2pa_format::FormatDescriptor {
+            JpegFormat.descriptor()
+        }
+
+        fn locate(&self, _stream: StreamId) -> Self::Locate {
+            RemoteLocate {
+                core: SessionCore::default(),
+                complete: false,
+            }
+        }
+
+        fn plan_embed(&self, stream: StreamId, manifest_len: u64) -> Self::PlanEmbed {
+            JpegFormat.plan_embed(stream, manifest_len)
+        }
+
+        fn commit(
+            &self,
+            plan: &contentauth_c2pa_format::EmbedPlan,
+            manifest: &[u8],
+        ) -> Result<Vec<contentauth_c2pa_format::Patch>, contentauth_c2pa_format::FormatError>
+        {
+            JpegFormat.commit(plan, manifest)
+        }
+    }
+
+    #[test]
+    fn a_remote_location_is_requested_only_when_enabled() {
+        let mut session = FileReadSession::new(
+            &RemoteFormat,
+            ReadSettings {
+                fetch_remote_manifests: true,
+                ..ReadSettings::default()
+            },
+        );
+
+        assert!(matches!(session.advance(), Ok(Step::AwaitHost)));
+        assert!(matches!(
+            session.outstanding_requests(),
+            [HostRequest {
+                kind: FileReadRequest::RemoteManifest { url },
+                ..
+            }] if url == "https://manifests.example/store"
+        ));
+    }
+
+    #[test]
+    fn a_remote_manifest_reply_reaches_reader_validation() {
+        let mut session = FileReadSession::new(
+            &RemoteFormat,
+            ReadSettings {
+                fetch_remote_manifests: true,
+                ..ReadSettings::default()
+            },
+        );
+
+        assert!(matches!(session.advance(), Ok(Step::AwaitHost)));
+        let id = session.outstanding_requests()[0].id;
+        assert!(matches!(
+            session.fulfill(id, FileReadReply::ManifestStore(vec![])),
+            Ok(())
+        ));
+
+        assert!(session.advance().is_err());
+        assert!(session.core.is_failed());
+    }
+
+    #[test]
+    fn a_remote_location_is_not_fetched_by_default() {
+        let mut session = FileReadSession::new(&RemoteFormat, ReadSettings::default());
+
+        assert!(matches!(session.advance(), Ok(Step::Complete)));
+        assert!(session.outstanding_requests().is_empty());
+        let report = session.finish();
+        assert!(matches!(
+            report,
+            Ok(report) if !report.manifest_store_found
+        ));
+    }
+
+    #[test]
+    fn a_detached_manifest_skips_remote_location_and_is_validated() {
+        let mut session = FileReadSession::new(
+            &RemoteFormat,
+            ReadSettings {
+                fetch_remote_manifests: true,
+                ..ReadSettings::default()
+            },
+        )
+        .with_detached_manifest(vec![]);
+
+        assert!(session.advance().is_err());
+        assert!(session.outstanding_requests().is_empty());
+        assert!(session.core.is_failed());
     }
 
     /// Every request accepts exactly the reply named by its
@@ -692,6 +904,7 @@ mod tests {
             pending: HashMap::new(),
             phase: None,
             settings: None,
+            detached_manifest: None,
         };
 
         assert!(matches!(
@@ -715,6 +928,7 @@ mod tests {
             pending: HashMap::new(),
             phase: None,
             settings: None,
+            detached_manifest: None,
         };
 
         assert!(matches!(

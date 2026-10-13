@@ -3,6 +3,8 @@
 A browser `cdylib` combining the existing reader and baseline-signing adapters.
 `BrowserReader` and `BrowserBuilder` delegate to those adapters; they do not add
 another engine, format handler, or signing implementation.
+`BrowserReader.fromBlob` accepts optional detached manifest-store bytes for
+assets without an embedded store.
 
 The browser exports exist only on `wasm32-unknown-unknown`. Native and WASI
 builds retain the empty packaging crate, without browser dependencies.

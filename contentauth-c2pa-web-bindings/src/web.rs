@@ -17,9 +17,10 @@ impl BrowserReader {
         format: &str,
         blob: &web_sys::Blob,
         context: Option<String>,
+        detached_manifest: Option<js_sys::Uint8Array>,
     ) -> Result<BrowserReader, JsString> {
         Ok(Self {
-            inner: WasmReader::from_blob(format, blob, context).await?,
+            inner: WasmReader::from_blob(format, blob, context, detached_manifest).await?,
         })
     }
 
@@ -71,5 +72,16 @@ impl BrowserBuilder {
         blob: &web_sys::Blob,
     ) -> Result<JsValue, JsString> {
         self.inner.sign(signer, format, blob).await
+    }
+
+    /// Signs a Blob into a detached manifest store, leaving the asset
+    /// unchanged.
+    #[wasm_bindgen(js_name = signDetached)]
+    pub async fn sign_detached(
+        &self,
+        signer: JsValue,
+        blob: &web_sys::Blob,
+    ) -> Result<JsValue, JsString> {
+        self.inner.sign_detached(signer, blob).await
     }
 }

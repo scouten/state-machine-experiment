@@ -108,11 +108,7 @@ pub(crate) fn encode(
     let placeholder = [(i64::MAX, i64::MAX); MAX_EXCLUSIONS];
 
     let entries: Vec<(i64, i64)> = match exclusions {
-        Some([]) => {
-            return Err(Error::PlaceholderRangeInvalid(
-                "a hard binding needs at least one exclusion",
-            ))
-        }
+        Some([]) => Vec::new(),
         Some(ranges) if ranges.len() > MAX_EXCLUSIONS => {
             return Err(Error::PlaceholderRangeInvalid(
                 "more exclusions than a hard binding has room reserved for",
@@ -338,14 +334,14 @@ mod tests {
     }
 
     #[test]
-    fn no_exclusions_or_too_many_are_refused() {
+    fn empty_exclusions_are_encoded_but_too_many_are_refused() {
         let hash = vec![0xab; HashAlgorithm::Sha256.digest_len()];
         let range = ByteRange { start: 1, len: 1 };
 
-        assert!(matches!(
-            encode(HashAlgorithm::Sha256, &hash, Some(&[])),
-            Err(Error::PlaceholderRangeInvalid(_))
-        ));
+        let placeholder = encode(HashAlgorithm::Sha256, &hash, None).unwrap();
+        let detached = encode(HashAlgorithm::Sha256, &hash, Some(&[])).unwrap();
+        assert_eq!(detached.len(), placeholder.len());
+
         assert!(matches!(
             encode(
                 HashAlgorithm::Sha256,

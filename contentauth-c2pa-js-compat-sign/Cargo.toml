@@ -30,6 +30,10 @@ web = [
 # The baseline definition → `BuilderSettings` step, shared by every binding.
 contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline" }
 
+# The detached build session, which hashes the entire asset without a
+# format-handler placeholder reservation.
+contentauth-c2pa-builder = { path = "../contentauth-c2pa-builder" }
+
 # The sans-I/O build session this crate's async host drives, and its
 # request/reply vocabulary.
 contentauth-c2pa-file-builder = { path = "../contentauth-c2pa-file-builder" }

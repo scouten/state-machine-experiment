@@ -118,11 +118,63 @@ impl Reader {
         B: Blob + ?Sized,
         P: Platform + ?Sized,
     {
+        Self::from_blob_with_context_and_detached_manifest(format, blob, context, None, platform)
+            .await
+    }
+
+    /// As [`Self::from_blob`], using caller-supplied detached manifest-store
+    /// bytes instead of locating a store in the asset.
+    ///
+    /// The asset is still read and validated against the supplied store. An
+    /// invalid or unrelated store fails through the same reader validation
+    /// path as an embedded store.
+    pub async fn from_blob_with_detached_manifest<B, P>(
+        format: &str,
+        blob: &B,
+        context_json: Option<&str>,
+        manifest_store: Vec<u8>,
+        platform: &P,
+    ) -> Result<Self, Error>
+    where
+        B: Blob + ?Sized,
+        P: Platform + ?Sized,
+    {
+        let context = match context_json {
+            Some(json) => Context::from_json(json)?,
+            None => Context::default(),
+        };
+        Self::from_blob_with_context_and_detached_manifest(
+            format,
+            blob,
+            context,
+            Some(manifest_store),
+            platform,
+        )
+        .await
+    }
+
+    async fn from_blob_with_context_and_detached_manifest<B, P>(
+        format: &str,
+        blob: &B,
+        context: Context,
+        detached_manifest: Option<Vec<u8>>,
+        platform: &P,
+    ) -> Result<Self, Error>
+    where
+        B: Blob + ?Sized,
+        P: Platform + ?Sized,
+    {
         let handler = format::for_format(format)?;
 
-        let report = crate::drive::read_manifest(&handler, blob, platform, context.into_settings())
-            .await
-            .map_err(C2paError::from)?;
+        let report = crate::drive::read_manifest_with_detached_manifest(
+            &handler,
+            blob,
+            platform,
+            context.into_settings(),
+            detached_manifest,
+        )
+        .await
+        .map_err(C2paError::from)?;
 
         if !report.manifest_store_found {
             return Err(C2paError::JumbfNotFound.into());

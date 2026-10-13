@@ -137,15 +137,28 @@ pub struct WasmReader {
 #[wasm_bindgen]
 impl WasmReader {
     /// Attempts to create a new `WasmReader` from an asset format and a
-    /// `Blob` of the asset's bytes, optionally with a context JSON string
-    /// configuring the read — c2pa-wasm's `fromBlob`.
+    /// `Blob` of the asset's bytes, optionally with context JSON and
+    /// detached manifest-store bytes.
     #[wasm_bindgen(js_name = fromBlob)]
     pub async fn from_blob(
         format: &str,
         blob: &web_sys::Blob,
         context_json: Option<String>,
+        detached_manifest: Option<Uint8Array>,
     ) -> Result<WasmReader, JsString> {
-        let inner = Reader::from_blob(format, blob, context_json.as_deref(), &WebPlatform).await?;
+        let inner = match detached_manifest {
+            Some(bytes) => {
+                Reader::from_blob_with_detached_manifest(
+                    format,
+                    blob,
+                    context_json.as_deref(),
+                    bytes.to_vec(),
+                    &WebPlatform,
+                )
+                .await?
+            }
+            None => Reader::from_blob(format, blob, context_json.as_deref(), &WebPlatform).await?,
+        };
 
         Ok(Self {
             inner,

@@ -42,7 +42,10 @@ export default defineConfig({
   optimizeDeps: { exclude: ["@contentauth/c2pa-web", "@contentauth/c2pa-utilities"] },
   server: { fs: { allow: [root] } },
   test: {
-    include: [".cache/upstream/packages/c2pa-web/src/lib/reader.spec.ts", ...(state ? ["browser/m1.spec.ts"] : [])],
+    include: [
+      ".cache/upstream/packages/c2pa-web/src/lib/reader.spec.ts",
+      ...(state ? ["browser/m1.spec.ts", "browser/m2.spec.ts", "browser/m3.spec.ts"] : []),
+    ],
     exclude: [],
     browser: {
       enabled: true,

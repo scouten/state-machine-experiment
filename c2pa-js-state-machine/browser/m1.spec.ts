@@ -174,8 +174,11 @@ describe("M1", () => {
     await expect(Builder.fromDefinition(client, { ...fixtures.definition, instance_id: null })).rejects.toThrow();
     const builder = await Builder.fromDefinition(client, { ...fixtures.definition, tsa_url: "https://example.invalid/tsa" });
     await expect(builder.sign(await signer(), "image/jpeg", source())).rejects.toThrow(/timestamp/i);
-    await expect(Reader.fromBlob(client, "image/jpeg", source(), new Context({ verify: { ocspFetch: true } }))).rejects.toThrow(/Unsupported M1 setting/);
-    await expect(Reader.fromBlob(client, "image/jpeg", source(), new Context({ trust: { trustAnchors: root } }))).rejects.toThrow(/require verifyTrust/);
+    await expect(Reader.fromBlob(client, "image/jpeg", source(), new Context({ verify: { ocspFetch: true } }))).rejects.toThrow(/Unsupported reader setting/);
+    await expect(Reader.fromBlob(client, "image/jpeg", source(), new Context({ verify: { verifyTrust: false } }))).rejects.toThrow(/Unsupported reader setting/);
+    const legacy = await (await fetch(legacyAssetSrc)).blob();
+    const defaultTrust = await Reader.fromBlob(client, "image/jpeg", legacy, new Context({ trust: { trustAnchors: legacyRoot } }));
+    expect((await defaultTrust!.manifestStore()).validation_state).toBe("Trusted");
     expect(await Reader.fromBlob(client, "image/jpeg", await (await fetch(unsignedSrc)).blob())).toBeNull();
   });
   test("free and disposal safely drain an in-flight builder without publishing a result", async () => {

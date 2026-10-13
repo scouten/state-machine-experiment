@@ -48,10 +48,9 @@ pub struct ReadSettings {
     /// If true, the session may issue an HTTP-fetch-style request to
     /// retrieve a remote manifest store referenced by the asset.
     ///
-    /// Aspirational: nothing in [`ReadSession`] issues such a request
-    /// today, since the request vocabulary this crate implements does not
-    /// yet include one. Carried here so hosts that already read this
-    /// setting do not need to change when it lands.
+    /// `FileReadSession` issues a host request when a format handler reports
+    /// a remote manifest and no embedded or detached manifest takes
+    /// precedence. The host owns URL policy and transport.
     pub fetch_remote_manifests: bool,
 
     /// DER-encoded certificates to treat as trust anchors.

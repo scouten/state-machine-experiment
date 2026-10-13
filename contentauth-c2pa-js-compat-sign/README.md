@@ -14,21 +14,27 @@ pub trait AsyncSigner {
     async fn sign(&self, data: &[u8]) -> Result<Vec<u8>, HostError>;
 }
 let SignedAsset { asset, manifest } = builder.sign(&signer, "image/jpeg", &blob).await?;
+let SignedAsset { asset, manifest } = builder.sign_detached(&signer, &blob).await?;
 ```
 
 The source is the read side's own `Blob` trait; the output is assembled in a
 `Vec<u8>` (a browser has no file, and the engine reads back what it wrote to
-hash it). Nothing below `src/drive.rs` is async — it is the same
-`FileBuilderSession` the blocking Rust host drives, with an `.await` at each
-host answer.
+hash it). `sign` uses the format handler and embeds the manifest. The distinct
+`sign_detached` path uses `BuilderSession::new_detached`, hashes every source
+byte with no exclusions, and returns the original asset bytes alongside the
+separate manifest store. Nothing below `src/drive.rs` is async — both paths
+await only host answers such as Blob reads, signing, and timestamping.
 
 With the `web` feature (compiled only for `wasm32-unknown-unknown`)
 `src/web.rs` exports `WasmBuilder` — `fromJson(json)` and
-`await sign({ alg, certs, sign }, format, blob)` →
+`await sign({ alg, certs, sign }, format, blob)` or
+`await signDetached({ alg, certs, sign }, blob)` →
 `{ asset, manifest }` — over a JavaScript signer object. The
 [M1 prototype](../c2pa-js-state-machine) now runs it in Chromium, Firefox, and
 WebKit through [the combined cdylib](../contentauth-c2pa-web-bindings), proving
-WebCrypto signing, trusted read-back, interleaving, and failures. It is also held to
+WebCrypto signing, trusted read-back, interleaving, and failures. The M3
+detached case additionally proves trusted validation of a store-free JPEG
+without changing its asset bytes. It is also held to
 `cargo check --all-features --target wasm32-unknown-unknown`, like
 `contentauth-c2pa-js-compat`'s `web` module.
 

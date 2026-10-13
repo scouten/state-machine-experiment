@@ -25,6 +25,14 @@ pub enum Error {
     #[error("bad parameter: {0}")]
     BadParam(#[from] contentauth_c2pa_sign_baseline::Error),
 
+    /// Building a detached manifest or reading back the asset failed.
+    #[error(transparent)]
+    DetachedBuild(#[from] contentauth_c2pa_builder::Error),
+
+    /// The detached host could not allocate or fill the output asset.
+    #[error("detached asset: {0}")]
+    DetachedAsset(contentauth_c2pa_primitives::HostError),
+
     /// Building or signing failed — including the host's signer or blob
     /// failing.
     #[error(transparent)]

@@ -93,6 +93,12 @@ pub struct Manifest {
     /// hash — is a validation concern, not a reading one.
     pub assertion_labels: Vec<String>,
 
+    /// Decoded CBOR assertion payloads, in assertion-store order.
+    ///
+    /// Assertions using another encoding or malformed CBOR remain visible
+    /// in [`Self::assertion_labels`] but have no decoded value here.
+    pub assertions: Vec<Assertion>,
+
     /// True if the manifest carries a claim signature box.
     ///
     /// Whether that signature *verifies* is a validation finding rather
@@ -114,6 +120,20 @@ pub struct Manifest {
     /// in the report's statuses, which name an assertion by
     /// [`IdentityAssertion::url`].
     pub identity_assertions: Vec<IdentityAssertion>,
+}
+
+/// One assertion whose CBOR payload was decoded.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct Assertion {
+    /// Assertion label within the manifest.
+    pub label: String,
+
+    /// True when the claim lists this assertion as created.
+    pub created: bool,
+
+    /// Decoded CBOR payload.
+    pub data: Option<c2pa_cbor::Value>,
 }
 
 /// The result of reading a manifest store.
@@ -272,10 +292,30 @@ fn read_manifest(
         statuses,
     ));
 
-    let assertion_labels = child_by_uuid(manifest, &ASSERTIONS_UUID)
+    let assertion_boxes = child_by_uuid(manifest, &ASSERTIONS_UUID);
+    let assertion_labels = assertion_boxes
         .map(|assertions| {
             child_superboxes(assertions)
                 .filter_map(|a| a.desc.label.map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let assertions = assertion_boxes
+        .map(|store| {
+            child_superboxes(store)
+                .filter_map(|assertion| {
+                    let label = assertion.desc.label?.to_string();
+                    let created = claim.created_assertions.iter().any(|reference| {
+                        reference.url.rsplit(['/', '=']).next() == Some(label.as_str())
+                    });
+                    let data = content(assertion, CBOR)
+                        .and_then(|bytes| c2pa_cbor::from_slice(bytes).ok());
+                    Some(Assertion {
+                        label,
+                        created,
+                        data,
+                    })
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -297,6 +337,7 @@ fn read_manifest(
         label,
         claim,
         assertion_labels,
+        assertions,
         has_signature: signature.is_some(),
         data_hash,
         identity_assertions,
@@ -720,6 +761,35 @@ mod tests {
             assert!(self_redacted[0].is_failure());
             assert_eq!(self_redacted[0].url.as_deref(), Some(uri));
         }
+    }
+
+    #[test]
+    fn decoded_assertions_preserve_payload_and_created_relationship() {
+        let payload = Value::Map(BTreeMap::from([(
+            Value::Text("actions".to_string()),
+            Value::Array(vec![Value::Map(BTreeMap::from([(
+                Value::Text("action".to_string()),
+                Value::Text("c2pa.created".to_string()),
+            )]))]),
+        )]));
+        let encoded = c2pa_cbor::to_vec(&payload).unwrap();
+        let assertion = superbox(
+            type_uuid(*b"cbor"),
+            "c2pa.actions.v2",
+            &[boxed(b"cbor", &encoded)],
+        );
+        let claim = claim_box_v2(
+            "created.jpg",
+            vec![hashed_uri("c2pa.actions.v2", &assertion)],
+            vec![],
+        );
+        let bytes = manifest_store(&[manifest_with_claim("urn:uuid:created", &[assertion], claim)]);
+
+        let parsed = parse(&bytes).unwrap();
+        let reported = &parsed.manifests[0].assertions[0];
+        assert_eq!(reported.label, "c2pa.actions.v2");
+        assert!(reported.created);
+        assert_eq!(reported.data.as_ref(), Some(&payload));
     }
 
     #[test]

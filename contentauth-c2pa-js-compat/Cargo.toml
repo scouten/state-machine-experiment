@@ -48,6 +48,10 @@ contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
 # `FileReadSession` through.
 contentauth-state-machine = { path = "../contentauth-state-machine" }
 
+# Assertion payloads are retained as their decoded CBOR values by the reader
+# and serialized here into the c2pa-js manifest report.
+c2pa_cbor = "0.77.4"
+
 # Decodes the PEM-armored trust anchors a c2pa-rs-style settings JSON
 # carries (`src/context.rs`); the same `base64` line already in the tree
 # via `contentauth-c2pa-rs-compat`'s `reqwest`.

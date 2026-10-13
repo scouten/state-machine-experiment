@@ -108,7 +108,7 @@ pub use contentauth_state_machine::{HostRequest, ProtocolError, RequestId, Sessi
 pub use data_hash::DataHash;
 pub use error::Error;
 pub use identity::{IdentityAssertion, IdentityCredential};
-pub use manifest_store::Manifest;
+pub use manifest_store::{Assertion, Manifest};
 pub use read::{ReadReport, ReadSession, ReadSettings, ReadStep, TrustList};
 pub use request::{ReadHostReply, ReadRequest};
 pub use validation::{ValidationState, ValidationStatus};

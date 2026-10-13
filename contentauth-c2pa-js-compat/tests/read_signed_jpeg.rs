@@ -71,6 +71,19 @@ fn a_manifest_written_by_the_builder_reads_back_as_trusted_with_anchors_from_con
         .validation_status
         .iter()
         .any(|status| status.code == "claimSignature.validated"));
+    assert!(store
+        .validation_results
+        .active_manifest
+        .success
+        .iter()
+        .any(|status| status.code == "claimSignature.validated"));
+    assert!(store
+        .validation_results
+        .active_manifest
+        .success
+        .iter()
+        .any(|status| status.code == "assertion.dataHash.match"));
+    assert!(store.validation_results.active_manifest.failure.is_empty());
 
     let active = reader.active_manifest().expect("has an active manifest");
     assert_eq!(active.label, "urn:uuid:test-manifest");
@@ -84,7 +97,8 @@ fn a_manifest_written_by_the_builder_reads_back_as_trusted_with_anchors_from_con
         Some("2.4.0")
     );
     assert_eq!(active.instance_id, "xmp:iid:test-instance");
-    assert_eq!(active.assertions, ["c2pa.hash.data"]);
+    assert_eq!(active.assertions.len(), 1);
+    assert_eq!(active.assertions[0].label, "c2pa.hash.data");
     // The builder writes structured `claim_generator_info`, not the legacy
     // free-form string, so this fixture has none to report.
     assert_eq!(active.claim_generator, None);
@@ -101,9 +115,21 @@ fn a_manifest_written_by_the_builder_reads_back_as_trusted_with_anchors_from_con
     assert_eq!(manifest_json["label"], "urn:uuid:test-manifest");
     assert_eq!(manifest_json["title"], "test.jpg");
     assert_eq!(manifest_json["instance_id"], "xmp:iid:test-instance");
+    assert_eq!(manifest_json["assertions"][0]["label"], "c2pa.hash.data");
+    assert_eq!(manifest_json["assertions"][0]["created"], true);
     assert_eq!(
-        manifest_json["assertions"],
-        serde_json::json!(["c2pa.hash.data"])
+        manifest_json["assertions"][0]["data"]["name"],
+        "jumbf manifest"
+    );
+    assert_eq!(
+        manifest_json["assertions"][0]["data"]["exclusions"][0]["start"],
+        20
+    );
+    assert_eq!(
+        manifest_json["assertions"][0]["data"]["hash"]
+            .as_array()
+            .map(Vec::len),
+        Some(32)
     );
     assert!(json["validation_status"]
         .as_array()
@@ -119,10 +145,14 @@ fn without_context_json_the_same_manifest_reads_back_only_as_valid() {
     let reader = block_on(Reader::from_blob("image/jpeg", &asset, None, &FixedClock))
         .expect("should still read and validate cleanly");
 
-    assert_eq!(
-        reader.manifest_store().validation_state,
-        ValidationState::Valid
-    );
+    let store = reader.manifest_store();
+    assert_eq!(store.validation_state, ValidationState::Valid);
+    assert!(store
+        .validation_results
+        .active_manifest
+        .failure
+        .iter()
+        .any(|status| status.code == "signingCredential.untrusted"));
     let json: serde_json::Value = serde_json::from_str(&reader.json()).unwrap();
     assert_eq!(json["validation_state"], "Valid");
 }

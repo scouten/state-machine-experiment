@@ -70,13 +70,17 @@ The pieces, bottom up:
 * **`Reader`** — `WasmReader`, method for method. `Error` reproduces
   c2pa-wasm's error-string contract (`format!("{err:?}")`) down to the
   `C2pa(JumbfNotFound)` string c2pa-web's `reader.ts` turns into `null`.
+  The browser `fromBlob` also accepts optional caller-supplied detached
+  manifest-store bytes; the asset is validated against those bytes through
+  the same session used for embedded stores.
   Missing/unsupported active claim hash algorithms reject with
   `C2pa(UnknownAlgorithm)`, matching legacy rather than the core's default.
-  `context_json` is c2pa-rs settings JSON; the slice recognized is
-  documented on `Context::from_json` (trust anchors as PEM, and
-  `ocsp_fetch`, which takes c2pa-rs's off-by-default when absent rather
-  than the engine's on-by-default; everything else is ignored, including
-  `remote_manifest_fetch`, which the engine cannot act on yet).
+  `context_json` is c2pa-rs settings JSON; `Context::from_json` supports
+  separate manifest, timestamp, and CAWG trust anchors, named trust lists,
+  and `ocsp_fetch`, which defaults off as in c2pa-rs. The inline facade
+  resolves `trust` and `cawgTrust` through the shared `Context` utility.
+  Settings the reader cannot honor, including disabled trust verification
+  and remote-manifest fetching, are rejected at that migration boundary.
 * **`web`** (feature, `wasm32-unknown-unknown` only) — the browser end:
   `Blob` for `web_sys::Blob`, `WebPlatform`, and a
   `#[wasm_bindgen]`-exported `WasmReader` whose JavaScript surface
@@ -119,13 +123,17 @@ produce, including the exact `C2pa(JumbfNotFound)` string.
   the engine does not decode yet.
 * **Formats other than JPEG** — `src/format.rs` is the seam, exactly as
   in `contentauth-c2pa-rs-compat`.
-* **The full `@contentauth/c2pa-types` `ManifestStore`** — ingredients,
-  decoded assertion values, thumbnails. `ManifestStore` carries the
-  top-level contract, populated with what the engine reports today, in
-  the same shape `contentauth-c2pa-rs-compat`'s `Reader::json` produces.
-* **Remote manifests** — the engine has no remote-manifest request yet,
-  so an asset whose only manifest store is remotely hosted reads as
-  `C2pa(JumbfNotFound)` here however `remote_manifest_fetch` is set.
+* **The full `@contentauth/c2pa-types` `ManifestStore`** — CBOR assertion
+  values, created flags, and active-manifest success/informational/failure
+  buckets are now projected. Ingredient relationships, signature metadata,
+  thumbnail/resource references, and exact validation-result parity remain
+  incomplete. `ManifestStore` stays shared with
+  `contentauth-c2pa-rs-compat`.
+* **Remote manifests** — `verify.remote_manifest_fetch` now controls whether
+  a format-reported URL becomes a host request. `Platform::remote_manifest`
+  is the transport seam. Its default and `WebPlatform` decline the request;
+  a networked host must enforce URL and response policies before returning
+  bytes. JPEG and TIFF do not report remote XMP references yet.
 * **A `fetch`-backed OCSP transport for the browser** — a `Platform`
   whose `ocsp` posts through `fetch`. `WebPlatform` declines OCSP today
   (fail-open, and off by default here as in c2pa-rs); a host that wants

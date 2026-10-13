@@ -64,6 +64,11 @@ decoding, report population) and verifies:
   was actually zeroed (`assertion.notRedacted`), which needs ingredient
   manifests.
 
+* **Assertion reporting** — each manifest retains assertion labels in
+  store order and decodes CBOR payloads into `Manifest::assertions`.
+  `created` follows the v2 claim's `created_assertions` references;
+  unsupported encodings and malformed CBOR remain label-only.
+
 * **CAWG identity assertions** — `cawg.identity` (and `cawg.identity__N`)
   assertions are decoded into `Manifest::identity_assertions` and
   verified: the assertion's structure and zeroed padding; that each

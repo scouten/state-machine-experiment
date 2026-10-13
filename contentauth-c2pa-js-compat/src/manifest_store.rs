@@ -18,15 +18,10 @@
 //! c2pa-wasm returns these as plain JavaScript objects — c2pa-rs's
 //! `Reader` and `Manifest` serialized through `serde_wasm_bindgen` — whose
 //! shape `@contentauth/c2pa-types` describes as `ManifestStore` and
-//! `Manifest`. That schema also carries ingredients, decoded assertion
-//! values, thumbnails, and resource references, none of which
-//! [`contentauth_c2pa_reader`] decodes yet. What is reproduced here is the
-//! top-level contract callers lean on — a `manifests` object keyed by
-//! label, an `active_manifest` label, a `validation_state`, and a
-//! `validation_status` array in the C2PA status-code vocabulary —
-//! populated with what this workspace's reader knows how to report today,
-//! and in the same shape `contentauth-c2pa-rs-compat`'s `Reader::json`
-//! produces, so the two compatibility layers agree with each other.
+//! `Manifest`. This projection reports decoded CBOR assertion payloads
+//! and created relationships, alongside the validation summary. Ingredient
+//! manifests, signature metadata, thumbnails, resolved resources, and
+//! complete validation-result buckets remain unimplemented.
 //!
 //! Every type here owns its data and implements [`serde::Serialize`], so
 //! a binding can hand it straight to `serde_wasm_bindgen` (as the `web`
@@ -36,7 +31,10 @@
 use std::collections::BTreeMap;
 
 use contentauth_c2pa_reader::{ClaimVersion, ReadReport};
-use serde::Serialize;
+use serde::{
+    ser::{SerializeMap, SerializeSeq},
+    Serialize, Serializer,
+};
 
 /// The asset's manifest store: what c2pa-wasm's `manifestStore()` returns.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -56,6 +54,9 @@ pub struct ManifestStore {
     /// vocabulary of the C2PA specification.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub validation_status: Vec<ValidationStatus>,
+
+    /// Validation results grouped by the active manifest and outcome.
+    pub validation_results: ValidationResults,
 }
 
 /// Serializes a [`ClaimVersion`] as the number c2pa-js reports
@@ -128,9 +129,84 @@ pub struct Manifest {
     /// here either.
     pub instance_id: String,
 
-    /// Labels of the assertions physically present in the manifest's
-    /// assertion store, in store order.
-    pub assertions: Vec<String>,
+    /// Assertions physically present in the manifest's assertion store,
+    /// in store order.
+    pub assertions: Vec<ManifestAssertion>,
+}
+
+/// One assertion in the manifest store.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ManifestAssertion {
+    /// Assertion label.
+    pub label: String,
+
+    /// True when the claim created this assertion.
+    #[serde(skip_serializing_if = "is_false")]
+    pub created: bool,
+
+    /// Decoded assertion payload, when its CBOR could be read.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_cbor_value"
+    )]
+    pub data: Option<c2pa_cbor::Value>,
+}
+
+fn serialize_cbor_value<S: Serializer>(
+    value: &Option<c2pa_cbor::Value>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match value {
+        Some(value) => JsonCbor(value).serialize(serializer),
+        None => serializer.serialize_none(),
+    }
+}
+
+struct JsonCbor<'a>(&'a c2pa_cbor::Value);
+
+impl Serialize for JsonCbor<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use c2pa_cbor::Value;
+
+        match self.0 {
+            Value::Null => serializer.serialize_none(),
+            Value::Bool(value) => serializer.serialize_bool(*value),
+            Value::Integer(value) => serializer.serialize_i64(*value),
+            Value::Float(value) => serializer.serialize_f64(*value),
+            Value::Bytes(values) => {
+                let mut sequence = serializer.serialize_seq(Some(values.len()))?;
+                for value in values {
+                    sequence.serialize_element(value)?;
+                }
+                sequence.end()
+            }
+            Value::Text(value) => serializer.serialize_str(value),
+            Value::Array(values) => {
+                let mut sequence = serializer.serialize_seq(Some(values.len()))?;
+                for value in values {
+                    sequence.serialize_element(&JsonCbor(value))?;
+                }
+                sequence.end()
+            }
+            Value::Map(values) => {
+                let mut map = serializer.serialize_map(Some(values.len()))?;
+                for (key, value) in values {
+                    let Value::Text(key) = key else {
+                        return Err(serde::ser::Error::custom(
+                            "assertion CBOR map key is not text",
+                        ));
+                    };
+                    map.serialize_entry(key, &JsonCbor(value))?;
+                }
+                map.end()
+            }
+            Value::Tag(_, value) => JsonCbor(value).serialize(serializer),
+        }
+    }
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 /// Overall validation outcome for a manifest store, as c2pa-rs's
@@ -196,6 +272,31 @@ pub struct ValidationStatus {
     pub trust_list_uri: Option<String>,
 }
 
+/// Validation statuses grouped as c2pa-rs reports them.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ValidationResults {
+    /// Results for the active manifest.
+    #[serde(rename = "activeManifest")]
+    pub active_manifest: ValidationResultBuckets,
+
+    /// C2PA specification version used by this report.
+    #[serde(rename = "specVersion")]
+    pub spec_version: &'static str,
+}
+
+/// Statuses grouped by result category.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct ValidationResultBuckets {
+    /// Checks that passed.
+    pub success: Vec<ValidationStatus>,
+
+    /// Checks that did not establish success or failure.
+    pub informational: Vec<ValidationStatus>,
+
+    /// Checks that failed.
+    pub failure: Vec<ValidationStatus>,
+}
+
 impl ManifestStore {
     /// Reports `report` in c2pa-rs's manifest-store shape.
     ///
@@ -203,6 +304,17 @@ impl ManifestStore {
     /// surface (`contentauth-c2pa-node-compat`) can reuse the one
     /// reporting of the engine's result rather than copy it.
     pub fn from_report(report: &ReadReport) -> Self {
+        let statuses: Vec<_> = report
+            .statuses
+            .iter()
+            .map(|status| ValidationStatus {
+                code: status.code.clone(),
+                url: status.url.clone(),
+                explanation: status.explanation.clone(),
+                trust_list_uri: status.trust_list_uri.clone(),
+            })
+            .collect();
+
         Self {
             active_manifest: report.active_manifest.clone(),
             manifests: report
@@ -211,18 +323,61 @@ impl ManifestStore {
                 .map(|manifest| (manifest.label.clone(), Manifest::from_inner(manifest)))
                 .collect(),
             validation_state: report.validation_state.into(),
-            validation_status: report
-                .statuses
-                .iter()
-                .map(|status| ValidationStatus {
-                    code: status.code.clone(),
-                    url: status.url.clone(),
-                    explanation: status.explanation.clone(),
-                    trust_list_uri: status.trust_list_uri.clone(),
-                })
-                .collect(),
+            validation_status: statuses.clone(),
+            validation_results: validation_results(report, statuses),
         }
     }
+}
+
+fn validation_results(report: &ReadReport, statuses: Vec<ValidationStatus>) -> ValidationResults {
+    let active_label = report.active_manifest.as_deref().unwrap_or_default();
+    let mut active_manifest = ValidationResultBuckets::default();
+
+    for (inner, status) in report.statuses.iter().zip(statuses) {
+        let pertains_to_active = inner.url.as_ref().is_none_or(|url| {
+            url.contains(&format!("/c2pa/{active_label}/"))
+                // Claim-local assertion URIs omit the manifest label.
+                || report.active_manifest.is_some()
+                    && url.starts_with("self#jumbf=c2pa.assertions/")
+        });
+        if !pertains_to_active {
+            continue;
+        }
+
+        if is_failure_bucket(inner) {
+            active_manifest.failure.push(status);
+        } else if is_informational_bucket(inner) {
+            active_manifest.informational.push(status);
+        } else {
+            active_manifest.success.push(status);
+        }
+    }
+
+    ValidationResults {
+        active_manifest,
+        spec_version: "2.4.0",
+    }
+}
+
+fn is_failure_bucket(status: &contentauth_c2pa_reader::ValidationStatus) -> bool {
+    status.is_failure() || status.code == "signingCredential.untrusted"
+}
+
+fn is_informational_bucket(status: &contentauth_c2pa_reader::ValidationStatus) -> bool {
+    use contentauth_c2pa_reader::validation::status_code;
+
+    status.is_unchecked()
+        || matches!(
+            status.code.as_str(),
+            status_code::SIGNING_CREDENTIAL_OCSP_SKIPPED
+                | status_code::SIGNING_CREDENTIAL_OCSP_INACCESSIBLE
+                | status_code::SIGNING_CREDENTIAL_OCSP_UNKNOWN
+                | status_code::TIMESTAMP_UNTRUSTED
+                | status_code::TIMESTAMP_MISMATCH
+                | status_code::TIMESTAMP_MALFORMED
+                | status_code::TIMESTAMP_OUTSIDE_VALIDITY
+                | status_code::CAWG_IDENTITY_SIG_TYPE_UNSUPPORTED
+        )
 }
 
 impl Manifest {
@@ -245,7 +400,15 @@ impl Manifest {
             title: manifest.claim.title.clone(),
             format: manifest.claim.format.clone(),
             instance_id: manifest.claim.instance_id.clone().unwrap_or_default(),
-            assertions: manifest.assertion_labels.clone(),
+            assertions: manifest
+                .assertions
+                .iter()
+                .map(|assertion| ManifestAssertion {
+                    label: assertion.label.clone(),
+                    created: assertion.created,
+                    data: assertion.data.clone(),
+                })
+                .collect(),
         }
     }
 }
@@ -290,6 +453,10 @@ mod tests {
             manifests: BTreeMap::new(),
             validation_state: ValidationState::Invalid,
             validation_status: vec![],
+            validation_results: ValidationResults {
+                active_manifest: ValidationResultBuckets::default(),
+                spec_version: "2.4.0",
+            },
         };
 
         let json = serde_json::to_value(store).unwrap_or(serde_json::Value::Null);
@@ -298,6 +465,14 @@ mod tests {
             serde_json::json!({
                 "manifests": {},
                 "validation_state": "Invalid",
+                "validation_results": {
+                    "activeManifest": {
+                        "success": [],
+                        "informational": [],
+                        "failure": [],
+                    },
+                    "specVersion": "2.4.0",
+                },
             })
         );
     }
@@ -312,7 +487,11 @@ mod tests {
             title: None,
             format: Some("image/jpeg".to_string()),
             instance_id: String::new(),
-            assertions: vec!["c2pa.hash.data".to_string()],
+            assertions: vec![ManifestAssertion {
+                label: "c2pa.hash.data".to_string(),
+                created: false,
+                data: None,
+            }],
         };
 
         let json = serde_json::to_value(manifest).unwrap_or(serde_json::Value::Null);
@@ -323,8 +502,34 @@ mod tests {
                 "claim_version": 1,
                 "format": "image/jpeg",
                 "instance_id": "",
-                "assertions": ["c2pa.hash.data"],
+                "assertions": [{ "label": "c2pa.hash.data" }],
             })
         );
+    }
+
+    #[test]
+    fn assertion_cbor_bytes_serialize_as_json_arrays() {
+        let assertion = ManifestAssertion {
+            label: "cawg.identity".to_string(),
+            created: false,
+            data: Some(c2pa_cbor::Value::Bytes(vec![1, 2, 255])),
+        };
+
+        let json = serde_json::to_value(assertion).unwrap_or(serde_json::Value::Null);
+        assert_eq!(json["data"], serde_json::json!([1, 2, 255]));
+    }
+
+    #[test]
+    fn assertion_cbor_with_non_text_map_keys_fails_serialization() {
+        let assertion = ManifestAssertion {
+            label: "custom.assertion".to_string(),
+            created: false,
+            data: Some(c2pa_cbor::Value::Map(BTreeMap::from([(
+                c2pa_cbor::Value::Integer(1),
+                c2pa_cbor::Value::Null,
+            )]))),
+        };
+
+        assert!(serde_json::to_value(assertion).is_err());
     }
 }

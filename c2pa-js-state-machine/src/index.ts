@@ -14,6 +14,14 @@ export interface ManifestProjection {
   manifests: Record<string, unknown>;
   validation_state: "Trusted" | "Valid" | "Invalid";
   validation_status?: { code: string; url?: string; explanation?: string }[];
+  validation_results: {
+    activeManifest: {
+      success: { code: string; url?: string; explanation?: string }[];
+      informational: { code: string; url?: string; explanation?: string }[];
+      failure: { code: string; url?: string; explanation?: string }[];
+    };
+    specVersion: string;
+  };
 }
 export interface Signer {
   alg: "es256";
@@ -35,33 +43,57 @@ function projection(value: unknown): ManifestProjection {
     throw new Error("Invalid state-machine manifest projection");
   return value;
 }
+function isValidationStatus(value: unknown): value is { code: string; url?: string; explanation?: string } {
+  return object(value) && typeof value.code === "string" &&
+    (value.url === undefined || typeof value.url === "string") &&
+    (value.explanation === undefined || typeof value.explanation === "string");
+}
+function isValidationStatusList(
+  value: unknown,
+): value is { code: string; url?: string; explanation?: string }[] {
+  return Array.isArray(value) && value.every(isValidationStatus);
+}
 function isProjection(value: unknown): value is ManifestProjection {
-  return object(value) && object(value.manifests) &&
-    (value.validation_state === "Trusted" || value.validation_state === "Valid" || value.validation_state === "Invalid") &&
-    (value.active_manifest === undefined || typeof value.active_manifest === "string") &&
-    (value.validation_status === undefined || (Array.isArray(value.validation_status) &&
-      value.validation_status.every((status: unknown) => object(status) && typeof status.code === "string" &&
-        (status.url === undefined || typeof status.url === "string") &&
-        (status.explanation === undefined || typeof status.explanation === "string"))));
+  if (!object(value) || !object(value.manifests) ||
+      !(value.validation_state === "Trusted" || value.validation_state === "Valid" ||
+        value.validation_state === "Invalid") ||
+      (value.active_manifest !== undefined && typeof value.active_manifest !== "string") ||
+      (value.validation_status !== undefined && !isValidationStatusList(value.validation_status))) {
+    return false;
+  }
+
+  const results = value.validation_results;
+  if (!object(results) || typeof results.specVersion !== "string") {
+    return false;
+  }
+
+  const activeManifest = results.activeManifest;
+  if (!object(activeManifest)) return false;
+
+  return ["success", "informational", "failure"].every((bucket) =>
+    isValidationStatusList(activeManifest[bucket]));
 }
 async function contextJson(context?: Context): Promise<string | undefined> {
   if (!context) return undefined;
   const settings: unknown = context.settings ?? {};
   if (!object(settings)) throw new Error("Invalid Context");
-  if (settings.trust !== undefined && (!object(settings.verify) || settings.verify.verifyTrust !== true))
-    throw new Error("M1 trust anchors require verifyTrust: true");
   for (const [section, value] of Object.entries(settings)) {
-    if (!["trust", "verify"].includes(section) || !object(value))
-      throw new Error(`Unsupported M1 setting: ${section}`);
+    if (!["trust", "cawgTrust", "verify"].includes(section) || !object(value))
+      throw new Error(`Unsupported reader setting: ${section}`);
     for (const [key, field] of Object.entries(value)) {
-      const supported = (section === "trust" && key === "trustAnchors" && typeof field === "string" &&
-        field.trimStart().startsWith("-----BEGIN CERTIFICATE-----")) ||
+      const anchorValue = (typeof field === "string" || Array.isArray(field)) &&
+        (typeof field === "string" || field.every((entry) => typeof entry === "string"));
+      const supported = ((section === "trust" || section === "cawgTrust") &&
+        ["trustAnchors", "userAnchors"].includes(key) && anchorValue) ||
         (section === "verify" && key === "ocspFetch" && field === false) ||
         (section === "verify" && key === "verifyTrust" && field === true);
-      if (!supported) throw new Error(`Unsupported M1 setting: ${section}.${key}`);
+      if (!supported) throw new Error(`Unsupported reader setting: ${section}.${key}`);
     }
   }
-  return context.toJson();
+  if ((settings.trust !== undefined || settings.cawgTrust !== undefined) &&
+      object(settings.verify) && settings.verify.verifyTrust === false)
+    throw new Error("verify.verifyTrust: false is not supported by the state-machine reader");
+  return await context.toJson();
 }
 
 let source: Config["wasmSrc"] | undefined;
@@ -98,8 +130,8 @@ class Runtime {
     for (const resource of this.#resources) resource.requestFree();
   }
   reader = {
-    fromBlob: (format: string, blob: Blob, settings?: Settings) =>
-      Reader.fromBlob(this, format, blob, settings ? new Context(settings) : undefined),
+    fromBlob: (format: string, blob: Blob, settings?: Settings, detachedManifest?: Uint8Array) =>
+      Reader.fromBlob(this, format, blob, settings ? new Context(settings) : undefined, detachedManifest),
   };
   builder = {
     fromDefinition: (definition: Record<string, unknown>) => Builder.fromDefinition(this, definition),
@@ -114,7 +146,13 @@ export class Reader implements Resource {
     this.#ffi = ffi;
     runtime.retain(this);
   }
-  static async fromBlob(runtime: Runtime, format: string | undefined, blob: Blob, context?: Context): Promise<Reader | null> {
+  static async fromBlob(
+    runtime: Runtime,
+    format: string | undefined,
+    blob: Blob,
+    context?: Context,
+    detachedManifest?: Uint8Array,
+  ): Promise<Reader | null> {
     runtime.assertLive();
     validateAssetSize(blob.size, MAX_SIZE_IN_BYTES);
     if (!format) {
@@ -125,7 +163,7 @@ export class Reader implements Resource {
     const json = await contextJson(context);
     runtime.assertLive();
     let ffi: BrowserReader;
-    try { ffi = await BrowserReader.fromBlob(format, blob, json) }
+    try { ffi = await BrowserReader.fromBlob(format, blob, json, detachedManifest) }
     catch (cause) {
       runtime.assertLive();
       if (cause === "C2pa(JumbfNotFound)") return null;
@@ -185,6 +223,25 @@ export class Builder implements Resource {
       if (this.#closed) throw new Error("Builder has been freed");
       if (!object(result) || !(result.asset instanceof Uint8Array) || !(result.manifest instanceof Uint8Array))
         throw new Error("Invalid state-machine signing result");
+      return { asset: result.asset, manifest: result.manifest };
+    } catch (cause) { throw error(cause) }
+    finally {
+      this.#busy = false;
+      if (this.#closed) this.requestFree();
+    }
+  }
+  async signDetached(signer: Signer, blob: Blob): Promise<ManifestAndAssetBytes> {
+    this.#runtime.assertLive();
+    if (this.#closed || !this.#ffi) throw new Error("Builder has been freed");
+    if (this.#busy) throw new Error("Builder already has an in-flight operation");
+    validateAssetSize(blob.size, MAX_SIZE_IN_BYTES);
+    this.#busy = true;
+    try {
+      const result: unknown = await this.#ffi.signDetached(signer, blob);
+      this.#runtime.assertLive();
+      if (this.#closed) throw new Error("Builder has been freed");
+      if (!object(result) || !(result.asset instanceof Uint8Array) || !(result.manifest instanceof Uint8Array))
+        throw new Error("Invalid state-machine detached signing result");
       return { asset: result.asset, manifest: result.manifest };
     } catch (cause) { throw error(cause) }
     finally {

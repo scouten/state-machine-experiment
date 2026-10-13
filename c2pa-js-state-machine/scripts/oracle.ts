@@ -27,9 +27,12 @@ mkdirSync(directory, { recursive: true });
 const evidence = join(directory, `${backend}-observations.json`);
 if (existsSync(evidence)) rmSync(evidence);
 const milestone = backend === "state-machine"
-  ? extractTests(readFileSync(join(root, "browser/m1.spec.ts"), "utf8"), "browser/m1.spec.ts") : [];
+  ? ["m1", "m2", "m3"].flatMap((name) => {
+    const file = `browser/${name}.spec.ts`;
+    return extractTests(readFileSync(join(root, file), "utf8"), file);
+  }) : [];
 if (backend === "state-machine" && (milestone.length === 0 || milestone.some((t) => t.parameterized || t.sourceMode !== "normal")))
-  throw new Error("M1 requires explicit, non-skipped browser tests");
+  throw new Error("Browser milestones require explicit, non-skipped tests");
 const artifacts = backend === "legacy" ? legacyArtifacts() : stateArtifacts();
 const fingerprint = {
   inventorySha256: hash(JSON.stringify(inventory)),
@@ -82,4 +85,4 @@ writeFileSync(evidence, JSON.stringify({
 }, null, 2) + "\n");
 if (runs.some((run) => run.exit !== 0 || run.outcomes.some((o) => o.status !== "passed")))
   throw new Error(`${backend} browser proof failed; failing observations recorded`);
-console.log(`Recorded ${observations.length} unchanged upstream passes and ${milestone.length} M1 cases on ${browsers.join(", ")}.`);
+console.log(`Recorded ${observations.length} unchanged upstream passes and ${milestone.length} M1/M2/M3 cases on ${browsers.join(", ")}.`);

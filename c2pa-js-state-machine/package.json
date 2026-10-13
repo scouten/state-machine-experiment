@@ -19,7 +19,9 @@
     "typecheck": "tsc --noEmit",
     "test:oracle": "tsx scripts/oracle.ts",
     "report:parity": "tsx scripts/report.ts",
-    "check:parity": "tsx scripts/report.ts --require-parity"
+    "check:parity": "tsx scripts/report.ts --require-parity",
+    "test:m2": "tsx scripts/oracle.ts --backend state-machine",
+    "test:m3": "tsx scripts/oracle.ts --backend state-machine"
   },
   "devDependencies": {
     "@contentauth/c2pa-web": "0.15.3",

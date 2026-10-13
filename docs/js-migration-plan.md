@@ -1,8 +1,9 @@
 # c2pa-js migration: implementation and proof plan
 
-Status: M0 is implemented; M1+ remains proposed. Researched on 2026-10-12.
-The M0 browser oracle executes the legacy SDK, not the state-machine bindings.
-This document does not claim a full-parity shim already exists.
+Status: M0 and the defined M1 slice are implemented; M2 is partial and M3 is
+in progress. Researched on 2026-10-12. The M0 browser oracle executes the legacy
+SDK, not the state-machine bindings. This document does not claim a full-parity
+shim already exists.
 
 ## Target and compatibility contract
 
@@ -227,6 +228,14 @@ arrays. Node and browser agree on the shared report for the same asset/settings.
 In particular, do not reduce upstream's `toEqual(ManifestStore)` tests to checking
 only `validation_state` or assertion labels.
 
+**In progress:** the reader now decodes CBOR assertion payloads and v2
+created-assertion relationships. The inline facade accepts separate signing and
+CAWG trust settings and rejects unsupported trust-verification settings.
+Active-manifest validation-result buckets are projected and checked in Rust and
+browser tests. Browser proof covers this subset; full-store equality, ingredients,
+signature metadata, exact validation-result parity, thumbnails, and resource
+bytes remain open.
+
 ### M3: network, formats, and runtime/distribution parity
 
 Add remote-manifest and detached-manifest session capabilities, then host
@@ -239,6 +248,20 @@ Provide controlled browser OCSP/remote fetch behavior with URL policy,
 response limits, cancellation/timeouts, and deterministic local test servers.
 Test failure, denial, CORS, and retry paths; do not rely on a public responder.
 Keep HTTP outside the domain engine.
+
+**In progress:** `FileReadSession` accepts detached manifest-store bytes and
+surfaces a format-reported remote URL when `fetch_remote_manifests` is enabled.
+The async compatibility host forwards that request through
+`Platform::remote_manifest`; hosts without transport fail explicitly. The
+inline JS reader now accepts detached manifest-store bytes and passes them
+through the Wasm binding into that same session. The JS builder now also has an
+explicit detached-output path: it skips placeholder reservation and encodes an
+empty exclusion list so the hard binding covers the complete asset. Browser
+proof strips the fixture's C2PA APP11 segment, verifies the output asset is
+unchanged and has no active embedded manifest, then reads the detached store as
+`Trusted`; a changed asset reports `Invalid`, and malformed detached bytes are
+rejected. URL policy and bounded browser transport, remote-pointer parsing,
+fragmented BMFF, and Worker/runtime parity remain open.
 
 Prove Worker and inline paths, CSP-compatible `workerSrc`, module/URL loading,
 package exports, cleanup, and invalid-handle behavior. Add test-only host counters

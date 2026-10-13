@@ -67,7 +67,25 @@ where
     B: Blob + ?Sized,
     P: Platform + ?Sized,
 {
+    read_manifest_with_detached_manifest(handler, blob, platform, settings, None).await
+}
+
+pub(crate) async fn read_manifest_with_detached_manifest<H, B, P>(
+    handler: &H,
+    blob: &B,
+    platform: &P,
+    settings: ReadSettings,
+    detached_manifest: Option<Vec<u8>>,
+) -> Result<ReadReport, Error>
+where
+    H: FormatHandler,
+    B: Blob + ?Sized,
+    P: Platform + ?Sized,
+{
     let mut session = FileReadSession::new(handler, settings);
+    if let Some(manifest_store) = detached_manifest {
+        session = session.with_detached_manifest(manifest_store);
+    }
 
     loop {
         if session.advance()? == Step::Complete {
@@ -121,6 +139,11 @@ where
 
         FileReadRequest::Ocsp { url, request_der } => match platform.ocsp(url, request_der).await {
             Ok(bytes) => FileReadReply::OcspResponse(bytes),
+            Err(err) => FileReadReply::Failed(err),
+        },
+
+        FileReadRequest::RemoteManifest { url } => match platform.remote_manifest(url).await {
+            Ok(bytes) => FileReadReply::ManifestStore(bytes),
             Err(err) => FileReadReply::Failed(err),
         },
 
@@ -253,6 +276,18 @@ mod tests {
         assert!(matches!(reply, FileReadReply::Failed(_)), "{reply:?}");
     }
 
+    #[test]
+    fn a_platform_without_a_remote_manifest_transport_fails_explicitly() {
+        let reply = block_on(answer(
+            &Canned(Ok(vec![])),
+            &Nothing,
+            &FileReadRequest::RemoteManifest {
+                url: "https://manifests.example/store".to_string(),
+            },
+        ));
+        assert!(matches!(reply, FileReadReply::Failed(_)), "{reply:?}");
+    }
+
     /// A [`Platform`] that answers both requests, so the success paths
     /// through `answer` are covered too.
     struct Everything;
@@ -266,6 +301,11 @@ mod tests {
             assert_eq!(url, "http://ocsp.example/");
             assert_eq!(request_der, [1, 2, 3]);
             Ok(vec![4, 5, 6])
+        }
+
+        async fn remote_manifest(&self, url: &str) -> Result<Vec<u8>, HostError> {
+            assert_eq!(url, "https://manifests.example/store");
+            Ok(vec![7, 8, 9])
         }
     }
 
@@ -294,6 +334,21 @@ mod tests {
         ));
         assert!(
             matches!(reply, FileReadReply::OcspResponse(ref bytes) if *bytes == [4, 5, 6]),
+            "{reply:?}"
+        );
+    }
+
+    #[test]
+    fn a_platform_with_a_remote_manifest_transport_returns_exact_bytes() {
+        let reply = block_on(answer(
+            &Canned(Ok(vec![])),
+            &Everything,
+            &FileReadRequest::RemoteManifest {
+                url: "https://manifests.example/store".to_string(),
+            },
+        ));
+        assert!(
+            matches!(reply, FileReadReply::ManifestStore(ref bytes) if *bytes == [7, 8, 9]),
             "{reply:?}"
         );
     }

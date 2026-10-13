@@ -172,8 +172,14 @@ fn the_baseline_case_signs_a_blob_that_reads_back_trusted() {
 
     let active = reader.active_manifest().unwrap();
     assert_eq!(active.title.as_deref(), Some("baseline.jpg"));
-    assert!(active.assertions.iter().any(|a| a == "c2pa.actions.v2"));
-    assert!(active.assertions.iter().any(|a| a == "c2pa.hash.data"));
+    assert!(active
+        .assertions
+        .iter()
+        .any(|assertion| assertion.label == "c2pa.actions.v2"));
+    assert!(active
+        .assertions
+        .iter()
+        .any(|assertion| assertion.label == "c2pa.hash.data"));
 }
 
 /// Same engine, different host: the async loop and the blocking
