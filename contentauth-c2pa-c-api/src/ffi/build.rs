@@ -21,6 +21,7 @@ use std::{
 use super::{ffi_call, ffi_call_without_error_output};
 use crate::{
     build::{BuildSession, C2paSmBuildRequest, C2paSmExclusion},
+    error::Error,
     C2PA_SM_STEP_ERROR,
 };
 
@@ -35,6 +36,12 @@ pub struct C2paSmBuildSession {
 /// release this owner with [`c2pa_sm_exclusions_free`].
 pub struct C2paSmExclusionList {
     entries: Vec<C2paSmExclusion>,
+}
+
+fn certificate_array_bytes(count: usize, entry_size: usize) -> Result<usize, Error> {
+    count
+        .checked_mul(entry_size)
+        .ok_or_else(|| Error::BadParam("certificate count is too large".to_owned()))
 }
 
 /// Creates a new sans-I/O build session.
@@ -65,14 +72,14 @@ pub unsafe extern "C" fn c2pa_sm_build_new(
         cimpl::ptr_or_return_null!(certs_der);
         cimpl::ptr_or_return_null!(cert_lens);
 
-        let cert_ptrs_len = cimpl::some_or_return_other_null!(
-            cert_count.checked_mul(std::mem::size_of::<*const u8>()),
-            "certificate count is too large"
-        );
-        let cert_lens_len = cimpl::some_or_return_other_null!(
-            cert_count.checked_mul(std::mem::size_of::<usize>()),
-            "certificate count is too large"
-        );
+        let cert_ptrs_len = cimpl::ok_or_return_null!(certificate_array_bytes(
+            cert_count,
+            std::mem::size_of::<*const u8>()
+        ));
+        let cert_lens_len = cimpl::ok_or_return_null!(certificate_array_bytes(
+            cert_count,
+            std::mem::size_of::<usize>()
+        ));
         let _ = cimpl::bytes_or_return_null!(certs_der.cast::<u8>(), cert_ptrs_len, "certs_der");
         let _ = cimpl::bytes_or_return_null!(cert_lens.cast::<u8>(), cert_lens_len, "cert_lens");
         let cert_ptrs = unsafe { slice::from_raw_parts(certs_der, cert_count) };
@@ -352,4 +359,26 @@ pub unsafe extern "C" fn c2pa_sm_exclusions_free(exclusions: *mut C2paSmExclusio
             let _ = cimpl::cimpl_free(exclusions.cast::<c_void>());
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn certificate_array_sizes_reject_overflow_before_reading_memory() {
+        for width in [
+            std::mem::size_of::<*const u8>(),
+            std::mem::size_of::<usize>(),
+        ] {
+            assert!(matches!(certificate_array_bytes(0, width), Ok(0)));
+            assert!(matches!(certificate_array_bytes(2, width), Ok(size) if size == 2 * width));
+            let largest = usize::MAX / width;
+            assert!(certificate_array_bytes(largest, width).is_ok());
+            assert!(matches!(
+                certificate_array_bytes(largest + 1, width),
+                Err(Error::BadParam(message)) if message == "certificate count is too large"
+            ));
+        }
+    }
 }

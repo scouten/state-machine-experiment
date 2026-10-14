@@ -21,25 +21,31 @@ use std::{
 use base64::Engine as _;
 use contentauth_c2pa_c_api::{
     c2pa_sm_read_advance, c2pa_sm_read_finish, c2pa_sm_read_free, c2pa_sm_read_fulfill_bytes,
-    c2pa_sm_read_fulfill_length, c2pa_sm_read_fulfill_time, c2pa_sm_read_new, c2pa_sm_string_free,
-    C2paSmReadRequest, C2PA_SM_READ_REQ_CURRENT_DATE_TIME, C2PA_SM_READ_REQ_LENGTH,
+    c2pa_sm_read_fulfill_failed, c2pa_sm_read_fulfill_length, c2pa_sm_read_fulfill_ocsp,
+    c2pa_sm_read_fulfill_time, c2pa_sm_read_new, c2pa_sm_string_free, C2paSmReadRequest,
+    C2PA_SM_READ_REQ_CURRENT_DATE_TIME, C2PA_SM_READ_REQ_LENGTH, C2PA_SM_READ_REQ_OCSP,
     C2PA_SM_READ_REQ_READ, C2PA_SM_STEP_COMPLETE, C2PA_SM_STEP_PENDING,
 };
-use contentauth_c2pa_sign_baseline::fixtures::TEST_SIGNER_CERT;
 
 const FIXED_NOW: i64 = 1_800_000_000;
 
 pub struct ReadOutput {
     pub has_manifest: bool,
     pub json: Option<String>,
+    pub ocsp_requests: usize,
 }
 
-pub fn read_signed_output(output_bytes: &[u8]) -> ReadOutput {
+pub fn read_signed_output(
+    output_bytes: &[u8],
+    anchor: &[u8],
+    ocsp_reply: Option<Result<&[u8], &str>>,
+) -> ReadOutput {
     let format = CString::new("image/jpeg").unwrap();
     let mut err_out = ptr::null_mut();
-    let cert_base64 = base64::engine::general_purpose::STANDARD.encode(TEST_SIGNER_CERT);
+    let cert_base64 = base64::engine::general_purpose::STANDARD.encode(anchor);
     let cert_pem = format!("-----BEGIN CERTIFICATE-----\n{cert_base64}\n-----END CERTIFICATE-----");
     let trust_settings = serde_json::json!({
+        "verify": { "ocsp_fetch": ocsp_reply.is_some() },
         "trust": {
             "anchors": [{
                 "trust_anchors": cert_pem,
@@ -54,6 +60,7 @@ pub fn read_signed_output(output_bytes: &[u8]) -> ReadOutput {
         unsafe { c2pa_sm_read_new(format.as_ptr(), trust_settings_json.as_ptr(), &mut err_out) };
     assert!(!read_session.is_null());
     assert!(err_out.is_null());
+    let mut ocsp_requests = 0;
 
     loop {
         let mut req_ptr: *const C2paSmReadRequest = ptr::null();
@@ -104,6 +111,57 @@ pub fn read_signed_output(output_bytes: &[u8]) -> ReadOutput {
                     assert_eq!(rc, 0);
                     assert!(err_out.is_null());
                 }
+                C2PA_SM_READ_REQ_OCSP => {
+                    ocsp_requests += 1;
+                    assert!(!req.url.is_null());
+                    assert_eq!(
+                        unsafe { CStr::from_ptr(req.url) }.to_str().unwrap(),
+                        "http://ocsp.example/"
+                    );
+                    assert!(!req.request_der.is_null());
+                    let der =
+                        unsafe { slice::from_raw_parts(req.request_der, req.request_der_len) };
+                    assert_eq!(der[0], 0x30);
+                    assert!(
+                        der.len() > 32,
+                        "OCSP CertID carries issuer hashes and serial"
+                    );
+                    assert_eq!(
+                        unsafe {
+                            c2pa_sm_read_fulfill_time(read_session, req.id, FIXED_NOW, &mut err_out)
+                        },
+                        -1
+                    );
+                    assert!(!err_out.is_null());
+                    let error = unsafe { CStr::from_ptr(err_out) }.to_string_lossy();
+                    assert!(error.contains("reply payload does not match"));
+                    unsafe { c2pa_sm_string_free(err_out) };
+                    err_out = ptr::null_mut();
+                    let rc = match ocsp_reply.expect("configured OCSP response") {
+                        Ok(bytes) => unsafe {
+                            c2pa_sm_read_fulfill_ocsp(
+                                read_session,
+                                req.id,
+                                bytes.as_ptr(),
+                                bytes.len(),
+                                &mut err_out,
+                            )
+                        },
+                        Err(message) => {
+                            let message = CString::new(message).unwrap();
+                            unsafe {
+                                c2pa_sm_read_fulfill_failed(
+                                    read_session,
+                                    req.id,
+                                    message.as_ptr(),
+                                    &mut err_out,
+                                )
+                            }
+                        }
+                    };
+                    assert_eq!(rc, 0);
+                    assert!(err_out.is_null());
+                }
                 _ => panic!("unexpected request kind: {}", req.kind),
             }
         }
@@ -131,5 +189,9 @@ pub fn read_signed_output(output_bytes: &[u8]) -> ReadOutput {
         c2pa_sm_read_free(read_session);
     }
 
-    ReadOutput { has_manifest, json }
+    ReadOutput {
+        has_manifest,
+        json,
+        ocsp_requests,
+    }
 }

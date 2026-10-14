@@ -33,10 +33,14 @@ pub struct BuildOutput {
 }
 
 pub fn build_signed_asset() -> BuildOutput {
-    build_with_definition(BASELINE_DEFINITION, None)
+    build_with_definition(BASELINE_DEFINITION, None, &[TEST_SIGNER_CERT])
 }
 
-pub fn build_with_definition(definition: &str, timestamp_response: Option<&[u8]>) -> BuildOutput {
+pub fn build_with_definition(
+    definition: &str,
+    timestamp_response: Option<&[u8]>,
+    certificates: &[&[u8]],
+) -> BuildOutput {
     let signer = c2pa_raw_crypto::signer_from_private_key(
         TEST_SIGNER_KEY_PEM,
         c2pa_raw_crypto::SigningAlg::Es256,
@@ -46,10 +50,8 @@ pub fn build_with_definition(definition: &str, timestamp_response: Option<&[u8]>
     let format = CString::new("image/jpeg").unwrap();
     let def_json = CString::new(definition).unwrap();
     let alg = CString::new("es256").unwrap();
-    let cert_ptr = TEST_SIGNER_CERT.as_ptr();
-    let cert_len = TEST_SIGNER_CERT.len();
-    let certs_ptrs = [cert_ptr];
-    let certs_lens = [cert_len];
+    let certs_ptrs: Vec<_> = certificates.iter().map(|cert| cert.as_ptr()).collect();
+    let certs_lens: Vec<_> = certificates.iter().map(|cert| cert.len()).collect();
     let mut err_out: *mut std::ffi::c_char = ptr::null_mut();
 
     let build_session = unsafe {
@@ -59,7 +61,7 @@ pub fn build_with_definition(definition: &str, timestamp_response: Option<&[u8]>
             alg.as_ptr(),
             certs_ptrs.as_ptr(),
             certs_lens.as_ptr(),
-            1,
+            certificates.len(),
             &mut err_out,
         )
     };

@@ -181,7 +181,11 @@ fn timestamp_request_and_response_cross_the_c_abi() {
     let response = [
         0x30, 0x0a, 0x30, 0x03, 0x02, 0x01, 0x00, 0x30, 0x03, 0x02, 0x01, 0x2a,
     ];
-    let output = build_host::build_with_definition(&definition, Some(&response));
+    let output = build_host::build_with_definition(
+        &definition,
+        Some(&response),
+        &[contentauth_c2pa_sign_baseline::fixtures::TEST_SIGNER_CERT],
+    );
     let token = &response[7..];
     assert!(output
         .manifest

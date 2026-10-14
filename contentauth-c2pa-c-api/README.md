@@ -42,6 +42,13 @@ the corresponding test files rather than inside the drivers.
 Feature-specific error matrices in `tests/common` check each C entry point's
 null inputs, rejected payloads, error allocation ownership, and whether the
 session remains usable afterward.
+The round-trip suite also drives real OCSP requests through the C ABI using
+a test certificate chain with an AIA responder URL. It checks authenticated
+good/revoked responses, malformed response bytes, and an unavailable transport,
+without making network requests.
+The public certificates and signed OCSP responses in `tests/fixtures` reuse the existing test signing
+key (which protects nothing); regenerate them with
+`sh contentauth-c2pa-c-api/tests/fixtures/generate-ocsp-chain.sh` from the repo root.
 
 This crate exposes the synchronous sans-I/O state machines
 (`FileReadSession` and `FileBuilderSession`) over an FFI boundary using
