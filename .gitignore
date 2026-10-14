@@ -1,3 +1,8 @@
 /target
 lcov.info
 Cargo.lock
+
+**/CMakeFiles/**
+build/
+**/cargo/**
+.vscode/
