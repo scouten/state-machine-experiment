@@ -258,3 +258,45 @@ fn describe_request(handle: u64, req: &FileReadRequest) -> Result<PendingRequest
         )),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    #[test]
+    fn ocsp_description_preserves_url_and_der() {
+        let request = FileReadRequest::Ocsp {
+            url: "https://ocsp.example/".to_owned(),
+            request_der: vec![0x30, 0x00],
+        };
+        let data = describe_request(9, &request).unwrap();
+        assert_eq!(data.id, 9);
+        assert_eq!(data.kind, C2PA_SM_READ_REQ_OCSP);
+        assert_eq!(
+            data.url.as_ref().unwrap().to_str().unwrap(),
+            "https://ocsp.example/"
+        );
+        assert_eq!(data.request_der.unwrap(), [0x30, 0x00]);
+        let invalid_url = FileReadRequest::Ocsp {
+            url: "https://ocsp.example/\0".to_owned(),
+            request_der: vec![],
+        };
+        assert!(matches!(
+            describe_request(9, &invalid_url),
+            Err(Error::NulError(_))
+        ));
+    }
+
+    #[test]
+    fn advancing_without_fulfilling_keeps_request_ids_live_without_reporting_twice() {
+        let mut session = ReadSession::new("jpeg", None).unwrap();
+        assert_eq!(session.advance().unwrap(), C2PA_SM_STEP_PENDING);
+        let id = session.current_requests()[0].id;
+        assert_eq!(session.advance().unwrap(), C2PA_SM_STEP_PENDING);
+        assert!(session.current_requests().is_empty());
+        assert!(session.handles.contains_key(&id));
+        assert!(session.fulfill_ocsp(id, &[0x30, 0]).is_err());
+    }
+}

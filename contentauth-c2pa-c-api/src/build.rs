@@ -386,3 +386,71 @@ fn alg_name(alg: SigningAlg) -> Result<&'static str, Error> {
         _ => Err(Error::BadParam(format!("unsupported algorithm {alg:?}"))),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use contentauth_c2pa_primitives::HashAlgorithm;
+
+    use super::*;
+
+    #[test]
+    fn algorithm_names_round_trip_and_unknown_names_fail() {
+        for (name, alg) in [
+            ("es256", SigningAlg::Es256),
+            ("es384", SigningAlg::Es384),
+            ("es512", SigningAlg::Es512),
+            ("ps256", SigningAlg::Ps256),
+            ("ps384", SigningAlg::Ps384),
+            ("ps512", SigningAlg::Ps512),
+            ("ed25519", SigningAlg::Ed25519),
+        ] {
+            assert_eq!(parse_alg(&name.to_uppercase()).unwrap(), alg);
+            assert_eq!(alg_name(alg).unwrap(), name);
+        }
+        assert!(matches!(parse_alg("unknown"), Err(Error::BadParam(_))));
+    }
+
+    #[test]
+    fn timestamp_description_requires_a_url_and_preserves_request_data() {
+        let request = FileBuilderRequest::Timestamp {
+            digest: vec![0x42; 32],
+            hash_alg: HashAlgorithm::Sha256,
+        };
+        assert!(matches!(
+            describe_request(4, &request, None),
+            Err(Error::BadParam(_))
+        ));
+        let data = describe_request(4, &request, Some("https://tsa.example/")).unwrap();
+        assert_eq!(data.id, 4);
+        assert_eq!(data.kind, C2PA_SM_BUILD_REQ_TIMESTAMP);
+        assert_eq!(
+            data.url.as_ref().unwrap().to_str().unwrap(),
+            "https://tsa.example/"
+        );
+        assert_eq!(
+            data.data.unwrap(),
+            timestamp_request(&[0x42; 32], HashAlgorithm::Sha256).unwrap()
+        );
+    }
+
+    #[test]
+    fn advancing_without_fulfilling_does_not_duplicate_pending_requests() {
+        let mut session = BuildSession::new(
+            "jpeg",
+            contentauth_c2pa_sign_baseline::BASELINE_DEFINITION,
+            "es256",
+            vec![contentauth_c2pa_sign_baseline::fixtures::TEST_SIGNER_CERT.to_vec()],
+        )
+        .unwrap();
+        assert_eq!(session.advance().unwrap(), C2PA_SM_STEP_PENDING);
+        assert!(!session.current_requests().is_empty());
+        let id = session.current_requests()[0].id;
+        assert_eq!(session.advance().unwrap(), C2PA_SM_STEP_PENDING);
+        assert!(session.current_requests().is_empty());
+        assert!(session.handles.contains_key(&id));
+        session.fulfill_failed(id, "host unavailable").unwrap();
+        assert!(session.advance().is_err());
+    }
+}

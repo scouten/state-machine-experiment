@@ -84,3 +84,50 @@ pub unsafe extern "C" fn c2pa_sm_string_free(string: *mut c_char) {
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::panic)]
+
+    use super::*;
+
+    #[cfg(any(feature = "read", feature = "build"))]
+    #[test]
+    fn panics_return_the_fallback_and_a_tracked_error() {
+        let mut error = std::ptr::null_mut();
+        let result = ffi_call(&mut error, -7, || panic!("test boundary panic"));
+        assert_eq!(result, -7);
+        assert!(!error.is_null());
+        let message = unsafe { std::ffi::CStr::from_ptr(error) }.to_string_lossy();
+        assert!(message.contains("panic caught at the C ABI boundary"));
+        unsafe { c2pa_sm_string_free(error) };
+        assert!(cimpl::Error::take_last().is_none());
+    }
+
+    #[cfg(any(feature = "read", feature = "build"))]
+    #[test]
+    fn an_error_output_is_optional_and_stale_errors_are_cleared() {
+        cimpl::Error::other("stale error").set_last();
+        let mut error = std::ptr::null_mut();
+        assert_eq!(ffi_call(&mut error, -1, || 3), 3);
+        assert!(error.is_null());
+        assert_eq!(
+            ffi_call(std::ptr::null_mut(), -1, || {
+                cimpl::Error::other("current error").set_last();
+                -1
+            }),
+            -1
+        );
+        assert!(cimpl::Error::take_last().is_none());
+    }
+
+    #[test]
+    fn panics_without_an_output_are_recorded_as_last_error() {
+        ffi_call_without_error_output(|| panic!("test cleanup panic"));
+        let error = cimpl::Error::take_last();
+        assert!(error.is_some());
+        assert!(error
+            .as_ref()
+            .is_some_and(|error| error.message().contains("panic caught")));
+    }
+}

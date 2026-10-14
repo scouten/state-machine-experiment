@@ -17,10 +17,11 @@ use std::{ffi::CString, ptr, slice};
 
 use contentauth_c2pa_c_api::{
     c2pa_sm_build_advance, c2pa_sm_build_finish, c2pa_sm_build_free, c2pa_sm_build_fulfill_bytes,
-    c2pa_sm_build_fulfill_length, c2pa_sm_build_fulfill_signature, c2pa_sm_build_fulfill_written,
-    c2pa_sm_build_new, c2pa_sm_bytes_free, c2pa_sm_exclusions_data, c2pa_sm_exclusions_free,
-    C2paSmBuildRequest, C2paSmExclusion, C2paSmExclusionList, C2PA_SM_BUILD_REQ_LENGTH,
-    C2PA_SM_BUILD_REQ_READ, C2PA_SM_BUILD_REQ_SIGN, C2PA_SM_BUILD_REQ_WRITE, C2PA_SM_STEP_COMPLETE,
+    c2pa_sm_build_fulfill_length, c2pa_sm_build_fulfill_signature, c2pa_sm_build_fulfill_timestamp,
+    c2pa_sm_build_fulfill_written, c2pa_sm_build_new, c2pa_sm_bytes_free, c2pa_sm_exclusions_data,
+    c2pa_sm_exclusions_free, C2paSmBuildRequest, C2paSmExclusion, C2paSmExclusionList,
+    C2PA_SM_BUILD_REQ_LENGTH, C2PA_SM_BUILD_REQ_READ, C2PA_SM_BUILD_REQ_SIGN,
+    C2PA_SM_BUILD_REQ_TIMESTAMP, C2PA_SM_BUILD_REQ_WRITE, C2PA_SM_STEP_COMPLETE,
     C2PA_SM_STEP_PENDING, C2PA_SM_STREAM_OUTPUT, C2PA_SM_STREAM_SOURCE,
 };
 use contentauth_c2pa_sign_baseline::{fixtures::*, BASELINE_DEFINITION};
@@ -32,6 +33,10 @@ pub struct BuildOutput {
 }
 
 pub fn build_signed_asset() -> BuildOutput {
+    build_with_definition(BASELINE_DEFINITION, None)
+}
+
+pub fn build_with_definition(definition: &str, timestamp_response: Option<&[u8]>) -> BuildOutput {
     let signer = c2pa_raw_crypto::signer_from_private_key(
         TEST_SIGNER_KEY_PEM,
         c2pa_raw_crypto::SigningAlg::Es256,
@@ -39,7 +44,7 @@ pub fn build_signed_asset() -> BuildOutput {
     .expect("valid test signer");
 
     let format = CString::new("image/jpeg").unwrap();
-    let def_json = CString::new(BASELINE_DEFINITION).unwrap();
+    let def_json = CString::new(definition).unwrap();
     let alg = CString::new("es256").unwrap();
     let cert_ptr = TEST_SIGNER_CERT.as_ptr();
     let cert_len = TEST_SIGNER_CERT.len();
@@ -144,6 +149,30 @@ pub fn build_signed_asset() -> BuildOutput {
                         )
                     };
                     assert_eq!(rc, 0);
+                    assert!(err_out.is_null());
+                }
+                C2PA_SM_BUILD_REQ_TIMESTAMP => {
+                    assert!(!req.url.is_null());
+                    let url = unsafe { std::ffi::CStr::from_ptr(req.url) }
+                        .to_str()
+                        .unwrap();
+                    assert_eq!(url, "https://tsa.example/");
+                    let request = unsafe { slice::from_raw_parts(req.data, req.data_len) };
+                    assert_eq!(request[0], 0x30);
+                    assert!(request.ends_with(&[0x01, 0x01, 0xff]));
+                    let response = timestamp_response.expect("timestamp transport configured");
+                    assert_eq!(
+                        unsafe {
+                            c2pa_sm_build_fulfill_timestamp(
+                                build_session,
+                                req.id,
+                                response.as_ptr(),
+                                response.len(),
+                                &mut err_out,
+                            )
+                        },
+                        0
+                    );
                     assert!(err_out.is_null());
                 }
                 _ => panic!("unexpected build request: {}", req.kind),
