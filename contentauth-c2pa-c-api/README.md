@@ -58,13 +58,23 @@ Key characteristics:
   Swift `async/await`, `URLSession`, Apple `CryptoKit`).
 - **Tracked ownership**: Session handles and returned strings and byte
   buffers use cimpl's allocation registry. Request data pointers borrow the
-  session's internal buffers for the current turn; the exclusion array is
+  session's internal buffers until the next `advance`, `finish`, or `free`
+  call on that session. Fulfillment calls do not invalidate them. Each request
+  is returned only once, so async hosts must copy its details and nested
+  payloads before advancing again; the exclusion array is
   borrowed from a tracked exclusion-list handle.
 - **Panic safety**: All `extern "C"` functions catch panics at the boundary
   and translate them into integer return codes and error messages.
 - **Concurrent access**: cimpl serializes handle borrows. A host should not
   use one session concurrently, and must not retain request pointers beyond
   their documented lifetime.
+
+Signing requests contain the full COSE `Sig_structure` message bytes, not a
+precomputed digest. The host signs those bytes using the requested algorithm
+and returns a COSE-format signature (fixed-width `r || s` for ECDSA, not DER).
+
+A rejected reply does not consume its request ID. The host can correct the
+reply or report a host failure using the same ID, without another `advance`.
 
 The generated C header is located in
 [`include/contentauth_c2pa_c_api.h`](include/contentauth_c2pa_c_api.h);

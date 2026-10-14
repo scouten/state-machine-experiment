@@ -151,52 +151,40 @@ impl ReadSession {
         &self.c_requests
     }
 
-    fn take_engine_id(&mut self, handle: u64) -> Result<RequestId, Error> {
-        let engine_id = self.handles.remove(&handle).ok_or_else(|| {
+    fn fulfill_reply(&mut self, handle: u64, reply: FileReadReply) -> Result<(), Error> {
+        let engine_id = self.handles.get(&handle).copied().ok_or_else(|| {
             Error::BadParam(format!("no outstanding read request with handle {handle}"))
         })?;
+        let inner = self.inner.as_mut().ok_or(Error::AlreadyFinished)?;
+        inner.fulfill(engine_id, reply)?;
+        self.handles.remove(&handle);
         self.reported.remove(&engine_id);
-        Ok(engine_id)
+        Ok(())
     }
 
     /// Fulfills a read request with bytes.
     pub fn fulfill_bytes(&mut self, id: u64, bytes: &[u8]) -> Result<(), Error> {
-        let engine_id = self.take_engine_id(id)?;
-        let inner = self.inner.as_mut().ok_or(Error::AlreadyFinished)?;
-        inner.fulfill(engine_id, FileReadReply::Bytes(bytes.to_vec()))?;
-        Ok(())
+        self.fulfill_reply(id, FileReadReply::Bytes(bytes.to_vec()))
     }
 
     /// Fulfills a length request with asset length.
     pub fn fulfill_length(&mut self, id: u64, length: u64) -> Result<(), Error> {
-        let engine_id = self.take_engine_id(id)?;
-        let inner = self.inner.as_mut().ok_or(Error::AlreadyFinished)?;
-        inner.fulfill(engine_id, FileReadReply::Length(length))?;
-        Ok(())
+        self.fulfill_reply(id, FileReadReply::Length(length))
     }
 
     /// Fulfills a time request with epoch seconds.
     pub fn fulfill_time(&mut self, id: u64, epoch_secs: i64) -> Result<(), Error> {
-        let engine_id = self.take_engine_id(id)?;
-        let inner = self.inner.as_mut().ok_or(Error::AlreadyFinished)?;
-        inner.fulfill(engine_id, FileReadReply::CurrentDateTime(epoch_secs))?;
-        Ok(())
+        self.fulfill_reply(id, FileReadReply::CurrentDateTime(epoch_secs))
     }
 
     /// Fulfills an OCSP request with response DER bytes.
     pub fn fulfill_ocsp(&mut self, id: u64, bytes: &[u8]) -> Result<(), Error> {
-        let engine_id = self.take_engine_id(id)?;
-        let inner = self.inner.as_mut().ok_or(Error::AlreadyFinished)?;
-        inner.fulfill(engine_id, FileReadReply::OcspResponse(bytes.to_vec()))?;
-        Ok(())
+        self.fulfill_reply(id, FileReadReply::OcspResponse(bytes.to_vec()))
     }
 
     /// Fulfills a request with a failure report.
     pub fn fulfill_failed(&mut self, id: u64, msg: &str) -> Result<(), Error> {
-        let engine_id = self.take_engine_id(id)?;
-        let inner = self.inner.as_mut().ok_or(Error::AlreadyFinished)?;
-        inner.fulfill(engine_id, FileReadReply::Failed(HostError::new(msg)))?;
-        Ok(())
+        self.fulfill_reply(id, FileReadReply::Failed(HostError::new(msg)))
     }
 
     /// Finishes the read session, returning JSON and whether a manifest store was found.
@@ -298,5 +286,28 @@ mod tests {
         assert!(session.current_requests().is_empty());
         assert!(session.handles.contains_key(&id));
         assert!(session.fulfill_ocsp(id, &[0x30, 0]).is_err());
+        assert!(session.handles.contains_key(&id));
+        assert_eq!(session.advance().unwrap(), C2PA_SM_STEP_PENDING);
+        assert!(session.current_requests().is_empty());
+        session
+            .fulfill_failed(id, "OCSP reply had the wrong kind")
+            .unwrap();
+        assert!(!session.handles.contains_key(&id));
+        assert!(session.fulfill_failed(id, "duplicate reply").is_err());
+    }
+
+    #[test]
+    fn a_rejected_reply_can_be_corrected_without_advancing() {
+        let mut session = ReadSession::new("jpeg", None).unwrap();
+        session.advance().unwrap();
+        let request = &session.current_requests()[0];
+        let (id, kind, len) = (request.id, request.kind, request.len);
+        assert!(session.fulfill_time(id, 0).is_err());
+        match kind {
+            C2PA_SM_READ_REQ_LENGTH => session.fulfill_length(id, 4).unwrap(),
+            C2PA_SM_READ_REQ_READ => session.fulfill_bytes(id, &vec![0; len as usize]).unwrap(),
+            _ => unreachable!("initial request must describe asset I/O"),
+        }
+        assert!(!session.handles.contains_key(&id));
     }
 }

@@ -49,7 +49,9 @@
 #define C2PA_SM_BUILD_REQ_WRITE 2
 
 /**
- * Request for host cryptographic signature over digest.
+ * Request to sign the full COSE Sig_structure message bytes in `data`, not a digest.
+ *
+ * Return a COSE-format signature: ECDSA uses fixed-width `r || s`, not DER.
  */
 #define C2PA_SM_BUILD_REQ_SIGN 3
 
@@ -122,6 +124,7 @@ typedef struct C2paSmBuildRequest {
   uint64_t len;
   /**
    * Data payload for `WRITE`, `SIGN`, or `TIMESTAMP`.
+   * For `SIGN`, these are the full COSE Sig_structure message bytes, not a digest.
    */
   const uint8_t *data;
   /**
@@ -218,6 +221,12 @@ struct C2paSmBuildSession *c2pa_sm_build_new(const char *format,
 /**
  * Advances the build session.
  *
+ * The returned array and all nested pointers borrow session-owned buffers and are
+ * valid until the next `c2pa_sm_build_advance`, `c2pa_sm_build_finish`, or
+ * `c2pa_sm_build_free` call. Fulfillment calls do not invalidate them.
+ * Each request is returned only once; its ID remains outstanding until a reply is
+ * accepted. Async hosts must copy request details and payloads before advancing again.
+ *
  * # Safety
  * `session`, `out_requests`, and `out_count` must be valid pointers. A
  * non-null `err_out` must point to writable storage.
@@ -262,7 +271,8 @@ int32_t c2pa_sm_build_fulfill_written(struct C2paSmBuildSession *session,
                                       char **err_out);
 
 /**
- * Fulfills a signing request with signature bytes.
+ * Fulfills a signing request with a COSE-format signature over the full message
+ * bytes in the request's `data`. ECDSA uses fixed-width `r || s`, not DER.
  *
  * # Safety
  * `session` must be live. For nonzero `sig_len`, `sig` must be valid for reads
@@ -364,6 +374,12 @@ struct C2paSmReadSession *c2pa_sm_read_new(const char *format,
 
 /**
  * Advances the read session.
+ *
+ * The returned array and all nested pointers borrow session-owned buffers and are
+ * valid until the next `c2pa_sm_read_advance`, `c2pa_sm_read_finish`, or
+ * `c2pa_sm_read_free` call. Fulfillment calls do not invalidate them.
+ * Each request is returned only once; its ID remains outstanding until a reply is
+ * accepted. Async hosts must copy request details and payloads before advancing again.
  *
  * # Safety
  * `session`, `out_requests`, and `out_count` must be valid pointers; a non-null

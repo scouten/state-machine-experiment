@@ -54,6 +54,12 @@ pub unsafe extern "C" fn c2pa_sm_read_new(
 
 /// Advances the read session.
 ///
+/// The returned array and all nested pointers borrow session-owned buffers and are
+/// valid until the next `c2pa_sm_read_advance`, `c2pa_sm_read_finish`, or
+/// `c2pa_sm_read_free` call. Fulfillment calls do not invalidate them.
+/// Each request is returned only once; its ID remains outstanding until a reply is
+/// accepted. Async hosts must copy request details and payloads before advancing again.
+///
 /// # Safety
 /// `session`, `out_requests`, and `out_count` must be valid pointers; a non-null
 /// `err_out` must point to writable storage.

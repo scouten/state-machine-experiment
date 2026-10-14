@@ -39,7 +39,9 @@ pub const C2PA_SM_BUILD_REQ_READ: u32 = 0;
 pub const C2PA_SM_BUILD_REQ_LENGTH: u32 = 1;
 /// Request to write bytes to output stream.
 pub const C2PA_SM_BUILD_REQ_WRITE: u32 = 2;
-/// Request for host cryptographic signature over digest.
+/// Request to sign the full COSE Sig_structure message bytes in `data`, not a digest.
+///
+/// Return a COSE-format signature: ECDSA uses fixed-width `r || s`, not DER.
 pub const C2PA_SM_BUILD_REQ_SIGN: u32 = 3;
 /// Request for RFC 3161 TSA timestamp over token request.
 pub const C2PA_SM_BUILD_REQ_TIMESTAMP: u32 = 4;
@@ -68,6 +70,7 @@ pub struct C2paSmBuildRequest {
     /// Byte length for `READ`.
     pub len: u64,
     /// Data payload for `WRITE`, `SIGN`, or `TIMESTAMP`.
+    /// For `SIGN`, these are the full COSE Sig_structure message bytes, not a digest.
     pub data: *const u8,
     /// Length of `data` in bytes.
     pub data_len: usize,
@@ -192,62 +195,53 @@ impl BuildSession {
         &self.c_requests
     }
 
-    fn take_engine_id(&mut self, handle: u64) -> Result<RequestId, Error> {
-        let engine_id = self.handles.remove(&handle).ok_or_else(|| {
+    fn engine_id(&self, handle: u64) -> Result<RequestId, Error> {
+        self.handles.get(&handle).copied().ok_or_else(|| {
             Error::BadParam(format!("no outstanding build request with handle {handle}"))
-        })?;
+        })
+    }
+
+    fn fulfill_reply(&mut self, handle: u64, reply: FileBuilderReply) -> Result<(), Error> {
+        let engine_id = self.engine_id(handle)?;
+        let inner = self.inner.as_mut().ok_or(Error::AlreadyFinished)?;
+        inner.fulfill(engine_id, reply)?;
+        self.handles.remove(&handle);
         self.reported.remove(&engine_id);
-        Ok(engine_id)
+        Ok(())
     }
 
     /// Fulfills a read request.
     pub fn fulfill_bytes(&mut self, id: u64, bytes: &[u8]) -> Result<(), Error> {
-        let engine_id = self.take_engine_id(id)?;
-        let inner = self.inner.as_mut().ok_or(Error::AlreadyFinished)?;
-        inner.fulfill(engine_id, FileBuilderReply::Bytes(bytes.to_vec()))?;
-        Ok(())
+        self.fulfill_reply(id, FileBuilderReply::Bytes(bytes.to_vec()))
     }
 
     /// Fulfills a length request.
     pub fn fulfill_length(&mut self, id: u64, length: u64) -> Result<(), Error> {
-        let engine_id = self.take_engine_id(id)?;
-        let inner = self.inner.as_mut().ok_or(Error::AlreadyFinished)?;
-        inner.fulfill(engine_id, FileBuilderReply::Length(length))?;
-        Ok(())
+        self.fulfill_reply(id, FileBuilderReply::Length(length))
     }
 
     /// Fulfills a write request.
     pub fn fulfill_written(&mut self, id: u64) -> Result<(), Error> {
-        let engine_id = self.take_engine_id(id)?;
-        let inner = self.inner.as_mut().ok_or(Error::AlreadyFinished)?;
-        inner.fulfill(engine_id, FileBuilderReply::Written)?;
-        Ok(())
+        self.fulfill_reply(id, FileBuilderReply::Written)
     }
 
-    /// Fulfills a sign request with signature bytes.
+    /// Fulfills a sign request with COSE-format signature bytes.
+    /// ECDSA signatures must be fixed-width `r || s`, not DER.
     pub fn fulfill_signature(&mut self, id: u64, sig: &[u8]) -> Result<(), Error> {
-        let engine_id = self.take_engine_id(id)?;
-        let inner = self.inner.as_mut().ok_or(Error::AlreadyFinished)?;
-        inner.fulfill(engine_id, FileBuilderReply::Signature(sig.to_vec()))?;
-        Ok(())
+        self.fulfill_reply(id, FileBuilderReply::Signature(sig.to_vec()))
     }
 
     /// Fulfills a timestamp request with DER TimeStampResp bytes.
     pub fn fulfill_timestamp(&mut self, id: u64, resp: &[u8]) -> Result<(), Error> {
-        let engine_id = self.take_engine_id(id)?;
-        let inner = self.inner.as_mut().ok_or(Error::AlreadyFinished)?;
+        self.engine_id(id)?;
         let token = timestamp_token(resp)
             .map_err(|err| Error::BadParam(format!("invalid timestamp response: {err}")))?;
-        inner.fulfill(engine_id, FileBuilderReply::Timestamp(token))?;
-        Ok(())
+        self.fulfill_reply(id, FileBuilderReply::Timestamp(token))
     }
 
     /// Fulfills a request with a failure report.
     pub fn fulfill_failed(&mut self, id: u64, msg: &str) -> Result<(), Error> {
-        let engine_id = self.take_engine_id(id)?;
-        let inner = self.inner.as_mut().ok_or(Error::AlreadyFinished)?;
-        inner.fulfill(engine_id, FileBuilderReply::Failed(HostError::new(msg)))?;
-        Ok(())
+        self.fulfill_reply(id, FileBuilderReply::Failed(HostError::new(msg)))
     }
 
     /// Finishes the build session.
@@ -452,5 +446,30 @@ mod tests {
         assert!(session.handles.contains_key(&id));
         session.fulfill_failed(id, "host unavailable").unwrap();
         assert!(session.advance().is_err());
+    }
+
+    #[test]
+    fn rejected_replies_can_be_corrected_without_advancing() {
+        let mut session = BuildSession::new(
+            "jpeg",
+            contentauth_c2pa_sign_baseline::BASELINE_DEFINITION,
+            "es256",
+            vec![contentauth_c2pa_sign_baseline::fixtures::TEST_SIGNER_CERT.to_vec()],
+        )
+        .unwrap();
+        session.advance().unwrap();
+        let request = &session.current_requests()[0];
+        let (id, kind, len) = (request.id, request.kind, request.len);
+        assert!(session.fulfill_signature(id, &[0]).is_err());
+        assert!(session.fulfill_written(id).is_err());
+        assert!(session.fulfill_timestamp(id, &[0]).is_err());
+        assert!(session.handles.contains_key(&id));
+        match kind {
+            C2PA_SM_BUILD_REQ_LENGTH => session.fulfill_length(id, 4).unwrap(),
+            C2PA_SM_BUILD_REQ_READ => session.fulfill_bytes(id, &vec![0; len as usize]).unwrap(),
+            _ => unreachable!("initial request must describe asset I/O"),
+        }
+        assert!(!session.handles.contains_key(&id));
+        assert!(session.fulfill_failed(id, "duplicate reply").is_err());
     }
 }

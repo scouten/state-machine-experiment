@@ -166,6 +166,23 @@ pub fn build_with_definition(definition: &str, timestamp_response: Option<&[u8]>
                             c2pa_sm_build_fulfill_timestamp(
                                 build_session,
                                 req.id,
+                                [0].as_ptr(),
+                                1,
+                                &mut err_out,
+                            )
+                        },
+                        -1
+                    );
+                    assert!(!err_out.is_null());
+                    let error = unsafe { std::ffi::CStr::from_ptr(err_out) }.to_string_lossy();
+                    assert!(error.contains("invalid timestamp response"));
+                    unsafe { contentauth_c2pa_c_api::c2pa_sm_string_free(err_out) };
+                    err_out = ptr::null_mut();
+                    assert_eq!(
+                        unsafe {
+                            c2pa_sm_build_fulfill_timestamp(
+                                build_session,
+                                req.id,
                                 response.as_ptr(),
                                 response.len(),
                                 &mut err_out,

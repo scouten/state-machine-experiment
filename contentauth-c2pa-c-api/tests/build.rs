@@ -140,6 +140,12 @@ fn build_failures_and_invalid_timestamp_responses_are_reported() {
                 -1
             );
             crate::error::assert_error(err, "invalid timestamp response");
+            err = ptr::null_mut();
+            assert_eq!(
+                unsafe { c2pa_sm_build_fulfill_failed(session, id, message.as_ptr(), &mut err) },
+                0
+            );
+            assert!(err.is_null());
         } else {
             assert_eq!(
                 unsafe { c2pa_sm_build_fulfill_failed(session, id, message.as_ptr(), &mut err) },
