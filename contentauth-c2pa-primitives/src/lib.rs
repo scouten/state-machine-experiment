@@ -26,6 +26,10 @@
 //! * [`types`] — [`StreamId`], [`ByteRange`], [`HashAlgorithm`], and
 //!   [`SigningAlg`], the opaque handles and algorithm vocabulary both
 //!   crates address the same host requests and COSE structures with.
+//! * [`assertion`] — [`EncodedAssertion`], the opaque (label, CBOR) pair
+//!   the independent assertion crates hand to the rest of the system.
+//! * [`hashed_uri`] — [`HashedUri`], the `{url, alg?, hash}` reference a
+//!   claim, an identity assertion, or an ingredient makes to a JUMBF box.
 //! * [`hash`] — digest computation. Verifying a hash and computing one to
 //!   record are the same operation.
 //! * [`cbor`] — a hand-rolled, deterministic CBOR encoder for the COSE
@@ -52,11 +56,15 @@
 #![deny(missing_docs)]
 #![deny(unsafe_code)]
 
+pub mod assertion;
 pub mod cbor;
 pub mod error;
 pub mod hash;
+pub mod hashed_uri;
 pub mod tsa;
 pub mod types;
 
+pub use assertion::EncodedAssertion;
 pub use error::HostError;
+pub use hashed_uri::HashedUri;
 pub use types::{ByteRange, HashAlgorithm, SigningAlg, StreamId};

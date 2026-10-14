@@ -1,6 +1,6 @@
 # 2. Architecture
 
-About twenty crates sounds like a lot. They fall into layers, and the rule
+About thirty crates sounds like a lot. They fall into layers, and the rule
 that organizes them is: **each layer knows nothing about the ones above it,
 and the reader, builder and format handlers know nothing about each other.**
 
@@ -28,6 +28,12 @@ flowchart BT
     JSC["js-compat<br/><i>c2pa-wasm shape, async</i>"]
     NDC["node-compat<br/><i>sync NodeSession</i>"]
 
+    DH["assertion-data-hash<br/><i>element</i>"]
+    AC["assertion-actions<br/><i>element</i>"]
+    CL["claim<br/><i>element</i>"]
+    EC["ephemeral-cert<br/><i>element</i>"]
+    SCB["sidecar-builder<br/><i>composes the elements</i>"]
+
     SB["sign-baseline"]
     RSS["rs-compat-sign"]
     JSS["js-compat-sign"]
@@ -44,6 +50,11 @@ flowchart BT
     RSC --> FR & RG
     JSC --> FR & JP
     NDC --> FR & JSC
+    DH --> SM & PR
+    AC --> PR
+    CL --> PR
+    EC --> PR
+    SCB --> DH & CL & SM & PR
     SB --> BD
     RSS --> SB & FB & JP
     JSS --> SB & FB & JSC
@@ -51,11 +62,13 @@ flowchart BT
 
     classDef engine fill:#dbeafe,stroke:#2563eb,color:#000
     classDef core fill:#dcfce7,stroke:#16a34a,color:#000
+    classDef elem fill:#e0f2fe,stroke:#0284c7,color:#000
     classDef fmt fill:#fef9c3,stroke:#ca8a04,color:#000
     classDef glue fill:#fae8ff,stroke:#a21caf,color:#000
     classDef bind fill:#fee2e2,stroke:#dc2626,color:#000
     class SM,PR engine
     class RD,BD core
+    class DH,AC,CL,EC,SCB elem
     class FM,JP,TF,RG fmt
     class FR,FB glue
     class RSC,JSC,NDC,SB,RSS,JSS,NDS bind
@@ -82,13 +95,18 @@ flowchart TB
     end
     subgraph L2["Workflows — C2PA, no container knowledge"]
         direction LR
-        w1[reader] ~~~ w2[builder]
+        w1[reader] ~~~ w2[builder] ~~~ w3[sidecar-builder]
+    end
+    subgraph L2E["Elements — independent structures; opaque CBOR out"]
+        direction LR
+        x1[assertion-data-hash] ~~~ x2[assertion-actions] ~~~ x3[claim] ~~~ x4[ephemeral-cert]
     end
     subgraph L1["Foundation — no C2PA workflow logic"]
         direction LR
         e1[state-machine] ~~~ e2[primitives]
     end
     L5 --> L4 --> L2 --> L1
+    L2 --> L2E --> L1
     L4 --> L3 --> L1
 ```
 
@@ -97,9 +115,14 @@ flowchart TB
 | Crate | Layer | What it is |
 |---|---|---|
 | `contentauth-state-machine` | Foundation | The engine: `Session`, `SessionCore`, request tracking, protocol errors. Domain-agnostic. |
-| `contentauth-c2pa-primitives` | Foundation | The narrow shared slice: `StreamId`, `ByteRange`, hash/signing algorithms, `HostError`, COSE `Sig_structure`, RFC 3161 encode/unwrap. |
+| `contentauth-c2pa-primitives` | Foundation | The narrow shared slice: `StreamId`, `ByteRange`, hash/signing algorithms, `HostError`, `HashedUri` (a reference to a JUMBF box, hashing its contents), `EncodedAssertion` (label + opaque CBOR), COSE `Sig_structure`, RFC 3161 encode/unwrap. |
 | `contentauth-c2pa-reader` | Workflow | `ReadSession`: JUMBF, claims (v1+v2), integrity, signature, trust, timestamps, OCSP, CAWG identity assertions (X.509). |
 | `contentauth-c2pa-builder` | Workflow | `BuilderSession`: v2 claim generation and signing via a two-pass placeholder scheme, plus optional CAWG identity assertions. |
+| `…-assertion-data-hash` | Element | `c2pa.hash.data` alone: `DataHash` (digest in) or `DataHashSession` (a sub-session that hashes a streamed asset); out comes an `EncodedAssertion`. |
+| `…-assertion-actions` | Element | `c2pa.actions.v2` alone; refuses what validators refuse. |
+| `…-claim` | Element | The v2 claim and its `COSE_Sign1` envelope, built from `HashedUri`s; knows no assertion. |
+| `…-ephemeral-cert` | Element | Throwaway Ed25519 CA + signer chain (adapted from Gavin's sample); entropy and clock are parameters. |
+| `…-sidecar-builder` | Workflow | `SidecarSession`: a `.c2pa` beside an asset, composed from the elements — three host requests, no placeholder, no format. See [the write path](04-write-path.md#sidecar-manifests). |
 | `contentauth-c2pa-format` | Format | `FormatHandler` trait, `FormatDescriptor`, `IoRequest`, `EmbedPlan`/`Patch`, test kit + conformance suite. |
 | `…-format-jpeg` | Format | APP11 segments; byte-compatible with c2pa-rs. The template for other handlers. |
 | `…-format-tiff` | Format | TIFF/BigTIFF/DNG; the format that forced `exclusions` to become a list. |
@@ -111,7 +134,8 @@ flowchart TB
 | `…-node-compat` (+ `c2pa-node-compat-addon`) | Binding | Purely synchronous `NodeSession`; Node owns all async. Addon is a separate Neon workspace. |
 | `…-sign-baseline` | Binding | The baseline signing case (JSON definition → `BuilderSettings`) every write binding is held to. |
 | `…-rs/js/node-compat-sign` (+ `c2pa-node-sign-addon`) | Binding | The baseline case through each binding. `rs-compat-sign` is the other crate with a network dependency (`reqwest` for RFC 3161 timestamps). |
-| `c2pa-rs-compat-conformance` | Test | Separate workspace; differential tests against the real `c2pa` crate. |
+| `c2pa-rs-compat-conformance` | Test | Separate workspace; differential tests against the real `c2pa` crate (includes the sidecar). |
+| `c2pa-core-comparison` | Test | Separate workspace; hand-coded JUMBF (`c2pa-core`'s `c2pa-store`) vs the `jumbf` crate: bytes, speed, memory. |
 
 ## Rules of the road
 

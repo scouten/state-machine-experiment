@@ -1,0 +1,18 @@
+[package]
+name = "contentauth-c2pa-claim"
+version = "0.1.0"
+description = "The C2PA v2 claim and its COSE_Sign1 claim signature as an independent element: hashed URIs in, claim and signature bytes out"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["c2pa", "content-credentials"]
+categories = ["api-bindings"]
+publish = false
+
+[dependencies]
+contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
+c2pa_cbor = "0.77.4"
+thiserror = "2.0.20"

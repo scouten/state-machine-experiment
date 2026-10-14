@@ -41,6 +41,13 @@ the sibling crate it depends on via a plain path dependency.
   entry's `count` field and the store), which it compares exactly.
   (`compare_tiff_signed_by_c2pa_rs.rs` also checks the handler reports the
   very exclusions c2pa-rs wrote.)
+* `tests/sidecar_signed_here.rs` — the sidecar direction: a `.c2pa` built by
+  `contentauth-c2pa-sidecar-builder` from independent elements (data hash,
+  actions, claim, throwaway Ed25519 chain) is validated by the real c2pa-rs
+  through its own sidecar path, `Reader::with_manifest_data_and_stream`:
+  `Trusted` with the ephemeral CA configured as an anchor, `Valid` with
+  `signingCredential.untrusted` without it, `Invalid` with a data-hash
+  mismatch against a modified asset.
 * `examples/compare_corpus.rs` — the same comparison, generalized to a
   whole directory tree:
 
