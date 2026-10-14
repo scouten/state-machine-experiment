@@ -186,6 +186,9 @@ pub unsafe extern "C" fn c2pa_sm_read_fulfill_failed(
 
 /// Finishes a read session and retrieves its JSON report.
 ///
+/// Call only after `advance` returns `C2PA_SM_STEP_COMPLETE`. Once valid arguments
+/// reach the engine, finishing consumes the workflow even if it returns an error.
+///
 /// # Safety
 /// `session`, `out_json`, and `out_has_manifest` must be valid pointers. A
 /// non-null `err_out` must point to writable storage.

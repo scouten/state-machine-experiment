@@ -427,6 +427,33 @@ mod tests {
             data.data.unwrap(),
             timestamp_request(&[0x42; 32], HashAlgorithm::Sha256).unwrap()
         );
+        assert!(matches!(
+            describe_request(4, &request, Some("https://tsa.example/\0")),
+            Err(Error::NulError(_))
+        ));
+        let bad_digest = FileBuilderRequest::Timestamp {
+            digest: vec![0x42; 31],
+            hash_alg: HashAlgorithm::Sha256,
+        };
+        let error = describe_request(4, &bad_digest, Some("https://tsa.example/"));
+        assert!(
+            matches!(error, Err(Error::BadParam(message)) if message.contains("timestamp request build error"))
+        );
+    }
+
+    #[test]
+    fn identity_signing_is_explicitly_rejected_instead_of_using_the_claim_key() {
+        let request = FileBuilderRequest::Sign {
+            purpose: SignPurpose::Identity {
+                label: "cawg.identity".to_owned(),
+            },
+            alg: SigningAlg::Es256,
+            data: vec![1, 2, 3],
+        };
+        assert!(matches!(
+            describe_request(7, &request, None),
+            Err(Error::BadParam(message)) if message.contains("unsupported sign purpose") && message.contains("cawg.identity")
+        ));
     }
 
     #[test]

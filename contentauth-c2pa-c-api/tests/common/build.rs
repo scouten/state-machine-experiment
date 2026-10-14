@@ -222,6 +222,42 @@ pub fn build_with_definition(definition: &str, timestamp_response: Option<&[u8]>
     let manifest = unsafe { slice::from_raw_parts(manifest_ptr, manifest_len) }.to_vec();
     let exclusions = unsafe { slice::from_raw_parts(exclusions_data, exclusions_count) }.to_vec();
 
+    let mut second_manifest = ptr::null_mut();
+    let mut second_len = 0;
+    let mut second_exclusions = ptr::null_mut();
+    let mut second_count = 0;
+    assert_eq!(
+        unsafe {
+            c2pa_sm_build_finish(
+                build_session,
+                &mut second_manifest,
+                &mut second_len,
+                &mut second_exclusions,
+                &mut second_count,
+                &mut err_out,
+            )
+        },
+        -1
+    );
+    assert!(!err_out.is_null());
+    let message = unsafe { std::ffi::CStr::from_ptr(err_out) }.to_string_lossy();
+    assert!(message.contains("already been finished"));
+    unsafe { contentauth_c2pa_c_api::c2pa_sm_string_free(err_out) };
+    err_out = ptr::null_mut();
+    assert!(second_manifest.is_null());
+    assert!(second_exclusions.is_null());
+    assert_eq!((second_len, second_count), (0, 0));
+    let mut requests = ptr::null();
+    let mut count = 0;
+    assert_eq!(
+        unsafe { c2pa_sm_build_advance(build_session, &mut requests, &mut count, &mut err_out) },
+        -1
+    );
+    assert!(!err_out.is_null());
+    let message = unsafe { std::ffi::CStr::from_ptr(err_out) }.to_string_lossy();
+    assert!(message.contains("already been finished"));
+    unsafe { contentauth_c2pa_c_api::c2pa_sm_string_free(err_out) };
+
     unsafe {
         c2pa_sm_bytes_free(manifest_ptr, manifest_len);
         c2pa_sm_exclusions_free(exclusions_ptr);

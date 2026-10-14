@@ -33,6 +33,9 @@ const FIXED_NOW: i64 = 1_800_000_000;
 #[path = "common/error.rs"]
 mod error;
 
+#[path = "common/read_errors.rs"]
+mod read_errors;
+
 #[test]
 fn invalid_settings_and_formats_return_owned_errors() {
     for (format, settings, expected) in [

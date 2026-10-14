@@ -19,6 +19,9 @@ mod build_host;
 #[path = "common/error.rs"]
 mod error;
 
+#[path = "common/build_errors.rs"]
+mod build_errors;
+
 #[test]
 fn invalid_build_inputs_return_owned_errors() {
     use std::{ffi::CString, ptr};

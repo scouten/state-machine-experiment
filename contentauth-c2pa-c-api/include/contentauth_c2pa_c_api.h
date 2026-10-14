@@ -312,6 +312,9 @@ int32_t c2pa_sm_build_fulfill_failed(struct C2paSmBuildSession *session,
 /**
  * Finishes the build and returns tracked manifest bytes and an exclusion-list handle.
  *
+ * Call only after `advance` returns `C2PA_SM_STEP_COMPLETE`. Once valid arguments
+ * reach the engine, finishing consumes the workflow even if it returns an error.
+ *
  * # Safety
  * All output pointers and `session` must be valid. A non-null `err_out` must
  * point to writable storage.
@@ -452,6 +455,9 @@ int32_t c2pa_sm_read_fulfill_failed(struct C2paSmReadSession *session,
 
 /**
  * Finishes a read session and retrieves its JSON report.
+ *
+ * Call only after `advance` returns `C2PA_SM_STEP_COMPLETE`. Once valid arguments
+ * reach the engine, finishing consumes the workflow even if it returns an error.
  *
  * # Safety
  * `session`, `out_json`, and `out_has_manifest` must be valid pointers. A

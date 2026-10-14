@@ -248,6 +248,9 @@ pub unsafe extern "C" fn c2pa_sm_build_fulfill_failed(
 
 /// Finishes the build and returns tracked manifest bytes and an exclusion-list handle.
 ///
+/// Call only after `advance` returns `C2PA_SM_STEP_COMPLETE`. Once valid arguments
+/// reach the engine, finishing consumes the workflow even if it returns an error.
+///
 /// # Safety
 /// All output pointers and `session` must be valid. A non-null `err_out` must
 /// point to writable storage.

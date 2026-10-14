@@ -39,6 +39,9 @@ driver from `tests/common`.
 Drivers check host-protocol calls and copy returned allocations into owned
 results before freeing them. Build-result and read-back assertions live in
 the corresponding test files rather than inside the drivers.
+Feature-specific error matrices in `tests/common` check each C entry point's
+null inputs, rejected payloads, error allocation ownership, and whether the
+session remains usable afterward.
 
 This crate exposes the synchronous sans-I/O state machines
 (`FileReadSession` and `FileBuilderSession`) over an FFI boundary using
@@ -75,6 +78,9 @@ and returns a COSE-format signature (fixed-width `r || s` for ECDSA, not DER).
 
 A rejected reply does not consume its request ID. The host can correct the
 reply or report a host failure using the same ID, without another `advance`.
+Call `finish` only after `advance` reports completion: an engine-level finish
+error still consumes the workflow. Invalid output pointers are rejected before
+consuming it.
 
 The generated C header is located in
 [`include/contentauth_c2pa_c_api.h`](include/contentauth_c2pa_c_api.h);
