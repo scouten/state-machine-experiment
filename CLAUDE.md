@@ -322,6 +322,11 @@ non-test code.
 
 ## Commands
 
+Any generative process producing a change for this repository must drive code
+coverage to the maximum reasonably possible before submitting a PR. Add or
+extend meaningful tests for changed behavior and uncovered reachable paths;
+do not stop at a passing test suite.
+
 Build/test the whole workspace from the repo root:
 
 ```sh
