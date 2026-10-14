@@ -11,6 +11,8 @@ about C2PA itself.
 * **Request *sets* are the right primitive.** The reader's hashing window
   (concurrent 64 KiB reads) maps directly onto Node overlapping `fs` reads
   and onto browser `Promise`s, with no engine-side concurrency machinery.
+  A concurrent host built on exactly this beats c2pa-rs ~2.6x on simulated
+  slow storage — [Concurrent hashing](10-concurrent-hashing.md).
 * **Time and randomness as requests/inputs make results reproducible.**
   A fixed "now" gives deterministic reads; the missing RNG is why
   `instance_id`/`label` are caller-supplied.

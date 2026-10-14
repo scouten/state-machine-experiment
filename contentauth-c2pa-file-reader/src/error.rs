@@ -45,4 +45,9 @@ pub enum Error {
     /// located.
     #[error(transparent)]
     Read(#[from] contentauth_c2pa_reader::Error),
+
+    /// [`crate::read_manifest_concurrent`] could not start or keep its
+    /// worker threads.
+    #[error("the concurrent host failed: {0}")]
+    ConcurrentHost(String),
 }

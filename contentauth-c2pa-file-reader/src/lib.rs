@@ -70,6 +70,7 @@
 #![deny(missing_docs)]
 #![deny(unsafe_code)]
 
+mod concurrent;
 mod drive;
 mod error;
 mod session;
@@ -79,7 +80,11 @@ use std::{
     path::Path,
 };
 
+pub use concurrent::{read_manifest_concurrent, RangeSource};
 pub use contentauth_c2pa_format::FormatHandler;
+pub use contentauth_c2pa_primitives::{
+    ByteRange, ChunkSize, ChunkSizeError, HashWindow, HashWindowError,
+};
 pub use contentauth_c2pa_reader::{ReadReport, ReadSettings, TrustList};
 pub use error::Error;
 pub use session::{FileReadReply, FileReadRequest, FileReadSession};

@@ -15,7 +15,7 @@
 
 use core::mem::replace;
 
-use contentauth_c2pa_primitives::{ByteRange, SigningAlg, StreamId};
+use contentauth_c2pa_primitives::{ByteRange, ChunkSize, HashWindow, SigningAlg, StreamId};
 pub use contentauth_state_machine::Step as BuilderStep;
 use contentauth_state_machine::{
     HostRequest, ProtocolError, RequestId, Session, SessionCore, Step,
@@ -102,6 +102,27 @@ pub struct BuilderSettings {
     /// [`BuilderRequest::Sign`]'s `purpose`. They become the assertions
     /// `cawg.identity`, `cawg.identity__1`, … in this order.
     pub identities: Vec<IdentitySettings>,
+
+    /// How many bytes of the asset each hard-binding hash request asks
+    /// the host for.
+    ///
+    /// A host that pays a round trip per request (a network-backed one)
+    /// wants this large; one that must bound its memory wants it small.
+    /// The session holds up to [`hash_window`](Self::hash_window) chunks at
+    /// once, so peak memory while hashing is that many times this.
+    /// [`ChunkSize`] enforces the engine's own minimum and maximum, so any
+    /// value that can be constructed is safe to set here. Defaults to
+    /// [`ChunkSize::DEFAULT`].
+    pub hash_chunk_size: ChunkSize,
+
+    /// How many hash chunks the session keeps in play at once.
+    ///
+    /// The ceiling on how much a concurrent host can overlap its reads, and
+    /// — with [`hash_chunk_size`](Self::hash_chunk_size) — the hash phase's
+    /// peak memory. A serial host gains nothing above 1; a high-latency,
+    /// network-backed host wants it large. [`HashWindow`] enforces the
+    /// engine's bounds. Defaults to [`HashWindow::DEFAULT`].
+    pub hash_window: HashWindow,
 }
 
 impl BuilderSettings {
@@ -128,6 +149,8 @@ impl BuilderSettings {
             rsa_signature_len: None,
             timestamp: None,
             identities: Vec::new(),
+            hash_chunk_size: ChunkSize::DEFAULT,
+            hash_window: HashWindow::DEFAULT,
         }
     }
 }
@@ -601,7 +624,12 @@ impl BuilderSession {
                 )?;
 
                 let hash_alg = self.settings.signing_alg.claim_hash_algorithm();
-                let mut stream = Box::new(HashStream::new(hash_alg, &ranges));
+                let mut stream = Box::new(HashStream::new(
+                    hash_alg,
+                    &ranges,
+                    self.settings.hash_chunk_size,
+                    self.settings.hash_window,
+                ));
                 stream.issue(&mut self.core, Self::PRIMARY_STREAM);
 
                 self.state = State::HashingAsset {

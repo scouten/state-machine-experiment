@@ -32,6 +32,7 @@ bindings. [Page 1](01-the-idea.md) is a direct comparison with them.
 | 7 | [Proof and CI](07-proof-and-ci.md) | 4 min | Why should we believe it works? |
 | 8 | [Findings](08-findings.md) | 5 min | What did building this teach us? |
 | 9 | [Future directions](09-future.md) | 6 min | Where could this go next? |
+| 10 | [Concurrent hashing](10-concurrent-hashing.md) | 7 min | Deep dive: when does a concurrent host beat c2pa-rs, and what's tunable? |
 
 About an hour with discussion. For a 15-minute version, present pages 1, 2,
 6 and 9.

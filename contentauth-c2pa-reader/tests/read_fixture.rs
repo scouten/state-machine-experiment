@@ -20,8 +20,8 @@
 //! fixtures' provenance.
 
 use contentauth_c2pa_reader::{
-    validation::status_code, ByteRange, Error, HostError, ReadHostReply, ReadReport, ReadRequest,
-    ReadSession, ReadSettings, ReadStep, RequestId, TrustList, ValidationState,
+    validation::status_code, ByteRange, ChunkSize, Error, HostError, ReadHostReply, ReadReport,
+    ReadRequest, ReadSession, ReadSettings, ReadStep, RequestId, TrustList, ValidationState,
 };
 use contentauth_state_machine::Session;
 
@@ -86,6 +86,12 @@ struct Host<'a> {
     /// Fulfil each round's requests in reverse order, to prove the session
     /// does not depend on arrival order.
     reverse: bool,
+
+    /// The hash chunk size to configure the session with.
+    chunk_size: ChunkSize,
+
+    /// The length of every [`ReadRequest::AssetBytes`] the session issued.
+    asset_bytes_asked: std::cell::RefCell<Vec<u64>>,
 }
 
 /// What the host has been asked for, captured so the borrow on the session
@@ -105,6 +111,7 @@ impl Host<'_> {
             timestamp_trust_anchors: self.timestamp_anchors.clone(),
             trust_lists: self.trust_lists.clone(),
             timestamp_trust_lists: self.timestamp_trust_lists.clone(),
+            hash_chunk_size: self.chunk_size,
             ..ReadSettings::default()
         });
 
@@ -151,6 +158,7 @@ impl Host<'_> {
                     },
 
                     Ask::Bytes(id, range) => {
+                        self.asset_bytes_asked.borrow_mut().push(range.len);
                         let asset = self.asset.expect("bytes asked for without an asset");
                         let start = range.start as usize;
                         let end = start + range.len as usize;
@@ -174,6 +182,8 @@ fn host() -> Host<'static> {
         trust_lists: vec![],
         timestamp_trust_lists: vec![],
         reverse: false,
+        chunk_size: ChunkSize::DEFAULT,
+        asset_bytes_asked: Default::default(),
     }
 }
 
@@ -331,6 +341,64 @@ fn out_of_order_fulfilment_reaches_the_same_verdict() {
     // must not change a single finding.
     assert_eq!(codes(&reversed), codes(&in_order));
     assert_eq!(reversed.validation_state, in_order.validation_state);
+}
+
+#[test]
+fn the_asset_is_requested_in_chunks_of_the_configured_size() {
+    let small = ChunkSize::MIN;
+    let host = Host {
+        chunk_size: small,
+        ..host()
+    };
+    let report = host
+        .read()
+        .expect("a small chunk size should still read cleanly");
+
+    let asked = host.asset_bytes_asked.borrow();
+    assert!(
+        asked.iter().all(|len| *len <= small.get()),
+        "no request may exceed the configured chunk size: {asked:?}"
+    );
+    // The hard binding skips the embedded manifest store, so that is what
+    // is not hashed.
+    let hashed = (ASSET.len() - MANIFEST_STORE.len()) as u64;
+    assert!(
+        asked.len() as u64 >= hashed / small.get(),
+        "{hashed} hashed bytes in {}-byte chunks needs at least that many requests, got {}",
+        small.get(),
+        asked.len()
+    );
+
+    // The same hard binding verifies whatever the chunking.
+    assert!(codes(&report).contains(&status_code::ASSERTION_DATAHASH_MATCH));
+    assert_eq!(codes(&report), codes(&read()));
+}
+
+#[test]
+fn the_default_chunk_size_is_the_engines_default() {
+    let host = host();
+    host.read().expect("fixture should read cleanly");
+
+    let asked = host.asset_bytes_asked.borrow();
+    assert!(!asked.is_empty());
+    assert!(asked.iter().all(|len| *len <= ChunkSize::DEFAULT.get()));
+    // Chunks never span the two ranges either side of the manifest store,
+    // so the first can be short; the largest is still a full default chunk.
+    assert_eq!(asked.iter().max(), Some(&ChunkSize::DEFAULT.get()));
+}
+
+#[test]
+fn a_chunk_larger_than_the_asset_requests_it_in_one_piece() {
+    let host = Host {
+        chunk_size: ChunkSize::MAX,
+        ..host()
+    };
+    let report = host
+        .read()
+        .expect("a large chunk size should still read cleanly");
+
+    assert!(host.asset_bytes_asked.borrow().len() <= 2);
+    assert!(codes(&report).contains(&status_code::ASSERTION_DATAHASH_MATCH));
 }
 
 #[test]
