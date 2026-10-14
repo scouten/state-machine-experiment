@@ -91,6 +91,7 @@ pub mod data_hash;
 pub mod error;
 pub(crate) mod hash_stream;
 pub mod identity;
+pub mod ingredient;
 pub mod manifest_store;
 pub(crate) mod ocsp;
 pub mod read;
@@ -108,6 +109,7 @@ pub use contentauth_state_machine::{HostRequest, ProtocolError, RequestId, Sessi
 pub use data_hash::DataHash;
 pub use error::Error;
 pub use identity::{IdentityAssertion, IdentityCredential};
+pub use ingredient::{Ingredient, Relationship};
 pub use manifest_store::Manifest;
 pub use read::{ReadReport, ReadSession, ReadSettings, ReadStep, TrustList};
 pub use request::{ReadHostReply, ReadRequest};

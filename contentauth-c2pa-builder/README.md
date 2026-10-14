@@ -60,7 +60,7 @@ changes and `replace_payload` always succeeds — see
 
 ## Status and scope
 
-Builds one manifest (no ingredients, no update manifests) as a C2PA v2
+Builds one manifest (no update manifests) as a C2PA v2
 claim, with a `c2pa.hash.data` hard binding (the only binding
 `contentauth-c2pa-reader` validates today), caller-supplied opaque
 assertions, every C2PA-permitted signing algorithm, and an optional RFC
@@ -78,7 +78,23 @@ carrying `specVersion` (the specification snapshot this repository pins),
 and there is no `dc:format` or `claim_generator` — so
 `BuilderSettings` takes no MIME type, and a reader reports no `format` for
 what this crate builds. Not yet written: `redacted_assertions` (which
-has no use without ingredients) and a generator `icon`.
+has no use without ingredients that carry a manifest) and a generator
+`icon`.
+
+`BuilderSettings::ingredients` adds ingredients (`IngredientSettings`), each
+a `c2pa.ingredient.v3` assertion (`c2pa.ingredient.v3`, then
+`c2pa.ingredient.v3__1`, …) — a `parentOf` always *created*, the others
+*gathered* unless `created` says otherwise. Nothing here needs the host: an
+ingredient assertion's hash depends on nothing but itself, so it is final
+when the placeholder is built. An action in the host's own
+`c2pa.actions.v2` names an ingredient by `IngredientSettings::label` under
+`parameters.ingredientIds` (c2pa-rs's convention) and the builder swaps
+that for the real hashed URI; with `auto_ingredient_actions` (on by
+default) it also adds the `c2pa.opened` for a parent and `c2pa.placed` for
+each component the host's actions leave out. At most one parent.
+**Temporary limit:** only ingredients with no manifest of their own, and no
+thumbnail or data; the plan for the rest is the walkthrough's
+[Ingredients](../docs/walkthrough/10-ingredients.md) page.
 
 `BuilderSettings::identities` adds CAWG identity assertions
 (`IdentitySettings`; the first is `cawg.identity`, then
@@ -104,7 +120,8 @@ infer that on its own. The claim's `created_assertions` and
 `gathered_assertions` are populated accordingly; the hard binding this
 session adds itself is always `Created`.
 
-Deliberately out of scope for now: ingredients and update manifests,
+Deliberately out of scope for now: ingredients that carry a manifest (see
+above) and update manifests,
 BMFF/box-hash hard bindings, OCSP, and certificate decoding or validation
 (certificates are passed through opaquely into the COSE `x5chain`; the
 host vouches for them).

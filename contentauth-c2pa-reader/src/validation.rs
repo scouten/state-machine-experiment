@@ -233,6 +233,45 @@ pub mod status_code {
     /// validity window at the instant the token claims.
     pub const TIMESTAMP_OUTSIDE_VALIDITY: &str = "timeStamp.outsideValidity";
 
+    /// An ingredient assertion is incomplete or inconsistent: no valid
+    /// `relationship`, both an `activeManifest` and a `digitalSourceType`,
+    /// or (v3) an `activeManifest` without `validationResults`.
+    pub const ASSERTION_INGREDIENT_MALFORMED: &str = "assertion.ingredient.malformed";
+
+    /// A `c2pa.opened` or `c2pa.placed` action does not refer to an
+    /// ingredient assertion of this manifest with the relationship the
+    /// action requires.
+    pub const ASSERTION_ACTION_INGREDIENT_MISMATCH: &str = "assertion.action.ingredientMismatch";
+
+    /// The manifest has more than one `parentOf` ingredient.
+    pub const MANIFEST_MULTIPLE_PARENTS: &str = "manifest.multipleParents";
+
+    /// The ingredient has no C2PA manifest. Informational: it says where
+    /// the provenance trail stops, not that anything is wrong.
+    pub const INGREDIENT_UNKNOWN_PROVENANCE: &str = "ingredient.unknownProvenance";
+
+    /// An ingredient's manifest box hashed to the value its ingredient
+    /// assertion recorded.
+    pub const INGREDIENT_MANIFEST_VALIDATED: &str = "ingredient.manifest.validated";
+
+    /// An ingredient's manifest box did not hash to the recorded value.
+    pub const INGREDIENT_MANIFEST_MISMATCH: &str = "ingredient.manifest.mismatch";
+
+    /// The manifest an ingredient assertion names is not in the store.
+    pub const INGREDIENT_MANIFEST_MISSING: &str = "ingredient.manifest.missing";
+
+    /// An ingredient's claim signature box hashed to the value its
+    /// ingredient assertion recorded.
+    pub const INGREDIENT_CLAIM_SIGNATURE_VALIDATED: &str = "ingredient.claimSignature.validated";
+
+    /// An ingredient's claim signature box did not hash to the recorded
+    /// value.
+    pub const INGREDIENT_CLAIM_SIGNATURE_MISMATCH: &str = "ingredient.claimSignature.mismatch";
+
+    /// The claim signature an ingredient assertion names is not in the
+    /// store.
+    pub const INGREDIENT_CLAIM_SIGNATURE_MISSING: &str = "ingredient.claimSignature.missing";
+
     /// A check could not be carried out at all — for instance because the
     /// asset the hard binding covers was not available.
     pub const GENERAL_ERROR: &str = "general.error";
@@ -449,6 +488,13 @@ impl ValidationStatus {
                 | status_code::ASSERTION_DATAHASH_MALFORMED
                 | status_code::CLAIM_MALFORMED
                 | status_code::ASSERTION_SELF_REDACTED
+                | status_code::ASSERTION_INGREDIENT_MALFORMED
+                | status_code::ASSERTION_ACTION_INGREDIENT_MISMATCH
+                | status_code::MANIFEST_MULTIPLE_PARENTS
+                | status_code::INGREDIENT_MANIFEST_MISMATCH
+                | status_code::INGREDIENT_MANIFEST_MISSING
+                | status_code::INGREDIENT_CLAIM_SIGNATURE_MISMATCH
+                | status_code::INGREDIENT_CLAIM_SIGNATURE_MISSING
                 | status_code::CLAIM_SIGNATURE_MISMATCH
                 | status_code::CLAIM_SIGNATURE_MISSING
                 | status_code::CLAIM_SIGNATURE_OUTSIDE_VALIDITY
@@ -891,7 +937,7 @@ pub(crate) fn check_assertion_hashes(
 
 /// Resolves a claim's hashed URI to the referenced assertion's superbox
 /// payload.
-fn assertion_payload<'a>(manifest: &SuperBox<'a>, url: &str) -> Option<&'a [u8]> {
+pub(crate) fn assertion_payload<'a>(manifest: &SuperBox<'a>, url: &str) -> Option<&'a [u8]> {
     let assertion = manifest.find_by_label(assertion_path(url)?)?;
 
     // `original` is the whole `jumb` box; re-reading its header yields the

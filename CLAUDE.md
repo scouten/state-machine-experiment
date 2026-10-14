@@ -28,7 +28,11 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   `sig_type` — `cawg.x509.cose` implemented, others reported rather than
   guessed at; judged against separate identity trust anchors, and a
   failure is scoped to its own assertion, never lowering the store's
-  `ValidationState`) and the full request-vocabulary table.
+  `ValidationState`), ingredient assertions (`src/ingredient.rs`: decoded
+  into `Manifest::ingredients` and checked against the store — hashes of
+  the manifest and claim signature they name, one `parentOf`, and the
+  `c2pa.opened`/`c2pa.placed` actions that name them) and the full
+  request-vocabulary table.
 - **`contentauth-c2pa-builder`** — the write-side counterpart: generates
   and signs a manifest store (always a spec-conformant v2 claim — a
   single-map `claim_generator_info` with `specVersion`, no `dc:format`;
@@ -36,7 +40,13 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   fields) via a two-pass placeholder scheme — plus optional CAWG identity
   assertions (`BuilderSettings::identities`), each signed by the host,
   told by `SignPurpose` whose key is wanted, after the asset is hashed and
-  before the claim is
+  before the claim is — plus ingredients that have no manifest of their
+  own (`BuilderSettings::ingredients`; `src/ingredient.rs`: the
+  `c2pa.ingredient.v3` assertions, `parameters.ingredientIds` resolved to
+  hashed URIs, and the `c2pa.opened`/`c2pa.placed` actions added unless
+  turned off). Ingredients that carry a manifest are **temporarily** not
+  supported; the plan is
+  [`docs/walkthrough/10-ingredients.md`](docs/walkthrough/10-ingredients.md)
   (`BuilderSession` in [`src/builder.rs`](contentauth-c2pa-builder/src/builder.rs);
   see its [README.md](contentauth-c2pa-builder/README.md)).
 - **`contentauth-c2pa-primitives`** — the narrow slice of vocabulary

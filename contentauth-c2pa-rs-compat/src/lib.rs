@@ -87,9 +87,11 @@
 //!   assertion labels and hashes for integrity, not their content). Once it
 //!   does, [`Manifest`] grows accessors for them the same way it already
 //!   exposes `title`/`format`/`instance_id`.
-//! * **Ingredients, remote manifests** — not yet modeled by
-//!   [`contentauth_c2pa_reader`] itself (see its own README's "not yet
-//!   checked" list), so there's nothing here yet to make compatible.
+//! * **Ingredients, remote manifests** — [`contentauth_c2pa_reader`] now
+//!   decodes ingredient assertions and checks their references (see its
+//!   README), but [`Manifest`] has no `ingredients()` accessor yet, so a
+//!   store's ingredients appear only as assertion labels and validation
+//!   statuses. Remote manifests are not modeled at all.
 //!   Revocation, by contrast, *is* covered: `src/host.rs` is the default
 //!   OCSP host [`Reader::with_file`] drives — see [`ReadSettings::check_ocsp`].
 //!

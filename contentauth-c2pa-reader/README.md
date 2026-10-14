@@ -61,8 +61,23 @@ decoding, report population) and verifies:
   `name`) is reported `claim.malformed`, and one that redacts an assertion
   in its *own* manifest `assertion.selfRedacted`. Not yet done for
   `redacted_assertions`: checking that an ingredient's redacted assertion
-  was actually zeroed (`assertion.notRedacted`), which needs ingredient
-  manifests.
+  was actually zeroed (`assertion.notRedacted`), which needs the recursion
+  below.
+
+* **Ingredients** — `c2pa.ingredient` (v1–v3) assertions are decoded into
+  `Manifest::ingredients` and checked against the store, for every
+  manifest in it: that the assertion is well formed
+  (`assertion.ingredient.malformed`), that there is at most one `parentOf`
+  (`manifest.multipleParents`), that the `activeManifest` and
+  `claimSignature` it names are in the store and hash as recorded
+  (`ingredient.manifest.*`, `ingredient.claimSignature.*` — the signature
+  alone where something in that manifest was redacted), and, in a v2
+  claim, that each `c2pa.opened` / `c2pa.placed` names ingredients of the
+  right relationship (`assertion.action.ingredientMismatch`). An
+  ingredient with no manifest is noted (`ingredient.unknownProvenance`).
+  Not yet done: recursing into an ingredient's own ingredients and
+  comparing `validationResults`; see the walkthrough's
+  [Ingredients](../docs/walkthrough/10-ingredients.md) page.
 
 * **CAWG identity assertions** — `cawg.identity` (and `cawg.identity__N`)
   assertions are decoded into `Manifest::identity_assertions` and
@@ -90,7 +105,8 @@ decoding, report population) and verifies:
   `signer_payload`, which a signer may add to constrain the claim.
 
 A report can reach `Trusted` or `Valid`. Not yet checked, and able to
-change a verdict: ingredient manifests and remote manifest retrieval.
+change a verdict: ingredients' own ingredients and remote manifest
+retrieval.
 
 See [`src/read.rs`](src/read.rs) for `ReadSession` itself, and
 [`src/validation.rs`](src/validation.rs) for the validation status

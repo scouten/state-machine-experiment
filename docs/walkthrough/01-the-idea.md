@@ -74,8 +74,8 @@ close to it:
 * **A second implementation to keep honest.** Reader/validator logic is
   written from scratch here, so conformance to c2pa-rs and to the spec is
   something to *keep proving*, not inherit.
-* **Less coverage.** No ingredients, remote manifests, BMFF or thumbnails
-  yet; CAWG identity assertions only for the X.509 credential type.
+* **Less coverage.** Ingredients only partly ([page 10](10-ingredients.md)),
+  and no remote manifests, BMFF or thumbnails yet; CAWG identity assertions only for the X.509 credential type.
 
 ## The engine, for reference
 

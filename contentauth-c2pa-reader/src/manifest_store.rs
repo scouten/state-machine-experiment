@@ -31,6 +31,7 @@ use crate::{
     data_hash::{self, DataHash},
     error::Error,
     identity::{self, IdentityAssertion},
+    ingredient::{self, Ingredient},
     validation::{self, status_code, ValidationStatus},
 };
 
@@ -114,6 +115,14 @@ pub struct Manifest {
     /// in the report's statuses, which name an assertion by
     /// [`IdentityAssertion::url`].
     pub identity_assertions: Vec<IdentityAssertion>,
+
+    /// The ingredient assertions this manifest carries, in store order.
+    ///
+    /// Each says what the claim generator recorded about an asset that went
+    /// into this one; whether it holds is in the report's statuses, which
+    /// name an assertion by URI. An assertion that could not be read at
+    /// all is absent here and reported as a status instead.
+    pub ingredients: Vec<Ingredient>,
 }
 
 /// The result of reading a manifest store.
@@ -163,7 +172,8 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ParsedManifestStore, Error> {
     let mut identity_chains = Vec::new();
     let mut manifests = Vec::new();
 
-    for manifest in child_superboxes(&manifest_store) {
+    let boxes: Vec<_> = child_superboxes(&manifest_store).collect();
+    for manifest in &boxes {
         manifests.push(read_manifest(
             manifest,
             &mut statuses,
@@ -171,6 +181,20 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ParsedManifestStore, Error> {
             &mut identity_chains,
         )?);
     }
+
+    // Each ingredient's references can only be checked once every manifest
+    // they might name has been read.
+    let entries: Vec<_> = boxes
+        .iter()
+        .zip(&manifests)
+        .map(|(sbox, manifest)| ingredient::StoreEntry {
+            label: &manifest.label,
+            sbox,
+            claim: &manifest.claim,
+            ingredients: &manifest.ingredients,
+        })
+        .collect();
+    ingredient::check_store(&entries, &mut statuses);
 
     // The C2PA specification defines the active manifest as the last
     // manifest in the store.
@@ -293,6 +317,16 @@ fn read_manifest(
     )
     .assertions;
 
+    let ingredients = ingredient::read(&label, child_by_uuid(manifest, &ASSERTIONS_UUID), statuses);
+    ingredient::check_manifest(
+        manifest,
+        &label,
+        &ingredients,
+        child_by_uuid(manifest, &ASSERTIONS_UUID),
+        &claim,
+        statuses,
+    );
+
     Ok(Manifest {
         label,
         claim,
@@ -300,6 +334,7 @@ fn read_manifest(
         has_signature: signature.is_some(),
         data_hash,
         identity_assertions,
+        ingredients,
     })
 }
 
@@ -600,12 +635,12 @@ mod tests {
     #[test]
     fn a_v2_claims_created_and_gathered_assertions_are_both_hash_checked() {
         let created = assertion_box("c2pa.actions");
-        let gathered = assertion_box("c2pa.ingredient");
+        let gathered = assertion_box("c2pa.metadata");
 
         let claim = claim_box_v2(
             "v2.jpg",
             vec![hashed_uri("c2pa.actions", &created)],
-            vec![hashed_uri("c2pa.ingredient", &gathered)],
+            vec![hashed_uri("c2pa.metadata", &gathered)],
         );
 
         let bytes = manifest_store(&[manifest_with_claim(

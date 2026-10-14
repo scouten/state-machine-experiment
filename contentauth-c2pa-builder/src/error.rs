@@ -83,6 +83,31 @@ pub enum Error {
     #[error("an identity assertion references {0:?} more than once")]
     DuplicateReferencedAssertion(String),
 
+    /// More than one of
+    /// [`BuilderSettings::ingredients`](crate::BuilderSettings::ingredients)
+    /// is a [`Relationship::ParentOf`](crate::Relationship::ParentOf)
+    /// ingredient. A validator rejects such a manifest with
+    /// `manifest.multipleParents`.
+    #[error("a manifest may have at most one parentOf ingredient")]
+    MultipleParents,
+
+    /// Two ingredients share an
+    /// [`IngredientSettings::label`](crate::IngredientSettings::label), so
+    /// an action could not tell them apart.
+    #[error("ingredient label {0:?} is used more than once")]
+    DuplicateIngredientLabel(String),
+
+    /// An action's `parameters.ingredientIds` names an ingredient that is
+    /// not among
+    /// [`BuilderSettings::ingredients`](crate::BuilderSettings::ingredients).
+    #[error("an action names ingredient {0:?}, which is not one of the manifest's ingredients")]
+    UnknownIngredientId(String),
+
+    /// A `c2pa.actions.v2` assertion could not be read well enough to link
+    /// it to the manifest's ingredients.
+    #[error("cannot link ingredients into the actions assertion: {0}")]
+    InvalidActions(&'static str),
+
     /// The host returned a different number of bytes than the range it was
     /// asked for.
     ///
