@@ -56,3 +56,8 @@ contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline", f
 # Reads back the hard binding c2pa-rs wrote, to compare the exclusions the
 # TIFF handler reports against the ones c2pa-rs recorded.
 contentauth-c2pa-file-reader = { path = "../contentauth-c2pa-file-reader" }
+# The benchmark (`examples/bench_slow_storage.rs`) signs a large JPEG with
+# the file builder, then reads it through both this workspace's readers and
+# the real `c2pa` crate.
+contentauth-c2pa-file-builder = { path = "../contentauth-c2pa-file-builder" }
+contentauth-c2pa-format-jpeg = { path = "../contentauth-c2pa-format-jpeg" }

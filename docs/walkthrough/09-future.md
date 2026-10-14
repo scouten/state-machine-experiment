@@ -40,6 +40,7 @@ flowchart LR
 | **CRLs** | Outside the spec §15.9 OCSP-only process the engine follows, but real certs use them. |
 | **Other hard bindings** (box hash, BMFF) | Only `c2pa.hash.data` is validated. |
 | **Decoded assertion values** (thumbnails, resources) | Needed for fuller `ManifestStore` and `crJson`/`resourceToBytes` parity. |
+| **Action assertion rules** (first action must be `created`/`opened`) | c2pa-rs reports `assertion.action.malformed`; this reader does not yet, so it is more lenient. Surfaced by [Concurrent hashing](11-concurrent-hashing.md)'s benchmark. |
 
 ## 2. More container formats
 
@@ -134,8 +135,11 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 * **Track c2pa-rs releases** — the compat layer follows a moving target.
 * **Fuzzing** the parsers (JUMBF, COSE, TIFF graph walks) — they already
   refuse hostile input by design, but nothing yet hammers that.
-* **Benchmarks** against c2pa-rs for large assets (the Node numbers are
-  encouraging but not comparative).
+* **Benchmarks** against c2pa-rs for large assets: a simulated-slow-storage
+  benchmark now exists and shows a concurrent host ~2.6x ahead
+  ([Concurrent hashing](11-concurrent-hashing.md)); still open is running it
+  against *real* network-backed storage and more formats, with variance
+  reported rather than a median of a few runs.
 
 ## Questions for discussion
 

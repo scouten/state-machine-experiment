@@ -27,21 +27,15 @@
 //! buffered), bounding peak memory at `WINDOW × CHUNK_SIZE` no matter how
 //! large the asset is.
 
-use contentauth_c2pa_primitives::{hash::Hasher, ByteRange, Bytes, HashAlgorithm, StreamId};
+use contentauth_c2pa_primitives::{
+    hash::Hasher, ByteRange, Bytes, ChunkSize, HashAlgorithm, HashWindow, StreamId,
+};
 use contentauth_state_machine::{ProtocolError, RequestId, SessionCore};
 
 use crate::{
     error::Error,
     request::{BuilderHostReply, BuilderRequest},
 };
-
-/// Bytes requested per chunk.
-const CHUNK_SIZE: u64 = 64 * 1024;
-
-/// Maximum chunks in play (outstanding or buffered) at any moment.
-///
-/// This is what lets the host overlap reads while keeping memory bounded.
-const WINDOW: usize = 8;
 
 /// Accumulates a digest over host-streamed chunks of an asset.
 #[derive(Debug)]
@@ -74,9 +68,15 @@ pub(crate) struct HashStream {
 }
 
 impl HashStream {
-    /// Prepares to hash the given ranges, in order.
-    pub(crate) fn new(algorithm: HashAlgorithm, ranges: &[ByteRange]) -> Self {
-        Self::with_limits(algorithm, ranges, CHUNK_SIZE, WINDOW)
+    /// Prepares to hash the given ranges, in order, requesting them
+    /// `chunk_size` bytes at a time and keeping `window` chunks in play.
+    pub(crate) fn new(
+        algorithm: HashAlgorithm,
+        ranges: &[ByteRange],
+        chunk_size: ChunkSize,
+        window: HashWindow,
+    ) -> Self {
+        Self::with_limits(algorithm, ranges, chunk_size.get(), window.get())
     }
 
     /// Prepares to hash with explicit chunking limits, so tests can drive

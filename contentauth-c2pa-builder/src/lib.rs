@@ -97,7 +97,8 @@ pub use builder::{
     GeneratorInfo, TimestampSettings,
 };
 pub use contentauth_c2pa_primitives::{
-    ByteRange, Bytes, HashAlgorithm, HostError, SigningAlg, StreamId,
+    ByteRange, Bytes, ChunkSize, ChunkSizeError, HashAlgorithm, HashWindow, HashWindowError,
+    HostError, SigningAlg, StreamId,
 };
 pub use contentauth_state_machine::{HostRequest, ProtocolError, RequestId, Session};
 pub use data_hash::MAX_EXCLUSIONS;

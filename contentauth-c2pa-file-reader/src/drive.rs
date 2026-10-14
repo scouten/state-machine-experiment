@@ -86,14 +86,17 @@ fn answer<R: Read + Seek>(source: &mut R, request: &FileReadRequest) -> FileRead
         // docs. Failing the request is safe: revocation checking is
         // fail-open (`ReadSettings::check_ocsp`'s own docs), so this reads
         // exactly as "could not be checked" rather than as a rejection.
-        FileReadRequest::Ocsp { .. } => {
-            FileReadReply::Failed(HostError::new("this host has no network access for OCSP"))
-        }
+        FileReadRequest::Ocsp { .. } => FileReadReply::Failed(ocsp_unavailable()),
     }
 }
 
+/// The failure every host in this crate answers an OCSP request with.
+pub(crate) fn ocsp_unavailable() -> HostError {
+    HostError::new("this host has no network access for OCSP")
+}
+
 /// The current wall-clock time as Unix seconds.
-fn now_unix() -> i64 {
+pub(crate) fn now_unix() -> i64 {
     unix_seconds(SystemTime::now())
 }
 
@@ -127,14 +130,14 @@ fn read_range<R: Read + Seek>(source: &mut R, range: ByteRange) -> io::Result<Ve
     Ok(buf)
 }
 
-fn read_failed(range: ByteRange, err: &io::Error) -> HostError {
+pub(crate) fn read_failed(range: ByteRange, err: &io::Error) -> HostError {
     HostError::new(format!(
         "could not read {}+{} bytes: {err}",
         range.start, range.len
     ))
 }
 
-fn length_failed(err: &io::Error) -> HostError {
+pub(crate) fn length_failed(err: &io::Error) -> HostError {
     HostError::new(format!("could not determine stream length: {err}"))
 }
 
