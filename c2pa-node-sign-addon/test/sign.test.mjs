@@ -80,9 +80,12 @@ function assertBaseline(reader) {
   const active = reader.getActive();
   assert.equal(active.title, "baseline.jpg");
   assert.equal(active.instance_id, BASELINE.instance_id);
-  const labels = active.assertions;
-  assert.ok(labels.includes("c2pa.actions.v2"), JSON.stringify(labels));
-  assert.ok(labels.includes("c2pa.hash.data"), JSON.stringify(labels));
+  assert.deepEqual(active.assertions.map((assertion) => assertion.label), ["c2pa.actions.v2", "c2pa.hash.data"]);
+  assert.deepEqual(active.assertions[0], {
+    label: "c2pa.actions.v2", created: true, data: BASELINE.assertions[0].data,
+  });
+  assert.equal(active.assertions[1].data.alg, "sha256");
+  assert.equal(active.assertions[1].data.hash.length, 32);
 }
 
 test("the baseline case signs a JPEG file that reads back Trusted", async () => {
@@ -377,7 +380,8 @@ test("a tsa_url timestamps the claim: Node POSTs the request and the token lands
     assert.ok(result.manifest.includes(TOKEN), "the token must be in the manifest store");
     // The signed asset still reads back, signature and hard binding intact.
     const reader = await Reader.fromAsset({ path: output }, trustSettings);
-    assert.ok(reader.getActive().assertions.includes("c2pa.hash.data"));
+    assert.ok(reader.getActive().assertions.some((assertion) =>
+      assertion.label === "c2pa.hash.data" && assertion.data.alg === "sha256"));
   } finally {
     await authority.close();
   }

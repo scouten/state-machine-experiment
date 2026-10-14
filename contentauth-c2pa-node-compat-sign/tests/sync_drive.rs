@@ -32,7 +32,7 @@ fn sign_with(
     session: NodeBuildSession,
     sign: &dyn Fn(&[u8]) -> Signed,
 ) -> Result<(Vec<u8>, SignReport, usize), Error> {
-    sign_and_timestamp_with(session, sign, &|_, _| {
+    sign_and_timestamp_with(session, SOURCE_JPEG, sign, &|_, _| {
         Err("this test does not expect a timestamp request".to_string())
     })
 }
@@ -41,6 +41,7 @@ fn sign_with(
 /// request, it returns the DER response body.
 fn sign_and_timestamp_with(
     mut session: NodeBuildSession,
+    source: &[u8],
     sign: &dyn Fn(&[u8]) -> Signed,
     tsa: &dyn Fn(&str, &[u8]) -> Signed,
 ) -> Result<(Vec<u8>, SignReport, usize), Error> {
@@ -56,13 +57,13 @@ fn sign_and_timestamp_with(
                     stream, start, len, ..
                 } => {
                     let bytes = match stream {
-                        Stream::Source => SOURCE_JPEG,
+                        Stream::Source => source,
                         Stream::Output => &output[..],
                     };
                     Reply::Bytes(bytes[start as usize..(start + len) as usize].to_vec())
                 }
                 PendingRequest::Length { stream, .. } => Reply::Length(match stream {
-                    Stream::Source => SOURCE_JPEG.len() as u64,
+                    Stream::Source => source.len() as u64,
                     Stream::Output => output.len() as u64,
                 }),
                 PendingRequest::Write { offset, bytes, .. } => {
@@ -200,12 +201,16 @@ fn granted_response() -> Vec<u8> {
 #[test]
 fn a_tsa_url_makes_the_loop_answer_a_timestamp_request_and_embed_the_token() {
     let asked = std::cell::RefCell::new(Vec::new());
-    let (output, report, _) =
-        sign_and_timestamp_with(timestamping_session(), &test_sign, &|url, request| {
+    let (output, report, _) = sign_and_timestamp_with(
+        timestamping_session(),
+        SOURCE_JPEG,
+        &test_sign,
+        &|url, request| {
             asked.borrow_mut().push((url.to_string(), request.to_vec()));
             Ok(granted_response())
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
 
     let asked = asked.borrow();
     assert_eq!(asked.len(), 1);
@@ -220,7 +225,7 @@ fn a_tsa_url_makes_the_loop_answer_a_timestamp_request_and_embed_the_token() {
 #[test]
 fn a_refusing_authority_fails_the_build() {
     let refused = vec![0x30, 0x05, 0x30, 0x03, 0x02, 0x01, 0x02];
-    let err = sign_and_timestamp_with(timestamping_session(), &test_sign, &|_, _| {
+    let err = sign_and_timestamp_with(timestamping_session(), SOURCE_JPEG, &test_sign, &|_, _| {
         Ok(refused.clone())
     })
     .unwrap_err();
@@ -229,9 +234,40 @@ fn a_refusing_authority_fails_the_build() {
 
 #[test]
 fn an_unreachable_authority_fails_the_build() {
-    let err = sign_and_timestamp_with(timestamping_session(), &test_sign, &|_, _| {
+    let err = sign_and_timestamp_with(timestamping_session(), SOURCE_JPEG, &test_sign, &|_, _| {
         Err("connection refused".to_string())
     })
     .unwrap_err();
     assert!(err.to_string().contains("connection refused"), "{err}");
+}
+
+#[test]
+fn tiff_selection_drives_the_tiff_builder_instead_of_a_hardcoded_jpeg_handler() {
+    let source = b"II\x2a\0\x08\0\0\0\x01\0\0\x01\x03\0\x01\0\0\0\x01\0\0\0\0\0\0\0";
+    let session = NodeBuildSession::new(
+        BASELINE_DEFINITION,
+        "image/tiff",
+        "es256",
+        vec![TEST_SIGNER_CERT.to_vec()],
+    )
+    .unwrap();
+    let (output, report, signatures) =
+        sign_and_timestamp_with(session, source, &test_sign, &|_, _| {
+            Err("unexpected timestamp".into())
+        })
+        .unwrap();
+    assert_eq!(signatures, 1);
+    assert_eq!(&output[..8], &source[..8]);
+    assert_eq!(report.exclusions.len(), 2);
+    assert!(report.exclusions[0].start + report.exclusions[0].len < report.exclusions[1].start);
+    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("node-sign-out.tiff");
+    std::fs::write(&path, output).unwrap();
+    let reader = Reader::from_context(Context::new().with_settings(ReadSettings {
+        trust_anchors: vec![TEST_SIGNER_CERT.to_vec()],
+        ..ReadSettings::default()
+    }))
+    .with_file(&path)
+    .unwrap();
+    assert_eq!(reader.validation_state(), ValidationState::Trusted);
+    std::fs::remove_file(path).unwrap();
 }

@@ -1,5 +1,11 @@
 import init, { BrowserBuilder, BrowserReader } from "../.cache/generated/state_machine.js";
 import { Context, validateAssetSize, type Settings } from "@contentauth/c2pa-utilities";
+import { remoteManifestHost, type RemoteManifestOptions } from "./remote.ts";
+export type { RemoteManifestOptions } from "./remote.ts";
+import { ocspHost, type OcspOptions } from "./ocsp.ts";
+import { isProjection } from "./projection.ts";
+import { contextJson, factoryContext, readerDefaults, rejectBuilderDefaults } from "./settings.ts";
+export type { OcspOptions } from "./ocsp.ts";
 
 export { Context, AssetTooLargeError } from "@contentauth/c2pa-utilities";
 export type { Runtime };
@@ -43,66 +49,14 @@ function projection(value: unknown): ManifestProjection {
     throw new Error("Invalid state-machine manifest projection");
   return value;
 }
-function isValidationStatus(value: unknown): value is { code: string; url?: string; explanation?: string } {
-  return object(value) && typeof value.code === "string" &&
-    (value.url === undefined || typeof value.url === "string") &&
-    (value.explanation === undefined || typeof value.explanation === "string");
-}
-function isValidationStatusList(
-  value: unknown,
-): value is { code: string; url?: string; explanation?: string }[] {
-  return Array.isArray(value) && value.every(isValidationStatus);
-}
-function isProjection(value: unknown): value is ManifestProjection {
-  if (!object(value) || !object(value.manifests) ||
-      !(value.validation_state === "Trusted" || value.validation_state === "Valid" ||
-        value.validation_state === "Invalid") ||
-      (value.active_manifest !== undefined && typeof value.active_manifest !== "string") ||
-      (value.validation_status !== undefined && !isValidationStatusList(value.validation_status))) {
-    return false;
-  }
-
-  const results = value.validation_results;
-  if (!object(results) || typeof results.specVersion !== "string") {
-    return false;
-  }
-
-  const activeManifest = results.activeManifest;
-  if (!object(activeManifest)) return false;
-
-  return ["success", "informational", "failure"].every((bucket) =>
-    isValidationStatusList(activeManifest[bucket]));
-}
-async function contextJson(context?: Context): Promise<string | undefined> {
-  if (!context) return undefined;
-  const settings: unknown = context.settings ?? {};
-  if (!object(settings)) throw new Error("Invalid Context");
-  for (const [section, value] of Object.entries(settings)) {
-    if (!["trust", "cawgTrust", "verify"].includes(section) || !object(value))
-      throw new Error(`Unsupported reader setting: ${section}`);
-    for (const [key, field] of Object.entries(value)) {
-      const anchorValue = (typeof field === "string" || Array.isArray(field)) &&
-        (typeof field === "string" || field.every((entry) => typeof entry === "string"));
-      const supported = ((section === "trust" || section === "cawgTrust") &&
-        ["trustAnchors", "userAnchors"].includes(key) && anchorValue) ||
-        (section === "verify" && key === "ocspFetch" && field === false) ||
-        (section === "verify" && key === "verifyTrust" && field === true);
-      if (!supported) throw new Error(`Unsupported reader setting: ${section}.${key}`);
-    }
-  }
-  if ((settings.trust !== undefined || settings.cawgTrust !== undefined) &&
-      object(settings.verify) && settings.verify.verifyTrust === false)
-    throw new Error("verify.verifyTrust: false is not supported by the state-machine reader");
-  return await context.toJson();
-}
-
 let source: Config["wasmSrc"] | undefined;
 let loading: Promise<void> | undefined;
 export async function createC2pa(config: Config): Promise<Runtime> {
   if (Object.keys(config).some((key) => !["wasmSrc", "workerSrc", "settings"].includes(key)))
     throw new Error("Unsupported M1 loader configuration");
-  if (config.workerSrc !== undefined || config.settings !== undefined)
-    throw new Error("M1 is inline-only; Worker configuration and global settings are not supported");
+  if (config.workerSrc !== undefined)
+    throw new Error("The loader is inline-only; Worker configuration is not supported");
+  const defaults = readerDefaults(config.settings);
   if (source !== undefined && source !== config.wasmSrc)
     throw new Error("The inline Wasm module is already initialized with a different resource");
   if (!loading) {
@@ -114,11 +68,13 @@ export async function createC2pa(config: Config): Promise<Runtime> {
     });
   }
   await loading;
-  return new Runtime();
+  return new Runtime(defaults);
 }
 
 interface Resource { requestFree(): void }
 class Runtime {
+  #defaults: Settings;
+  constructor(defaults: Settings) { this.#defaults = defaults }
   #disposed = false;
   #resources = new Set<Resource>();
   get liveResources(): number { return this.#resources.size }
@@ -130,11 +86,16 @@ class Runtime {
     for (const resource of this.#resources) resource.requestFree();
   }
   reader = {
-    fromBlob: (format: string, blob: Blob, settings?: Settings, detachedManifest?: Uint8Array) =>
-      Reader.fromBlob(this, format, blob, settings ? new Context(settings) : undefined, detachedManifest),
+    fromBlob: async (format: string, blob: Blob, settings?: Settings, detachedManifest?: Uint8Array,
+      remoteManifest?: RemoteManifestOptions, ocsp?: OcspOptions) =>
+      await Reader.fromBlob(this, format, blob, factoryContext(this.#defaults, settings),
+        detachedManifest, remoteManifest, ocsp),
   };
   builder = {
-    fromDefinition: (definition: Record<string, unknown>) => Builder.fromDefinition(this, definition),
+    fromDefinition: async (definition: Record<string, unknown>) => {
+      rejectBuilderDefaults(this.#defaults);
+      return await Builder.fromDefinition(this, definition);
+    },
   };
 }
 
@@ -152,18 +113,38 @@ export class Reader implements Resource {
     blob: Blob,
     context?: Context,
     detachedManifest?: Uint8Array,
+    remoteManifest?: RemoteManifestOptions,
+    ocsp?: OcspOptions,
   ): Promise<Reader | null> {
     runtime.assertLive();
     validateAssetSize(blob.size, MAX_SIZE_IN_BYTES);
     if (!format) {
-      const bytes = new Uint8Array(await blob.slice(0, 3).arrayBuffer());
+      const bytes = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
       if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) format = "image/jpeg";
-      else throw new Error("Unsupported M1 asset format");
+      else if ((bytes[0] === 0x49 && bytes[1] === 0x49 && bytes[3] === 0 &&
+                (bytes[2] === 42 || bytes[2] === 43)) ||
+               (bytes[0] === 0x4d && bytes[1] === 0x4d && bytes[2] === 0 &&
+                (bytes[3] === 42 || bytes[3] === 43))) format = "image/tiff";
+      else throw new Error("Unsupported state-machine asset format");
     }
-    const json = await contextJson(context);
+    const remoteHost = remoteManifest ? remoteManifestHost(remoteManifest) : undefined;
+    const ocspTransport = ocsp ? ocspHost(ocsp) : undefined;
+    const baseJson = await contextJson(context, ocspTransport !== undefined);
+    let json = baseJson;
+    if (remoteHost || ocspTransport) {
+      const parsed: unknown = JSON.parse(baseJson ?? "{}");
+      if (!object(parsed) || (parsed.verify !== undefined && !object(parsed.verify)))
+        throw new Error("Invalid serialized Context");
+      json = JSON.stringify({
+        ...parsed, verify: { ...parsed.verify,
+          ...(remoteHost ? { remote_manifest_fetch: true } : {}),
+          ...(ocspTransport ? { ocsp_fetch: true } : {}),
+        },
+      });
+    }
     runtime.assertLive();
     let ffi: BrowserReader;
-    try { ffi = await BrowserReader.fromBlob(format, blob, json, detachedManifest) }
+    try { ffi = await BrowserReader.fromBlob(format, blob, json, detachedManifest, remoteHost, ocspTransport) }
     catch (cause) {
       runtime.assertLive();
       if (cause === "C2pa(JumbfNotFound)") return null;

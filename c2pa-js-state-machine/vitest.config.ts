@@ -3,15 +3,21 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { root, upstreamRoot } from "./scripts/contract.ts";
+import { remoteFixtures } from "./scripts/remote-fixtures.ts";
+import { workerFixtures } from "./scripts/worker-fixtures.ts";
 
 const web = join(upstreamRoot, "packages/c2pa-web");
 const state = process.env.CONTRACT_BACKEND === "state-machine";
 const browser = process.env.CONTRACT_BROWSER ?? "chromium";
+const performance = process.env.CONTRACT_PERFORMANCE === "1";
+const runtime = process.env.CONTRACT_RUNTIME ?? "inline";
+if (!["inline", "worker"].includes(runtime)) throw new Error(`Unknown contract runtime: ${runtime}`);
 if (!["chromium", "firefox", "webkit"].includes(browser)) throw new Error(`Unknown browser: ${browser}`);
 const trustFixtures = ["correct", "cawg", "incorrect"].map((name) => `test/trust/anchor-${name}.pem`);
 export default defineConfig({
-  define: { __CONTRACT_BACKEND__: JSON.stringify(process.env.CONTRACT_BACKEND ?? "legacy") },
-  plugins: [{
+  define: { __CONTRACT_BACKEND__: JSON.stringify(process.env.CONTRACT_BACKEND ?? "legacy"),
+    __CONTRACT_RUNTIME__: JSON.stringify(runtime) },
+  plugins: [...(state && !performance ? [remoteFixtures(), workerFixtures()] : []), {
     name: "pinned-oracle-imports",
     enforce: "pre",
     resolveId(id, importer) {
@@ -42,9 +48,9 @@ export default defineConfig({
   optimizeDeps: { exclude: ["@contentauth/c2pa-web", "@contentauth/c2pa-utilities"] },
   server: { fs: { allow: [root] } },
   test: {
-    include: [
+    include: performance ? ["browser/performance.spec.ts"] : [
       ".cache/upstream/packages/c2pa-web/src/lib/reader.spec.ts",
-      ...(state ? ["browser/m1.spec.ts", "browser/m2.spec.ts", "browser/m3.spec.ts"] : []),
+      ...(state && runtime === "inline" ? ["browser/m1.spec.ts", "browser/m2.spec.ts", "browser/m3.spec.ts", "browser/m3-worker.spec.ts", "browser/m3-settings.spec.ts"] : []),
     ],
     exclude: [],
     browser: {

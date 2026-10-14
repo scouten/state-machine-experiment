@@ -34,6 +34,10 @@ pub(crate) trait Goal: Send {
     /// The operation's result.
     type Output: Send;
 
+    fn discover_remote(&self) -> bool {
+        false
+    }
+
     /// Computes the result from the scan.
     fn finalize(self, layout: Layout) -> Result<Self::Output, FormatError>;
 }
@@ -61,7 +65,7 @@ impl<G: Goal> ScanOp<G> {
         Self {
             core: SessionCore::default(),
             state: State::Scanning {
-                scanner: Scanner::new(stream),
+                scanner: Scanner::new(stream, goal.discover_remote()),
                 goal,
             },
         }

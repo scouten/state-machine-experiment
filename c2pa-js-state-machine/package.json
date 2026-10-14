@@ -5,12 +5,16 @@
   "type": "module",
   "exports": {
     "./inline": "./src/index.ts",
+    "./worker": "./src/worker.ts",
+    "./worker-entry": "./src/worker-entry.ts",
     "./resources/state-machine.wasm": "./.cache/generated/state_machine_bg.wasm"
   },
   "description": "Pinned c2pa-js migration contract inventory and dual-backend parity harness",
   "engines": { "node": ">=22" },
   "scripts": {
     "build:wasm": "tsx scripts/build-wasm.ts",
+    "build:package": "tsx scripts/build-package.ts",
+    "test:package": "tsx scripts/package-proof.ts",
     "test:m1": "tsx scripts/oracle.ts --backend state-machine",
     "prepare:upstream": "tsx scripts/prepare.ts",
     "inventory": "tsx scripts/inventory.ts",
@@ -21,7 +25,8 @@
     "report:parity": "tsx scripts/report.ts",
     "check:parity": "tsx scripts/report.ts --require-parity",
     "test:m2": "tsx scripts/oracle.ts --backend state-machine",
-    "test:m3": "tsx scripts/oracle.ts --backend state-machine"
+    "test:m3": "tsx scripts/oracle.ts --backend state-machine",
+    "test:performance": "tsx scripts/performance.ts"
   },
   "devDependencies": {
     "@contentauth/c2pa-web": "0.15.3",

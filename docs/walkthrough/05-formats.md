@@ -41,6 +41,14 @@ flowchart LR
 | Byte order / width | One | Either order; classic and BigTIFF (alignment padding) |
 | `commit` patches | None | None (framing depends only on store length) |
 
+JPEG location also reads bounded `APP1` payloads and reports standard XMP
+`dcterms:provenance` URLs, by namespace rather than prefix spelling. A small
+`roxmltree` decoding seam rejects DTDs, excessive node counts, malformed XML,
+and ambiguous references; extended XMP is explicitly unsupported. The handler
+never fetches URLs. The file-reader gives embedded/detached stores precedence;
+the browser host opts in with origin policy, byte limits, and deadlines.
+Embedding keeps XMP opaque and unchanged.
+
 ```mermaid
 flowchart LR
     subgraph TIFF["TIFF embedding layout (appended)"]

@@ -18,6 +18,8 @@ publish = false
 contentauth-c2pa-format = { path = "../contentauth-c2pa-format" }
 contentauth-state-machine = { path = "../contentauth-state-machine" }
 contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
+# Namespace-aware, DTD-disabled decoding of bounded standard XMP packets.
+roxmltree = "0.21"
 
 [dev-dependencies]
 # The conformance suite every format handler runs against itself.

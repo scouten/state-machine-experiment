@@ -25,10 +25,8 @@ use crate::{
 /// scans the JPEG's header and reassembles the manifest store from its
 /// `APP11` segments.
 ///
-/// Reports embedded stores only: this crate does not parse XMP, so an
-/// `APP1` XMP packet's `dcterms:provenance` reference to a remote store
-/// goes unreported for now. The contract has room for it
-/// ([`ManifestLocation::remote`]); the parsing is what is missing.
+/// Reports standard `APP1` XMP `dcterms:provenance` references alongside
+/// embedded stores. Extended XMP is explicitly unsupported.
 pub struct Locate(ScanOp<LocateGoal>);
 
 impl Locate {
@@ -44,10 +42,16 @@ struct LocateGoal;
 impl Goal for LocateGoal {
     type Output = ManifestLocation;
 
+    fn discover_remote(&self) -> bool {
+        true
+    }
+
     fn finalize(self, layout: Layout) -> Result<ManifestLocation, FormatError> {
-        Ok(match layout.manifest_run()? {
+        let mut location = match layout.manifest_run()? {
             Some(run) => ManifestLocation::embedded(run.jumbf, run.range, vec![run.range]),
             None => ManifestLocation::none(),
-        })
+        };
+        location.remote = layout.remote;
+        Ok(location)
     }
 }

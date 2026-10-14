@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { assertFreshEvidence, buildInventory, extractTests, harnessFingerprint, hash, legacyArtifacts, loadInventory, pin, root, stateArtifacts, type Observation } from "./contract.ts";
+import { assertRuntimeRuns, runtimeObservations } from "./runtime-record.ts";
 
 const backend = process.argv.includes("--backend")
   ? process.argv[process.argv.indexOf("--backend") + 1] : "legacy";
@@ -27,7 +28,7 @@ mkdirSync(directory, { recursive: true });
 const evidence = join(directory, `${backend}-observations.json`);
 if (existsSync(evidence)) rmSync(evidence);
 const milestone = backend === "state-machine"
-  ? ["m1", "m2", "m3"].flatMap((name) => {
+  ? ["m1", "m2", "m3", "m3-worker", "m3-settings"].flatMap((name) => {
     const file = `browser/${name}.spec.ts`;
     return extractTests(readFileSync(join(root, file), "utf8"), file);
   }) : [];
@@ -42,33 +43,43 @@ const fingerprint = {
 };
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const browsers = backend === "legacy" ? ["chromium"] : ["chromium", "firefox", "webkit"];
-const runs = browsers.map((browser) => {
-  const output = join(directory, `${backend}-${browser}-vitest.json`);
+function execute(browser: string, runtime: "inline" | "worker") {
+  const selection = runtime === "worker" ? selected : [...selected, ...milestone];
+  const suffix = runtime === "worker" ? "-worker" : "";
+  const output = join(directory, `${backend}${suffix}-${browser}-vitest.json`);
   if (existsSync(output)) rmSync(output);
   const run = spawnSync(process.execPath, [
   join(root, "node_modules/vitest/vitest.mjs"), "run",
-  "--testNamePattern", `^(${[...selected, ...milestone].map((t) => escape(t.fullName)).join("|")})$`,
+  "--testNamePattern", `^(${selection.map((t) => escape(t.fullName)).join("|")})$`,
   "--reporter=default", "--reporter=json", "--reporter=junit",
-  `--outputFile.json=${output}`, `--outputFile.junit=${join(directory, `${backend}-${browser}-junit.xml`)}`,
-], { cwd: root, env: { ...process.env, CONTRACT_BACKEND: backend, CONTRACT_BROWSER: browser }, stdio: "inherit", timeout: 180_000 });
+ `--outputFile.json=${output}`, `--outputFile.junit=${join(directory, `${backend}${suffix}-${browser}-junit.xml`)}`,
+], { cwd: root, env: { ...process.env, CONTRACT_BACKEND: backend, CONTRACT_BROWSER: browser,
+  CONTRACT_RUNTIME: runtime }, stdio: "inherit", timeout: 180_000 });
 if (run.error) throw run.error;
 const result = JSON.parse(readFileSync(output, "utf8")) as {
   testResults: { assertionResults: { fullName: string; status: string }[] }[];
 };
 const assertions = result.testResults.flatMap((test) => test.assertionResults);
-const outcomes: Observation[] = [...selected, ...milestone].map((test) => {
+const outcomes: Observation[] = selection.map((test) => {
   const matching = assertions.filter((a) => a.fullName === test.fullName);
   if (matching.length !== 1 || !["passed", "failed"].includes(matching[0].status))
     throw new Error(`Missing, duplicate, or skipped oracle test: ${test.fullName}`);
   return { id: test.id, status: matching[0].status === "passed" ? "passed" : "failed" };
 });
-if (assertions.filter((a) => a.status === "passed" || a.status === "failed").length !== selected.length + milestone.length)
+if (assertions.filter((a) => a.status === "passed" || a.status === "failed").length !== selection.length)
   throw new Error("Unexpected tests executed outside the declared browser selection");
-return { browser, exit: run.status, signal: run.signal, outcomes };
-});
-const observations: Observation[] = selected.map((test) => ({
+return { browser, runtime, exit: run.status, signal: run.signal, outcomes };
+}
+const runs = browsers.map((browser) => execute(browser, "inline"));
+const runtimeRuns = backend === "state-machine" ? [
+  ...runs.map((run) => ({ ...run, outcomes: run.outcomes.filter((o) => selected.some((test) => test.id === o.id)) })),
+  ...browsers.map((browser) => execute(browser, "worker")),
+] : undefined;
+if (runtimeRuns) assertRuntimeRuns(runtimeRuns, selected.map((test) => test.id));
+const observations: Observation[] = runtimeRuns ? runtimeObservations(runtimeRuns, selected.map((test) => test.id)) : selected.map((test) => ({
   id: test.id,
-  status: runs.every((run) => run.outcomes.find((o) => o.id === test.id)?.status === "passed") ? "passed" : "failed",
+  status: (runtimeRuns ?? runs).every((run) => run.exit === 0 &&
+    run.outcomes.find((o) => o.id === test.id)?.status === "passed") ? "passed" : "failed",
 }));
 assertFreshEvidence(fingerprint, {
   inventorySha256: hash(JSON.stringify(buildInventory())),
@@ -77,12 +88,12 @@ assertFreshEvidence(fingerprint, {
   harnessSha256: harnessFingerprint(),
 });
 writeFileSync(evidence, JSON.stringify({
-  backend, browsers, runs,
+  backend, browsers, runs, runtimeRuns,
   upstreamCommit: pin.commit,
   ...fingerprint,
   artifacts,
   observations,
 }, null, 2) + "\n");
-if (runs.some((run) => run.exit !== 0 || run.outcomes.some((o) => o.status !== "passed")))
+if ([...runs, ...(runtimeRuns ?? [])].some((run) => run.exit !== 0 || run.outcomes.some((o) => o.status !== "passed")))
   throw new Error(`${backend} browser proof failed; failing observations recorded`);
-console.log(`Recorded ${observations.length} unchanged upstream passes and ${milestone.length} M1/M2/M3 cases on ${browsers.join(", ")}.`);
+console.log(`Recorded ${observations.length} unchanged upstream passes${runtimeRuns ? " on inline and Worker" : ""} and ${milestone.length} M1/M2/M3 cases on ${browsers.join(", ")}.`);

@@ -33,6 +33,50 @@ const C_JPG_MANIFEST_RANGE: ByteRange = ByteRange {
     len: 45884,
 };
 
+fn with_xmp(asset: &[u8], xml: &str) -> Vec<u8> {
+    let payload = [b"http://ns.adobe.com/xap/1.0/\0".as_slice(), xml.as_bytes()].concat();
+    [&asset[..2], &segment(0xe1, &payload), &asset[2..]].concat()
+}
+
+#[test]
+fn standard_xmp_reports_remote_and_embedded_locations_independently() {
+    let xml =
+        r#"<x xmlns:d="http://purl.org/dc/terms/" d:provenance="https://example.test/store"/>"#;
+    for asset in [&unsigned_jpeg(false, false)[..], C_JPG] {
+        let location = conformance::locate(&JpegFormat, &with_xmp(asset, xml));
+        assert_eq!(
+            location.remote.as_deref(),
+            Some("https://example.test/store")
+        );
+        assert_eq!(location.embedded.is_some(), asset == C_JPG);
+    }
+}
+
+#[test]
+fn malformed_xmp_fails_location_but_embedding_preserves_it_as_opaque_metadata() {
+    let asset = with_xmp(&unsigned_jpeg(false, false), "<unclosed>");
+    let err = MemoryHost::new()
+        .with_stream(STREAM, asset.clone())
+        .run(JpegFormat.locate(STREAM))
+        .unwrap_err();
+    assert!(matches!(err, FormatError::Malformed(_)));
+    assert!(MemoryHost::new()
+        .with_stream(STREAM, asset)
+        .run(JpegFormat.plan_embed(STREAM, 100))
+        .is_ok());
+}
+
+#[test]
+fn duplicate_xmp_references_across_packets_are_rejected() {
+    let xml =
+        r#"<x xmlns:d="http://purl.org/dc/terms/" d:provenance="https://example.test/store"/>"#;
+    let asset = with_xmp(&with_xmp(&unsigned_jpeg(false, false), xml), xml);
+    assert!(MemoryHost::new()
+        .with_stream(STREAM, asset)
+        .run(JpegFormat.locate(STREAM))
+        .is_err());
+}
+
 #[test]
 fn passes_the_conformance_suite() {
     // A store that fits one segment, and one that needs two.

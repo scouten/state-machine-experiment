@@ -36,9 +36,8 @@ contentauth-c2pa-file-reader = { path = "../contentauth-c2pa-file-reader" }
 # `src/manifest_store.rs` re-serializes into c2pa-wasm's JSON shapes.
 contentauth-c2pa-reader = { path = "../contentauth-c2pa-reader" }
 
-# The only `FormatHandler` wired up today; see `src/format.rs` for where a
-# second one would plug in.
-contentauth-c2pa-format-jpeg = { path = "../contentauth-c2pa-format-jpeg" }
+# Host-side format choice, shared by browser and Node read/sign adapters.
+contentauth-c2pa-format-registry = { path = "../contentauth-c2pa-format-registry", default-features = false, features = ["jpeg", "tiff"] }
 
 # `ByteRange` and `HostError`: the vocabulary this crate's `Blob` and
 # `Platform` traits speak, shared with every other host in this workspace.
@@ -74,6 +73,7 @@ wasm-bindgen-futures = { version = "0.4", optional = true }
 web-sys = { version = "0.3", features = ["Blob"], optional = true }
 
 [dev-dependencies]
+contentauth-c2pa-format-jpeg = { path = "../contentauth-c2pa-format-jpeg" }
 # Builds and signs a manifest to embed in this crate's own round-trip test
 # fixture, exactly as the sibling crates' own tests do.
 contentauth-c2pa-builder = { path = "../contentauth-c2pa-builder" }

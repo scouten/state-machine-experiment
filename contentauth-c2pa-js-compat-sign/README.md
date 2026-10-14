@@ -19,7 +19,8 @@ let SignedAsset { asset, manifest } = builder.sign_detached(&signer, &blob).awai
 
 The source is the read side's own `Blob` trait; the output is assembled in a
 `Vec<u8>` (a browser has no file, and the engine reads back what it wrote to
-hash it). `sign` uses the format handler and embeds the manifest. The distinct
+hash it). `sign` uses the shared reader registry (JPEG or TIFF/BigTIFF/DNG)
+and embeds the manifest. The distinct
 `sign_detached` path uses `BuilderSession::new_detached`, hashes every source
 byte with no exclusions, and returns the original asset bytes alongside the
 separate manifest store. Nothing below `src/drive.rs` is async — both paths
@@ -34,7 +35,10 @@ With the `web` feature (compiled only for `wasm32-unknown-unknown`)
 WebKit through [the combined cdylib](../contentauth-c2pa-web-bindings), proving
 WebCrypto signing, trusted read-back, interleaving, and failures. The M3
 detached case additionally proves trusted validation of a store-free JPEG
-without changing its asset bytes. It is also held to
+without changing its asset bytes. M3 also proves TIFF/BigTIFF signing in both
+byte orders, two nonadjacent hard-binding exclusions, tampering, detached
+read-back, and legacy validation of classic TIFF output. DNG coverage is aliases,
+not a camera corpus. It is also held to
 `cargo check --all-features --target wasm32-unknown-unknown`, like
 `contentauth-c2pa-js-compat`'s `web` module.
 

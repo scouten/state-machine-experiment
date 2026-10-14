@@ -12,6 +12,7 @@ flowchart TB
     E --> N["node-compat<br/>no host in Rust at all"]
     R --> R1["Reader::from_context(ctx).with_file(path)"]
     J --> J1["Reader::from_blob(fmt, blob, ctx, platform).await"]
+    J1 --> J2["Browser facade: inline or module Worker<br/>(same async Wasm host)"]
     N --> N1["NodeSession.advance / fulfill / finish"]
     N1 --> N2["JS loop in index.mjs<br/>(fs, fetch, event loop)"]
 ```
@@ -36,6 +37,70 @@ Honest differences, found by building these:
   response at 1 MiB.
 * **Reader state is a snapshot.** Node's `Reader` is parsed JSON, not a
   mutex-guarded live object.
+
+The browser's optional remote-manifest and OCSP callbacks keep network I/O
+in JavaScript. The inline facade requires explicit origin authorization,
+response bounds, deadlines, and optional abort signals. OCSP uses a DER POST
+and remains off by default; inaccessible or unauthenticated responses are
+reported without invalidating an otherwise trusted asset, while authenticated
+revocation fails validation. Local signed-response tests cover both outcomes.
+
+Browser and Node read/sign adapters now share the JPEG/TIFF registry selector.
+The browser tests include classic TIFF and BigTIFF in both byte orders,
+detached stores, nonadjacent exclusions, pixel tampering, and legacy validation
+of classic TIFF output. DNG aliases are recognized; a camera corpus remains open.
+
+The standalone JS prototype also offers explicit module-Worker hosting. Wasm
+handles, asset reads/hashing, and bounded network hosts live in the Worker;
+signing/timestamp callbacks remain on the caller thread. A readiness handshake
+and URL/precompiled-module initialization precede operation messages. Free closes
+resource proxies; runtime disposal terminates the Worker and rejects outstanding
+operations. Abort signals cross as messages, without changing OCSP fail-open
+policy. Three-browser tests cover read/sign, callback failures, cleanup, network
+cancellation, and external-module CSP allow/deny behavior. Byte arrays are cloned
+without detaching callers. The small-JPEG performance harness now compares both
+Worker paths plus inline, with Worker-side read telemetry and separate
+cross-thread command/reply counts. Each new Worker read uses one round trip;
+its multiple Blob reads stay inside the Worker. Pure crossing cost and
+large-asset memory still need measurement. There is no legacy fallback or
+published package. A private compiled ESM/types/Wasm archive now installs into
+an isolated external consumer without source aliases: TypeScript resolution and
+a Vite production build pass inline/Worker URL/module loading, direct Worker
+entry loading, sign/read cross-validation, detached output and cleanup in three
+browsers. Runtime utilities are a declared dependency; test keys and harness
+sources stay out of the archive. This is one private bundler proof, not registry
+publication or full SDK compatibility.
+
+Inline/Worker loaders now accept the implemented reader settings as factory
+defaults, merged per read with the shared legacy helper. Static Reader Contexts
+remain independent, as in legacy. Defaults are snapshotted per runtime rather
+than retaining mutable caller configuration. Inherited OCSP flags still require
+explicit operation-host authorization. Builder factories reject nonempty
+defaults until builder settings exist; static builders do not inherit them.
+Three-browser legacy comparisons and installed-consumer proof cover this slice.
+
+The five selected pinned upstream Reader tests now execute unchanged through
+both inline and Worker in all three browsers. A separate 30-execution runtime
+gate rejects missing/duplicate/skipped combinations and contradictory aggregate
+outcomes. It proves unsigned, size-error, algorithm-error, free and serialization
+behavior across the bridge; unique upstream coverage remains five declarations.
+Full manifest/resource/fragment equality still needs implementation.
+
+Local Worker RFC 3161 proof now covers authentic per-request RSA/SHA-256 tokens:
+timestamped embedded output cross-validates as `Trusted` with
+`timeStamp.validated` through Worker, inline and the pinned legacy SDK. Detached
+Worker/inline output, concurrent callback routing, definition URL precedence and
+explicit failure/retry paths are tested in three browsers. A wrong-imprint token
+cannot supply trusted time and is reported informationally; current signer trust
+still uses the host clock. Timestamp HTTP remains a caller-owned callback, not
+a new production transport. Public TSA and algorithm breadth remain open.
+
+A fourth, test-only Worker path caches small header reads in one operation-local
+4 KiB read-ahead window, bypassing large reads. It reduces physical Blob reads
+from 10 to 1 unsigned and 15 to 4 signed while preserving logical requests,
+complete signed/tampered reports and malformed-input failures. It fetches extra
+bytes, so this is an experimental trade-off, not an enabled production policy
+or a change to Rust hash chunk sizes.
 
 ## What the tests show
 

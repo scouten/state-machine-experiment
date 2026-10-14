@@ -117,6 +117,16 @@ fn a_synchronous_loop_reads_a_signed_jpeg() {
 }
 
 #[test]
+fn tiff_aliases_drive_the_tiff_locator_and_return_no_reader_for_an_unsigned_ifd() {
+    let source = b"II\x2a\0\x08\0\0\0\x01\0\0\x01\x03\0\x01\0\0\0\x01\0\0\0\0\0\0\0";
+    for format in ["image/tiff", "tif", "TIFF", "dng", "image/x-adobe-dng"] {
+        let (reader, counts) = read(source, format).unwrap();
+        assert!(reader.is_none());
+        assert!(counts.reads > 0);
+    }
+}
+
+#[test]
 fn it_reports_exactly_what_the_async_host_reports_for_the_same_bytes() {
     let (reader, _) = read(C_JPG, "image/jpeg").unwrap();
 

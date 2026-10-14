@@ -106,6 +106,57 @@ impl Platform for WebPlatform {
     }
 }
 
+struct ReaderPlatform {
+    remote_manifest: Option<js_sys::Function>,
+    ocsp: Option<js_sys::Function>,
+}
+
+impl Platform for ReaderPlatform {
+    async fn current_date_time(&self) -> Result<i64, HostError> {
+        WebPlatform.current_date_time().await
+    }
+
+    async fn ocsp(&self, url: &str, request_der: &[u8]) -> Result<Vec<u8>, HostError> {
+        let callback = self
+            .ocsp
+            .as_ref()
+            .ok_or_else(|| HostError::new("WebPlatform has no OCSP transport"))?;
+        let result = callback
+            .call2(
+                &JsValue::UNDEFINED,
+                &JsValue::from_str(url),
+                &Uint8Array::from(request_der),
+            )
+            .map_err(|err| HostError::new(format!("OCSP host failed: {}", describe(&err))))?;
+        host_bytes(result, "OCSP").await
+    }
+
+    async fn remote_manifest(&self, url: &str) -> Result<Vec<u8>, HostError> {
+        let callback = self
+            .remote_manifest
+            .as_ref()
+            .ok_or_else(|| HostError::new("WebPlatform has no remote manifest transport"))?;
+        let result = callback
+            .call1(&JsValue::UNDEFINED, &JsValue::from_str(url))
+            .map_err(|err| {
+                HostError::new(format!("remote manifest host failed: {}", describe(&err)))
+            })?;
+        host_bytes(result, "remote manifest").await
+    }
+}
+
+async fn host_bytes(result: JsValue, operation: &str) -> Result<Vec<u8>, HostError> {
+    let result = JsFuture::from(js_sys::Promise::resolve(&result))
+        .await
+        .map_err(|err| HostError::new(format!("{operation} host failed: {}", describe(&err))))?;
+    if !result.is_instance_of::<Uint8Array>() {
+        return Err(HostError::new(format!(
+            "{operation} host must return Uint8Array"
+        )));
+    }
+    Ok(Uint8Array::new(&result).to_vec())
+}
+
 /// The string [`Error`] crosses into JavaScript as — c2pa-wasm's own
 /// `From<WasmError> for JsString`, which is the contract c2pa-web's
 /// `reader.ts` matches `C2pa(JumbfNotFound)` against.
@@ -138,14 +189,22 @@ pub struct WasmReader {
 impl WasmReader {
     /// Attempts to create a new `WasmReader` from an asset format and a
     /// `Blob` of the asset's bytes, optionally with context JSON and
-    /// detached manifest-store bytes.
+    /// detached manifest-store bytes. An optional host callback may supply
+    /// remote manifest bytes or OCSP response bytes; those hosts must enforce
+    /// URL/size/deadline policy.
     #[wasm_bindgen(js_name = fromBlob)]
     pub async fn from_blob(
         format: &str,
         blob: &web_sys::Blob,
         context_json: Option<String>,
         detached_manifest: Option<Uint8Array>,
+        remote_manifest: Option<js_sys::Function>,
+        ocsp: Option<js_sys::Function>,
     ) -> Result<WasmReader, JsString> {
+        let platform = ReaderPlatform {
+            remote_manifest,
+            ocsp,
+        };
         let inner = match detached_manifest {
             Some(bytes) => {
                 Reader::from_blob_with_detached_manifest(
@@ -153,11 +212,11 @@ impl WasmReader {
                     blob,
                     context_json.as_deref(),
                     bytes.to_vec(),
-                    &WebPlatform,
+                    &platform,
                 )
                 .await?
             }
-            None => Reader::from_blob(format, blob, context_json.as_deref(), &WebPlatform).await?,
+            None => Reader::from_blob(format, blob, context_json.as_deref(), &platform).await?,
         };
 
         Ok(Self {

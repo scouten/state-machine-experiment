@@ -35,7 +35,7 @@ it — so that *every* host interaction, asset bytes included, is a real
 ## What this covers
 
 One use case, worked through end to end: **read and validate a C2PA
-manifest store from an asynchronously-readable JPEG, and report it the
+manifest store from an asynchronously-readable JPEG or TIFF, and report it the
 way c2pa-wasm does.**
 
 ```rust,no_run
@@ -79,8 +79,10 @@ The pieces, bottom up:
   separate manifest, timestamp, and CAWG trust anchors, named trust lists,
   and `ocsp_fetch`, which defaults off as in c2pa-rs. The inline facade
   resolves `trust` and `cawgTrust` through the shared `Context` utility.
-  Settings the reader cannot honor, including disabled trust verification
-  and remote-manifest fetching, are rejected at that migration boundary.
+  Settings the reader cannot honor, including disabled trust verification,
+  are rejected at that migration boundary. Remote fetching is enabled only
+  through the inline facade's explicit policy-bounded host options, not an
+  unchecked settings flag.
 * **`web`** (feature, `wasm32-unknown-unknown` only) — the browser end:
   `Blob` for `web_sys::Blob`, `WebPlatform`, and a
   `#[wasm_bindgen]`-exported `WasmReader` whose JavaScript surface
@@ -121,8 +123,8 @@ produce, including the exact `C2pa(JumbfNotFound)` string.
   with two `Blob`s.
 * **`resourceToBytes`, `crJson`** — depend on resource and thumbnail data
   the engine does not decode yet.
-* **Formats other than JPEG** — `src/format.rs` is the seam, exactly as
-  in `contentauth-c2pa-rs-compat`.
+* **Formats beyond JPEG and TIFF/BigTIFF/DNG** — `src/format.rs` selects
+  the workspace registry's handlers, shared with browser/Node signing.
 * **The full `@contentauth/c2pa-types` `ManifestStore`** — CBOR assertion
   values, created flags, and active-manifest success/informational/failure
   buckets are now projected. Ingredient relationships, signature metadata,
@@ -133,11 +135,18 @@ produce, including the exact `C2pa(JumbfNotFound)` string.
   a format-reported URL becomes a host request. `Platform::remote_manifest`
   is the transport seam. Its default and `WebPlatform` decline the request;
   a networked host must enforce URL and response policies before returning
-  bytes. JPEG and TIFF do not report remote XMP references yet.
-* **A `fetch`-backed OCSP transport for the browser** — a `Platform`
-  whose `ocsp` posts through `fetch`. `WebPlatform` declines OCSP today
-  (fail-open, and off by default here as in c2pa-rs); a host that wants
-  it implements `Platform` itself and opts in with `"ocsp_fetch": true`.
+  bytes. JPEG now reports standard XMP references; TIFF and extended XMP
+  remain open. `WasmReader.fromBlob` accepts an optional remote-host callback;
+  the inline facade supplies it with exact-origin policy, streamed byte limits,
+  deadlines, and caller cancellation. HTTP stays in JavaScript and fetching
+  stays off by default.
+* **Browser OCSP breadth** — the optional `WasmReader.fromBlob` OCSP callback
+  now receives the URL and DER request, returning response bytes. The inline
+  facade supplies a bounded `fetch` POST host with explicit allowed origins,
+  limits, deadline, and cancellation; no callback means the offline behavior
+  remains. Fetching is off by default. The reader authenticates DER and retains
+  its existing inaccessible/fail-open versus authenticated-revocation policy.
+  Real responder interoperability beyond the local signed fixtures remains open.
 
 The [M1 browser prototype](../c2pa-js-state-machine) now executes this adapter
 through the combined [browser packaging crate](../contentauth-c2pa-web-bindings)

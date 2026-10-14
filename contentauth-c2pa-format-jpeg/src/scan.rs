@@ -17,7 +17,8 @@
 //!
 //! Sequential by design — one outstanding host request at a time, since
 //! each segment's length is only known from its header — and cheap: only
-//! segment headers and `APP11` contents are ever read, never the
+//! segment headers, `APP11` contents, and (during location) `APP1` contents
+//! are ever read, never the
 //! entropy-coded image data, so scanning a large JPEG costs a few dozen
 //! small reads regardless of its size.
 
@@ -65,6 +66,8 @@ pub(crate) struct Layout {
 
     /// The asset's total length.
     pub(crate) source_len: u64,
+
+    pub(crate) remote: Option<String>,
 }
 
 /// A C2PA manifest store found in a [`Layout`].
@@ -206,6 +209,7 @@ enum Phase {
         id: RequestId,
         range: ByteRange,
         segment: ByteRange,
+        marker: u8,
     },
 
     /// Installed while a phase is being processed, and left behind by an
@@ -225,10 +229,12 @@ pub(crate) struct Scanner {
     source_len: u64,
     segments: Vec<Segment>,
     jumbf: Vec<JumbfSegment>,
+    remote: Option<String>,
+    discover_remote: bool,
 }
 
 impl Scanner {
-    pub(crate) fn new(stream: StreamId) -> Self {
+    pub(crate) fn new(stream: StreamId, discover_remote: bool) -> Self {
         Self {
             stream,
             phase: Phase::Start,
@@ -236,6 +242,8 @@ impl Scanner {
             source_len: 0,
             segments: Vec::new(),
             jumbf: Vec::new(),
+            remote: None,
+            discover_remote,
         }
     }
 
@@ -296,13 +304,29 @@ impl Scanner {
                 Some(bytes) => self.handle_marker(core, &bytes),
             },
 
-            Phase::Contents { id, range, segment } => match take_bytes(core, id, range)? {
+            Phase::Contents {
+                id,
+                range,
+                segment,
+                marker,
+            } => match take_bytes(core, id, range)? {
                 None => {
-                    self.phase = Phase::Contents { id, range, segment };
+                    self.phase = Phase::Contents {
+                        id,
+                        range,
+                        segment,
+                        marker,
+                    };
                     Ok(None)
                 }
                 Some(contents) => {
-                    if let Some((preamble, payload)) = parse_preamble(&contents) {
+                    if marker == 0xe1 {
+                        if let Some(url) = crate::xmp::provenance(&contents)? {
+                            if self.remote.replace(url).is_some() {
+                                return Err(malformed("multiple XMP provenance references"));
+                            }
+                        }
+                    } else if let Some((preamble, payload)) = parse_preamble(&contents) {
                         self.jumbf.push(JumbfSegment {
                             preamble,
                             range: segment,
@@ -310,7 +334,7 @@ impl Scanner {
                         });
                     }
                     self.segments.push(Segment {
-                        marker: APP11,
+                        marker,
                         range: segment,
                     });
                     self.pos = segment.start + segment.len;
@@ -375,6 +399,7 @@ impl Scanner {
                 segments: take(&mut self.segments),
                 jumbf: take(&mut self.jumbf),
                 source_len: self.source_len,
+                remote: take(&mut self.remote),
             }));
         }
 
@@ -418,13 +443,20 @@ impl Scanner {
             )));
         }
 
-        if marker == APP11 && le - 2 >= PREAMBLE_LEN as u64 {
+        if (self.discover_remote && marker == 0xe1)
+            || (marker == APP11 && le - 2 >= PREAMBLE_LEN as u64)
+        {
             let range = ByteRange {
                 start: self.pos + 4,
                 len: le - 2,
             };
             let id = self.read(core, range);
-            self.phase = Phase::Contents { id, range, segment };
+            self.phase = Phase::Contents {
+                id,
+                range,
+                segment,
+                marker,
+            };
             return Ok(None);
         }
 
@@ -466,7 +498,7 @@ pub(crate) mod tests {
         fn new() -> Self {
             Self {
                 core: SessionCore::default(),
-                scanner: Scanner::new(STREAM),
+                scanner: Scanner::new(STREAM, true),
                 layout: None,
             }
         }

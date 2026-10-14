@@ -24,6 +24,99 @@ legacy-engine assistance. Passing a JPEG subset is a prototype milestone, not
 full parity. Production suitability additionally needs corpus, robustness, and
 performance evidence; SDK test parity alone does not establish those.
 
+## Performance: cost of crossing the host boundary
+
+Treat host-boundary overhead as a first-class migration question, not an
+assumption. The state-machine path may make multiple JS/Wasm-to-host requests
+for asset ranges, signatures, timestamps, or network responses, while the
+previous SDK may batch some of that work differently. Measure the observable
+cost before optimizing or setting a performance budget.
+
+For each comparison, run the same operation on the pinned legacy SDK and the
+state-machine backend with identical browser/version, asset bytes, settings,
+trust anchors, and signer. Instrument the host adapters on both sides to record
+per operation:
+
+- Number of host-boundary calls, grouped by operation (asset read, sign,
+  timestamp, remote fetch); distinguish a Rust session step from an actual
+  JS/host crossing.
+- Bytes requested and returned per asset-read call, total bytes transferred,
+  and time spent awaiting host replies.
+- End-to-end operation duration after Wasm/module and fixture setup. Report
+  warmed-run median and p95, with cold initialization measured separately.
+- Optionally, time to the first host yield and event-loop delay while the
+  operation is in flight; do not infer responsiveness from total duration.
+
+Start with two small browser comparisons:
+
+1. **Unsigned JPEG read:** use the same unsigned fixture and verify both APIs
+   return the same absent-manifest result. This is the low-work baseline.
+2. **Signed JPEG validation:** use one fixed, trusted JPEG with a hard binding
+   and verify equivalent validation outcomes and manifest identity. This
+   exercises the full asset-byte read path.
+
+For each, first measure the natural browser host and record its call count,
+latency, and bytes. Then repeat with a deterministic per-reply delay in the
+test host (including a zero-delay control) to expose how much added latency is
+amplified by additional crossings. Keep artificial-delay results separate from
+native timings. Add asset-size variants only after these two cases produce a
+reproducible comparison; signing comparisons belong in M4 once the same
+definition and signing behavior are supported on both backends.
+
+Run the initial baseline in Chromium for quick iteration, then run the selected
+comparison on Chromium, Firefox, and WebKit before making a cross-browser
+performance claim. Keep timing results as evidence, not flaky pass/fail
+assertions. Assert deterministic request counts, byte totals, and result
+equivalence in CI. Choose any duration or regression budget only after reviewing
+the baseline distributions and measurement noise.
+
+The initial two-case harness is now implemented as
+[`test:performance`](../c2pa-js-state-machine/README.md#host-boundary-performance-experiment).
+It asserts outcome, read-count, and byte-total baselines and records natural,
+zero-delay, and 2 ms/read delay series with raw samples and median/p95.
+The comparison now includes legacy Worker, state-machine inline,
+state-machine module Worker, and a test-only bounded read-ahead Worker using the
+same bytes/settings/clock, with four-path
+order rotated across samples. Worker location is matched, not the Wasm code,
+loader or I/O model; this is not an isolated FFI measurement.
+Legacy's synchronous whole-Blob reads require a
+test-only busy wait for synthetic delay; state-machine's asynchronous slice
+reads await timers. Read-service duration is reported rather than misleadingly
+calling legacy synchronous time "await time." Length/clock requests and Worker
+control messages are counted separately from byte reads. Test-only Worker-side
+Blob instrumentation returns one aggregate packet per operation and a
+Worker-local execution span, excluding caller queues/clone and packet delivery.
+The new Worker read uses one command and one reply despite 10/15 Blob reads
+inside its realm. Exact schema-v3 checks reject incomplete/invalid timing,
+read/byte, or message evidence. Larger-asset variants, event-loop/memory proof,
+and pure crossing/copy cost isolation remain follow-ups;
+no chunk-size or scheduling optimization is made by this measurement slice.
+
+The test-only read-ahead host keeps one operation-local 4 KiB window for
+requests of 64 bytes or fewer; large manifest/hash reads bypass unchanged.
+All three browsers prove unchanged logical requests and full signed/tampered
+projections, malformed-input rejection, and physical-read reductions from 10 to 1
+(unsigned) and 15 to 4 (signed). Physical bytes rise from 38 to 4,096 and 88,525
+to 92,559 respectively; the report records this trade-off rather than presenting
+cache hits as eliminated logical boundary calls. Unit tests cover exact ranges,
+EOF/empty handling, eviction, source/output isolation, failures/short reads and
+concurrent requests. Cache-window occupancy is not whole-process peak memory.
+No production cache is enabled. A broader metadata/layout corpus, large assets,
+memory/response-time evidence and window/threshold choices remain gates.
+
+Initial measurements on 2026-10-13 show the current legacy backend reads the
+whole Blob once; state-machine reads 10 ranges totaling 38 bytes for the
+unsigned fixture and 15 ranges totaling asset length plus 38 bytes for the
+signed fixture. Many are tiny JPEG header reads, not hashing chunks. Synthetic
+per-read delay amplifies the serial state-machine path's latency. Natural
+timings vary by browser (the trusted signed state-machine case is slower in
+Chromium/WebKit but faster in Firefox in the initial run), so these observations
+do not establish an overall performance ranking. Investigate host read-ahead or
+coalescing before choosing a chunk-size change. The matched Worker experiment
+confirms browser-dependent rankings rather than one overall winner; its measured
+tables and caveats are in the linked experiment README. Both new paths still
+amplify per-read injected latency. No chunk or scheduling changes were made.
+
 ## Existing building blocks and gaps
 
 - [WasmReader](../contentauth-c2pa-js-compat/src/web.rs) already exposes
@@ -260,14 +353,126 @@ empty exclusion list so the hard binding covers the complete asset. Browser
 proof strips the fixture's C2PA APP11 segment, verifies the output asset is
 unchanged and has no active embedded manifest, then reads the detached store as
 `Trusted`; a changed asset reports `Invalid`, and malformed detached bytes are
-rejected. URL policy and bounded browser transport, remote-pointer parsing,
-fragmented BMFF, and Worker/runtime parity remain open.
+rejected.
 
-Prove Worker and inline paths, CSP-compatible `workerSrc`, module/URL loading,
-package exports, cleanup, and invalid-handle behavior. Add test-only host counters
-and interleaving traces; measure large-asset memory and event-loop stalls against
-the pinned legacy backend. Record measurements before choosing regression
-budgets; do not invent a performance threshold without a baseline.
+JPEG now reports standard XMP `dcterms:provenance` pointers using a
+namespace-aware XML parser, with DTDs disabled and explicit malformed/ambiguous
+packet rejection. Extended XMP remains unsupported. The inline facade accepts
+optional remote-host options: an exact-origin allowlist, positive byte limit,
+deadline, and optional caller abort signal. The Rust/Wasm adapter invokes that
+host only for the session's remote request; HTTP remains in JavaScript.
+Fetching omits credentials/referrer, forbids redirects, checks streamed decoded
+bytes (not only Content-Length), and aborts on deadline or cancellation.
+Loopback HTTP origins are allowed only when explicitly listed, for local tests;
+other origins require HTTPS. Embedded/detached stores take precedence, remote
+fetching is still off by default, and failed fetches reject without fallback.
+Real loopback-server browser proof covers trusted remote reads, tampering,
+precedence, denial, redirects, HTTP/size/malformed failures, header/body
+deadlines, cancellation, cross-origin CORS denial/success, and explicit retry
+in all three browsers. The test servers use ephemeral loopback ports and shut
+down with the test runner.
+
+Browser OCSP now uses an opt-in JavaScript POST host with the same origin,
+streamed-byte, deadline, redirect, and cancellation controls. Explicitly
+authorized HTTP origins are permitted for OCSP because signed DER, not HTTP,
+authenticates the response. CORS and mixed-content rules still apply. The host
+sets `application/ocsp-request` and accepts `application/ocsp-response`; Rust
+constructs the request and verifies the response. Browser proof uses ephemeral
+TEST ONLY certificates and genuine OpenSSL-signed responses, with SHA-256
+CertIDs and a fixture clock strictly inside the response window. It proves
+default-off/no-request behavior, non-revocation, authenticated revocation,
+malformed DER, destination/CORS/HTTP/redirect/size denial, header/body deadlines,
+in-flight abort, and retry. Unavailable or unauthenticated responses record
+`signingCredential.ocsp.inaccessible` without invalidating the asset; authenticated
+revocation does invalidate it, preserving the core's existing policy.
+
+The shared JS/Node format selector now uses the host-side registry for JPEG and
+TIFF/BigTIFF/DNG aliases, rather than a JPEG-only handler. Browser proof signs and
+reads all four endian/flavor combinations, checks the two nonadjacent exclusions,
+detects pixel tampering, reads detached TIFF stores, and validates classic TIFF
+output through the pinned legacy SDK. DNG tests prove aliases, not a real DNG
+camera corpus or all DNG-specific metadata. Native Node tests ensure both read and
+sign sessions actually select TIFF; the Neon addon suites preserve existing
+JPEG behavior. Other-format remote pointers, extended XMP, fragmented BMFF, and
+Worker/runtime parity remain open.
+
+The next Worker-hosting slice is implemented as the explicit
+`c2pa-js-state-machine/worker` entry, using an external module Worker and the same
+async Wasm adapters as inline. Each runtime owns its Worker, Wasm realm, and
+resource handles. A readiness handshake precedes URL/precompiled-module
+initialization; startup errors or the 30-second initialization deadline terminate
+the Worker. Signing/timestamp callbacks remain on the caller thread, while Blob
+reads, hashing, and bounded remote/OCSP fetches run in the Worker. Abort signals
+cross as messages; OCSP retains its existing inaccessible-response policy.
+Reader/builder proxies expose the implemented inline method shapes, reject
+freed handles, and do not enumerate/serialize their handles. Busy-builder free
+defers Wasm cleanup; disposal terminates the Worker and rejects pending work.
+Caller signing Promises cannot themselves be canceled, but late results are
+ignored after disposal. Input buffers are cloned, not detached.
+
+Three-browser proof covers separate URL/module instances, failed-loader retry,
+trusted Worker/inline read-back, detached/concurrent reads, malformed input,
+invalid handles, caller signing/timestamp failures, busy/free/disposal behavior,
+real remote-fetch abort/retry, signed OCSP good/revoked/inaccessible outcomes,
+and external module Workers under self-only CSP versus `worker-src 'none'`.
+This is a supported-operation bridge, not complete upstream Worker parity.
+Successful local Worker TSA interoperability is now proven with ephemeral
+RSA/SHA-256 RFC 3161 responses generated for each actual request and independently
+verified by OpenSSL. Three-browser cases cover concurrent callbacks and
+definition URL precedence, `Trusted`/`timeStamp.validated` embedded read-back
+through Worker, inline and pinned legacy, detached Worker/inline parity, explicit
+missing-callback/refusal/malformed failures and same-builder retry. An authentic
+wrong-imprint token reports informational `timeStamp.mismatch` and cannot supply
+trusted time; the existing reader evaluates the signer using the host clock.
+Public TSA/algorithm breadth and expired-signer longevity are not established.
+No production transport or fallback is added.
+
+Private tarball consumption now passes a separate packaging gate: emit ESM/types,
+stage generated Wasm with fresh Rust provenance, pack only compiled files and the
+manifest, and install offline into an isolated external consumer. TypeScript
+resolves the installed exports; Vite 6.3.6 production output passes inline/Worker
+URL and precompiled-Wasm loading, direct Worker-entry loading, sign/read
+cross-validation, unchanged detached output, malformed rejection and cleanup in
+all three browsers. The staged package has pinned runtime utilities and remains
+private; no registry publication, source aliases or workspace links are used.
+Packaging adds no upstream test passes. Source development and explicit backend
+choice are preserved; no rollout/contraction occurs.
+
+Supported reader-factory loader settings now work in inline and Worker hosts.
+The shared legacy `mergeSettings` helper preserves deep field/array behavior;
+per-read overrides retain unspecified defaults. Static Reader Contexts do not
+inherit loader defaults, matching pinned legacy semantics. Three-browser
+comparisons prove trust inheritance/clearing, static isolation and retries;
+real signed OCSP proves an inherited enabled flag still requires a per-operation
+authorized transport. Installed package consumers exercise defaults too.
+New runtimes deliberately snapshot defaults rather than retaining the legacy
+mutable configuration reference. Builder factories reject nonempty defaults
+until builder settings are implemented; static builders remain independent.
+Unsupported settings reject, and no global configuration grants network access.
+
+Classic Workers, full settings/builder inheritance, registry publication and other bundlers, and
+large-asset memory/event-loop measurements remain open.
+Performance evidence now includes the new Worker path alongside
+legacy Worker and inline, with within-Worker reads distinguished from
+cross-thread messages; it does not isolate pure boundary cost.
+
+The selected five unchanged upstream reader declarations now run through both
+inline and module Worker on all three browsers (30 runtime executions).
+The `readerRuntimes` ledger gate checks exact runtime/browser/selected-ID coverage
+and consistency with aggregate upstream outcomes. Failures on either path
+prevent a passing upstream observation; no legacy fallback or rewritten
+assertions are used. Unique upstream coverage remains 5/249, not 30/249.
+Full report equality, resources, the dedicated upstream inline-entrypoint test,
+and fragmented-asset declarations remain unported.
+
+Complete broader upstream Worker/inline parity and package exports beyond the now-proven
+module/URL loading, external-Worker CSP, cleanup, and invalid-handle slice.
+Add test-only host counters
+and interleaving traces; run the unsigned-JPEG and signed-JPEG before/after
+boundary-cost comparisons described above. Measure large-asset memory and
+event-loop stalls against the pinned legacy backend. Record measurements before
+choosing regression budgets; do not invent a performance threshold without a
+baseline.
 
 **Exit:** upstream reader/inline/serialization tests pass on both runtime paths,
 and supported formats, resources, detached and remote manifests are accounted
@@ -283,7 +488,10 @@ and all pinned signer/identity/Trustmark interfaces.
 Definition-editing callbacks must preserve metadata/order and be atomic on
 exceptions. For Node keep upstream synchronous editing behavior; browser
 methods retain their Promise/Worker semantics. Preserve atomic output replacement
-and streaming in the existing Node/file-builder implementation.
+and streaming in the existing Node/file-builder implementation. Once the
+same signing cases are supported on both backends, add a matched signing
+before/after measurement and include signer-boundary calls and awaits separately
+from asset I/O.
 
 **Exit:** complete web and Node builder suites pass unchanged against the new
 backend, and outputs validate in both readers. Run the exact same application

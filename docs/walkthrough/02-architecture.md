@@ -18,7 +18,7 @@ flowchart BT
     BD["c2pa-builder"]
     FM["c2pa-format<br/><i>FormatHandler contract</i>"]
 
-    JP["c2pa-format-jpeg"]
+    JP["c2pa-format-jpeg<br/><i>APP11 + standard XMP discovery</i>"]
     TF["c2pa-format-tiff"]
     RG["c2pa-format-registry"]
 
@@ -34,7 +34,7 @@ flowchart BT
     JSS["js-compat-sign"]
     NDS["node-compat-sign"]
     WEB["c2pa-web-bindings<br/><i>combined browser cdylib</i>"]
-    JSP["c2pa-js-state-machine<br/><i>M1 inline prototype + proof</i>"]
+    JSP["c2pa-js-state-machine<br/><i>inline + module Worker / private package proof</i>"]
     ORC["pinned c2pa-js<br/><i>legacy test oracle</i>"]
 
     RD --> SM & PR
@@ -46,12 +46,12 @@ flowchart BT
     FR --> RD & FM
     FB --> BD & FM
     RSC --> FR & RG
-    JSC --> FR & JP
-    NDC --> FR & JSC
+    JSC --> FR & RG
+    NDC --> FR & JSC & RG
     SB --> BD
     RSS --> SB & FB & JP
-    JSS --> SB & FB & JSC
-    NDS --> SB & FB & JSC
+    JSS --> SB & FB & JSC & JP
+    NDS --> SB & FB & JSC & RG
     WEB --> JSC & JSS
     JSP --> WEB
     JSP -.-> ORC
@@ -108,19 +108,19 @@ flowchart TB
 | `contentauth-c2pa-reader` | Workflow | `ReadSession`: JUMBF, claims (v1+v2), integrity, signature, trust, timestamps, OCSP, CAWG identity assertions (X.509). |
 | `contentauth-c2pa-builder` | Workflow | `BuilderSession`: v2 claim generation and signing via a two-pass placeholder scheme, plus optional CAWG identity assertions. |
 | `contentauth-c2pa-format` | Format | `FormatHandler` trait, `FormatDescriptor`, `IoRequest`, `EmbedPlan`/`Patch`, test kit + conformance suite. |
-| `…-format-jpeg` | Format | APP11 segments; byte-compatible with c2pa-rs. The template for other handlers. |
+| `…-format-jpeg` | Format | APP11 segments, byte-compatible with c2pa-rs; standard XMP remote references via a bounded namespace-aware decoder. The template for other handlers. |
 | `…-format-tiff` | Format | TIFF/BigTIFF/DNG; the format that forced `exclusions` to become a list. |
 | `…-format-registry` | Format (host side) | Detect by content / extension / MIME; type-erased `AnyFormat`. |
 | `…-file-reader` | Orchestration | `FileReadSession`: `locate` + `ReadSession`; plus a blocking `Read + Seek` host. |
 | `…-file-builder` | Orchestration | `FileBuilderSession`: `plan_embed`/`commit` + `BuilderSession`, never buffering the asset; plus blocking hosts. |
 | `…-rs-compat` | Binding | c2pa-rs `Context` + `Reader::with_file` slice; one of two crates with a network dependency (`reqwest` OCSP). |
-| `…-js-compat` | Binding | c2pa-wasm `WasmReader` slice; async host with `Blob`/`Platform` traits; `web` feature for `wasm-bindgen`. |
+| `…-js-compat` | Binding | c2pa-wasm `WasmReader` slice; async Blob/Platform host, shared JPEG/TIFF registry, optional browser remote/OCSP callbacks. |
 | `…-node-compat` (+ `c2pa-node-compat-addon`) | Binding | Purely synchronous `NodeSession`; Node owns all async. Addon is a separate Neon workspace. |
 | `…-sign-baseline` | Binding | The baseline signing case (JSON definition → `BuilderSettings`) every write binding is held to. |
 | `…-rs/js/node-compat-sign` (+ `c2pa-node-sign-addon`) | Binding | The baseline case through each binding. `rs-compat-sign` is the other crate with a network dependency (`reqwest` for RFC 3161 timestamps). |
 | `…-web-bindings` | Binding | Combined browser `cdylib` delegating to the existing JS read/sign adapters; target-only browser dependencies. |
 | `c2pa-rs-compat-conformance` | Test | Separate workspace; differential tests against the real `c2pa` crate. |
-| `c2pa-js-state-machine` (JS package) | Binding / Test | Source-only inline read/sign facade, pinned legacy oracle, and real Chromium/Firefox/WebKit proof; full SDK parity remains future work. |
+| `c2pa-js-state-machine` (JS package) | Binding / Test | Inline/module-Worker JPEG/TIFF read/sign facade, reader-factory settings defaults, opt-in bounded remote/OCSP hosts, caller-owned signing/timestamps, private compiled ESM/types/Wasm packaging, pinned legacy oracle, and three-browser runtime/installed-consumer/performance proof; full SDK parity remains future work. |
 
 ## Rules of the road
 

@@ -14,9 +14,11 @@ to read about the design and the measurements.
 
 Settings JSON, manifest-store JSON, and the error-string contract are
 reused from [`contentauth-c2pa-js-compat`](../contentauth-c2pa-js-compat):
-c2pa-node and c2pa-wasm both sit on c2pa-rs's `Reader`.
+c2pa-node and c2pa-wasm both sit on c2pa-rs's `Reader`. Both read and sign
+adapters use the shared registry selector for JPEG and TIFF/BigTIFF/DNG aliases.
+The Node session still performs no I/O.
 
 Not covered: `fromManifestDataAndAsset`, `resourceToAsset`, `Builder`,
-signers, identity assertions, Trustmark, and every format but JPEG.
+signers, identity assertions, Trustmark, and formats beyond JPEG/TIFF.
 
 [c2pa-node]: https://github.com/contentauth/c2pa-js/tree/main/packages/c2pa-node

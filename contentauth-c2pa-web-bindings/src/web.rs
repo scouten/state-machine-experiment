@@ -11,16 +11,27 @@ pub struct BrowserReader {
 
 #[wasm_bindgen]
 impl BrowserReader {
-    /// Reads a Blob through the existing async host.
+    /// Reads a Blob through the async host, optionally using a caller-owned
+    /// policy-bounded remote manifest and OCSP callbacks.
     #[wasm_bindgen(js_name = fromBlob)]
     pub async fn from_blob(
         format: &str,
         blob: &web_sys::Blob,
         context: Option<String>,
         detached_manifest: Option<js_sys::Uint8Array>,
+        remote_manifest: Option<js_sys::Function>,
+        ocsp: Option<js_sys::Function>,
     ) -> Result<BrowserReader, JsString> {
         Ok(Self {
-            inner: WasmReader::from_blob(format, blob, context, detached_manifest).await?,
+            inner: WasmReader::from_blob(
+                format,
+                blob,
+                context,
+                detached_manifest,
+                remote_manifest,
+                ocsp,
+            )
+            .await?,
         })
     }
 

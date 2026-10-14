@@ -332,6 +332,19 @@ fn a_jpeg_format_with_unparseable_content_surfaces_as_a_read_error() {
 }
 
 #[test]
-fn supported_formats_lists_jpeg_as_mime_type_and_extensions() {
-    assert_eq!(Reader::supported_formats(), ["image/jpeg", "jpeg", "jpg"]);
+fn supported_formats_lists_jpeg_tiff_and_dng_as_mime_types_and_extensions() {
+    assert_eq!(
+        Reader::supported_formats(),
+        [
+            "image/jpeg",
+            "jpeg",
+            "jpg",
+            "image/tiff",
+            "image/dng",
+            "image/x-adobe-dng",
+            "tif",
+            "tiff",
+            "dng",
+        ]
+    );
 }
