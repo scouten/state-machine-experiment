@@ -434,6 +434,23 @@ pub(crate) fn check_store(entries: &[StoreEntry<'_, '_>], statuses: &mut Vec<Val
     for entry in entries {
         for ingredient in entry.ingredients {
             let url = ingredient.url(entry.label);
+
+            // The two references describe one manifest. A claim signature
+            // that names another would let a redacted manifest, whose own
+            // hash is waived, be "bound" by someone else's signature.
+            if let (Some(manifest), Some(signature)) =
+                (&ingredient.active_manifest, &ingredient.claim_signature)
+            {
+                let manifest = manifest_reference(&manifest.url);
+                let signature = signature_reference(&signature.url);
+                if manifest.is_some() && signature.is_some() && manifest != signature {
+                    statuses.push(ValidationStatus::for_url(
+                        status_code::ASSERTION_INGREDIENT_MALFORMED,
+                        &url,
+                        "`claimSignature` names a different manifest than `activeManifest`",
+                    ));
+                }
+            }
             let algorithm_for = |reference: &HashedUri| {
                 algorithm(reference.alg.as_deref(), entry.claim.alg.as_deref())
             };
@@ -1253,6 +1270,40 @@ mod tests {
         assert_eq!(
             failures(&parsed),
             [status_code::INGREDIENT_CLAIM_SIGNATURE_MISSING]
+        );
+    }
+
+    #[test]
+    fn a_claim_signature_of_another_manifest_cannot_stand_in_for_a_redacted_one() {
+        // `B` names `A` (redacted, so its box hash is waived) but gives the
+        // claim signature of `C`, whose hash is right. Each reference
+        // checks out alone; together they bind `A` to nothing.
+        let a = manifest("A", vec![], &[]);
+        let c = manifest("C", vec![], &[]);
+        let (_, signature_of_c) = hashes(&c);
+        let ingredient = map(vec![
+            ("relationship", text("parentOf")),
+            (
+                "activeManifest",
+                reference("self#jumbf=/c2pa/A", vec![0; 32]),
+            ),
+            (
+                "claimSignature",
+                reference("self#jumbf=/c2pa/C/c2pa.signature", signature_of_c),
+            ),
+            ("validationResults", map(vec![])),
+        ]);
+        let b = manifest(
+            "B",
+            vec![("c2pa.ingredient.v3", ingredient)],
+            &["self#jumbf=/c2pa/A/c2pa.assertions/c2pa.thumbnail.claim.jpeg"],
+        );
+
+        let parsed = parse(&[a, c, b]);
+
+        assert_eq!(
+            failures(&parsed),
+            [status_code::ASSERTION_INGREDIENT_MALFORMED]
         );
     }
 
