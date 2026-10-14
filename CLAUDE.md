@@ -360,9 +360,11 @@ Doc build (CI denies rustdoc warnings too):
 RUSTDOCFLAGS=-Dwarnings cargo doc --no-deps --all-features
 ```
 
-Code coverage (matches the CI job; requires `cargo-llvm-cov`):
+Code coverage (matches the CI job; requires `cargo-llvm-cov` and LLVM tools):
 
 ```sh
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov
 cargo llvm-cov --all-features --tests --lcov --output-path lcov.info
 ```
 

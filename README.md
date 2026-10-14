@@ -110,9 +110,12 @@ Minimum supported Rust version: 1.96.0.
 Any generative process producing a change for this repository must drive
 code coverage to the maximum reasonably possible before submitting a PR,
 adding meaningful tests for changed behavior and uncovered reachable paths.
-Measure coverage with `cargo-llvm-cov`:
+Install the coverage tool and Rust's LLVM tools component, then measure
+coverage:
 
 ```sh
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov
 cargo llvm-cov --all-features --tests --lcov --output-path lcov.info
 ```
 
