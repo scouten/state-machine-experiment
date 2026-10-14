@@ -458,3 +458,37 @@ jobs:
           # the raw gcov data for the tests and examples.
           disable_search: true
           files: ./lcov.cpp.info
+
+  cpp-binding-macos:
+    name: C++ binding (macOS)
+    runs-on: macos-latest
+
+    # The Apple (Grand Central Dispatch) thread pool is compiled only on
+    # Apple platforms (`if(APPLE)` in `contentauth-c2pa-cpp/CMakeLists.txt`),
+    # so the Ubuntu jobs above never build or run it. A plain build and test
+    # run is enough: coverage and the sanitizers are exercised on Linux.
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master@2026-06-30
+        with:
+          toolchain: stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: ". -> contentauth-c2pa-cpp/build/cargo"
+
+      - name: Configure
+        working-directory: contentauth-c2pa-cpp
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        working-directory: contentauth-c2pa-cpp
+        run: cmake --build build -j
+
+      - name: Test
+        working-directory: contentauth-c2pa-cpp
+        run: ctest --test-dir build --output-on-failure
