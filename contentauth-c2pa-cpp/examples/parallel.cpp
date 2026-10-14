@@ -65,8 +65,8 @@ int main(int argc, char **argv) {
     try {
         timed("serial (blocking)", file, [&] { return read(Session("image/jpeg"), file); });
 
-        ThreadPool pool(8);
-        PooledHost pooled(file, pool);
+        auto pool = make_simple_thread_pool(8);
+        PooledHost pooled(file, *pool);
         timed("thread pool (8)", file, [&] { return read_parallel(Session("image/jpeg"), pooled); });
         timed("coroutine, same pool", file,
               [&] { return co_read(Session("image/jpeg"), pooled).get(); });

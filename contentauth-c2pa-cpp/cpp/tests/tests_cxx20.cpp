@@ -38,7 +38,7 @@ Task<std::optional<Reader>> bad_format(AsyncHost &host) {
 
 TEST(a_coroutine_reads_with_a_pool_and_resumes_on_a_pool_thread) {
     SlowHost slow(std::chrono::milliseconds(5));
-    ThreadPool pool(8);
+    SimpleThreadPool pool(8);
     PooledHost host(slow, pool);
 
     auto reader = co_read(Session("image/jpeg"), host).get();
@@ -52,7 +52,7 @@ TEST(get_may_free_the_frame_the_instant_the_task_completes_on_another_thread) {
     // rounds, so a completer that touched the frame after signalling would
     // be caught by ASan/TSan.
     MemoryHost backing = fixture_host();
-    ThreadPool pool(4);
+    SimpleThreadPool pool(4);
     PooledHost host(backing, pool);
     const std::string expected = reference_json();
     for (int i = 0; i < 100; ++i) {
@@ -62,7 +62,7 @@ TEST(get_may_free_the_frame_the_instant_the_task_completes_on_another_thread) {
 
 TEST(coroutines_compose_and_propagate_exceptions) {
     MemoryHost backing = fixture_host();
-    ThreadPool pool(4);
+    SimpleThreadPool pool(4);
     PooledHost host(backing, pool);
 
     CHECK_EQ(json_of(read_twice_and_return_second(host).get()), reference_json());
@@ -93,7 +93,7 @@ TEST(the_session_migrates_between_threads_but_never_runs_on_two_at_once) {
     // Resumption happens on whichever thread posts the reply; record which.
     struct Recording : AsyncHost {
         MemoryHost backing = fixture_host();
-        ThreadPool pool{4};
+        SimpleThreadPool pool{4};
         std::mutex m;
         std::set<std::thread::id> completers;
         void start(const Request &request, Completion done) override {
@@ -119,7 +119,7 @@ TEST(the_session_migrates_between_threads_but_never_runs_on_two_at_once) {
 
 TEST(many_reads_are_spawned_from_one_thread_and_share_a_few_io_threads) {
     SlowHost slow(std::chrono::milliseconds(2));
-    ThreadPool pool(8);
+    SimpleThreadPool pool(8);
     PooledHost host(slow, pool);
     const std::string expected = reference_json();
 

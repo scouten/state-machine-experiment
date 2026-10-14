@@ -425,7 +425,7 @@ jobs:
         if: matrix.name == 'coverage'
         run: pipx install gcovr
 
-      # Only the headers: the tests and examples shouldn't count for or
+      # Only the library sources: the tests and examples shouldn't count for or
       # against coverage (as for the Rust jobs), and the Rust half is
       # covered by the `tests` job. gcov's counters can go negative under
       # threads even with atomic updates; that is a known gcov quirk.
@@ -434,6 +434,7 @@ jobs:
         run: >
           gcovr --root . --object-directory contentauth-c2pa-cpp/build
           --filter 'contentauth-c2pa-cpp/include/'
+          --filter 'contentauth-c2pa-cpp/cpp/src/'
           --gcov-ignore-parse-errors negative_hits.warn_once_per_file
           --exclude-throw-branches --exclude-unreachable-branches
           --lcov lcov.cpp.info --txt

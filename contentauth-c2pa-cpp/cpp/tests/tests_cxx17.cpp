@@ -270,7 +270,7 @@ TEST(a_pool_runs_the_engines_requests_concurrently_and_gets_the_same_answer) {
 
     SlowHost slow(std::chrono::milliseconds(10));
     {
-        ThreadPool pool(8);
+        SimpleThreadPool pool(8);
         PooledHost host(slow, pool);
         CHECK_EQ(json_of(read_parallel(Session("image/jpeg"), host)), expected);
     }
@@ -290,7 +290,7 @@ TEST(a_read_can_be_a_future_and_many_can_run_at_once) {
     const std::string expected = json_of(read(Session("image/jpeg"), reference));
 
     SlowHost backing(std::chrono::milliseconds(2));
-    ThreadPool pool(8);
+    SimpleThreadPool pool(8);
     auto host = std::make_shared<PooledHost>(backing, pool);
 
     std::vector<std::future<std::optional<Reader>>> futures;

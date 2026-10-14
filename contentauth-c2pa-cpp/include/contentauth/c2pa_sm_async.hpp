@@ -44,7 +44,7 @@
 #include <thread>
 
 #include "c2pa_sm.hpp"
-
+#include "thread_pool.hpp"
 namespace c2pa::sm {
 
 /// @brief Called by a host, from any thread, exactly once per request.
@@ -224,64 +224,6 @@ inline std::future<std::optional<Reader>> read_future(Session session,
                           return read_parallel(std::move(session), *host);
                       });
 }
-
-/// @brief A minimal fixed-size thread pool: enough to run a host's
-///        blocking calls concurrently. Joins on destruction after running
-///        everything queued.
-class ThreadPool {
-public:
-    explicit ThreadPool(size_t threads) {
-        for (size_t i = 0; i < std::max<size_t>(threads, 1); ++i) {
-            workers_.emplace_back([this] { run(); });
-        }
-    }
-
-    ~ThreadPool() {
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            stopping_ = true;
-        }
-        cv_.notify_all();
-        for (auto &worker : workers_) {
-            worker.join();
-        }
-    }
-
-    ThreadPool(const ThreadPool &) = delete;
-    ThreadPool &operator=(const ThreadPool &) = delete;
-
-    /// @brief Queues `task`.
-    void post(std::function<void()> task) {
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            tasks_.push_back(std::move(task));
-        }
-        cv_.notify_one();
-    }
-
-private:
-    void run() {
-        for (;;) {
-            std::function<void()> task;
-            {
-                std::unique_lock<std::mutex> lock(mutex_);
-                cv_.wait(lock, [this] { return stopping_ || !tasks_.empty(); });
-                if (tasks_.empty()) {
-                    return;  // stopping, and drained
-                }
-                task = std::move(tasks_.front());
-                tasks_.pop_front();
-            }
-            task();
-        }
-    }
-
-    std::mutex mutex_;
-    std::condition_variable cv_;
-    std::deque<std::function<void()>> tasks_;
-    std::vector<std::thread> workers_;
-    bool stopping_ = false;
-};
 
 /// @brief Adapts any thread-safe `SyncHost` into an `AsyncHost` by running
 ///        each request on a `ThreadPool`: the one-line way to make an

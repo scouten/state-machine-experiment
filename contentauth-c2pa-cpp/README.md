@@ -5,13 +5,14 @@ one question: **can the session model express asynchronous and threaded
 behavior that a callback-based C++ API cannot?**
 
 It is a Rust static library behind a small C ABI (`src/lib.rs`,
-`include/contentauth_c2pa_sm.h`) and **header-only C++** on top
-(`include/contentauth/`):
+`include/contentauth_c2pa_sm.h`) and **C++** on top (`include/contentauth/`),
+header-only except for the thread pools (`cpp/src/`, built as `c2pa_sm_cpp`):
 
 | Header | Standard | Provides |
 |---|---|---|
 | `c2pa_sm.hpp` | C++17 | `Session`, `Reader`, the request/reply vocabulary, `Exception`, the blocking driver `read()`, hosts for memory / `std::istream` / files |
-| `c2pa_sm_async.hpp` | C++17 | `AsyncHost`, `Reading`, `Mailbox`, `read_parallel`, `read_future`, `ThreadPool`, `PooledHost` |
+| `c2pa_sm_async.hpp` | C++17 | `AsyncHost`, `Reading`, `Mailbox`, `read_parallel`, `read_future`, `PooledHost` |
+| `thread_pool.hpp` | C++17 | the `ThreadPool` interface, `make_simple_thread_pool`, and on Apple platforms `make_apple_thread_pool` (GCD) |
 | `c2pa_sm_coro.hpp` | C++20 | `Task`, `co_read`, `spawn` |
 
 ```cpp
@@ -22,7 +23,8 @@ auto reader = c2pa::sm::read(c2pa::sm::Session("image/jpeg"), host);
 if (reader) std::cout << reader->json();   // nullopt: no Content Credentials
 ```
 
-Read side only; see [Not covered](#not-covered). Build and test with
+Read side only; see [Not covered](#not-covered). Build with `./build.sh`, or
+build and test with
 `cmake -S . -B build && cmake --build build && ctest --test-dir build`
 (needs cargo, CMake ≥ 3.16, a C++17 compiler; the coroutine pieces need C++20).
 
@@ -67,7 +69,7 @@ When the engine needs something it parks and reports *requests* (read these
 bytes, tell me the time, POST this OCSP request); the host answers in any order
 and any subset; `advance()` continues. That is an inversion of control, and in
 C++ it buys the following — all demonstrated in `cpp/tests/` and
-`cpp/examples/parallel.cpp`:
+`examples/parallel.cpp`:
 
 1. **The host picks the concurrency, per call site, with the same engine.**
    `read(session, SyncHost&)` answers one request at a time;
@@ -146,8 +148,9 @@ for "no manifest" (`Reader::from_asset`'s contract); one exception type;
 Deliberately *not* done: a `std::future`/`std::async`-only API (it hides the
 step boundary that makes cancellation and multiplexing possible; `read_future`
 is provided as a convenience over `Reading`, not the model), exceptions inside
-the ABI, and a built-in event loop (there is a minimal thread pool for tests
-and the example; a real application brings its own).
+the ABI, and a built-in event loop (the bundled thread pools are for tests
+and the example; a real application implements `ThreadPool` over its own
+executor).
 
 ## The ABI
 

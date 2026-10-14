@@ -201,10 +201,13 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   static library behind a small C ABI (`src/lib.rs`, `include/contentauth_c2pa_sm.h`;
   the one crate here allowed `unsafe`, being the FFI boundary; symbols are
   `c2pa_sm_*` to coexist with c2pa-c) wrapping `contentauth-c2pa-node-compat`'s
-  flat `NodeSession`, plus header-only C++ in `include/contentauth/`:
+  flat `NodeSession`, plus C++ in `include/contentauth/` (header-only apart
+  from the compiled thread pools in `cpp/src/`):
   a C++17 core (`Session`, `Reader`, blocking `read()`), C++17 thread-based
   drivers (`Reading`/`Mailbox`, `read_parallel`, `read_future`,
-  `ThreadPool`/`PooledHost`) and C++20 coroutines (`co_read`, `spawn`).
+  `PooledHost` over the `ThreadPool` interface, with a portable
+  `make_simple_thread_pool` and an Apple GCD `make_apple_thread_pool`) and
+  C++20 coroutines (`co_read`, `spawn`).
   Errors are values, not thread-local, so a session can move between
   threads. Built with CMake (`cpp/`, `CMakeLists.txt`); its README holds the
   review of c2pa-cpp's API and the rationale for every departure. Read side
