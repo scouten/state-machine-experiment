@@ -59,6 +59,14 @@ pub enum C2paError {
     #[error("no JUMBF data found")]
     JumbfNotFound,
 
+    /// A claim omits its hash algorithm or names one the SDK cannot use.
+    #[error("unknown algorithm")]
+    UnknownAlgorithm,
+
+    /// No unique embedded resource matches the supplied identifier.
+    #[error("resource not found: {0}")]
+    ResourceNotFound(String),
+
     /// `format` names a container format no `FormatHandler` in this build
     /// recognizes.
     ///
@@ -103,6 +111,9 @@ mod tests {
 
         let err = Error::from(C2paError::UnsupportedType);
         assert_eq!(err.js_message(), "C2pa(UnsupportedType)");
+
+        let err = Error::from(C2paError::UnknownAlgorithm);
+        assert_eq!(err.js_message(), "C2pa(UnknownAlgorithm)");
     }
 
     #[test]

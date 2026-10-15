@@ -44,6 +44,17 @@ field, so the buffer's length never changes and the patch always fits.
 Exclusions are a **list** (up to `MAX_EXCLUSIONS` = 4, padded) — because TIFF
 needs two ([formats](05-formats.md)).
 
+## Detached manifest output
+
+`BuilderSession::new_detached` is the explicit alternative when the host will
+keep the manifest store separately from the asset. It skips placeholder
+reservation, hashes the whole asset with an empty exclusion list, and returns
+the final store from `CommitManifest` without asking a format handler to write
+it. The regular constructor keeps the embedded path and its placeholder-range
+checks. The JS/Wasm `Builder.signDetached` proof covers a JPEG with its C2PA
+APP11 segment removed, confirms the asset is unchanged, and reads the detached
+store back as `Trusted`.
+
 ## Composing with a format: `FileBuilderSession`
 
 The host's asset I/O is not a single stream. `FileBuilderSession` composes

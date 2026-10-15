@@ -17,32 +17,36 @@
 //! c2pa-rs accepts either a MIME type or a bare file extension there, and
 //! resolves it through a registry of handlers; c2pa-web's own
 //! `isSupportedReaderFormat` gate in front of it covers far more
-//! containers than this. This crate has exactly one handler —
-//! [`JpegFormat`] — so today this is a single string match rather than a
-//! registry, and the seam a second `contentauth-c2pa-format-*` crate would
-//! extend, exactly as `contentauth-c2pa-rs-compat`'s `format.rs` is: most
-//! naturally by returning a small enum that itself implements
-//! `FormatHandler`, one variant per handler, since [`crate::read_manifest`]
-//! is generic over the handler type rather than a trait object.
+//! containers than this. This host wires JPEG and TIFF/BigTIFF/DNG through
+//! the workspace's registry. The type-erased handler still drives the same
+//! sans-I/O sessions, and is shared by the read/sign browser and Node hosts.
 
-use contentauth_c2pa_format_jpeg::JpegFormat;
+use contentauth_c2pa_format_registry::{AnyFormat, Registry};
 
 use crate::error::C2paError;
 
 /// The `format` strings this build can locate a manifest store within: a
 /// MIME type or a bare extension, matched without regard to case.
-pub const FORMATS: &[&str] = &["image/jpeg", "jpeg", "jpg"];
+pub const FORMATS: &[&str] = &[
+    "image/jpeg",
+    "jpeg",
+    "jpg",
+    "image/tiff",
+    "image/dng",
+    "image/x-adobe-dng",
+    "tif",
+    "tiff",
+    "dng",
+];
 
 /// Picks a handler for `format`.
-pub fn for_format(format: &str) -> Result<JpegFormat, C2paError> {
-    if FORMATS
-        .iter()
-        .any(|candidate| format.eq_ignore_ascii_case(candidate))
-    {
-        Ok(JpegFormat)
-    } else {
-        Err(C2paError::UnsupportedType)
-    }
+pub fn for_format(format: &str) -> Result<AnyFormat, C2paError> {
+    let registry = Registry::standard();
+    registry
+        .by_mime(format)
+        .or_else(|| registry.by_extension(format))
+        .cloned()
+        .ok_or(C2paError::UnsupportedType)
 }
 
 #[cfg(test)]
@@ -64,5 +68,40 @@ mod tests {
                 "{format}"
             );
         }
+    }
+
+    #[test]
+    fn tiff_and_dng_are_selected_through_the_shared_registry() {
+        for format in [
+            "image/tiff",
+            "IMAGE/TIFF",
+            "image/dng",
+            "image/x-adobe-dng",
+            "tif",
+            "TIFF",
+            "dng",
+        ] {
+            assert!(matches!(
+                for_format(format).map(|handler| handler.descriptor().name),
+                Ok("tiff")
+            ));
+        }
+        let registry = Registry::standard();
+        let mut advertised: Vec<_> = registry
+            .formats()
+            .iter()
+            .flat_map(|handler| {
+                let descriptor = handler.descriptor();
+                descriptor
+                    .mime_types
+                    .iter()
+                    .chain(descriptor.extensions.iter())
+                    .copied()
+            })
+            .collect();
+        let mut formats = FORMATS.to_vec();
+        advertised.sort_unstable();
+        formats.sort_unstable();
+        assert_eq!(formats, advertised);
     }
 }

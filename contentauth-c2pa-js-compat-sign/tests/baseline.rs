@@ -172,8 +172,20 @@ fn the_baseline_case_signs_a_blob_that_reads_back_trusted() {
 
     let active = reader.active_manifest().unwrap();
     assert_eq!(active.title.as_deref(), Some("baseline.jpg"));
-    assert!(active.assertions.iter().any(|a| a == "c2pa.actions.v2"));
-    assert!(active.assertions.iter().any(|a| a == "c2pa.hash.data"));
+    assert!(active
+        .assertions
+        .iter()
+        .any(|assertion| assertion.label == "c2pa.actions.v2"));
+    assert!(!active
+        .assertions
+        .iter()
+        .any(|assertion| assertion.label == "c2pa.hash.data"));
+    assert!(store
+        .validation_results
+        .active_manifest
+        .success
+        .iter()
+        .any(|status| status.code == "assertion.dataHash.match"));
 }
 
 /// Same engine, different host: the async loop and the blocking
@@ -209,8 +221,8 @@ fn the_async_host_agrees_with_the_blocking_host() {
     assert_eq!(async_signed.asset.len(), sync_out.len());
     assert_eq!(async_signed.manifest.len(), report.manifest.len());
     assert_eq!(
-        read_back(&async_signed.asset).json(),
-        read_back(&sync_out).json()
+        read_back(&async_signed.asset).json().unwrap(),
+        read_back(&sync_out).json().unwrap()
     );
 }
 

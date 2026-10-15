@@ -61,6 +61,15 @@ pub trait Platform {
     /// reach; see `contentauth-c2pa-rs-compat`'s host for what that
     /// involves.
     async fn ocsp(&self, url: &str, request_der: &[u8]) -> Result<Vec<u8>, HostError>;
+
+    /// Retrieves a remote manifest store referenced by the asset.
+    ///
+    /// The URL is untrusted asset data. Implementations must enforce
+    /// destination policy and response limits before returning bytes. The
+    /// default declines the request explicitly.
+    async fn remote_manifest(&self, _url: &str) -> Result<Vec<u8>, HostError> {
+        Err(HostError::new("platform has no remote manifest transport"))
+    }
 }
 
 /// A [`Platform`] with the system clock and no network access.

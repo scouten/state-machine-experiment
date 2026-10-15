@@ -106,6 +106,9 @@ pub struct IdentityAssertion {
 
     /// The assertions this one vouches for.
     pub referenced_assertions: Vec<HashedUri>,
+
+    /// Metadata for a verified X.509 COSE signature, if available.
+    pub signature_info: Option<crate::SignatureInfo>,
 }
 
 /// The kind of credential an identity assertion carries.
@@ -301,6 +304,7 @@ fn check_assertion(
 
     let mut signer = None;
     let mut signature_verified = false;
+    let mut signature_info = None;
 
     let credential = match decoded.sig_type.as_str() {
         SIG_TYPE_X509_COSE => {
@@ -308,6 +312,7 @@ fn check_assertion(
                 x509::verify(url, decoded.signer_payload, &decoded.signature, statuses)
             {
                 signature_verified = true;
+                signature_info = Some(verified.signature_info.clone());
                 signer = verified.certificates.first().map(|c| c.subject.clone());
                 chains.push(PendingChain {
                     manifest_label: manifest_label.to_string(),
@@ -315,6 +320,7 @@ fn check_assertion(
                     certificates: verified.certificates,
                     timestamp: verified.timestamp,
                     rvals: Vec::new(),
+                    signature_info: verified.signature_info,
                 });
             }
             IdentityCredential::X509Cose { signer }
@@ -358,6 +364,7 @@ fn check_assertion(
         credential,
         roles: decoded.roles,
         referenced_assertions: decoded.referenced,
+        signature_info,
     })
 }
 
@@ -569,6 +576,10 @@ mod tests {
         assert_eq!(identity.sig_type, SIG_TYPE_X509_COSE);
         assert_eq!(identity.roles, ["creator"]);
         assert_eq!(identity.referenced_assertions.len(), 2);
+        let info = identity.signature_info.as_ref().unwrap();
+        assert_eq!(info.alg, crate::SigningAlg::Es256);
+        assert!(info.time.is_none());
+        assert!(!info.serial_number.is_empty());
         assert!(matches!(
             &identity.credential,
             IdentityCredential::X509Cose { signer: Some(_) }
@@ -987,6 +998,9 @@ mod tests {
             IdentityCredential::X509Cose { signer: None }
         ));
         assert!(parsed.identity_chains.is_empty());
+        assert!(parsed.manifests[0].identity_assertions[0]
+            .signature_info
+            .is_none());
     }
 
     #[test]
@@ -997,6 +1011,9 @@ mod tests {
 
         assert_eq!(identity_codes(&parsed), ["cawg.x509.credential.invalid"]);
         assert!(parsed.statuses.iter().any(ValidationStatus::is_failure));
+        assert!(parsed.manifests[0].identity_assertions[0]
+            .signature_info
+            .is_none());
     }
 
     #[test]

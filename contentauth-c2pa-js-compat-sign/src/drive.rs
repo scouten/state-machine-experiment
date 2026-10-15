@@ -15,6 +15,7 @@
 //! `contentauth_c2pa_file_builder::build_and_sign`, the blocking host
 //! for the same session — line for line the same loop.
 
+use contentauth_c2pa_builder::{BuilderHostReply, BuilderRequest, BuilderSession};
 use contentauth_c2pa_file_builder::{
     BuilderSettings, FileBuilderReply, FileBuilderRequest, FileBuilderSession, FormatHandler,
     SignPurpose,
@@ -125,6 +126,100 @@ where
             session.fulfill(request.id, reply)?;
         }
     }
+}
+
+pub(crate) async fn build_detached<B, S>(
+    source: &B,
+    signer: &S,
+    settings: BuilderSettings,
+    tsa_url: Option<&str>,
+) -> Result<SignedAsset, Error>
+where
+    B: Blob + ?Sized,
+    S: AsyncSigner + ?Sized,
+{
+    let asset_len = usize::try_from(source.size())
+        .map_err(|_| Error::DetachedAsset(HostError::new("asset is too large to address")))?;
+    let mut asset = Vec::new();
+    asset.try_reserve_exact(asset_len).map_err(|err| {
+        Error::DetachedAsset(HostError::new(format!(
+            "could not allocate detached asset: {err}"
+        )))
+    })?;
+    asset.resize(asset_len, 0);
+
+    let mut session = BuilderSession::new_detached(settings);
+    loop {
+        if session.advance()? == Step::Complete {
+            let report = session.finish()?;
+            return Ok(SignedAsset {
+                asset,
+                manifest: report.manifest,
+            });
+        }
+
+        for request in session.outstanding_requests().to_vec() {
+            let reply = match &request.kind {
+                BuilderRequest::AssetLength { .. } => BuilderHostReply::AssetLength(source.size()),
+                BuilderRequest::AssetBytes { range, .. } => match source.bytes(*range).await {
+                    Ok(bytes) if bytes.len() as u64 == range.len => {
+                        match store_asset_range(&mut asset, *range, &bytes) {
+                            Ok(()) => BuilderHostReply::AssetBytes(bytes),
+                            Err(err) => BuilderHostReply::Failed(err),
+                        }
+                    }
+                    Ok(bytes) => BuilderHostReply::Failed(HostError::new(format!(
+                        "asked for {} bytes at {}, but the blob returned {}",
+                        range.len,
+                        range.start,
+                        bytes.len()
+                    ))),
+                    Err(err) => BuilderHostReply::Failed(err),
+                },
+                BuilderRequest::Sign {
+                    purpose: SignPurpose::Claim,
+                    data,
+                    ..
+                } => match signer.sign(data).await {
+                    Ok(signature) => BuilderHostReply::Signature(signature),
+                    Err(err) => BuilderHostReply::Failed(err),
+                },
+                BuilderRequest::Sign { purpose, .. } => BuilderHostReply::Failed(HostError::new(
+                    format!("this builder cannot sign for {purpose:?}"),
+                )),
+                BuilderRequest::Timestamp { digest, hash_alg } => {
+                    match timestamp(signer, tsa_url, *hash_alg, digest).await {
+                        Ok(token) => BuilderHostReply::Timestamp(token),
+                        Err(err) => BuilderHostReply::Failed(err),
+                    }
+                }
+                BuilderRequest::CommitManifest { .. } => BuilderHostReply::ManifestCommitted,
+                BuilderRequest::ReservePlaceholder { .. } => BuilderHostReply::Failed(
+                    HostError::new("detached build unexpectedly requested a placeholder"),
+                ),
+                _ => BuilderHostReply::Failed(HostError::new("unsupported request")),
+            };
+            session.fulfill(request.id, reply)?;
+        }
+    }
+}
+
+fn store_asset_range(asset: &mut [u8], range: ByteRange, bytes: &[u8]) -> Result<(), HostError> {
+    if bytes.len() as u64 != range.len {
+        return Err(HostError::new("asset range has an unexpected length"));
+    }
+    let end = range
+        .start
+        .checked_add(range.len)
+        .ok_or_else(|| HostError::new("asset range overflows"))?;
+    let start =
+        usize::try_from(range.start).map_err(|_| HostError::new("asset offset is too large"))?;
+    let end = usize::try_from(end).map_err(|_| HostError::new("asset end is too large"))?;
+    let destination = asset
+        .get_mut(start..end)
+        .ok_or_else(|| HostError::new("asset range is outside the source"))?;
+    destination.copy_from_slice(bytes);
+    Ok(())
 }
 
 /// One RFC 3161 round trip: encode the `TimeStampReq`, await the signer

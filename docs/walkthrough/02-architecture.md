@@ -6,7 +6,8 @@ and the reader, builder and format handlers know nothing about each other.**
 
 ## Dependency graph
 
-Arrows point from a crate to what it depends on (workspace crates only).
+Arrows point from a crate to what it depends on. The dashed edge is standalone
+JS test tooling, not a Rust workspace dependency.
 
 ```mermaid
 flowchart BT
@@ -17,7 +18,7 @@ flowchart BT
     BD["c2pa-builder"]
     FM["c2pa-format<br/><i>FormatHandler contract</i>"]
 
-    JP["c2pa-format-jpeg"]
+    JP["c2pa-format-jpeg<br/><i>APP11 + standard XMP discovery</i>"]
     TF["c2pa-format-tiff"]
     RG["c2pa-format-registry"]
 
@@ -32,6 +33,9 @@ flowchart BT
     RSS["rs-compat-sign"]
     JSS["js-compat-sign"]
     NDS["node-compat-sign"]
+    WEB["c2pa-web-bindings<br/><i>combined browser cdylib</i>"]
+    JSP["c2pa-js-state-machine<br/><i>inline + module Worker / private package proof</i>"]
+    ORC["pinned c2pa-js<br/><i>legacy test oracle</i>"]
 
     RD --> SM & PR
     BD --> SM & PR
@@ -42,12 +46,15 @@ flowchart BT
     FR --> RD & FM
     FB --> BD & FM
     RSC --> FR & RG
-    JSC --> FR & JP
-    NDC --> FR & JSC
+    JSC --> FR & RG
+    NDC --> FR & JSC & RG
     SB --> BD
     RSS --> SB & FB & JP
-    JSS --> SB & FB & JSC
-    NDS --> SB & FB & JSC
+    JSS --> SB & FB & JSC & JP
+    NDS --> SB & FB & JSC & RG
+    WEB --> JSC & JSS
+    JSP --> WEB
+    JSP -.-> ORC
 
     classDef engine fill:#dbeafe,stroke:#2563eb,color:#000
     classDef core fill:#dcfce7,stroke:#16a34a,color:#000
@@ -58,7 +65,7 @@ flowchart BT
     class RD,BD core
     class FM,JP,TF,RG fmt
     class FR,FB glue
-    class RSC,JSC,NDC,SB,RSS,JSS,NDS bind
+    class RSC,JSC,NDC,SB,RSS,JSS,NDS,WEB bind
 ```
 
 (Edges to `primitives` and `state-machine` from most crates are omitted
@@ -98,20 +105,22 @@ flowchart TB
 |---|---|---|
 | `contentauth-state-machine` | Foundation | The engine: `Session`, `SessionCore`, request tracking, protocol errors. Domain-agnostic. |
 | `contentauth-c2pa-primitives` | Foundation | The narrow shared slice: `StreamId`, `ByteRange`, hash/signing algorithms, `HostError`, COSE `Sig_structure`, RFC 3161 encode/unwrap. |
-| `contentauth-c2pa-reader` | Workflow | `ReadSession`: JUMBF, claims (v1+v2), integrity, signature, trust, timestamps, OCSP, CAWG identity assertions (X.509). |
+| `contentauth-c2pa-reader` | Workflow | `ReadSession`: JUMBF, claims (v1+v2), embedded binary assertion resources, assertion hashes, active-asset binding, signature, trust, timestamps, OCSP, CAWG identity assertions (X.509). Ingredient-link/hash/history validation remains future core work. |
 | `contentauth-c2pa-builder` | Workflow | `BuilderSession`: v2 claim generation and signing via a two-pass placeholder scheme, plus optional CAWG identity assertions. |
 | `contentauth-c2pa-format` | Format | `FormatHandler` trait, `FormatDescriptor`, `IoRequest`, `EmbedPlan`/`Patch`, test kit + conformance suite. |
-| `…-format-jpeg` | Format | APP11 segments; byte-compatible with c2pa-rs. The template for other handlers. |
+| `…-format-jpeg` | Format | APP11 segments, byte-compatible with c2pa-rs; standard XMP remote references via a bounded namespace-aware decoder. The template for other handlers. |
 | `…-format-tiff` | Format | TIFF/BigTIFF/DNG; the format that forced `exclusions` to become a list. |
 | `…-format-registry` | Format (host side) | Detect by content / extension / MIME; type-erased `AnyFormat`. |
 | `…-file-reader` | Orchestration | `FileReadSession`: `locate` + `ReadSession`; plus a blocking `Read + Seek` host. |
 | `…-file-builder` | Orchestration | `FileBuilderSession`: `plan_embed`/`commit` + `BuilderSession`, never buffering the asset; plus blocking hosts. |
 | `…-rs-compat` | Binding | c2pa-rs `Context` + `Reader::with_file` slice; one of two crates with a network dependency (`reqwest` OCSP). |
-| `…-js-compat` | Binding | c2pa-wasm `WasmReader` slice; async host with `Blob`/`Platform` traits; `web` feature for `wasm-bindgen`. |
-| `…-node-compat` (+ `c2pa-node-compat-addon`) | Binding | Purely synchronous `NodeSession`; Node owns all async. Addon is a separate Neon workspace. |
+| `…-js-compat` | Binding | c2pa-wasm `WasmReader` slice; async Blob/Platform host, shared JPEG/TIFF registry, claim-thumbnail and same-manifest embedded generator-icon/ingredient-thumbnail/data references and `resourceToBytes`, optional browser remote/OCSP callbacks. |
+| `…-node-compat` (+ `c2pa-node-compat-addon`) | Binding | Purely synchronous `NodeSession`, including optional explicit detached bytes; retained resources share JS-compat's strict URI lookup. Node owns all async, including `fromManifestDataAndAsset` source reads and `resourceToAsset` file output. Addon is a separate Neon workspace. |
 | `…-sign-baseline` | Binding | The baseline signing case (JSON definition → `BuilderSettings`) every write binding is held to. |
 | `…-rs/js/node-compat-sign` (+ `c2pa-node-sign-addon`) | Binding | The baseline case through each binding. `rs-compat-sign` is the other crate with a network dependency (`reqwest` for RFC 3161 timestamps). |
+| `…-web-bindings` | Binding | Combined browser `cdylib` delegating to the existing JS read/sign adapters; target-only browser dependencies. |
 | `c2pa-rs-compat-conformance` | Test | Separate workspace; differential tests against the real `c2pa` crate. |
+| `c2pa-js-state-machine` (JS package) | Binding / Test | Inline/module-Worker JPEG/TIFF read/sign facade, embedded-resource extraction, exact active-manifest and single-manifest trusted/untrusted store/parsed JSON reporting, resource-free ingredient metadata/reviews and unknown-provenance deltas, explicit claim-trust policy and independent CAWG anchor switches, reader-factory settings defaults, caller-resolved/memoized Contexts with concurrent isolation (private Worker protocol v2), opt-in bounded remote/OCSP hosts, caller-owned signing/timestamps, private compiled ESM/types/Wasm packaging, pinned legacy oracle, and three-browser runtime/installed-consumer/performance proof; full SDK parity remains future work. |
 
 ## Rules of the road
 

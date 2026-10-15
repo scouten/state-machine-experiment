@@ -35,7 +35,7 @@ it — so that *every* host interaction, asset bytes included, is a real
 ## What this covers
 
 One use case, worked through end to end: **read and validate a C2PA
-manifest store from an asynchronously-readable JPEG, and report it the
+manifest store from an asynchronously-readable JPEG or TIFF, and report it the
 way c2pa-wasm does.**
 
 ```rust,no_run
@@ -70,21 +70,129 @@ The pieces, bottom up:
 * **`Reader`** — `WasmReader`, method for method. `Error` reproduces
   c2pa-wasm's error-string contract (`format!("{err:?}")`) down to the
   `C2pa(JumbfNotFound)` string c2pa-web's `reader.ts` turns into `null`.
-  `context_json` is c2pa-rs settings JSON; the slice recognized is
-  documented on `Context::from_json` (trust anchors as PEM, and
-  `ocsp_fetch`, which takes c2pa-rs's off-by-default when absent rather
-  than the engine's on-by-default; everything else is ignored, including
-  `remote_manifest_fetch`, which the engine cannot act on yet).
+  The browser `fromBlob` also accepts optional caller-supplied detached
+  manifest-store bytes; the asset is validated against those bytes through
+  the same session used for embedded stores.
+  Missing/unsupported active claim hash algorithms reject with
+  `C2pa(UnknownAlgorithm)`, matching legacy rather than the core's default.
+  `context_json` is c2pa-rs settings JSON; `Context::from_json` supports
+  separate manifest, timestamp, and CAWG trust anchors, named trust lists,
+  and `ocsp_fetch`, which defaults off as in c2pa-rs. The inline facade
+  resolves `trust` and `cawgTrust` through the shared `Context` utility.
+  `verify.verify_trust` defaults true; false suppresses claim anchor verdicts
+  without disabling cryptographic, certificate, validity, binding, timestamp or
+  revocation checks. JS boolean `verifyTrustList` switches omit the corresponding
+  anchors through the pinned utilities; CAWG validation still runs.
+  Other settings the reader cannot honor are rejected at that migration
+  boundary. Remote fetching is enabled only
+  through the inline facade's explicit policy-bounded host options, not an
+  unchecked settings flag.
 * **`web`** (feature, `wasm32-unknown-unknown` only) — the browser end:
   `Blob` for `web_sys::Blob`, `WebPlatform`, and a
   `#[wasm_bindgen]`-exported `WasmReader` whose JavaScript surface
   (`fromBlob`, `activeLabel`, `manifestStore`, `activeManifest`, `json`)
-  is c2pa-wasm's own. This is the one module in the workspace that names
-  a wasm-bindgen type; its dependencies are declared for that target
+  is c2pa-wasm's own. Its dependencies are declared for that target
   alone, so the feature is a no-op everywhere else and nothing below this
   crate changes.
 
 ## What the tests demonstrate
+
+Generator icons resolve only exact embedded assertion resources in the owning
+manifest, exposing legacy `{format, identifier}` metadata. Relative references
+are normalized to absolute self JUMBF IDs; missing/ambiguous resources and
+external, cross-manifest or deprecated databox references are serialization
+errors. No icon is silently omitted or fetched. Real c2pa-rs-signed fixtures
+prove full trusted legacy object/JSON equality and exact independent byte
+extraction on inline/Worker and installed packages. Damaged icon bytes remain
+available but retain their live hash failures. Node shares this projection;
+its separate addon now uses the shared `resource_bytes` lookup for
+`resourceToAsset` buffer/file output, with file I/O remaining in JavaScript.
+
+The shared reporting projection retains generator extensions, embedded assertion
+icon references, verified
+claim/CAWG X.509 signer metadata and authenticated timestamp times. Serials are
+unsigned decimal strings without a machine-integer size limit. Legacy `issuer`
+means the signer's subject organization; UTF-8, PrintableString and IA5String
+subject attributes are projected. Other directory-string encodings remain
+unprojected. Hard-binding and embedded-resource assertions stay in the core's
+raw report but are omitted from this compatibility list. Verified identity
+credentials use legacy's `revocation_status: true` field; this does not certify
+an OCSP check. Trust and timestamp validation semantics are unchanged.
+The browser harness proves unchanged upstream active-manifest equality and
+single-manifest trusted/untrusted complete-store goldens on inline and Worker.
+Top-level `validation_status` contains failures only and is omitted when empty;
+success and informational observations remain in `validation_results`, with
+stable legacy phase ordering and no deduplication. Assertion URLs retain their
+actual owning manifest. Aggregate `trustListUri` and `timestampTrustListUri`
+derive only from the corresponding active claim/timestamp trusted observations,
+never CAWG or ingredient trust. Identity distrust enters the compatibility
+failure bucket without lowering core store validation state. Unknown status
+details and forced-failure explanations are retained.
+Compatibility failure observations cap an otherwise `Trusted` projection at
+`Valid`, matching legacy's separate valid/trusted predicates; the core report
+is not mutated. Independent claim/CAWG settings combinations are compared as
+complete object and JSON reports against legacy on inline and Worker.
+`ManifestStore::json` supplies a separate legacy display view shared by JS and
+Node hosts. `Reader::json` now returns `Result<String, serde_json::Error>`; Wasm
+and Neon propagate errors rather than returning `"{}"`. Parsed JSON matches
+legacy's trusted/untrusted single-manifest fixtures. Nonempty all-number arrays
+in object fields become padded standard base64, regardless of field name;
+unsigned integers supply their low byte and negative/floating-point values are
+omitted. Empty/mixed arrays and direct nested arrays remain arrays. This
+deliberately lossy compatibility formatting never mutates object projections.
+Newly signed custom assertions verify the quirks against legacy on both browser
+runtimes. Whitespace/key-order byte equality and `crJson` remain open.
+
+Resource-free v1/v2/v3 ingredient assertions now project into `ingredients`,
+retaining positional labels and store order instead of also appearing as
+generic assertions. Supported fields cover relationship, title/format/instance
+ID, version-appropriate document ID, description, informational URI, digital
+source type and data types. Ingredient assertion `metadata` supports `dateTime`,
+`reviewRatings` (explanation, optional code and unsigned-byte value) and custom
+extension fields. Empty metadata/review lists remain present; null optional
+fields are omitted, and unknown fields inside individual reviews are ignored
+like legacy. These are asserted metadata, not proof of an
+ingredient asset's authenticity. Core unknown-provenance observations are
+reported in owner-qualified `ingredientDeltas` for unsigned
+`parentOf`/`componentOf` inputs, not `inputTo`. Newly signed full object and JSON
+reports match legacy on inline and Worker; live tampering failures remain.
+
+Ingredient `thumbnail` references now resolve using the generator-icon resource
+resolver, preserving exact same-owner absolute IDs, declared media type and
+positional labels. Native v1/v2/v3 tests cover relative/absolute refs and malformed
+hashed URIs. Real c2pa-rs v2 fixtures match complete legacy object/JSON stores
+with two ingredient thumbnails, exact independent bytes and live tamper failures
+on inline/Worker. Installed consumers prove extraction and Node shares metadata.
+Null thumbnails are omitted. Missing/ambiguous, cross-owner, external and
+deprecated databox targets fail explicitly, with release/retry proof.
+
+Ingredient `data` references use the same resolver and hashed-URI shape checks,
+preserving legacy `{format, identifier}` metadata for embedded same-owner data.
+Real c2pa-rs v2 fixtures compare complete trusted legacy reports and exact
+independent bytes for two positional data resources, one alongside a thumbnail.
+Live payload tampering remains invalid without modifying the other resources.
+Databox, external/cross-owner, missing/ambiguous and malformed data references
+fail explicitly; null data is omitted. Installed paths prove browser extraction,
+and actual Node tests prove independent buffer/file output through the same
+resolver. This does not implement full ingredient-link hash/history validation
+or grant trust to extracted contents.
+
+Linked manifests (`activeManifest`/`c2pa_manifest`/`claimSignature`), unsupported
+resource targets, structured metadata (`reference`, `dataSource`,
+`localizations`, `regionOfInterest`) and recorded validation
+history are not yet supported in this view: serialization errors explicitly,
+rather than returning a partial report or trusting asserted statuses.
+Unsupported numeric versions and malformed supported fields also error; optional
+malformed fields are rejected rather than silently omitted like legacy may do.
+The owned Rust `Ingredient` view implements `Serialize`; actual
+object/JSON conversion is where these errors surface through Wasm and Neon.
+Native hosts can still inspect the engine's raw assertion data.
+Review ratings are signed opinions, never live validation observations. Their
+encoding is checked (integer 0-255, as legacy decodes it), not the truth of the
+review or the recommended 1-5 rating scale. Creation time is text, not a trusted
+clock or authenticated timestamp. Newly signed full reports match legacy through
+inline and Worker, including custom metadata's array/base64 JSON formatting.
+Malformed reviews fail explicitly rather than silently dropping all metadata.
 
 `tests/async_host.rs` drives `Reader::from_blob` with a `Blob` whose
 every read genuinely suspends (returns `Pending` once, the way a real
@@ -114,25 +222,42 @@ produce, including the exact `C2pa(JumbfNotFound)` string.
 * **`fromBlobFragment`** — needs a fragmented-BMFF `FormatHandler`, which
   does not exist yet; then it is a second constructor over the same loop
   with two `Blob`s.
-* **`resourceToBytes`, `crJson`** — depend on resource and thumbnail data
-  the engine does not decode yet.
-* **Formats other than JPEG** — `src/format.rs` is the seam, exactly as
-  in `contentauth-c2pa-rs-compat`.
-* **The full `@contentauth/c2pa-types` `ManifestStore`** — ingredients,
-  decoded assertion values, thumbnails. `ManifestStore` carries the
-  top-level contract, populated with what the engine reports today, in
-  the same shape `contentauth-c2pa-rs-compat`'s `Reader::json` produces.
-* **Remote manifests** — the engine has no remote-manifest request yet,
-  so an asset whose only manifest store is remotely hosted reads as
-  `C2pa(JumbfNotFound)` here however `remote_manifest_fetch` is set.
-* **A `fetch`-backed OCSP transport for the browser** — a `Platform`
-  whose `ocsp` posts through `fetch`. `WebPlatform` declines OCSP today
-  (fail-open, and off by default here as in c2pa-rs); a host that wants
-  it implements `Platform` itself and opts in with `"ocsp_fetch": true`.
-* **Running the `web` module** — there is no browser in CI. It is held
-  to `cargo check --all-features --target wasm32-unknown-unknown`, which
-  CI runs, and to the shape of the code it delegates to, all of which is
-  tested natively.
+* **`crJson`** — the full Content Credentials JSON projection is not implemented.
+  `resourceToBytes` now copies embedded binary assertion bytes by absolute
+  `self#jumbf=/c2pa/<manifest>/c2pa.assertions/<assertion>` URI. Claim-thumbnail
+  metadata, generator icons and same-manifest ingredient thumbnails are projected;
+  missing or ambiguous identifiers fail explicitly.
+  Extraction does not grant trust: consult the reader's validation results.
+* **Formats beyond JPEG and TIFF/BigTIFF/DNG** — `src/format.rs` selects
+  the workspace registry's handlers, shared with browser/Node signing.
+* **The full `@contentauth/c2pa-types` `ManifestStore`** — CBOR assertion
+  values, created flags, and active-manifest success/informational/failure
+  buckets are now projected. Ingredient relationships, signature metadata,
+  broader resource references, and exact validation-result parity remain
+  incomplete. `ManifestStore` stays shared with
+  `contentauth-c2pa-rs-compat`.
+* **Remote manifests** — `verify.remote_manifest_fetch` now controls whether
+  a format-reported URL becomes a host request. `Platform::remote_manifest`
+  is the transport seam. Its default and `WebPlatform` decline the request;
+  a networked host must enforce URL and response policies before returning
+  bytes. JPEG now reports standard XMP references; TIFF and extended XMP
+  remain open. `WasmReader.fromBlob` accepts an optional remote-host callback;
+  the inline facade supplies it with exact-origin policy, streamed byte limits,
+  deadlines, and caller cancellation. HTTP stays in JavaScript and fetching
+  stays off by default.
+* **Browser OCSP breadth** — the optional `WasmReader.fromBlob` OCSP callback
+  now receives the URL and DER request, returning response bytes. The inline
+  facade supplies a bounded `fetch` POST host with explicit allowed origins,
+  limits, deadline, and cancellation; no callback means the offline behavior
+  remains. Fetching is off by default. The reader authenticates DER and retains
+  its existing inaccessible/fail-open versus authenticated-revocation policy.
+  Real responder interoperability beyond the local signed fixtures remains open.
+
+The [M1 browser prototype](../c2pa-js-state-machine) now executes this adapter
+through the combined [browser packaging crate](../contentauth-c2pa-web-bindings)
+in Chromium, Firefox, and WebKit. Its five unchanged upstream cases and
+read/sign proofs supplement the native suites and portable target checks;
+they do not establish full c2pa-web reporting or Worker parity.
 
 ## Building
 

@@ -61,7 +61,10 @@
 //! online [`Platform`](crate::Platform) must not start making
 //! certificate-directed network requests a caller never opted into. A
 //! caller who wants the engine's own default reaches it explicitly, with
-//! `"ocsp_fetch": true` or [`Context::from_settings`].
+//! `"ocsp_fetch": true` or [`Context::from_settings`]. `remote_manifest_fetch`
+//! maps to [`ReadSettings::fetch_remote_manifests`], which defaults to
+//! `false`; enabling it lets a format-reported URL reach the host, whose
+//! transport must enforce destination policy.
 //!
 //! Any other key is ignored, so a full c2pa-rs settings document loads
 //! without complaint — the alternative, rejecting a setting this crate has
@@ -159,12 +162,10 @@ impl Context {
 
         // Every field is named here on purpose: a setting the engine grows
         // is one this parser should be made to decide about, not one that
-        // silently keeps its default. `fetch_remote_manifests` is decided
-        // *not* to follow `verify.remote_manifest_fetch` — see the module
-        // docs — and stays at the engine's default until the engine can
-        // actually act on it.
+        // silently keeps its default.
         let defaults = Self::default().settings;
         let settings = ReadSettings {
+            verify_trust: doc.verify.verify_trust.unwrap_or(defaults.verify_trust),
             trust_anchors: signing_anchors,
             timestamp_trust_anchors: timestamp_anchors,
             trust_lists: signing_lists,
@@ -172,7 +173,10 @@ impl Context {
             identity_trust_anchors: identity_anchors,
             identity_trust_lists: identity_lists,
             check_ocsp: doc.verify.ocsp_fetch.unwrap_or(defaults.check_ocsp),
-            fetch_remote_manifests: defaults.fetch_remote_manifests,
+            fetch_remote_manifests: doc
+                .verify
+                .remote_manifest_fetch
+                .unwrap_or(defaults.fetch_remote_manifests),
         };
 
         Ok(Self { settings })
@@ -232,7 +236,32 @@ enum TrustListKind {
 #[derive(Default, Deserialize)]
 #[serde(default)]
 struct VerifyJson {
+    verify_trust: Option<bool>,
     ocsp_fetch: Option<bool>,
+    remote_manifest_fetch: Option<bool>,
+}
+
+#[cfg(test)]
+mod trust_policy_tests {
+    use super::Context;
+
+    #[test]
+    fn claim_trust_defaults_on_and_explicit_false_is_retained() -> Result<(), super::C2paError> {
+        assert!(Context::default().settings().verify_trust);
+        assert!(Context::from_json("{}")?.settings().verify_trust);
+        assert!(
+            !Context::from_json(r#"{"verify":{"verify_trust":false}}"#)?
+                .settings()
+                .verify_trust
+        );
+        assert!(
+            Context::from_json(r#"{"verify":{"verify_trust":true}}"#)?
+                .settings()
+                .verify_trust
+        );
+        assert!(Context::from_json(r#"{"verify":{"verify_trust":"false"}}"#).is_err());
+        Ok(())
+    }
 }
 
 const PEM_BEGIN: &str = "-----BEGIN CERTIFICATE-----";
@@ -498,20 +527,21 @@ mod tests {
         assert!(context.settings().check_ocsp);
     }
 
-    /// `remote_manifest_fetch` is accepted (c2pa-rs defaults it to `true`,
-    /// so a stock settings document carries it) but never reaches the
-    /// engine, which cannot act on it — see the module docs.
+    /// Remote fetching remains disabled by default. An explicit setting
+    /// controls whether the session may hand an asset-provided URL to its
+    /// host; the host still owns transport safety.
     #[test]
-    fn remote_manifest_fetch_is_accepted_but_does_not_reach_the_engine() {
-        for value in ["true", "false"] {
-            let json = format!(r#"{{ "verify": {{ "remote_manifest_fetch": {value} }} }}"#);
-            let context = Context::from_json(&json).expect("parses");
-            assert_eq!(
-                context.settings().fetch_remote_manifests,
-                Context::default().settings().fetch_remote_manifests,
-                "{json}"
-            );
-        }
+    fn remote_manifest_fetch_is_disabled_by_default_and_can_be_enabled() {
+        let default = Context::from_json("{}").expect("parses");
+        assert!(!default.settings().fetch_remote_manifests);
+
+        let enabled = Context::from_json(r#"{ "verify": { "remote_manifest_fetch": true } }"#)
+            .expect("parses");
+        assert!(enabled.settings().fetch_remote_manifests);
+
+        let disabled = Context::from_json(r#"{ "verify": { "remote_manifest_fetch": false } }"#)
+            .expect("parses");
+        assert!(!disabled.settings().fetch_remote_manifests);
     }
 
     #[test]

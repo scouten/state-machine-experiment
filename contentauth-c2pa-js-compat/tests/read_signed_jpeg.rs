@@ -68,9 +68,24 @@ fn a_manifest_written_by_the_builder_reads_back_as_trusted_with_anchors_from_con
     );
     assert_eq!(store.manifests.len(), 1);
     assert!(store
-        .validation_status
+        .validation_results
+        .active_manifest
+        .success
         .iter()
         .any(|status| status.code == "claimSignature.validated"));
+    assert!(store
+        .validation_results
+        .active_manifest
+        .success
+        .iter()
+        .any(|status| status.code == "claimSignature.validated"));
+    assert!(store
+        .validation_results
+        .active_manifest
+        .success
+        .iter()
+        .any(|status| status.code == "assertion.dataHash.match"));
+    assert!(store.validation_results.active_manifest.failure.is_empty());
 
     let active = reader.active_manifest().expect("has an active manifest");
     assert_eq!(active.label, "urn:uuid:test-manifest");
@@ -84,7 +99,14 @@ fn a_manifest_written_by_the_builder_reads_back_as_trusted_with_anchors_from_con
         Some("2.4.0")
     );
     assert_eq!(active.instance_id, "xmp:iid:test-instance");
-    assert_eq!(active.assertions, ["c2pa.hash.data"]);
+    assert!(active.assertions.is_empty());
+    let signature = active
+        .signature_info
+        .as_ref()
+        .expect("verified signer metadata");
+    assert_eq!(signature.alg, "Es256");
+    assert!(signature.time.is_none());
+    assert!(!signature.cert_serial_number.is_empty());
     // The builder writes structured `claim_generator_info`, not the legacy
     // free-form string, so this fixture has none to report.
     assert_eq!(active.claim_generator, None);
@@ -94,20 +116,20 @@ fn a_manifest_written_by_the_builder_reads_back_as_trusted_with_anchors_from_con
     // parse it as such — check it field by field rather than as a
     // substring of the raw string.
     let json: serde_json::Value =
-        serde_json::from_str(&reader.json()).expect("Reader::json produces valid JSON");
+        serde_json::from_str(&reader.json().unwrap()).expect("Reader::json produces valid JSON");
     assert_eq!(json["active_manifest"], "urn:uuid:test-manifest");
     assert_eq!(json["validation_state"], "Trusted");
     let manifest_json = &json["manifests"]["urn:uuid:test-manifest"];
     assert_eq!(manifest_json["label"], "urn:uuid:test-manifest");
     assert_eq!(manifest_json["title"], "test.jpg");
     assert_eq!(manifest_json["instance_id"], "xmp:iid:test-instance");
-    assert_eq!(
-        manifest_json["assertions"],
-        serde_json::json!(["c2pa.hash.data"])
-    );
-    assert!(json["validation_status"]
+    assert_eq!(manifest_json["assertions"], serde_json::json!([]));
+    assert_eq!(manifest_json["signature_info"]["alg"], "Es256");
+    assert!(manifest_json["signature_info"].get("time").is_none());
+    assert!(json.get("validation_status").is_none());
+    assert!(json["validation_results"]["activeManifest"]["success"]
         .as_array()
-        .expect("validation_status is a JSON array")
+        .expect("success is a JSON array")
         .iter()
         .any(|status| status["code"] == "claimSignature.validated"));
 }
@@ -119,11 +141,15 @@ fn without_context_json_the_same_manifest_reads_back_only_as_valid() {
     let reader = block_on(Reader::from_blob("image/jpeg", &asset, None, &FixedClock))
         .expect("should still read and validate cleanly");
 
-    assert_eq!(
-        reader.manifest_store().validation_state,
-        ValidationState::Valid
-    );
-    let json: serde_json::Value = serde_json::from_str(&reader.json()).unwrap();
+    let store = reader.manifest_store();
+    assert_eq!(store.validation_state, ValidationState::Valid);
+    assert!(store
+        .validation_results
+        .active_manifest
+        .failure
+        .iter()
+        .any(|status| status.code == "signingCredential.untrusted"));
+    let json: serde_json::Value = serde_json::from_str(&reader.json().unwrap()).unwrap();
     assert_eq!(json["validation_state"], "Valid");
 }
 
@@ -152,7 +178,9 @@ fn a_trust_uri_in_context_json_is_reported_as_the_trust_list_uri() {
     assert_eq!(store.validation_state, ValidationState::Trusted);
 
     let trusted = store
-        .validation_status
+        .validation_results
+        .active_manifest
+        .success
         .iter()
         .find(|status| status.code == "signingCredential.trusted")
         .expect("a trusted status");
@@ -161,14 +189,24 @@ fn a_trust_uri_in_context_json_is_reported_as_the_trust_list_uri() {
         Some("https://example.com/signers")
     );
     assert!(store
-        .validation_status
+        .validation_results
+        .active_manifest
+        .success
         .iter()
         .filter(|status| status.code != "signingCredential.trusted")
         .all(|status| status.trust_list_uri.is_none()));
 
-    // As in c2pa-rs, the field is reachable but never serialized.
-    assert!(!reader.json().contains("trust_list_uri"));
-    assert!(!reader.json().contains("https://example.com/signers"));
+    // Per-status provenance is not serialized; aggregate provenance is.
+    assert!(!reader.json().unwrap().contains("trust_list_uri"));
+    assert_eq!(
+        store.validation_results.trust_list_uri.as_deref(),
+        Some("https://example.com/signers")
+    );
+    let json: serde_json::Value = serde_json::from_str(&reader.json().unwrap()).unwrap();
+    assert_eq!(
+        json["validation_results"]["trustListUri"],
+        "https://example.com/signers"
+    );
 }
 
 #[test]
@@ -302,6 +340,19 @@ fn a_jpeg_format_with_unparseable_content_surfaces_as_a_read_error() {
 }
 
 #[test]
-fn supported_formats_lists_jpeg_as_mime_type_and_extensions() {
-    assert_eq!(Reader::supported_formats(), ["image/jpeg", "jpeg", "jpg"]);
+fn supported_formats_lists_jpeg_tiff_and_dng_as_mime_types_and_extensions() {
+    assert_eq!(
+        Reader::supported_formats(),
+        [
+            "image/jpeg",
+            "jpeg",
+            "jpg",
+            "image/tiff",
+            "image/dng",
+            "image/x-adobe-dng",
+            "tif",
+            "tiff",
+            "dng",
+        ]
+    );
 }

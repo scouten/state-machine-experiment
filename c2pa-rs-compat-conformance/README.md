@@ -1,5 +1,20 @@
 # c2pa-rs-compat-conformance
 
+The `generate_resource_fixtures` example regenerates the JS migration's modern
+embedded-assertion and legacy databox icon/ingredient-thumbnail/data fixtures
+using real c2pa-rs and the repository's TEST ONLY signer. It takes a PEM certificate path and output
+directory. See the [migration package's reproduction commands](../c2pa-js-state-machine/README.md#embedded-resources).
+The browser differential tests, installed-package consumer and Node addon read
+these fixtures; generation does not add a production workspace dependency.
+It also writes `detached-data-v2.jpg`, its `.c2pa` sidecar and a complete
+`detached-data-v2-report.json` golden. Generation requires the explicit sidecar
+to validate as Trusted/non-embedded and the asset alone to report no store.
+The Node detached tests compare the unfiltered report with equivalent named
+trust settings. `tests/detached_resource_fixture.rs` rechecks manifest projection,
+non-embedded state, store-free input and asset tampering against the real SDK.
+`serde_json` is a conformance-only dev dependency for fixture settings/goldens;
+no portable production crate gains a legacy-SDK dependency.
+
 Differential test harness: does
 [`contentauth-c2pa-rs-compat`](../contentauth-c2pa-rs-compat) report the
 same thing as the real [c2pa-rs] `Reader` for the same file?

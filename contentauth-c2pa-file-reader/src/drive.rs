@@ -92,6 +92,10 @@ fn answer<R: Read + Seek>(source: &mut R, request: &FileReadRequest) -> FileRead
         FileReadRequest::Ocsp { .. } => {
             FileReadReply::Failed(HostError::new("this host has no network access for OCSP"))
         }
+
+        FileReadRequest::RemoteManifest { .. } => FileReadReply::Failed(HostError::new(
+            "this host has no network access for remote manifests",
+        )),
     }
 }
 

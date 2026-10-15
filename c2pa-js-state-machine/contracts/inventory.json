@@ -1,0 +1,4511 @@
+{
+  "schemaVersion": 1,
+  "upstream": {
+    "repository": "contentauth/c2pa-js",
+    "commit": "3c642db3e566f20ede9442090d1d414f424bcea1",
+    "archiveSha256": "d85100dd5a9bd9caff51e994c6aafadd49feb36ee26c8711a1fb1932ad2c7567",
+    "legacyPackage": "@contentauth/c2pa-web",
+    "legacyVersion": "0.15.3",
+    "legacyIntegrity": "sha512-dpNW5CSWyN4kPkB3vb+7IWc0qfF87brxMDCZcIJqa110GjNE+xBWm3AhgXgegniYmArOS7cnkhTmG1ZP09mYOg==",
+    "packages": [
+      "c2pa-web",
+      "c2pa-node",
+      "c2pa-types",
+      "c2pa-utilities"
+    ],
+    "oracleTests": [
+      "should detect the format from the blob bytes when format is omitted",
+      "should apply the given Context",
+      "supports different Contexts for Readers created from the same c2pa instance",
+      "does not re-resolve the same Context on repeated fromBlob calls",
+      "creates a Reader via c2pa.reader.fromBlob",
+      "merges per-call settings over the top-level settings passed to createC2pa, with per-call taking precedence",
+      "should report a \"valid\" (not \"trusted\") asset when trust settings are disabled",
+      "should return c2pa data when created from a blob",
+      "should return null when reading an asset with no C2PA data",
+      "should throw AssetTooLargeError when the blob exceeds the max size",
+      "should report c2pa-rs errors correctly",
+      "should be freeable",
+      "does not expose its internal worker/id via enumeration or serialization",
+      "should return an embedded thumbnail",
+      "should return the asset's active manifest",
+      "should report a trusted asset when when configured to verify trust",
+      "should report an untrusted asset when configured to verify trust"
+    ]
+  },
+  "packages": [
+    {
+      "name": "c2pa-web",
+      "manifest": {
+        "name": "@contentauth/c2pa-web",
+        "version": "0.15.3",
+        "license": "MIT",
+        "repository": {
+          "type": "git",
+          "url": "git+https://github.com/contentauth/c2pa-js"
+        },
+        "type": "module",
+        "module": "./dist/index.js",
+        "types": "./dist/index.d.ts",
+        "files": [
+          "dist/**/*"
+        ],
+        "exports": {
+          "./package.json": "./package.json",
+          "./resources/c2pa.wasm": "./dist/resources/c2pa_bg.wasm",
+          ".": {
+            "development": "./src/index.ts",
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js",
+            "default": "./dist/index.js"
+          },
+          "./inline": {
+            "development": "./src/inline.ts",
+            "types": "./dist/inline.d.ts",
+            "import": "./dist/inline.js",
+            "default": "./dist/inline.js"
+          },
+          "./c2pa_worker": {
+            "development": "./src/lib/worker.ts",
+            "import": "./dist/c2pa_worker.js",
+            "default": "./dist/c2pa_worker.js"
+          }
+        },
+        "publishConfig": {
+          "exports": {
+            "./package.json": "./package.json",
+            "./resources/c2pa.wasm": "./dist/resources/c2pa_bg.wasm",
+            ".": {
+              "types": "./dist/index.d.ts",
+              "import": "./dist/index.js",
+              "default": "./dist/index.js"
+            },
+            "./inline": {
+              "types": "./dist/inline.d.ts",
+              "import": "./dist/inline.js",
+              "default": "./dist/inline.js"
+            },
+            "./c2pa_worker": {
+              "import": "./dist/c2pa_worker.js",
+              "default": "./dist/c2pa_worker.js"
+            }
+          }
+        },
+        "dependencies": {
+          "@contentauth/c2pa-types": "workspace:*",
+          "@contentauth/c2pa-utilities": "workspace:*",
+          "@contentauth/c2pa-wasm": "workspace:*",
+          "highgain": "^0.1.0"
+        },
+        "devDependencies": {
+          "@playwright/test": "^1.60.0",
+          "@types/ssri": "^7.1.5",
+          "@vitest/browser": "^3.2.4",
+          "vitest": "^3.0.0",
+          "msw": "^2.12.1",
+          "rimraf": "^6.0.1",
+          "typedoc": "^0.28.12",
+          "vite-tsconfig-paths": "^5.1.4"
+        },
+        "scripts": {
+          "build:docs": "typedoc src/index.ts src/inline.ts"
+        }
+      }
+    },
+    {
+      "name": "c2pa-node",
+      "manifest": {
+        "name": "@contentauth/c2pa-node",
+        "repository": {
+          "type": "git",
+          "url": "git+https://github.com/contentauth/c2pa-js.git",
+          "directory": "packages/c2pa-node"
+        },
+        "version": "0.9.9",
+        "description": "Node.js bindings for C2PA",
+        "main": "dist/index.js",
+        "type": "module",
+        "types": "dist/types/index.d.ts",
+        "files": [
+          "dist",
+          "scripts",
+          "src",
+          "Cargo.toml",
+          "Cargo.lock"
+        ],
+        "engines": {
+          "node": ">=22"
+        },
+        "scripts": {
+          "build": "run-s build:rust build:ts",
+          "build:debug": "run-s build:rust-debug build:ts",
+          "build:rust": "pnpm run build:rust-debug --release",
+          "build:rust-debug": "cargo build --message-format=json-render-diagnostics > cargo.log",
+          "build:ts": "tsc -b && cpy index.node dist && cpy index.node js-src && cpy --flat js-src/types.d.ts dist/types",
+          "ci": "run-s build:rust-debug build:ts test",
+          "clean": "rimraf dist target",
+          "cross": "pnpm run cross-build --release",
+          "cross-build": "cross build --message-format=json-render-diagnostics > cross.log",
+          "debug": "pnpm run cargo-build --",
+          "lint": "cargo clippy && pnpm eslint",
+          "postbuild:rust-debug": "neon dist < cargo.log",
+          "postcross-build": "neon dist -m /target < cross.log",
+          "postinstall": "node scripts/postinstall.cjs",
+          "test": "pnpm build:debug && vitest run --config ./vitest.config.ts",
+          "test:watch": "pnpm build:debug && vitest --config ./vitest.config.ts",
+          "test:ui": "pnpm build:debug && vitest --ui --config ./vitest.config.ts"
+        },
+        "author": "Colin Murphy <colmurph@adobe.com>, Austin Le <ale@adobe.com>",
+        "license": "MIT",
+        "devDependencies": {
+          "@changesets/cli": "^2.31.0",
+          "@eslint/js": "^9.39.4",
+          "@neon-rs/cli": "0.1.82",
+          "@types/cli-progress": "^3.11.6",
+          "@types/debug": "^4.1.13",
+          "@types/fs-extra": "^11.0.4",
+          "@types/jest": "^29.5.14",
+          "@types/node": "^22.19.17",
+          "@types/unzipper": "^0.10.11",
+          "@typescript-eslint/eslint-plugin": "^8.59.1",
+          "@typescript-eslint/parser": "^8.59.1",
+          "@vitest/ui": "^3.2.4",
+          "cbor2": "^2.3.0",
+          "cpy-cli": "^5.0.0",
+          "eslint": "^9.39.4",
+          "npm-run-all": "^4.1.5",
+          "rimraf": "^6.1.3",
+          "sharp": "^0.34.5",
+          "ts-jest": "^29.4.9",
+          "typedoc": "^0.28.19",
+          "typedoc-plugin-markdown": "^4.11.0",
+          "typescript": "^5.9.3",
+          "vitest": "^3.2.4"
+        },
+        "keywords": [
+          "c2pa"
+        ],
+        "bugs": {
+          "url": "https://github.com/contentauth/c2pa-js/issues"
+        },
+        "homepage": "https://github.com/contentauth/c2pa-js/tree/main/packages/c2pa-node#readme",
+        "dependencies": {
+          "@contentauth/c2pa-types": "workspace:*",
+          "@contentauth/c2pa-utilities": "workspace:*",
+          "cargo-cp-artifact": "^0.1.9",
+          "cli-progress": "^3.12.0",
+          "debug": "^4.4.3",
+          "fs-extra": "^11.3.4",
+          "mkdirp": "^3.0.1",
+          "node-fetch": "^3.3.2",
+          "pkg-dir": "^8.0.0",
+          "pretty-bytes": "^6.1.1",
+          "unzipper": "^0.10.14"
+        },
+        "packageManager": "pnpm@10.15.0",
+        "nx": {
+          "tags": [
+            "lib"
+          ]
+        }
+      }
+    },
+    {
+      "name": "c2pa-types",
+      "manifest": {
+        "name": "@contentauth/c2pa-types",
+        "description": "Typescript types generated from c2pa-rs",
+        "repository": {
+          "type": "git",
+          "url": "git+https://github.com/contentauth/c2pa-js"
+        },
+        "type": "module",
+        "version": "0.7.5",
+        "types": "dist/index.d.ts",
+        "scripts": {
+          "test": "echo \"No tests to run\" && exit 0",
+          "build": "zx build.ts"
+        },
+        "files": [
+          "dist/**/*",
+          "!**/*.tsbuildinfo"
+        ],
+        "devDependencies": {
+          "@types/fs-extra": "^11.0.4",
+          "json-schema-to-typescript": "^15.0.4",
+          "zx": "^8.8.0"
+        }
+      }
+    },
+    {
+      "name": "c2pa-utilities",
+      "manifest": {
+        "name": "@contentauth/c2pa-utilities",
+        "version": "0.3.1",
+        "license": "MIT",
+        "repository": {
+          "type": "git",
+          "url": "git+https://github.com/contentauth/c2pa-js"
+        },
+        "type": "module",
+        "module": "./dist/index.js",
+        "types": "./dist/index.d.ts",
+        "files": [
+          "dist/**/*"
+        ],
+        "exports": {
+          "./package.json": "./package.json",
+          ".": {
+            "development": "./src/index.ts",
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js",
+            "default": "./dist/index.js"
+          }
+        },
+        "publishConfig": {
+          "exports": {
+            "./package.json": "./package.json",
+            ".": {
+              "types": "./dist/index.d.ts",
+              "import": "./dist/index.js",
+              "default": "./dist/index.js"
+            }
+          }
+        },
+        "dependencies": {
+          "@contentauth/c2pa-types": "workspace:*",
+          "ts-deepmerge": "^8.0.0"
+        },
+        "scripts": {
+          "test": "vitest run"
+        },
+        "devDependencies": {
+          "msw": "^2.12.1",
+          "rimraf": "^6.0.1",
+          "vitest": "^3.0.0"
+        },
+        "nx": {
+          "tags": [
+            "lib"
+          ]
+        }
+      }
+    }
+  ],
+  "provenance": [
+    {
+      "file": "LICENSE",
+      "sha256": "5aeea31bc245dd31213e7ff878a40362d6d4d8bc8093e34a0f30ed7639fe93c6"
+    },
+    {
+      "file": "pnpm-lock.yaml",
+      "sha256": "286e83a13ad5e0debfa1e7d1913eafe7b7a2c279422c2f71d703bc5480e63c6b"
+    }
+  ],
+  "surfaces": [
+    {
+      "file": "packages/c2pa-web/src/common.ts",
+      "exports": [
+        {
+          "declaration": "export type { Config, C2pa } from './lib/c2pa.js';",
+          "members": []
+        },
+        {
+          "declaration": "export type { ManifestAndAssetBytes, BuilderFactory } from './lib/builder.js';",
+          "members": []
+        },
+        {
+          "declaration": "export type { ReaderFactory } from './lib/reader.js';",
+          "members": []
+        },
+        {
+          "declaration": "export type {\n  Signer,\n  SigningAlg,\n  HashedUri,\n  SignerPayload,\n  CredentialHolder,\n  IdentityAssertion,\n  SignOptions\n} from './lib/signer.js';",
+          "members": []
+        },
+        {
+          "declaration": "export type * from '@contentauth/c2pa-types';",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-web/src/index.ts",
+      "exports": [
+        {
+          "declaration": "export { createC2pa } from './lib/c2pa.js';",
+          "members": []
+        },
+        {
+          "declaration": "export { Reader } from './lib/reader.js';",
+          "members": []
+        },
+        {
+          "declaration": "export { Builder } from './lib/builder.js';",
+          "members": []
+        },
+        {
+          "declaration": "export * from './common.js';",
+          "members": []
+        },
+        {
+          "declaration": "export * from '@contentauth/c2pa-utilities';",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-web/src/inline.ts",
+      "exports": [
+        {
+          "declaration": "InlineConfig",
+          "members": []
+        },
+        {
+          "declaration": "createC2pa",
+          "members": []
+        },
+        {
+          "declaration": "export { Reader } from './lib/reader.js';",
+          "members": []
+        },
+        {
+          "declaration": "export { Builder } from './lib/builder.js';",
+          "members": []
+        },
+        {
+          "declaration": "export * from './common.js';",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-web/src/lib/builder.ts",
+      "exports": [
+        {
+          "declaration": "ManifestAndAssetBytes",
+          "members": [
+            "manifest",
+            "asset"
+          ]
+        },
+        {
+          "declaration": "Builder",
+          "members": [
+            "new",
+            "fromDefinition",
+            "fromArchive",
+            "setIntent",
+            "addAction",
+            "addAssertion",
+            "updateAssertion",
+            "addRedaction",
+            "setRemoteUrl",
+            "setNoEmbed",
+            "setThumbnailFromBlob",
+            "filterActions",
+            "filterIngredients",
+            "filterActionsAndIngredients",
+            "updateActions",
+            "addIngredient",
+            "addIngredientFromBlob",
+            "addResourceFromBlob",
+            "getDefinition",
+            "toArchive",
+            "sign",
+            "signAndGetManifestBytes",
+            "free"
+          ]
+        },
+        {
+          "declaration": "BuilderFactory",
+          "members": [
+            "new",
+            "fromDefinition",
+            "fromArchive"
+          ]
+        },
+        {
+          "declaration": "createBuilderFactory",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-web/src/lib/c2pa.ts",
+      "exports": [
+        {
+          "declaration": "Config",
+          "members": [
+            "wasmSrc",
+            "workerSrc",
+            "settings"
+          ]
+        },
+        {
+          "declaration": "C2pa",
+          "members": [
+            "worker",
+            "reader",
+            "builder",
+            "dispose"
+          ]
+        },
+        {
+          "declaration": "createC2pa",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-web/src/lib/reader.ts",
+      "exports": [
+        {
+          "declaration": "MAX_SIZE_IN_BYTES",
+          "members": []
+        },
+        {
+          "declaration": "Reader",
+          "members": [
+            "fromBlob",
+            "fromBlobFragment",
+            "activeLabel",
+            "manifestStore",
+            "activeManifest",
+            "json",
+            "crJson",
+            "resourceToBytes",
+            "free"
+          ]
+        },
+        {
+          "declaration": "ReaderFactory",
+          "members": [
+            "fromBlob",
+            "fromBlobFragment"
+          ]
+        },
+        {
+          "declaration": "createReaderFactory",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-web/src/lib/signer.ts",
+      "exports": [
+        {
+          "declaration": "export type { SigningAlg };",
+          "members": []
+        },
+        {
+          "declaration": "Signer",
+          "members": [
+            "sign",
+            "reserveSize",
+            "alg"
+          ]
+        },
+        {
+          "declaration": "SerializableSigningPayload",
+          "members": [
+            "reserveSize",
+            "alg"
+          ]
+        },
+        {
+          "declaration": "getSerializablePayload",
+          "members": []
+        },
+        {
+          "declaration": "HashedUri",
+          "members": [
+            "url",
+            "hash",
+            "alg"
+          ]
+        },
+        {
+          "declaration": "SignerPayload",
+          "members": [
+            "referencedAssertions",
+            "sigType",
+            "roles"
+          ]
+        },
+        {
+          "declaration": "CredentialHolder",
+          "members": [
+            "sigType",
+            "reserveSize",
+            "sign"
+          ]
+        },
+        {
+          "declaration": "IdentityAssertion",
+          "members": [
+            "credentialHolder",
+            "referencedAssertions",
+            "roles"
+          ]
+        },
+        {
+          "declaration": "SignOptions",
+          "members": [
+            "identityAssertions"
+          ]
+        },
+        {
+          "declaration": "SerializableIdentityAssertion",
+          "members": [
+            "requestId",
+            "sigType",
+            "reserveSize",
+            "referencedAssertions",
+            "roles"
+          ]
+        },
+        {
+          "declaration": "getSerializableIdentityAssertion",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-web/src/lib/worker/rpc.ts",
+      "exports": [
+        {
+          "declaration": "export { createTx, rx, createWorkerTx, workerRx };",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-web/src/lib/worker/sanitizeManifestStore.ts",
+      "exports": [
+        {
+          "declaration": "sanitizeManifestStore",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-web/src/lib/worker/workerManager.ts",
+      "exports": [
+        {
+          "declaration": "WorkerManager",
+          "members": [
+            "tx",
+            "registerSignReceiver",
+            "registerCredentialHolderReceiver",
+            "terminate"
+          ]
+        },
+        {
+          "declaration": "CreateWorkerManagerConfig",
+          "members": [
+            "wasm",
+            "workerSrc"
+          ]
+        },
+        {
+          "declaration": "validateWorkerSrc",
+          "members": []
+        },
+        {
+          "declaration": "createWorkerManager",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-web/src/lib/worker/workerObjectMap.ts",
+      "exports": [
+        {
+          "declaration": "WorkerObjectMap",
+          "members": [
+            "add",
+            "get",
+            "remove"
+          ]
+        },
+        {
+          "declaration": "createWorkerObjectMap",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-web/test/methods.ts",
+      "exports": [
+        {
+          "declaration": "export { test };",
+          "members": []
+        },
+        {
+          "declaration": "export { describe, expect } from 'vitest';",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-web/test/msw.ts",
+      "exports": [
+        {
+          "declaration": "worker",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-web/test/utils.ts",
+      "exports": [
+        {
+          "declaration": "getBlobForAsset",
+          "members": []
+        },
+        {
+          "declaration": "createTestSigner",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-node/js-src/assertions.ts",
+      "exports": [
+        {
+          "declaration": "isActionsAssertion",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-node/js-src/assetSize.ts",
+      "exports": [
+        {
+          "declaration": "MAX_SIZE_IN_BYTES",
+          "members": []
+        },
+        {
+          "declaration": "validateSourceAssetSize",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-node/js-src/binary.ts",
+      "exports": [
+        {
+          "declaration": "getNeonBinary",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-node/js-src/Builder.ts",
+      "exports": [
+        {
+          "declaration": "Builder",
+          "members": [
+            "constructor",
+            "new",
+            "newAsync",
+            "withJson",
+            "withJsonAsync",
+            "setIntent",
+            "setNoEmbed",
+            "setRemoteUrl",
+            "addAction",
+            "addAssertion",
+            "addResource",
+            "addIngredient",
+            "addIngredientFromReader",
+            "toArchive",
+            "fromArchive",
+            "sign",
+            "signFile",
+            "signConfigAsync",
+            "signAsync",
+            "getManifestDefinition",
+            "updateManifestProperty",
+            "addRedaction",
+            "filterActions",
+            "filterIngredients",
+            "filterActionsAndIngredients",
+            "updateActions",
+            "updateAssertion",
+            "getHandle"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-node/js-src/IdentityAssertion.ts",
+      "exports": [
+        {
+          "declaration": "IdentityAssertionBuilder",
+          "members": [
+            "constructor",
+            "identityBuilderForCredentialHolder",
+            "addReferencedAssertions",
+            "addRoles",
+            "builder"
+          ]
+        },
+        {
+          "declaration": "IdentityAssertionSigner",
+          "members": [
+            "constructor",
+            "new",
+            "addIdentityAssertion",
+            "getHandle"
+          ]
+        },
+        {
+          "declaration": "CallbackCredentialHolder",
+          "members": [
+            "constructor",
+            "getHandle",
+            "newCallbackCredentialHolder",
+            "sign",
+            "reserveSize",
+            "sigType"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-node/js-src/index.ts",
+      "exports": [
+        {
+          "declaration": "export type * from \"./types.d.ts\";",
+          "members": []
+        },
+        {
+          "declaration": "export { Builder } from \"./Builder.js\";",
+          "members": []
+        },
+        {
+          "declaration": "export { Reader } from \"./Reader.js\";",
+          "members": []
+        },
+        {
+          "declaration": "export { LocalSigner, CallbackSigner } from \"./Signer.js\";",
+          "members": []
+        },
+        {
+          "declaration": "export {\n  IdentityAssertionBuilder,\n  IdentityAssertionSigner,\n  CallbackCredentialHolder,\n} from \"./IdentityAssertion.js\";",
+          "members": []
+        },
+        {
+          "declaration": "export { Trustmark } from \"./Trustmark.js\";",
+          "members": []
+        },
+        {
+          "declaration": "export { isActionsAssertion } from \"./assertions.js\";",
+          "members": []
+        },
+        {
+          "declaration": "export { loadSettingsFromFile } from \"./Settings.js\";",
+          "members": []
+        },
+        {
+          "declaration": "export * from '@contentauth/c2pa-utilities';",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-node/js-src/Reader.ts",
+      "exports": [
+        {
+          "declaration": "Reader",
+          "members": [
+            "constructor",
+            "json",
+            "remoteUrl",
+            "isEmbedded",
+            "resourceToAsset",
+            "fromAsset",
+            "fromManifestDataAndAsset",
+            "activeLabel",
+            "getActive",
+            "getHandle"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-node/js-src/Settings.ts",
+      "exports": [
+        {
+          "declaration": "loadSettingsFromFile",
+          "members": []
+        },
+        {
+          "declaration": "resolveSettingsForNeon",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-node/js-src/Signer.ts",
+      "exports": [
+        {
+          "declaration": "LocalSigner",
+          "members": [
+            "constructor",
+            "newSigner",
+            "sign",
+            "alg",
+            "certs",
+            "reserveSize",
+            "timeAuthorityUrl",
+            "getHandle"
+          ]
+        },
+        {
+          "declaration": "CallbackSigner",
+          "members": [
+            "constructor",
+            "getHandle",
+            "newSigner",
+            "sign",
+            "alg",
+            "certs",
+            "reserveSize",
+            "timeAuthorityUrl",
+            "directCoseHandling"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-node/js-src/Trustmark.ts",
+      "exports": [
+        {
+          "declaration": "Trustmark",
+          "members": [
+            "constructor",
+            "newTrustmark",
+            "encode",
+            "decode"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-node/js-src/types.d.ts",
+      "exports": [
+        {
+          "declaration": "export type {\n  Action,\n  C2paReason,\n  Ingredient,\n  ManifestAssertionKind,\n} from \"@contentauth/c2pa-types\";",
+          "members": []
+        },
+        {
+          "declaration": "export type { SigningAlg } from \"@contentauth/c2pa-utilities\";",
+          "members": []
+        },
+        {
+          "declaration": "ClaimVersion",
+          "members": []
+        },
+        {
+          "declaration": "TrustmarkVersion",
+          "members": []
+        },
+        {
+          "declaration": "TrustmarkVariant",
+          "members": []
+        },
+        {
+          "declaration": "SourceBufferAsset",
+          "members": [
+            "buffer",
+            "mimeType"
+          ]
+        },
+        {
+          "declaration": "DestinationBufferAsset",
+          "members": [
+            "buffer"
+          ]
+        },
+        {
+          "declaration": "FileAsset",
+          "members": [
+            "path",
+            "mimeType"
+          ]
+        },
+        {
+          "declaration": "SourceAsset",
+          "members": []
+        },
+        {
+          "declaration": "DestinationAsset",
+          "members": []
+        },
+        {
+          "declaration": "ResourceAsset",
+          "members": []
+        },
+        {
+          "declaration": "LocalSignerInterface",
+          "members": [
+            "sign",
+            "alg",
+            "certs",
+            "reserveSize",
+            "timeAuthorityUrl",
+            "getHandle"
+          ]
+        },
+        {
+          "declaration": "CallbackSignerInterface",
+          "members": [
+            "sign",
+            "alg",
+            "certs",
+            "reserveSize",
+            "timeAuthorityUrl",
+            "directCoseHandling",
+            "getHandle"
+          ]
+        },
+        {
+          "declaration": "CallbackCredentialHolderInterface",
+          "members": [
+            "sigType",
+            "reserveSize",
+            "sign",
+            "getHandle"
+          ]
+        },
+        {
+          "declaration": "CallbackSignerConfig",
+          "members": []
+        },
+        {
+          "declaration": "NeonCallbackSignerHandle",
+          "members": []
+        },
+        {
+          "declaration": "NeonCallbackCredentialHolderHandle",
+          "members": []
+        },
+        {
+          "declaration": "NeonLocalSignerHandle",
+          "members": []
+        },
+        {
+          "declaration": "NeonBuilderHandle",
+          "members": []
+        },
+        {
+          "declaration": "NeonReaderHandle",
+          "members": []
+        },
+        {
+          "declaration": "NeonIdentityAssertionSignerHandle",
+          "members": []
+        },
+        {
+          "declaration": "NeonIdentityAssertionBuilderHandle",
+          "members": []
+        },
+        {
+          "declaration": "NeonTrustmarkHandle",
+          "members": []
+        },
+        {
+          "declaration": "JsCallbackSignerConfig",
+          "members": [
+            "alg",
+            "certs",
+            "reserveSize",
+            "tsaUrl",
+            "tsaHeaders",
+            "tsaBody",
+            "directCoseHandling"
+          ]
+        },
+        {
+          "declaration": "SignerPayload",
+          "members": [
+            "referencedAssertions",
+            "sigType",
+            "roles"
+          ]
+        },
+        {
+          "declaration": "HashedUri",
+          "members": [
+            "url",
+            "hash",
+            "alg"
+          ]
+        },
+        {
+          "declaration": "C2paSettings",
+          "members": []
+        },
+        {
+          "declaration": "BuilderInterface",
+          "members": [
+            "setIntent",
+            "setNoEmbed",
+            "setRemoteUrl",
+            "addAction",
+            "addAssertion",
+            "addResource",
+            "addIngredient",
+            "addIngredientFromReader",
+            "toArchive",
+            "sign",
+            "signConfigAsync",
+            "signAsync",
+            "signFile",
+            "getManifestDefinition",
+            "updateManifestProperty",
+            "addRedaction",
+            "filterActions",
+            "filterIngredients",
+            "filterActionsAndIngredients",
+            "updateActions",
+            "updateAssertion",
+            "getHandle"
+          ]
+        },
+        {
+          "declaration": "ReaderInterface",
+          "members": [
+            "json",
+            "remoteUrl",
+            "isEmbedded",
+            "resourceToAsset",
+            "getHandle"
+          ]
+        },
+        {
+          "declaration": "IdentityAssertionSignerInterface",
+          "members": [
+            "addIdentityAssertion",
+            "getHandle"
+          ]
+        },
+        {
+          "declaration": "IdentityAssertionBuilderInterface",
+          "members": [
+            "addReferencedAssertions",
+            "addRoles",
+            "builder"
+          ]
+        },
+        {
+          "declaration": "TrustmarkInterface",
+          "members": [
+            "encode",
+            "decode"
+          ]
+        },
+        {
+          "declaration": "TrustmarkConfig",
+          "members": [
+            "variant",
+            "version",
+            "modelPath"
+          ]
+        },
+        {
+          "declaration": "TrustConfig",
+          "members": []
+        },
+        {
+          "declaration": "VerifyConfig",
+          "members": []
+        },
+        {
+          "declaration": "SettingsContext",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-types/index.ts",
+      "exports": [
+        {
+          "declaration": "ManifestStore",
+          "members": []
+        },
+        {
+          "declaration": "export type {\n  Actor,\n  AssertionMetadata,\n  AssetType,\n  ClaimGeneratorInfo,\n  Coordinate,\n  DataSource,\n  DateT,\n  Frame,\n  HashedUri,\n  Ingredient,\n  IngredientDeltaValidationResult,\n  Item,\n  Manifest,\n  ManifestAssertion,\n  ManifestAssertionKind,\n  Range,\n  Reader,\n  RegionOfInterest,\n  ResourceRef,\n  ReviewRating,\n  Role,\n  Shape,\n  SignatureInfo,\n  StatusCodes,\n  Text,\n  TextSelector,\n  TextSelectorRange,\n  Time,\n  UriOrResource,\n  ValidationResults,\n  ValidationState,\n  ValidationStatus\n} from './types/ManifestStore.js';",
+          "members": []
+        },
+        {
+          "declaration": "export type { SigningAlgSchema as SigningAlg } from './types/ManifestStore.js';",
+          "members": []
+        },
+        {
+          "declaration": "export type {\n  AssertionDefinition,\n  ManifestDefinition\n} from './types/ManifestDefinition.js';",
+          "members": []
+        },
+        {
+          "declaration": "export type {\n  Builder,\n  BuilderIntent,\n  DigitalSourceType\n} from './types/Builder.js';",
+          "members": []
+        },
+        {
+          "declaration": "export type { Action } from './types/Action.js';",
+          "members": []
+        },
+        {
+          "declaration": "export type { C2PaReason as C2paReason } from './types/Action.js';",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-utilities/src/assetSize.ts",
+      "exports": [
+        {
+          "declaration": "DEFAULT_MAX_SIZE_IN_BYTES",
+          "members": []
+        },
+        {
+          "declaration": "AssetTooLargeError",
+          "members": [
+            "constructor"
+          ]
+        },
+        {
+          "declaration": "validateAssetSize",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-utilities/src/caseConversion.ts",
+      "exports": [
+        {
+          "declaration": "SettingsValue",
+          "members": []
+        },
+        {
+          "declaration": "SettingsObjectType",
+          "members": []
+        },
+        {
+          "declaration": "snakeCaseify",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-utilities/src/context.ts",
+      "exports": [
+        {
+          "declaration": "Context",
+          "members": [
+            "constructor",
+            "settings",
+            "toJson"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.ts",
+      "exports": [
+        {
+          "declaration": "DEFAULT_MAX_RESPONSE_BYTES",
+          "members": []
+        },
+        {
+          "declaration": "DEFAULT_MAX_RETRIES",
+          "members": []
+        },
+        {
+          "declaration": "DEFAULT_INITIAL_RETRY_DELAY_MS",
+          "members": []
+        },
+        {
+          "declaration": "DEFAULT_MAX_RETRY_DELAY_MS",
+          "members": []
+        },
+        {
+          "declaration": "DEFAULT_MAX_RETRY_AFTER_MS",
+          "members": []
+        },
+        {
+          "declaration": "defaultIsRetryableStatus",
+          "members": []
+        },
+        {
+          "declaration": "FetchWithRetryOptions",
+          "members": [
+            "maxResponseBytes",
+            "maxRetries",
+            "initialRetryDelayMs",
+            "maxRetryDelayMs",
+            "maxRetryAfterMs",
+            "isRetryableStatus",
+            "isRetryableError",
+            "fetch"
+          ]
+        },
+        {
+          "declaration": "fetchWithRetryRaw",
+          "members": []
+        },
+        {
+          "declaration": "fetchWithRetry",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-utilities/src/index.ts",
+      "exports": [
+        {
+          "declaration": "export * from './context.js';",
+          "members": []
+        },
+        {
+          "declaration": "export * from './settings.js';",
+          "members": []
+        },
+        {
+          "declaration": "export * from './fetchWithRetry.js';",
+          "members": []
+        },
+        {
+          "declaration": "export * from './caseConversion.js';",
+          "members": []
+        },
+        {
+          "declaration": "export * from './signingAlg.js';",
+          "members": []
+        },
+        {
+          "declaration": "export * from './assetSize.js';",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-utilities/src/settings.ts",
+      "exports": [
+        {
+          "declaration": "Settings",
+          "members": [
+            "trust",
+            "cawgTrust",
+            "verify",
+            "builder"
+          ]
+        },
+        {
+          "declaration": "TrustSettings",
+          "members": [
+            "userAnchors",
+            "trustAnchors",
+            "trustConfig",
+            "allowedList",
+            "verifyTrustList"
+          ]
+        },
+        {
+          "declaration": "VerifySettings",
+          "members": [
+            "verifyTrust",
+            "verifyAfterReading",
+            "verifyAfterSign",
+            "verifyTimestampTrust",
+            "ocspFetch",
+            "remoteManifestFetch",
+            "skipIngredientConflictResolution",
+            "strictV1Validation"
+          ]
+        },
+        {
+          "declaration": "BuilderSettings",
+          "members": [
+            "generateC2paArchive",
+            "thumbnail"
+          ]
+        },
+        {
+          "declaration": "DEFAULT_SETTINGS",
+          "members": []
+        },
+        {
+          "declaration": "withDefaultSettings",
+          "members": []
+        },
+        {
+          "declaration": "resolveSettings",
+          "members": []
+        },
+        {
+          "declaration": "createTrustSettings",
+          "members": []
+        },
+        {
+          "declaration": "createCawgTrustSettings",
+          "members": []
+        },
+        {
+          "declaration": "createVerifySettings",
+          "members": []
+        },
+        {
+          "declaration": "mergeSettings",
+          "members": []
+        },
+        {
+          "declaration": "settingsToJson",
+          "members": []
+        },
+        {
+          "declaration": "loadSettingsFromUrl",
+          "members": []
+        },
+        {
+          "declaration": "resolveTrustSettings",
+          "members": []
+        }
+      ]
+    },
+    {
+      "file": "packages/c2pa-utilities/src/signingAlg.ts",
+      "exports": [
+        {
+          "declaration": "SigningAlg",
+          "members": []
+        }
+      ]
+    }
+  ],
+  "publishedTypes": [
+    {
+      "file": "@contentauth/c2pa-web/dist/common.d.ts",
+      "sha256": "e3c45ebc180238b0a467d97628c1b7456661361f44c979ef7aa30d07ad4fe31b"
+    },
+    {
+      "file": "@contentauth/c2pa-web/dist/index.d.ts",
+      "sha256": "6f93a4d196761a7b3548e31c2c42d52b21d552823a26229e48d97fb4ec51a773"
+    },
+    {
+      "file": "@contentauth/c2pa-web/dist/inline.d.ts",
+      "sha256": "aa1de7662b9ce064076ef92efa12947c423f6e29a1b5e3b7957f1d6f6db15dcf"
+    },
+    {
+      "file": "@contentauth/c2pa-web/dist/lib/builder.d.ts",
+      "sha256": "c99867bc35781954d8a2735d5cfacf962dd22ccdc45b563c193ea85ca241731f"
+    },
+    {
+      "file": "@contentauth/c2pa-web/dist/lib/c2pa.d.ts",
+      "sha256": "4eafd8ed1d03f57e2c436c7cf1f009717706e470a1d06237daef4ed0806e2cd0"
+    },
+    {
+      "file": "@contentauth/c2pa-web/dist/lib/reader.d.ts",
+      "sha256": "ec20389aba35228e93c1d89b337792cabd0faa8b114be9efd5a3822d7dd172ec"
+    },
+    {
+      "file": "@contentauth/c2pa-web/dist/lib/signer.d.ts",
+      "sha256": "a4741d85ca008c9c55e0d4c1260d4cb524706db00bff7337d41f5a98baebb18e"
+    },
+    {
+      "file": "@contentauth/c2pa-web/dist/lib/worker/rpc.d.ts",
+      "sha256": "38a7eec85c239aaa23f31a9df1967368351afb7c50cb87f9c66b7a4fd196a5a8"
+    },
+    {
+      "file": "@contentauth/c2pa-web/dist/lib/worker/sanitizeManifestStore.d.ts",
+      "sha256": "e27750601f38674163dc40fbf471d43a24f8569f7a8c3a68ebb8a38d962cfee8"
+    },
+    {
+      "file": "@contentauth/c2pa-web/dist/lib/worker/workerManager.d.ts",
+      "sha256": "86bd549fc03be49fb1e4ef993e2d903a60406343f55516d52a19fa8e09534b4d"
+    },
+    {
+      "file": "@contentauth/c2pa-web/dist/lib/worker/workerObjectMap.d.ts",
+      "sha256": "3013bf82477d30b58d6afffeede7e97a9334b876529713620cdc2df005a9e1fb"
+    },
+    {
+      "file": "@contentauth/c2pa-web/dist/lib/worker.d.ts",
+      "sha256": "e68bb3856588c05b0a1744db4b4179b77552767ebeceaaf8132cd94fae5b049b"
+    },
+    {
+      "file": "@contentauth/c2pa-wasm/pkg/c2pa_bg.wasm.d.ts",
+      "sha256": "3e7537bab819ec2606be1d1d071771939465e5da5bb081b87af098cb1f204ced"
+    },
+    {
+      "file": "@contentauth/c2pa-wasm/pkg/c2pa.d.ts",
+      "sha256": "a5a55ca9aeae42558d1b15aa08d0b387e30088312f8326b5159333fa3338238f"
+    },
+    {
+      "file": "@contentauth/c2pa-utilities/dist/assetSize.d.ts",
+      "sha256": "86d4a743e8a71f45e818a40098fa465ae2fe432224a34f8c8ac56c4b06e09546"
+    },
+    {
+      "file": "@contentauth/c2pa-utilities/dist/caseConversion.d.ts",
+      "sha256": "d470d148f4a7d1012d8d81785c03b24b6cc4de3d9e8ef6b9ad29bd15b65df7ee"
+    },
+    {
+      "file": "@contentauth/c2pa-utilities/dist/context.d.ts",
+      "sha256": "cffa9d43b089bc6c256f40647087084e3f157e746087547a60ca93c7fe37648e"
+    },
+    {
+      "file": "@contentauth/c2pa-utilities/dist/fetchWithRetry.d.ts",
+      "sha256": "14f5d87198eb4a294882496e129f3b76006ad60090e70907e270f0b21585e83b"
+    },
+    {
+      "file": "@contentauth/c2pa-utilities/dist/index.d.ts",
+      "sha256": "d7a9c1fc753a4d600fc3d9b4254cffd12374931f2ed95b4889f3acc0d62a0f5d"
+    },
+    {
+      "file": "@contentauth/c2pa-utilities/dist/settings.d.ts",
+      "sha256": "09b24ba482eaae4a468dda38ca397d732e6cc66613c7ad93bcce08c8a4c06fe4"
+    },
+    {
+      "file": "@contentauth/c2pa-utilities/dist/signingAlg.d.ts",
+      "sha256": "e2472199a08c07f1864551247d4250dc8430ba6e371c7816b1e3df105e9d22cc"
+    },
+    {
+      "file": "@contentauth/c2pa-types/dist/index.d.ts",
+      "sha256": "00832f5d31533bf433994b8c9aeec8bc6eb6714071220051c812609b74988c19"
+    },
+    {
+      "file": "@contentauth/c2pa-types/dist/types/Action.d.ts",
+      "sha256": "ec8fb21f3fec8ab69053164daf9fa0b49c21ebb788d695945d8b0b4c905b6895"
+    },
+    {
+      "file": "@contentauth/c2pa-types/dist/types/Builder.d.ts",
+      "sha256": "3f4e8dd62325a5adb15edc80dc8a88cec50aec9e7ba2e04c35cfca489e656c34"
+    },
+    {
+      "file": "@contentauth/c2pa-types/dist/types/Ingredient.d.ts",
+      "sha256": "5ef9a07eb716495b9dd3e7d91c23d12d9e5855cff463a88f448f9ab12ee34d10"
+    },
+    {
+      "file": "@contentauth/c2pa-types/dist/types/ManifestDefinition.d.ts",
+      "sha256": "8f1f1491f63212312907f63bb745d7c6f38fb8e26275d367b44ad8f918066c82"
+    },
+    {
+      "file": "@contentauth/c2pa-types/dist/types/ManifestStore.d.ts",
+      "sha256": "20fdaa1f52ec5495adc0fb41b5b48c228f0d47662f647cf5be29b7823ed94f05"
+    }
+  ],
+  "snapshots": [
+    {
+      "file": "packages/c2pa-web/CHANGELOG.md",
+      "sha256": "6b3d5fa4c7e3d57a9beac6666c6f3f538996a1d37866a6640a99ba2de702c7eb"
+    },
+    {
+      "file": "packages/c2pa-web/eslint.config.mjs",
+      "sha256": "8818fb86e811fc2cd3de1e9536aecc235e31cf25b6ba126adbb5e52d2d51507d"
+    },
+    {
+      "file": "packages/c2pa-web/package.json",
+      "sha256": "7cf60063a2c3c85d536fea41cec24213e7e9b3019d5150f6afa3a112e81ddcb8"
+    },
+    {
+      "file": "packages/c2pa-web/project.json",
+      "sha256": "3bf956b5f8552af475f0688f750fefb86adec8cfbbd284ee918653ad36273f54"
+    },
+    {
+      "file": "packages/c2pa-web/README.md",
+      "sha256": "6ac0986d67f8433e6934a355e6338163699875300ea646bec112ba93514270e4"
+    },
+    {
+      "file": "packages/c2pa-web/src/common.ts",
+      "sha256": "c9ea2cd52f759107958a9afdd26e94dd19af79c7342e70d8861057ae49628596"
+    },
+    {
+      "file": "packages/c2pa-web/src/index.ts",
+      "sha256": "c46cad3d97c41497955e9b3b41e2b0ef5450724f1434ab352ae3c4851ab49ce7"
+    },
+    {
+      "file": "packages/c2pa-web/src/inline.spec.ts",
+      "sha256": "f75e03e7bded6d9740af8b981fda2bb493ca605d038f89b0bb374b5aa64dc0a4"
+    },
+    {
+      "file": "packages/c2pa-web/src/inline.ts",
+      "sha256": "d71d8b4fe14b1697d3e62a78b896057c86b10998a443687600d7ac80813c264b"
+    },
+    {
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "sha256": "81bbf000d7abf601464588818ac4520d1ebe0291addf252b4cf8a9dd20db413d"
+    },
+    {
+      "file": "packages/c2pa-web/src/lib/builder.ts",
+      "sha256": "4d76929351b760ec36e7fed4224bb052d2170220794beab09de342587d6a9fc2"
+    },
+    {
+      "file": "packages/c2pa-web/src/lib/c2pa.ts",
+      "sha256": "69a9a9033a4767d54d870c8148cd0ad31a03cb197c2ed90b994c29677bf83709"
+    },
+    {
+      "file": "packages/c2pa-web/src/lib/reader.spec.ts",
+      "sha256": "6c8664e7ad06cb777f9fe7832d3866445d86d89436fd901cccd15c8aa531f644"
+    },
+    {
+      "file": "packages/c2pa-web/src/lib/reader.ts",
+      "sha256": "ae9ab372f5ed40b522c7ee90b171c7d1f77bd9677c067b64bc9f351d2b22d581"
+    },
+    {
+      "file": "packages/c2pa-web/src/lib/signer.ts",
+      "sha256": "d0fc64c26848d627d1fce35304ecc23633538c9e52d49ecdce18387395b2fec1"
+    },
+    {
+      "file": "packages/c2pa-web/src/lib/worker/rpc.ts",
+      "sha256": "e8d9ba8da49d3af30b7f84323653deffbba635030b2026d90fc6f8c76cf28ab6"
+    },
+    {
+      "file": "packages/c2pa-web/src/lib/worker/sanitizeManifestStore.spec.ts",
+      "sha256": "4c09e4b93e19df1c3c3e6ef0349433a1179cf0d862e36eb0ae094464986865f2"
+    },
+    {
+      "file": "packages/c2pa-web/src/lib/worker/sanitizeManifestStore.ts",
+      "sha256": "5d093488cddcd1c12b2c35ef8e0f7e7708fcdff99357f92c111082c1db3b0630"
+    },
+    {
+      "file": "packages/c2pa-web/src/lib/worker/workerManager.ts",
+      "sha256": "31acb2e524a9c4fc2ea23892945fd4e4639f961780186e5ebe94f3ef85e587b0"
+    },
+    {
+      "file": "packages/c2pa-web/src/lib/worker/workerObjectMap.ts",
+      "sha256": "74f46f49df93237fb6f3a4c3ef956b54317975d81d90d435378fee7ad63ecec3"
+    },
+    {
+      "file": "packages/c2pa-web/src/lib/worker.ts",
+      "sha256": "ca665ac17e3d3ed8109d111221ec0998970b6a2914465d4c51e86b4d19c95fcc"
+    },
+    {
+      "file": "packages/c2pa-web/test/assets/C_with_CAWG_data_thumbnail.jpg",
+      "sha256": "c13676faf4036e8847f6bce61734376bf8c14fe5f1bc66ae85a2c3106e0fc300"
+    },
+    {
+      "file": "packages/c2pa-web/test/assets/C_with_CAWG_data.jpg",
+      "sha256": "fa0b257c863cb5b367135a017813ce0c1fbfc690a03e94acdd047c25c2d1ed46"
+    },
+    {
+      "file": "packages/c2pa-web/test/assets/C.jpg",
+      "sha256": "a2d14755db55de67a47c04090340d8266e892367be4104a45626d7a6fa6e9ffd"
+    },
+    {
+      "file": "packages/c2pa-web/test/assets/dash1.m4s",
+      "sha256": "6967526d29a85a1246c56850a20fa545cf900798e58492bb73cd34a229666e80"
+    },
+    {
+      "file": "packages/c2pa-web/test/assets/dashinit.mp4",
+      "sha256": "98932f75cc3f796ce77bbb3b7306c9e09756b099d7fd4335219eec73a9ea0bf8"
+    },
+    {
+      "file": "packages/c2pa-web/test/assets/no_alg.jpg",
+      "sha256": "7c91641416c18319b823c292ae603c5354892ac365c05543519154c48c6a1f8a"
+    },
+    {
+      "file": "packages/c2pa-web/test/assets/PirateShip_save_credentials_to_cloud.jpg",
+      "sha256": "54620b5f7b7bfd657f74732064ca3cb509f512072c1ee9bd03d5f3f1a0bc8d5f"
+    },
+    {
+      "file": "packages/c2pa-web/test/assets/sample1.jxl",
+      "sha256": "b73170a9a1b783b822deae84067b1ea93dfef8f455435e0216ceadb000b22b13"
+    },
+    {
+      "file": "packages/c2pa-web/test/manifests/C_with_CAWG_data_trusted.ts",
+      "sha256": "92e228cef91f75eaef8a2c836adaa34532a1ac8ce2023d3bf51ac19d2e23ad97"
+    },
+    {
+      "file": "packages/c2pa-web/test/manifests/C_with_CAWG_data_untrusted.ts",
+      "sha256": "7897b31f97d8297ae3ab6f486f78f8a4dac6e08d412aeff676c55ca8b0238c75"
+    },
+    {
+      "file": "packages/c2pa-web/test/manifests/C_with_CAWG_data.ts",
+      "sha256": "88f366fea08fd9876796e9a79ce4df17560ea67b72d6d2b88d36dba0743da256"
+    },
+    {
+      "file": "packages/c2pa-web/test/manifests/dashinit.ts",
+      "sha256": "df1b92bed3d82ca6affee221add25e50fd959020c2fac872447d5580e3bd486d"
+    },
+    {
+      "file": "packages/c2pa-web/test/methods.ts",
+      "sha256": "bf0d49f9637da38b4894fa24999bc7d14aaa72804ba540e1e7222c2dffb7faaa"
+    },
+    {
+      "file": "packages/c2pa-web/test/msw.ts",
+      "sha256": "711dd123fd1a2c1e8004dd81a50e1f6458455e6d365f066fc73f0d5dc6ec4441"
+    },
+    {
+      "file": "packages/c2pa-web/test/trust/anchor-cawg.pem",
+      "sha256": "2bcb6cdb1dad10fb518ddc0989e1953ba79092ff9ec6d0b366c34ebe42370d09"
+    },
+    {
+      "file": "packages/c2pa-web/test/trust/anchor-correct.pem",
+      "sha256": "c0e4156f9cefc9f8583b44e5a97b528cc0219e50331b382d83cc7cda58fc0cd9"
+    },
+    {
+      "file": "packages/c2pa-web/test/trust/anchor-incorrect.pem",
+      "sha256": "e48cade7f0b57bcf4097d2e2b7a69a9bbd4e29cab5f2e8e01560f4aac467bdb4"
+    },
+    {
+      "file": "packages/c2pa-web/test/utils.ts",
+      "sha256": "461b825fefb36ce6911f3c635ddc9a95e93cd56380a42a8bc30aaca922d20bc2"
+    },
+    {
+      "file": "packages/c2pa-web/tsconfig.json",
+      "sha256": "6e4663e5ad412ad67ddec8b06b488ba53cf8ea0e356dc959a7cba0434e7d0572"
+    },
+    {
+      "file": "packages/c2pa-web/tsconfig.lib.json",
+      "sha256": "4a8621ca08f0e83941baca9ab33eb9bbaf2ffb7beb02b1114d0dbef84befec40"
+    },
+    {
+      "file": "packages/c2pa-web/tsconfig.spec.json",
+      "sha256": "d9f3fcd7079437e11ea20aadb911c1dfe18f37f7a44da0ff0b5dd312b2d7540b"
+    },
+    {
+      "file": "packages/c2pa-web/typedoc.json",
+      "sha256": "3ac1a59b592a5b39de678a0170322c53baf533d71c2aabda1c8303597c24e500"
+    },
+    {
+      "file": "packages/c2pa-web/vite.config.ts",
+      "sha256": "21d4f65175d15370634694a4ec91fdceb520f6f28fc69f845638791dff3e35a2"
+    },
+    {
+      "file": "packages/c2pa-node/.gitignore",
+      "sha256": "585f9ffd08dfd875130d2cfa18b42a7b0e53ed07db9255303a68afd9cca5c3d0"
+    },
+    {
+      "file": "packages/c2pa-node/.npmignore",
+      "sha256": "d109a7e4ef388b2b8bca04d915865a623b7f85ad07779df9bbfb5123ffc382e0"
+    },
+    {
+      "file": "packages/c2pa-node/Cargo.toml",
+      "sha256": "b456c50c4c8b3c975f5bdf4b127f22a6f8c69a716f1f172a6e9f39c6e55416fe"
+    },
+    {
+      "file": "packages/c2pa-node/CHANGELOG.md",
+      "sha256": "3c47b3ca5ad14bd1f7438460d4b846d5a7def56caf779817c65ba58030cb156f"
+    },
+    {
+      "file": "packages/c2pa-node/eslint.config.cjs",
+      "sha256": "f7b4ec5b9009026e3e504a03ae137de1bba42954b784105c0dfac9ecca1e4336"
+    },
+    {
+      "file": "packages/c2pa-node/js-src/assertions.ts",
+      "sha256": "22e4f836629a10359393c09da8e6ad2911d7b5b76a8babd97c5f5bc6dfc9a9fd"
+    },
+    {
+      "file": "packages/c2pa-node/js-src/assetSize.ts",
+      "sha256": "cedc9eae3a61f3f9c71e8024c8263c173a3985a13e5b247d285a87da532da6f3"
+    },
+    {
+      "file": "packages/c2pa-node/js-src/binary.ts",
+      "sha256": "bb9a421ca4c700e2e1c7941324095cdbd5af0c5041757b1e31990954d1bd8604"
+    },
+    {
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "sha256": "ffe90a41123826229a1cfdf17f61e4ea8318389b1396a081163a753f989e1c52"
+    },
+    {
+      "file": "packages/c2pa-node/js-src/Builder.ts",
+      "sha256": "a39d48437aaaf2b04983a4741291b1acbd618751572e58df873d3fa36c8a9233"
+    },
+    {
+      "file": "packages/c2pa-node/js-src/IdentityAssertion.spec.ts",
+      "sha256": "b03f2aa1c698afe078e5ddf05b7abe4e5596f0054d29588d9246451531739b22"
+    },
+    {
+      "file": "packages/c2pa-node/js-src/IdentityAssertion.ts",
+      "sha256": "a5b7e7f9dce22e2a4068874f61ec3786f0248a4f8de82b2758f454b2056a8ea7"
+    },
+    {
+      "file": "packages/c2pa-node/js-src/index.node.d.ts",
+      "sha256": "ec096fb62107f974d5301386bdde1a03722b57d8762f31f353dddcfb0b1b2354"
+    },
+    {
+      "file": "packages/c2pa-node/js-src/index.ts",
+      "sha256": "a1dcc5ce5d8c6e6156e0d9146d3e5d43e66d491213f551e9790e3ca7bb13186f"
+    },
+    {
+      "file": "packages/c2pa-node/js-src/Reader.spec.ts",
+      "sha256": "bf0b14ab514e97b5018b5a635781fdcd166df543a29f4240600d666e45f97a23"
+    },
+    {
+      "file": "packages/c2pa-node/js-src/Reader.ts",
+      "sha256": "121e06ec7b5ccea6f8c93598372d960f592ae5eb86b5924d7cba9fd90f0ca97b"
+    },
+    {
+      "file": "packages/c2pa-node/js-src/Settings.spec.ts",
+      "sha256": "04595ac0f949c2519799991f655e72e0eb1d62f1deda3435a1f935e48e02ba3d"
+    },
+    {
+      "file": "packages/c2pa-node/js-src/Settings.ts",
+      "sha256": "f9099ada2b62987758cda93adedf49b1424cd3135c8c75f7657659faa7d4f694"
+    },
+    {
+      "file": "packages/c2pa-node/js-src/Signer.spec.ts",
+      "sha256": "be53be9070f36d4a6b5b5e921d001025f32b16b3b23bca3730c9df31a1b996ab"
+    },
+    {
+      "file": "packages/c2pa-node/js-src/Signer.ts",
+      "sha256": "1858cccc5df9dbcf93631fff23a42f2b2d13c71e972bc06280f1bd9ab5551e10"
+    },
+    {
+      "file": "packages/c2pa-node/js-src/Trustmark.spec.ts",
+      "sha256": "76c494c2bf266ff6a89f7ddd068d98fe6eb9208ae3b60cb73c1b4d1b5acaccdc"
+    },
+    {
+      "file": "packages/c2pa-node/js-src/Trustmark.ts",
+      "sha256": "03f402f0501cf1b2d264e117d002e22b01c8d1df015d147888c357bace587179"
+    },
+    {
+      "file": "packages/c2pa-node/js-src/types.d.ts",
+      "sha256": "6a6720f35d6ae090d39ddcacd11382ec8b57f3cc2cc1d03cb4db08b81b669d40"
+    },
+    {
+      "file": "packages/c2pa-node/package.json",
+      "sha256": "21a8fadef1b65475978c6cc44a3091f18937b36147b7acf436455f9bcbc8a5c5"
+    },
+    {
+      "file": "packages/c2pa-node/project.json",
+      "sha256": "0174cc07e329fbeca2e304d8a367fb062dd5ae8bdfeb87a1ea84169901272b5e"
+    },
+    {
+      "file": "packages/c2pa-node/README.md",
+      "sha256": "230791303a94fa436974c1b73573a7c852381c23013c011ba3a16118ba58f784"
+    },
+    {
+      "file": "packages/c2pa-node/scripts/postinstall.cjs",
+      "sha256": "1640c4af7cd661a4674abce95dc50433988e30c0f2b34950899d60779b81dbd2"
+    },
+    {
+      "file": "packages/c2pa-node/src/asset.rs",
+      "sha256": "924e59c3716bc3772fbdfe37770d7b8f40c1c478d97e243b3d8e78228526fdf0"
+    },
+    {
+      "file": "packages/c2pa-node/src/error.rs",
+      "sha256": "99f7097e89a2307e275a8d66e8890c34860ffa2e1051d54eaa42f0ece79f7d89"
+    },
+    {
+      "file": "packages/c2pa-node/src/lib.rs",
+      "sha256": "49d1d722eeec7349ea010707508a03067e13515e5d8fa4ad5c377eb4bc47b9c3"
+    },
+    {
+      "file": "packages/c2pa-node/src/neon_builder.rs",
+      "sha256": "7ec8f7b0cc073efb4c8ba5e9e1ba3c262a630954a76d9208c37d5b18378b832b"
+    },
+    {
+      "file": "packages/c2pa-node/src/neon_credential_holder.rs",
+      "sha256": "60058f95156cd7920f5d1f101a5937e96d9f3913fa897060706a495fee43a29f"
+    },
+    {
+      "file": "packages/c2pa-node/src/neon_identity_assertion_builder.rs",
+      "sha256": "269e2a84e4bb17c871014a0032b6e49f417721a194d53993c01bf92c91a76643"
+    },
+    {
+      "file": "packages/c2pa-node/src/neon_identity_assertion_signer.rs",
+      "sha256": "da117b93502a09b6d4dda848656cc1fa87555cf702df375f2bf14607956b65d9"
+    },
+    {
+      "file": "packages/c2pa-node/src/neon_reader.rs",
+      "sha256": "cbfcf1a30c98d2edf73b507b190ff97b1a4490214e26078c722adf2533ef6884"
+    },
+    {
+      "file": "packages/c2pa-node/src/neon_signer.rs",
+      "sha256": "6e382ac6f15ddaba3ed4ab0443f65c1f22ce9c4493a8c890dc4fd3e181275595"
+    },
+    {
+      "file": "packages/c2pa-node/src/neon_trustmark.rs",
+      "sha256": "12effc8ae00e6609efa75a8b87dfcbb84156d3b44e99b16e8d31202675b242b2"
+    },
+    {
+      "file": "packages/c2pa-node/src/runtime.rs",
+      "sha256": "30ef2090ad6a25425c5a8b52b80a74114cf93491ef6225337db0ed8026067070"
+    },
+    {
+      "file": "packages/c2pa-node/src/utils.rs",
+      "sha256": "736063d8c2ff4bee6901a53738b5e90e0cd561df4be472c5e76753491af35982"
+    },
+    {
+      "file": "packages/c2pa-node/tests/fixtures/A.jpg",
+      "sha256": "f999fd78bfe8a83c96e468a078830ba94485bc1bc6fd086fb94a43bd29dd0f23"
+    },
+    {
+      "file": "packages/c2pa-node/tests/fixtures/C_with_CAWG_data.jpg",
+      "sha256": "fa0b257c863cb5b367135a017813ce0c1fbfc690a03e94acdd047c25c2d1ed46"
+    },
+    {
+      "file": "packages/c2pa-node/tests/fixtures/CA/contentauth_urn_uuid_c2677d4b-0a93-4444-876f-ed2f2d40b8cf/c2pa.assertions/c2pa.thumbnail.claim.jpeg",
+      "sha256": "3bf6b42c65ef83a569e9f072c1fdc805feeb6d40ff553fe6eab035e43354a697"
+    },
+    {
+      "file": "packages/c2pa-node/tests/fixtures/CA/ingredient.json",
+      "sha256": "3033e84816899cd946e6156ea0908eeaff74e62745d01be3e28719782113d61d"
+    },
+    {
+      "file": "packages/c2pa-node/tests/fixtures/CA/manifest_data.c2pa",
+      "sha256": "d92a7c6e3ba9a7a41b0b96e7517edbc4b06da4ff60dc4845808fe45389d0bab9"
+    },
+    {
+      "file": "packages/c2pa-node/tests/fixtures/CA.jpg",
+      "sha256": "e71bff58fc57640803e6e65f7534e2fb0c2f99018c85276cc14b30f04427cc76"
+    },
+    {
+      "file": "packages/c2pa-node/tests/fixtures/certs/ed25519_root.pub_key",
+      "sha256": "84a8088c7c3758cc41d860c64358a20024492d24ee9f0607d5bc0eae06df49a7"
+    },
+    {
+      "file": "packages/c2pa-node/tests/fixtures/certs/ed25519.pem",
+      "sha256": "9603588a6670b967efaf3ea6a2853d1ec6c7c3d5ff1d66c235160722f92f25c3"
+    },
+    {
+      "file": "packages/c2pa-node/tests/fixtures/certs/ed25519.pub",
+      "sha256": "cfadf518b882a8a9f4dc2308ad093419866de92570bd8ed3ca1a58352e1279c3"
+    },
+    {
+      "file": "packages/c2pa-node/tests/fixtures/certs/es256_root.pub_key",
+      "sha256": "abcedd67a1a991c0c29bb4462b9bf1a68a8096b82d32ba521b641e57711bfe01"
+    },
+    {
+      "file": "packages/c2pa-node/tests/fixtures/certs/es256.pem",
+      "sha256": "f547ec8dbf24e50b51cf9924e58c250d246ed8844304408a072801fcf70a95d7"
+    },
+    {
+      "file": "packages/c2pa-node/tests/fixtures/certs/es256.pub",
+      "sha256": "2bf499037fd1fa7d803e3052c7b4ef6a0e67564aa2b805c0d7ae64d25a13c07b"
+    },
+    {
+      "file": "packages/c2pa-node/tests/fixtures/cloud.jpg",
+      "sha256": "e6ad9f51be5bb83f137322a3f260b5881738e3528aee208727e75b6daaba6092"
+    },
+    {
+      "file": "packages/c2pa-node/tests/fixtures/thumbnail.jpg",
+      "sha256": "f999fd78bfe8a83c96e468a078830ba94485bc1bc6fd086fb94a43bd29dd0f23"
+    },
+    {
+      "file": "packages/c2pa-node/tsconfig.json",
+      "sha256": "cd5220870edac6824cabbe1d73d595767ff50392270ad802fa9747b3bd298007"
+    },
+    {
+      "file": "packages/c2pa-node/typedoc.json",
+      "sha256": "8ba6d56edddf42089b84ac4158c4940ca4c9d2002362ab1716fd9d059e94589d"
+    },
+    {
+      "file": "packages/c2pa-node/vitest.config.ts",
+      "sha256": "c18cf5aa91f61e3619a3e9d5c3c469e0f9c12041fee567da4e1debcd2953a4e3"
+    },
+    {
+      "file": "packages/c2pa-types/.gitignore",
+      "sha256": "91d7c3ae4df35d826502a50259d232ff044574fad047b8b6bdde4a3134a074d3"
+    },
+    {
+      "file": "packages/c2pa-types/build.ts",
+      "sha256": "a8ec44da57046871191b48e291c14ae3ee38bd7fd82165a002b320f59bb3194c"
+    },
+    {
+      "file": "packages/c2pa-types/Cargo.toml",
+      "sha256": "5a1c978790b1db1c17d4aa1e14159ff77cbf75c5ea76b035a77dd89806577058"
+    },
+    {
+      "file": "packages/c2pa-types/CHANGELOG.md",
+      "sha256": "2fddda7b645ce0e13f44601bcf64e37c849f49fde58fb1597ee314617679bdaa"
+    },
+    {
+      "file": "packages/c2pa-types/index.ts",
+      "sha256": "a5cf711d55261fb2436e817fcef0469202ed565e738ff7b55ea7fddd60daf8ab"
+    },
+    {
+      "file": "packages/c2pa-types/package.json",
+      "sha256": "4a9c4e43300ca5d948492001eb10c1ebda5faaff09dd2e882c51eb8944b68928"
+    },
+    {
+      "file": "packages/c2pa-types/project.json",
+      "sha256": "a53a250b945e84429409b5e79b266a5d69dd7562ab564aa3cf2de682561ba2af"
+    },
+    {
+      "file": "packages/c2pa-types/README.md",
+      "sha256": "f662ef6a7cd5c11388f7c937118e83237e683777f42b15721e54e7143b96b2ef"
+    },
+    {
+      "file": "packages/c2pa-types/src/main.rs",
+      "sha256": "e429183131dbae3ff8237da33b1126bf2152704055174931f482592e039953b7"
+    },
+    {
+      "file": "packages/c2pa-types/tsconfig.json",
+      "sha256": "5b8e525d6ace87d50e996cfded11ef043a2d1c74dafa6031b201b2d7d2286a39"
+    },
+    {
+      "file": "packages/c2pa-types/typedoc.json",
+      "sha256": "a9297b1f50bc5008b7fa89d38c9086e0b0c2ceed90a3e2806d824c180e4b6f4f"
+    },
+    {
+      "file": "packages/c2pa-utilities/CHANGELOG.md",
+      "sha256": "3e730ba85d9e70ee8cc2159833b4cc88df1c117054a195aa2dd757e918c3ef2c"
+    },
+    {
+      "file": "packages/c2pa-utilities/package.json",
+      "sha256": "87f7f063ee406e58fe95db5a13fb4e08f3c19d0349075b954ab247413a655887"
+    },
+    {
+      "file": "packages/c2pa-utilities/README.md",
+      "sha256": "a610cfc3d12aeecfda1b3c4fb1a920612a055842d7fd8f0ca14833a1888ad206"
+    },
+    {
+      "file": "packages/c2pa-utilities/src/assetSize.spec.ts",
+      "sha256": "44d49d5ef2abafaa775b460a3f4e9d022d74e1ec0a211fd9ec268b96a3673860"
+    },
+    {
+      "file": "packages/c2pa-utilities/src/assetSize.ts",
+      "sha256": "71379187bd8a4b9cc7766f6d389dcff8edadd92e33abf63dbd275be82b62e587"
+    },
+    {
+      "file": "packages/c2pa-utilities/src/caseConversion.spec.ts",
+      "sha256": "1f7c4f7fb970748f16914be25948b8bbe7151fd88a5a8bffd415ac1adf9bc763"
+    },
+    {
+      "file": "packages/c2pa-utilities/src/caseConversion.ts",
+      "sha256": "cee97112d014805d7ca9b4fd006a16b2aef3bd1eca8009b7978e868e3e232023"
+    },
+    {
+      "file": "packages/c2pa-utilities/src/context.spec.ts",
+      "sha256": "301df50652f15d3e328ded6cedd62b6f5a0f2b39e6eae6c5ce9095a1e0c48c47"
+    },
+    {
+      "file": "packages/c2pa-utilities/src/context.ts",
+      "sha256": "49081d3b5a259465c01ede33ce3359126c5c2140831a4060aa484b8c731f9c56"
+    },
+    {
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "sha256": "aee7f41e0aac0c291a2904cb8f06beb592d48151fba7c380038e4c4bd15ca9dc"
+    },
+    {
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.ts",
+      "sha256": "6bb6730a674e265053bcbcba1502e09bac4aba1a4794d3ef8c94f646d295955f"
+    },
+    {
+      "file": "packages/c2pa-utilities/src/index.ts",
+      "sha256": "57b9e54b92855c022f0f398868cdc4e6a146370f00807393d474ed04cdcea9ce"
+    },
+    {
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "sha256": "a77f00f196a4fe957bf7bb7421be02070b23b523052ed97e67a8a8f2797bdecc"
+    },
+    {
+      "file": "packages/c2pa-utilities/src/settings.ts",
+      "sha256": "942fa4710562aab71610ace7fb22d9795a8cf855ec4d9df385739cf6777580da"
+    },
+    {
+      "file": "packages/c2pa-utilities/src/signingAlg.ts",
+      "sha256": "a660810d093b3c66a83f012880557ee82d74e55788e40f805778affc3d13c654"
+    },
+    {
+      "file": "packages/c2pa-utilities/tsconfig.json",
+      "sha256": "c4ff9aaf0065b83a010f774956beb3278379fd85388a02ece9db71164f840176"
+    },
+    {
+      "file": "packages/c2pa-utilities/tsconfig.lib.json",
+      "sha256": "35a80360a8568d6aa0a16107a9ca34649bdc83f32fbe8ac465967114dbd2b198"
+    },
+    {
+      "file": "packages/c2pa-utilities/tsconfig.spec.json",
+      "sha256": "5bf135e58196bc7b7f55f8e71a4e93e7f1c296fb972008ce767b0226a733c351"
+    },
+    {
+      "file": "packages/c2pa-utilities/vitest.config.ts",
+      "sha256": "4a4125cfd57995e88d659864cd5d0dfcedbefd6d698b6a410ae9739edc117b40"
+    }
+  ],
+  "tests": [
+    {
+      "id": "packages/c2pa-web/src/inline.spec.ts:19",
+      "file": "packages/c2pa-web/src/inline.spec.ts",
+      "line": 19,
+      "title": "should work",
+      "fullName": "inline entrypoint should work",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "skipIf"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:29",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 29,
+      "title": "should create a builder with a default manifest",
+      "fullName": "builder creation new should create a builder with a default manifest",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:42",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 42,
+      "title": "does not expose its internal worker/id via enumeration or serialization",
+      "fullName": "builder creation new does not expose its internal worker/id via enumeration or serialization",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:53",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 53,
+      "title": "should apply the given Context",
+      "fullName": "builder creation new should apply the given Context",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:76",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 76,
+      "title": "supports different Contexts for Builders created from the same c2pa instance",
+      "fullName": "builder creation new supports different Contexts for Builders created from the same c2pa instance",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:108",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 108,
+      "title": "should apply the given Context",
+      "fullName": "builder creation fromDefinition should apply the given Context",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:133",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 133,
+      "title": "should create a builder with the provided manifest definition",
+      "fullName": "builder creation manifestDefinition should create a builder with the provided manifest definition",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:159",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 159,
+      "title": "should apply the given Context",
+      "fullName": "builder creation fromArchive should apply the given Context",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:185",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 185,
+      "title": "should re-create a builder from an archive",
+      "fullName": "builder creation fromArchive should re-create a builder from an archive",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:217",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 217,
+      "title": "should re-create a builder from an archive with ingredient from blob",
+      "fullName": "builder creation fromArchive should re-create a builder from an archive with ingredient from blob",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:263",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 263,
+      "title": "should create a readable archive",
+      "fullName": "builder creation fromArchive should create a readable archive",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:336",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 336,
+      "title": "should add the provided actions",
+      "fullName": "builder methods addAction should add the provided actions",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:373",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 373,
+      "title": "should redact a thumbnail from an ingredient manifest",
+      "fullName": "builder methods addRedaction should redact a thumbnail from an ingredient manifest",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:411",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 411,
+      "title": "should redact an assertion from an ingredient manifest",
+      "fullName": "builder methods addRedaction should redact an assertion from an ingredient manifest",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:466",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 466,
+      "title": "should add the provided ingredient",
+      "fullName": "builder methods addIngredient should add the provided ingredient",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:489",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 489,
+      "title": "should add multiple ingredients",
+      "fullName": "builder methods addIngredient should add multiple ingredients",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:522",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 522,
+      "title": "should add ingredient from blob and archive for cloud-only file",
+      "fullName": "builder methods addIngredient should add ingredient from blob and archive for cloud-only file",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:547",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 547,
+      "title": "should add ingredient with custom metadata",
+      "fullName": "builder methods addIngredient should add ingredient with custom metadata",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:577",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 577,
+      "title": "invokes the predicate for each action and honors its return",
+      "fullName": "builder methods filterActions invokes the predicate for each action and honors its return",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:615",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 615,
+      "title": "preserves flat order across multiple actions assertions",
+      "fullName": "builder methods filterActions preserves flat order across multiple actions assertions",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:684",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 684,
+      "title": "surfaces an error thrown by the predicate",
+      "fullName": "builder methods filterActions surfaces an error thrown by the predicate",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:698",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 698,
+      "title": "updates each exact label match without changing its metadata or order",
+      "fullName": "builder methods updateAssertion updates each exact label match without changing its metadata or order",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:727",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 727,
+      "title": "leaves the builder unchanged if a later transform throws",
+      "fullName": "builder methods updateAssertion leaves the builder unchanged if a later transform throws",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:755",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 755,
+      "title": "does not invoke the callback for a missing label",
+      "fullName": "builder methods updateAssertion does not invoke the callback for a missing label",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:768",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 768,
+      "title": "skips null and undefined results while applying other updates",
+      "fullName": "builder methods updateAssertion skips null and undefined results while applying other updates",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:790",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 790,
+      "title": "preserves JSON and CBOR kinds when signing updated assertions",
+      "fullName": "builder methods updateAssertion preserves JSON and CBOR kinds when signing updated assertions",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:841",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 841,
+      "title": "patches a parameter on an existing action, preserving every actions assertion",
+      "fullName": "builder methods updateActions patches a parameter on an existing action, preserving every actions assertion",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:910",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 910,
+      "title": "adds a new parameter alongside the existing ones",
+      "fullName": "builder methods updateActions adds a new parameter alongside the existing ones",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:988",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 988,
+      "title": "is no-op when there is no actions assertion",
+      "fullName": "builder methods updateActions is no-op when there is no actions assertion",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:1014",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 1014,
+      "title": "drops an assertion whose transform returns an empty list",
+      "fullName": "builder methods updateActions drops an assertion whose transform returns an empty list",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:1062",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 1062,
+      "title": "preserves per-assertion metadata across a round trip",
+      "fullName": "builder methods updateActions preserves per-assertion metadata across a round trip",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:1110",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 1110,
+      "title": "preserves action order when transform patches in place",
+      "fullName": "builder methods updateActions preserves action order when transform patches in place",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:1143",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 1143,
+      "title": "surfaces an error thrown by transform",
+      "fullName": "builder methods updateActions surfaces an error thrown by transform",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:1154",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 1154,
+      "title": "preserves allActionsIncluded/softwareAgents/templates/metadata not seen by transform",
+      "fullName": "builder methods updateActions preserves allActionsIncluded/softwareAgents/templates/metadata not seen by transform",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:1206",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 1206,
+      "title": "invokes the predicate and prunes ingredients it does not rescue",
+      "fullName": "builder methods filterIngredients invokes the predicate and prunes ingredients it does not rescue",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:1232",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 1232,
+      "title": "surfaces an error thrown by the predicate",
+      "fullName": "builder methods filterIngredients surfaces an error thrown by the predicate",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:1250",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 1250,
+      "title": "should sign a jxl asset and read back the signed result",
+      "fullName": "builder methods sign JXL file, then read it back should sign a jxl asset and read back the signed result",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:1286",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 1286,
+      "title": "invokes the credential holder sign with the expected SignerPayload shape, signs successfully, and embeds a cawg.identity assertion",
+      "fullName": "builder methods sign with a CAWG identity assertion invokes the credential holder sign with the expected SignerPayload shape, signs successfully, and embeds a cawg.identity assertion",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:1354",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 1354,
+      "title": "rejects a reserveSize too small for the id assertion (does not poison the worker)",
+      "fullName": "builder methods sign with a CAWG identity assertion rejects a reserveSize too small for the id assertion (does not poison the worker)",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:1400",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 1400,
+      "title": "creates a Builder via c2pa.builder.new",
+      "fullName": "builder BuilderFactory (deprecated) creates a Builder via c2pa.builder.new",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:1411",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 1411,
+      "title": "creates a Builder via c2pa.builder.fromDefinition",
+      "fullName": "builder BuilderFactory (deprecated) creates a Builder via c2pa.builder.fromDefinition",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:1427",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 1427,
+      "title": "creates a Builder via c2pa.builder.fromArchive",
+      "fullName": "builder BuilderFactory (deprecated) creates a Builder via c2pa.builder.fromArchive",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/builder.spec.ts:1443",
+      "file": "packages/c2pa-web/src/lib/builder.spec.ts",
+      "line": 1443,
+      "title": "merges per-call settings over the top-level settings passed to createC2pa, with per-call taking precedence",
+      "fullName": "builder BuilderFactory (deprecated) merges per-call settings over the top-level settings passed to createC2pa, with per-call taking precedence",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/reader.spec.ts:40",
+      "file": "packages/c2pa-web/src/lib/reader.spec.ts",
+      "line": 40,
+      "title": "should return c2pa data when created from a blob",
+      "fullName": "reader creation fromBlob should return c2pa data when created from a blob",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/reader.spec.ts:54",
+      "file": "packages/c2pa-web/src/lib/reader.spec.ts",
+      "line": 54,
+      "title": "should return null when reading an asset with no C2PA data",
+      "fullName": "reader creation fromBlob should return null when reading an asset with no C2PA data",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/reader.spec.ts:64",
+      "file": "packages/c2pa-web/src/lib/reader.spec.ts",
+      "line": 64,
+      "title": "should throw AssetTooLargeError when the blob exceeds the max size",
+      "fullName": "reader creation fromBlob should throw AssetTooLargeError when the blob exceeds the max size",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/reader.spec.ts:77",
+      "file": "packages/c2pa-web/src/lib/reader.spec.ts",
+      "line": 77,
+      "title": "should detect the format from the blob bytes when format is omitted",
+      "fullName": "reader creation fromBlob should detect the format from the blob bytes when format is omitted",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/reader.spec.ts:91",
+      "file": "packages/c2pa-web/src/lib/reader.spec.ts",
+      "line": 91,
+      "title": "should apply the given Context",
+      "fullName": "reader creation fromBlob should apply the given Context",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/reader.spec.ts:124",
+      "file": "packages/c2pa-web/src/lib/reader.spec.ts",
+      "line": 124,
+      "title": "supports different Contexts for Readers created from the same c2pa instance",
+      "fullName": "reader creation fromBlob supports different Contexts for Readers created from the same c2pa instance",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/reader.spec.ts:164",
+      "file": "packages/c2pa-web/src/lib/reader.spec.ts",
+      "line": 164,
+      "title": "does not re-resolve the same Context on repeated fromBlob calls",
+      "fullName": "reader creation fromBlob does not re-resolve the same Context on repeated fromBlob calls",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/reader.spec.ts:185",
+      "file": "packages/c2pa-web/src/lib/reader.spec.ts",
+      "line": 185,
+      "title": "should return c2pa data from an initial segment and fragment",
+      "fullName": "reader creation fromBlobFragment should return c2pa data from an initial segment and fragment",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/reader.spec.ts:205",
+      "file": "packages/c2pa-web/src/lib/reader.spec.ts",
+      "line": 205,
+      "title": "should return null when reading an initial fragment with no C2PA data",
+      "fullName": "reader creation fromBlobFragment should return null when reading an initial fragment with no C2PA data",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/reader.spec.ts:221",
+      "file": "packages/c2pa-web/src/lib/reader.spec.ts",
+      "line": 221,
+      "title": "should throw AssetTooLargeError when the init blob exceeds the max size",
+      "fullName": "reader creation fromBlobFragment should throw AssetTooLargeError when the init blob exceeds the max size",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/reader.spec.ts:235",
+      "file": "packages/c2pa-web/src/lib/reader.spec.ts",
+      "line": 235,
+      "title": "should throw AssetTooLargeError when the fragment blob exceeds the max size",
+      "fullName": "reader creation fromBlobFragment should throw AssetTooLargeError when the fragment blob exceeds the max size",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/reader.spec.ts:253",
+      "file": "packages/c2pa-web/src/lib/reader.spec.ts",
+      "line": 253,
+      "title": "should return an embedded thumbnail",
+      "fullName": "reader methods resourceToBytes should return an embedded thumbnail",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/reader.spec.ts:280",
+      "file": "packages/c2pa-web/src/lib/reader.spec.ts",
+      "line": 280,
+      "title": "should return the asset's active manifest",
+      "fullName": "reader methods activeManifest should return the asset's active manifest",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/reader.spec.ts:302",
+      "file": "packages/c2pa-web/src/lib/reader.spec.ts",
+      "line": 302,
+      "title": "should report c2pa-rs errors correctly",
+      "fullName": "reader errors should report c2pa-rs errors correctly",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/reader.spec.ts:313",
+      "file": "packages/c2pa-web/src/lib/reader.spec.ts",
+      "line": 313,
+      "title": "should report a trusted asset when when configured to verify trust",
+      "fullName": "reader should report a trusted asset when when configured to verify trust",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/reader.spec.ts:339",
+      "file": "packages/c2pa-web/src/lib/reader.spec.ts",
+      "line": 339,
+      "title": "should report an untrusted asset when configured to verify trust",
+      "fullName": "reader should report an untrusted asset when configured to verify trust",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/reader.spec.ts:362",
+      "file": "packages/c2pa-web/src/lib/reader.spec.ts",
+      "line": 362,
+      "title": "should report a \"valid\" (not \"trusted\") asset when trust settings are disabled",
+      "fullName": "reader should report a \"valid\" (not \"trusted\") asset when trust settings are disabled",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/reader.spec.ts:385",
+      "file": "packages/c2pa-web/src/lib/reader.spec.ts",
+      "line": 385,
+      "title": "should fetch the remote manifest",
+      "fullName": "reader should fetch the remote manifest",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/reader.spec.ts:408",
+      "file": "packages/c2pa-web/src/lib/reader.spec.ts",
+      "line": 408,
+      "title": "should be freeable",
+      "fullName": "reader should be freeable",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/reader.spec.ts:420",
+      "file": "packages/c2pa-web/src/lib/reader.spec.ts",
+      "line": 420,
+      "title": "does not expose its internal worker/id via enumeration or serialization",
+      "fullName": "reader does not expose its internal worker/id via enumeration or serialization",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/reader.spec.ts:436",
+      "file": "packages/c2pa-web/src/lib/reader.spec.ts",
+      "line": 436,
+      "title": "creates a Reader via c2pa.reader.fromBlob",
+      "fullName": "reader ReaderFactory (deprecated) creates a Reader via c2pa.reader.fromBlob",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/reader.spec.ts:448",
+      "file": "packages/c2pa-web/src/lib/reader.spec.ts",
+      "line": 448,
+      "title": "creates a Reader via c2pa.reader.fromBlobFragment",
+      "fullName": "reader ReaderFactory (deprecated) creates a Reader via c2pa.reader.fromBlobFragment",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/reader.spec.ts:467",
+      "file": "packages/c2pa-web/src/lib/reader.spec.ts",
+      "line": 467,
+      "title": "merges per-call settings over the top-level settings passed to createC2pa, with per-call taking precedence",
+      "fullName": "reader ReaderFactory (deprecated) merges per-call settings over the top-level settings passed to createC2pa, with per-call taking precedence",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/worker/sanitizeManifestStore.spec.ts:14",
+      "file": "packages/c2pa-web/src/lib/worker/sanitizeManifestStore.spec.ts",
+      "line": 14,
+      "title": "returns the store unchanged when store is nullish",
+      "fullName": "sanitizeManifestStore returns the store unchanged when store is nullish",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/worker/sanitizeManifestStore.spec.ts:19",
+      "file": "packages/c2pa-web/src/lib/worker/sanitizeManifestStore.spec.ts",
+      "line": 19,
+      "title": "rebuilds manifests as a null-prototype object for normal labels",
+      "fullName": "sanitizeManifestStore rebuilds manifests as a null-prototype object for normal labels",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/worker/sanitizeManifestStore.spec.ts:32",
+      "file": "packages/c2pa-web/src/lib/worker/sanitizeManifestStore.spec.ts",
+      "line": 32,
+      "title": "recovers a manifest displaced into the prototype chain by a \"__proto__\" label",
+      "fullName": "sanitizeManifestStore recovers a manifest displaced into the prototype chain by a \"__proto__\" label",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/worker/sanitizeManifestStore.spec.ts:55",
+      "file": "packages/c2pa-web/src/lib/worker/sanitizeManifestStore.spec.ts",
+      "line": 55,
+      "title": "preserves sibling manifests alongside a recovered \"__proto__\" manifest",
+      "fullName": "sanitizeManifestStore preserves sibling manifests alongside a recovered \"__proto__\" manifest",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-web/src/lib/worker/sanitizeManifestStore.spec.ts:69",
+      "file": "packages/c2pa-web/src/lib/worker/sanitizeManifestStore.spec.ts",
+      "line": 69,
+      "title": "does not clobber the active manifest when the \"__proto__\"-labeled manifest is not active",
+      "fullName": "sanitizeManifestStore does not clobber the active manifest when the \"__proto__\"-labeled manifest is not active",
+      "platform": "browser",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:57",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 57,
+      "title": "should sign data",
+      "fullName": "TestSigner should sign data",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:138",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 138,
+      "title": "should build a manifest store",
+      "fullName": "Builder should build a manifest store",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:208",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 208,
+      "title": "should sign data",
+      "fullName": "Builder Sign and Archive should sign data",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:226",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 226,
+      "title": "should add a CBOR assertion, sign, and verify it in the signed manifest",
+      "fullName": "Builder Sign and Archive should add a CBOR assertion, sign, and verify it in the signed manifest",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:257",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 257,
+      "title": "should archive and construct from archive",
+      "fullName": "Builder Sign and Archive should archive and construct from archive",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:282",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 282,
+      "title": "should populate buffer when archiving to buffer",
+      "fullName": "Builder Sign and Archive should populate buffer when archiving to buffer",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:291",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 291,
+      "title": "should write archive to file",
+      "fullName": "Builder Sign and Archive should write archive to file",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:302",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 302,
+      "title": "should construct reader directly from builder archive buffer",
+      "fullName": "Builder Sign and Archive should construct reader directly from builder archive buffer",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:351",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 351,
+      "title": "should sign data with callback to file",
+      "fullName": "Builder Sign and Archive should sign data with callback to file",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:383",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 383,
+      "title": "should sign data with callback to buffer",
+      "fullName": "Builder Sign and Archive should sign data with callback to buffer",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:418",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 418,
+      "title": "should sign data with callback signer to buffer",
+      "fullName": "Builder Sign and Archive should sign data with callback signer to buffer",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:449",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 449,
+      "title": "should preserve JSON assertion characters without escaping",
+      "fullName": "Builder Sign and Archive should preserve JSON assertion characters without escaping",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:496",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 496,
+      "title": "should archive and restore builder with ingredient thumbnail",
+      "fullName": "Builder Sign and Archive should archive and restore builder with ingredient thumbnail",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:562",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 562,
+      "title": "should add ingredient with custom metadata",
+      "fullName": "Builder Sign and Archive should add ingredient with custom metadata",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:587",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 587,
+      "title": "should redact a thumbnail from an ingredient manifest",
+      "fullName": "Builder Sign and Archive should redact a thumbnail from an ingredient manifest",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:655",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 655,
+      "title": "should redact an assertion from an ingredient manifest",
+      "fullName": "Builder Sign and Archive should redact an assertion from an ingredient manifest",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:744",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 744,
+      "title": "should add redactions via addRedaction method",
+      "fullName": "Builder Sign and Archive should add redactions via addRedaction method",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:755",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 755,
+      "title": "should test builder remote url",
+      "fullName": "Builder Sign and Archive should test builder remote url",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:831",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 831,
+      "title": "should add action using addAction method",
+      "fullName": "Builder Sign and Archive should add action using addAction method",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:882",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 882,
+      "title": "should add ingredient using addIngredient method",
+      "fullName": "Builder Sign and Archive should add ingredient using addIngredient method",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:939",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 939,
+      "title": "should add ingredient from reader",
+      "fullName": "Builder Sign and Archive should add ingredient from reader",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:985",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 985,
+      "title": "newAsync() with no context behaves like new()",
+      "fullName": "Builder Context newAsync() with no context behaves like new()",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:991",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 991,
+      "title": "newAsync(context) applies the Context's settings",
+      "fullName": "Builder Context newAsync(context) applies the Context's settings",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:1018",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 1018,
+      "title": "withJsonAsync(json, context) applies the Context's settings",
+      "fullName": "Builder Context withJsonAsync(json, context) applies the Context's settings",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:1052",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 1052,
+      "title": "fromArchive(asset, context) accepts a Context in place of the deprecated raw settings",
+      "fullName": "Builder Context fromArchive(asset, context) accepts a Context in place of the deprecated raw settings",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:1104",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 1104,
+      "title": "filterActions keeps the inception action and drops excluded actions",
+      "fullName": "Builder Filter actions and ingredients filterActions keeps the inception action and drops excluded actions",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:1124",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 1124,
+      "title": "filterActions surfaces an error thrown by the predicate",
+      "fullName": "Builder Filter actions and ingredients filterActions surfaces an error thrown by the predicate",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:1136",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 1136,
+      "title": "filterActions surfaces a non-boolean predicate return",
+      "fullName": "Builder Filter actions and ingredients filterActions surfaces a non-boolean predicate return",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:1144",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 1144,
+      "title": "filterIngredients prunes orphans and passes provenance to the predicate",
+      "fullName": "Builder Filter actions and ingredients filterIngredients prunes orphans and passes provenance to the predicate",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:1189",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 1189,
+      "title": "filterIngredients surfaces an error thrown by the predicate",
+      "fullName": "Builder Filter actions and ingredients filterIngredients surfaces an error thrown by the predicate",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:1212",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 1212,
+      "title": "filterActionsAndIngredients rescues an edited action for a kept ingredient",
+      "fullName": "Builder Filter actions and ingredients filterActionsAndIngredients rescues an edited action for a kept ingredient",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:1266",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 1266,
+      "title": "filterActionsAndIngredients drops unreferenced and unrescued",
+      "fullName": "Builder Filter actions and ingredients filterActionsAndIngredients drops unreferenced and unrescued",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:1296",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 1296,
+      "title": "filterActionsAndIngredients surfaces an error thrown by either predicate",
+      "fullName": "Builder Filter actions and ingredients filterActionsAndIngredients surfaces an error thrown by either predicate",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:1308",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 1308,
+      "title": "updateAssertion updates exact label matches in order and preserves metadata",
+      "fullName": "Builder Filter actions and ingredients updateAssertion updates exact label matches in order and preserves metadata",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:1332",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 1332,
+      "title": "updateAssertion preserves JSON and CBOR kinds when signing",
+      "fullName": "Builder Filter actions and ingredients updateAssertion preserves JSON and CBOR kinds when signing",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:1370",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 1370,
+      "title": "updateAssertion skips null and undefined results without dropping other updates",
+      "fullName": "Builder Filter actions and ingredients updateAssertion skips null and undefined results without dropping other updates",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:1388",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 1388,
+      "title": "updateAssertion is atomic on callback failure and ignores missing labels",
+      "fullName": "Builder Filter actions and ingredients updateAssertion is atomic on callback failure and ignores missing labels",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:1422",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 1422,
+      "title": "updateActions patches a parameter on an existing action",
+      "fullName": "Builder Filter actions and ingredients updateActions patches a parameter on an existing action",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:1452",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 1452,
+      "title": "updateActions adds a new parameter alongside the existing ones",
+      "fullName": "Builder Filter actions and ingredients updateActions adds a new parameter alongside the existing ones",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:1491",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 1491,
+      "title": "updateActions is no-op when there is no actions assertion",
+      "fullName": "Builder Filter actions and ingredients updateActions is no-op when there is no actions assertion",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:1516",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 1516,
+      "title": "updateActions drops an assertion whose transform returns an empty list",
+      "fullName": "Builder Filter actions and ingredients updateActions drops an assertion whose transform returns an empty list",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:1560",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 1560,
+      "title": "updateActions rewrites every actions assertion under its own label",
+      "fullName": "Builder Filter actions and ingredients updateActions rewrites every actions assertion under its own label",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:1613",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 1613,
+      "title": "updateActions preserves the created flag",
+      "fullName": "Builder Filter actions and ingredients updateActions preserves the created flag",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:1656",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 1656,
+      "title": "updateActions produces a signable manifest",
+      "fullName": "Builder Filter actions and ingredients updateActions produces a signable manifest",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:1699",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 1699,
+      "title": "updateActions preserves action order when transform patches in place",
+      "fullName": "Builder Filter actions and ingredients updateActions preserves action order when transform patches in place",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:1725",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 1725,
+      "title": "updateActions surfaces an error thrown by transform",
+      "fullName": "Builder Filter actions and ingredients updateActions surfaces an error thrown by transform",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Builder.spec.ts:1734",
+      "file": "packages/c2pa-node/js-src/Builder.spec.ts",
+      "line": 1734,
+      "title": "updateActions preserves allActionsIncluded/softwareAgents/templates/metadata not seen by transform",
+      "fullName": "Builder Filter actions and ingredients updateActions preserves allActionsIncluded/softwareAgents/templates/metadata not seen by transform",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/IdentityAssertion.spec.ts:110",
+      "file": "packages/c2pa-node/js-src/IdentityAssertion.spec.ts",
+      "line": 110,
+      "title": "should build an Identity Assertion Signer",
+      "fullName": "IdentityAssertionBuilder should build an Identity Assertion Signer",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/IdentityAssertion.spec.ts:192",
+      "file": "packages/c2pa-node/js-src/IdentityAssertion.spec.ts",
+      "line": 192,
+      "title": "returns reserveSize and sigType set on the constructor",
+      "fullName": "CallbackCredentialHolder accessors returns reserveSize and sigType set on the constructor",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/IdentityAssertion.spec.ts:205",
+      "file": "packages/c2pa-node/js-src/IdentityAssertion.spec.ts",
+      "line": 205,
+      "title": "signs a payload through the callback set",
+      "fullName": "CallbackCredentialHolder accessors signs a payload through the callback set",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/IdentityAssertion.spec.ts:330",
+      "file": "packages/c2pa-node/js-src/IdentityAssertion.spec.ts",
+      "line": 330,
+      "title": "rejects a reserveSize too small for the identity assertion",
+      "fullName": "handles reserveSize rejects a reserveSize too small for the identity assertion",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/IdentityAssertion.spec.ts:336",
+      "file": "packages/c2pa-node/js-src/IdentityAssertion.spec.ts",
+      "line": 336,
+      "title": "rejects a reserveSize overflowing into padding",
+      "fullName": "handles reserveSize rejects a reserveSize overflowing into padding",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/IdentityAssertion.spec.ts:340",
+      "file": "packages/c2pa-node/js-src/IdentityAssertion.spec.ts",
+      "line": 340,
+      "title": "signs with a large reserveSize",
+      "fullName": "handles reserveSize signs with a large reserveSize",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Reader.spec.ts:122",
+      "file": "packages/c2pa-node/js-src/Reader.spec.ts",
+      "line": 122,
+      "title": "should read from an ArrayBuffer",
+      "fullName": "Reader should read from an ArrayBuffer",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Reader.spec.ts:135",
+      "file": "packages/c2pa-node/js-src/Reader.spec.ts",
+      "line": 135,
+      "title": "should read from an ArrayBuffer with no mimeType by detecting the format from its bytes",
+      "fullName": "Reader should read from an ArrayBuffer with no mimeType by detecting the format from its bytes",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Reader.spec.ts:145",
+      "file": "packages/c2pa-node/js-src/Reader.spec.ts",
+      "line": 145,
+      "title": "should read from a file",
+      "fullName": "Reader should read from a file",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Reader.spec.ts:155",
+      "file": "packages/c2pa-node/js-src/Reader.spec.ts",
+      "line": 155,
+      "title": "should read from a file with an unrecognized extension by detecting the format from its bytes",
+      "fullName": "Reader should read from a file with an unrecognized extension by detecting the format from its bytes",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Reader.spec.ts:167",
+      "file": "packages/c2pa-node/js-src/Reader.spec.ts",
+      "line": 167,
+      "title": "should return null for a file without C2PA data",
+      "fullName": "Reader should return null for a file without C2PA data",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Reader.spec.ts:174",
+      "file": "packages/c2pa-node/js-src/Reader.spec.ts",
+      "line": 174,
+      "title": "should throw AssetTooLargeError for a file asset exceeding the max size",
+      "fullName": "Reader should throw AssetTooLargeError for a file asset exceeding the max size",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Reader.spec.ts:184",
+      "file": "packages/c2pa-node/js-src/Reader.spec.ts",
+      "line": 184,
+      "title": "should read from manifest data and buffer",
+      "fullName": "Reader should read from manifest data and buffer",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Reader.spec.ts:198",
+      "file": "packages/c2pa-node/js-src/Reader.spec.ts",
+      "line": 198,
+      "title": "should read from manifest data and file",
+      "fullName": "Reader should read from manifest data and file",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Reader.spec.ts:212",
+      "file": "packages/c2pa-node/js-src/Reader.spec.ts",
+      "line": 212,
+      "title": "should read from manifest data and file with settings context",
+      "fullName": "Reader should read from manifest data and file with settings context",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Reader.spec.ts:245",
+      "file": "packages/c2pa-node/js-src/Reader.spec.ts",
+      "line": 245,
+      "title": "should read from manifest data and file with a Context",
+      "fullName": "Reader should read from manifest data and file with a Context",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Reader.spec.ts:278",
+      "file": "packages/c2pa-node/js-src/Reader.spec.ts",
+      "line": 278,
+      "title": "should write to a file",
+      "fullName": "Reader should write to a file",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Reader.spec.ts:296",
+      "file": "packages/c2pa-node/js-src/Reader.spec.ts",
+      "line": 296,
+      "title": "should report manifest is embedded",
+      "fullName": "Reader should report manifest is embedded",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Reader.spec.ts:305",
+      "file": "packages/c2pa-node/js-src/Reader.spec.ts",
+      "line": 305,
+      "title": "should report manifest is not embedded",
+      "fullName": "Reader should report manifest is not embedded",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Reader.spec.ts:316",
+      "file": "packages/c2pa-node/js-src/Reader.spec.ts",
+      "line": 316,
+      "title": "should decode CAWG identity assertion with signature_info",
+      "fullName": "Reader should decode CAWG identity assertion with signature_info",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Reader.spec.ts:360",
+      "file": "packages/c2pa-node/js-src/Reader.spec.ts",
+      "line": 360,
+      "title": "should return null when reading an asset without C2PA metadata",
+      "fullName": "Reader should return null when reading an asset without C2PA metadata",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Settings.spec.ts:32",
+      "file": "packages/c2pa-node/js-src/Settings.spec.ts",
+      "line": 32,
+      "title": "loads settings from a JSON file",
+      "fullName": "Settings loadSettingsFromFile loads settings from a JSON file",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Settings.spec.ts:50",
+      "file": "packages/c2pa-node/js-src/Settings.spec.ts",
+      "line": 50,
+      "title": "loads settings from a TOML file",
+      "fullName": "Settings loadSettingsFromFile loads settings from a TOML file",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Settings.spec.ts:62",
+      "file": "packages/c2pa-node/js-src/Settings.spec.ts",
+      "line": 62,
+      "title": "throws error for non-existent file",
+      "fullName": "Settings loadSettingsFromFile throws error for non-existent file",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Settings.spec.ts:69",
+      "file": "packages/c2pa-node/js-src/Settings.spec.ts",
+      "line": 69,
+      "title": "returns undefined when omitted",
+      "fullName": "Settings resolveSettingsForNeon returns undefined when omitted",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Settings.spec.ts:73",
+      "file": "packages/c2pa-node/js-src/Settings.spec.ts",
+      "line": 73,
+      "title": "returns undefined when null is passed in",
+      "fullName": "Settings resolveSettingsForNeon returns undefined when null is passed in",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Settings.spec.ts:80",
+      "file": "packages/c2pa-node/js-src/Settings.spec.ts",
+      "line": 80,
+      "title": "applies defaults for an empty Context",
+      "fullName": "Settings resolveSettingsForNeon applies defaults for an empty Context",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Settings.spec.ts:87",
+      "file": "packages/c2pa-node/js-src/Settings.spec.ts",
+      "line": 87,
+      "title": "merges a Context's settings with defaults",
+      "fullName": "Settings resolveSettingsForNeon merges a Context's settings with defaults",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Settings.spec.ts:95",
+      "file": "packages/c2pa-node/js-src/Settings.spec.ts",
+      "line": 95,
+      "title": "passes a raw settings object through as-is, without applying defaults",
+      "fullName": "Settings resolveSettingsForNeon passes a raw settings object through as-is, without applying defaults",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Settings.spec.ts:104",
+      "file": "packages/c2pa-node/js-src/Settings.spec.ts",
+      "line": 104,
+      "title": "passes a raw settings JSON string through unchanged",
+      "fullName": "Settings resolveSettingsForNeon passes a raw settings JSON string through unchanged",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Signer.spec.ts:44",
+      "file": "packages/c2pa-node/js-src/Signer.spec.ts",
+      "line": 44,
+      "title": "should sign data",
+      "fullName": "TestSigner should sign data",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Signer.spec.ts:65",
+      "file": "packages/c2pa-node/js-src/Signer.spec.ts",
+      "line": 65,
+      "title": "should create a new instance",
+      "fullName": "CallbackSigner should create a new instance",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Signer.spec.ts:70",
+      "file": "packages/c2pa-node/js-src/Signer.spec.ts",
+      "line": 70,
+      "title": "should sign data",
+      "fullName": "CallbackSigner should sign data",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Signer.spec.ts:77",
+      "file": "packages/c2pa-node/js-src/Signer.spec.ts",
+      "line": 77,
+      "title": "should get algorithm",
+      "fullName": "CallbackSigner should get algorithm",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Signer.spec.ts:83",
+      "file": "packages/c2pa-node/js-src/Signer.spec.ts",
+      "line": 83,
+      "title": "should return certificates",
+      "fullName": "CallbackSigner should return certificates",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Signer.spec.ts:90",
+      "file": "packages/c2pa-node/js-src/Signer.spec.ts",
+      "line": 90,
+      "title": "should return reserve size",
+      "fullName": "CallbackSigner should return reserve size",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Signer.spec.ts:95",
+      "file": "packages/c2pa-node/js-src/Signer.spec.ts",
+      "line": 95,
+      "title": "should return time authority URL when provided",
+      "fullName": "CallbackSigner should return time authority URL when provided",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Signer.spec.ts:100",
+      "file": "packages/c2pa-node/js-src/Signer.spec.ts",
+      "line": 100,
+      "title": "should return undefined for time authority URL when not provided",
+      "fullName": "CallbackSigner should return undefined for time authority URL when not provided",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Signer.spec.ts:114",
+      "file": "packages/c2pa-node/js-src/Signer.spec.ts",
+      "line": 114,
+      "title": "should create valid COSE signature with buffer output",
+      "fullName": "CallbackSigner should create valid COSE signature with buffer output",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Trustmark.spec.ts:70",
+      "file": "packages/c2pa-node/js-src/Trustmark.spec.ts",
+      "line": 70,
+      "title": "should create a new trustmark instance with valid config",
+      "fullName": "Trustmark newTrustmark should create a new trustmark instance with valid config",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Trustmark.spec.ts:78",
+      "file": "packages/c2pa-node/js-src/Trustmark.spec.ts",
+      "line": 78,
+      "title": "should throw error with invalid config",
+      "fullName": "Trustmark newTrustmark should throw error with invalid config",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Trustmark.spec.ts:91",
+      "file": "packages/c2pa-node/js-src/Trustmark.spec.ts",
+      "line": 91,
+      "title": "should encode a watermark into an image with default watermark",
+      "fullName": "Trustmark encode should encode a watermark into an image with default watermark",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Trustmark.spec.ts:102",
+      "file": "packages/c2pa-node/js-src/Trustmark.spec.ts",
+      "line": 102,
+      "title": "should encode a watermark into an image with custom watermark",
+      "fullName": "Trustmark encode should encode a watermark into an image with custom watermark",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Trustmark.spec.ts:116",
+      "file": "packages/c2pa-node/js-src/Trustmark.spec.ts",
+      "line": 116,
+      "title": "should throw error with invalid strength values",
+      "fullName": "Trustmark encode should throw error with invalid strength values",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Trustmark.spec.ts:125",
+      "file": "packages/c2pa-node/js-src/Trustmark.spec.ts",
+      "line": 125,
+      "title": "should throw error with empty image buffer",
+      "fullName": "Trustmark encode should throw error with empty image buffer",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Trustmark.spec.ts:134",
+      "file": "packages/c2pa-node/js-src/Trustmark.spec.ts",
+      "line": 134,
+      "title": "should decode a watermark from an encoded image",
+      "fullName": "Trustmark decode should decode a watermark from an encoded image",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Trustmark.spec.ts:162",
+      "file": "packages/c2pa-node/js-src/Trustmark.spec.ts",
+      "line": 162,
+      "title": "should decode watermark from image with generated watermark",
+      "fullName": "Trustmark decode should decode watermark from image with generated watermark",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Trustmark.spec.ts:183",
+      "file": "packages/c2pa-node/js-src/Trustmark.spec.ts",
+      "line": 183,
+      "title": "should throw error decoding from original image (no watermark)",
+      "fullName": "Trustmark decode should throw error decoding from original image (no watermark)",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-node/js-src/Trustmark.spec.ts:190",
+      "file": "packages/c2pa-node/js-src/Trustmark.spec.ts",
+      "line": 190,
+      "title": "should throw error with empty image buffer",
+      "fullName": "Trustmark decode should throw error with empty image buffer",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/assetSize.spec.ts:18",
+      "file": "packages/c2pa-utilities/src/assetSize.spec.ts",
+      "line": 18,
+      "title": "does not throw when the size is within the max",
+      "fullName": "validateAssetSize does not throw when the size is within the max",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/assetSize.spec.ts:22",
+      "file": "packages/c2pa-utilities/src/assetSize.spec.ts",
+      "line": 22,
+      "title": "does not throw when the size equals the max",
+      "fullName": "validateAssetSize does not throw when the size equals the max",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/assetSize.spec.ts:26",
+      "file": "packages/c2pa-utilities/src/assetSize.spec.ts",
+      "line": 26,
+      "title": "throws AssetTooLargeError with a message including the size and the max when the size exceeds the max",
+      "fullName": "validateAssetSize throws AssetTooLargeError with a message including the size and the max when the size exceeds the max",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/assetSize.spec.ts:33",
+      "file": "packages/c2pa-utilities/src/assetSize.spec.ts",
+      "line": 33,
+      "title": "treats a maxSizeInBytes of 0 as a request to use the default",
+      "fullName": "validateAssetSize treats a maxSizeInBytes of 0 as a request to use the default",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/assetSize.spec.ts:43",
+      "file": "packages/c2pa-utilities/src/assetSize.spec.ts",
+      "line": 43,
+      "title": "throws RangeError for a sizeInBytes of %s",
+      "fullName": "validateAssetSize throws RangeError for a sizeInBytes of %s",
+      "platform": "node",
+      "parameterized": true,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/assetSize.spec.ts:50",
+      "file": "packages/c2pa-utilities/src/assetSize.spec.ts",
+      "line": 50,
+      "title": "throws RangeError for a maxSizeInBytes of %s",
+      "fullName": "validateAssetSize throws RangeError for a maxSizeInBytes of %s",
+      "platform": "node",
+      "parameterized": true,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/assetSize.spec.ts:61",
+      "file": "packages/c2pa-utilities/src/assetSize.spec.ts",
+      "line": 61,
+      "title": "includes the size and the max in the message",
+      "fullName": "AssetTooLargeError includes the size and the max in the message",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/assetSize.spec.ts:67",
+      "file": "packages/c2pa-utilities/src/assetSize.spec.ts",
+      "line": 67,
+      "title": "never throws, and resolves a maxSizeInBytes of %s to the default",
+      "fullName": "AssetTooLargeError never throws, and resolves a maxSizeInBytes of %s to the default",
+      "platform": "node",
+      "parameterized": true,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/caseConversion.spec.ts:14",
+      "file": "packages/c2pa-utilities/src/caseConversion.spec.ts",
+      "line": 14,
+      "title": "converts camelCase keys to snake_case",
+      "fullName": "snakeCaseify converts camelCase keys to snake_case",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/caseConversion.spec.ts:19",
+      "file": "packages/c2pa-utilities/src/caseConversion.spec.ts",
+      "line": 19,
+      "title": "recurses into nested objects",
+      "fullName": "snakeCaseify recurses into nested objects",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/caseConversion.spec.ts:31",
+      "file": "packages/c2pa-utilities/src/caseConversion.spec.ts",
+      "line": 31,
+      "title": "preserves arrays as arrays instead of flattening them into objects",
+      "fullName": "snakeCaseify preserves arrays as arrays instead of flattening them into objects",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/caseConversion.spec.ts:40",
+      "file": "packages/c2pa-utilities/src/caseConversion.spec.ts",
+      "line": 40,
+      "title": "snake-cases keys of object elements inside an array",
+      "fullName": "snakeCaseify snake-cases keys of object elements inside an array",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/caseConversion.spec.ts:50",
+      "file": "packages/c2pa-utilities/src/caseConversion.spec.ts",
+      "line": 50,
+      "title": "leaves an empty array as an empty array",
+      "fullName": "snakeCaseify leaves an empty array as an empty array",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/context.spec.ts:15",
+      "file": "packages/c2pa-utilities/src/context.spec.ts",
+      "line": 15,
+      "title": "new Context() with no settings resolves to defaults",
+      "fullName": "Context new Context() with no settings resolves to defaults",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/context.spec.ts:20",
+      "file": "packages/c2pa-utilities/src/context.spec.ts",
+      "line": 20,
+      "title": "settings getter returns what was attached",
+      "fullName": "Context settings getter returns what was attached",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/context.spec.ts:27",
+      "file": "packages/c2pa-utilities/src/context.spec.ts",
+      "line": 27,
+      "title": "constructing with settings resolves the given settings",
+      "fullName": "Context constructing with settings resolves the given settings",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/context.spec.ts:41",
+      "file": "packages/c2pa-utilities/src/context.spec.ts",
+      "line": 41,
+      "title": "successful toJson() calls should be memoized",
+      "fullName": "Context successful toJson() calls should be memoized",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/context.spec.ts:56",
+      "file": "packages/c2pa-utilities/src/context.spec.ts",
+      "line": 56,
+      "title": "failed toJson() calls should not be memoized",
+      "fullName": "Context failed toJson() calls should not be memoized",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:38",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 38,
+      "title": "fetchWithRetry rejects a malformed URL without attempting a request",
+      "fullName": "URL validation fetchWithRetry rejects a malformed URL without attempting a request",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:44",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 44,
+      "title": "fetchWithRetryRaw rejects a malformed URL without attempting a request",
+      "fullName": "URL validation fetchWithRetryRaw rejects a malformed URL without attempting a request",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:52",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 52,
+      "title": "fetches and returns response text",
+      "fullName": "fetchWithRetry fetches and returns response text",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:59",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 59,
+      "title": "reports a meaningful error for a non-OK HTTP response with no Retry-After",
+      "fullName": "fetchWithRetry reports a meaningful error for a non-OK HTTP response with no Retry-After",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:73",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 73,
+      "title": "respects an HTTP-date Retry-After header and retries",
+      "fullName": "fetchWithRetry respects an HTTP-date Retry-After header and retries",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:93",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 93,
+      "title": "falls back to generic backoff when Retry-After is unparseable",
+      "fullName": "fetchWithRetry falls back to generic backoff when Retry-After is unparseable",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:112",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 112,
+      "title": "fails immediately when Retry-After exceeds the maximum allowed delay",
+      "fullName": "fetchWithRetry fails immediately when Retry-After exceeds the maximum allowed delay",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:130",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 130,
+      "title": "recovers after a transient 500 by retrying",
+      "fullName": "fetchWithRetry recovers after a transient 500 by retrying",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:146",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 146,
+      "title": "rejects after exhausting retries when server keeps returning 429 with Retry-After",
+      "fullName": "fetchWithRetry rejects after exhausting retries when server keeps returning 429 with Retry-After",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:163",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 163,
+      "title": "rejects after exhausting retries on repeated network errors",
+      "fullName": "fetchWithRetry rejects after exhausting retries on repeated network errors",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:173",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 173,
+      "title": "stringifies a non-Error network rejection after exhausting retries",
+      "fullName": "fetchWithRetry stringifies a non-Error network rejection after exhausting retries",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:184",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 184,
+      "title": "applies the default 1MB cap when maxResponseBytes is omitted",
+      "fullName": "fetchWithRetry applies the default 1MB cap when maxResponseBytes is omitted",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:195",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 195,
+      "title": "accepts a response under the default cap when maxResponseBytes is omitted",
+      "fullName": "fetchWithRetry accepts a response under the default cap when maxResponseBytes is omitted",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:206",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 206,
+      "title": "rejects a response larger than the given maxResponseBytes",
+      "fullName": "fetchWithRetry rejects a response larger than the given maxResponseBytes",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:216",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 216,
+      "title": "rejects based on Content-Length before reading an oversized body",
+      "fullName": "fetchWithRetry rejects based on Content-Length before reading an oversized body",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:234",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 234,
+      "title": "falls back to checking the body when Content-Length is absent",
+      "fullName": "fetchWithRetry falls back to checking the body when Content-Length is absent",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:254",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 254,
+      "title": "accepts a response at or under the given maxResponseBytes",
+      "fullName": "fetchWithRetry accepts a response at or under the given maxResponseBytes",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:265",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 265,
+      "title": "honors a custom maxRetries, giving up sooner than the default",
+      "fullName": "fetchWithRetry honors a custom maxRetries, giving up sooner than the default",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:280",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 280,
+      "title": "honors a custom maxRetries, retrying more than the default",
+      "fullName": "fetchWithRetry honors a custom maxRetries, retrying more than the default",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:301",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 301,
+      "title": "honors a custom maxRetryAfterMs cap",
+      "fullName": "fetchWithRetry honors a custom maxRetryAfterMs cap",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:318",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 318,
+      "title": "honors a custom isRetryableStatus, retrying a status not retried by default",
+      "fullName": "fetchWithRetry honors a custom isRetryableStatus, retrying a status not retried by default",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:336",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 336,
+      "title": "honors a custom isRetryableStatus, refusing to retry a status retried by default",
+      "fullName": "fetchWithRetry honors a custom isRetryableStatus, refusing to retry a status retried by default",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:353",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 353,
+      "title": "honors a Retry-After header on a non-429 retryable status",
+      "fullName": "fetchWithRetry honors a Retry-After header on a non-429 retryable status",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:372",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 372,
+      "title": "honors a custom isRetryableError",
+      "fullName": "fetchWithRetry honors a custom isRetryableError",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:384",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 384,
+      "title": "never retries an AbortError, even with a permissive isRetryableError",
+      "fullName": "fetchWithRetry never retries an AbortError, even with a permissive isRetryableError",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:401",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 401,
+      "title": "returns the raw Response for a successful request",
+      "fullName": "fetchWithRetryRaw returns the raw Response for a successful request",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:409",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 409,
+      "title": "forwards method, headers, and body via RequestInit",
+      "fullName": "fetchWithRetryRaw forwards method, headers, and body via RequestInit",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:431",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 431,
+      "title": "does not enforce a response size cap",
+      "fullName": "fetchWithRetryRaw does not enforce a response size cap",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:442",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 442,
+      "title": "still retries on a retryable status using the same policy options",
+      "fullName": "fetchWithRetryRaw still retries on a retryable status using the same policy options",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:458",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 458,
+      "title": "preserves the given RequestInit across retries",
+      "fullName": "fetchWithRetryRaw preserves the given RequestInit across retries",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts:503",
+      "file": "packages/c2pa-utilities/src/fetchWithRetry.spec.ts",
+      "line": 503,
+      "title": "honors a custom fetch implementation, using it instead of the global fetch",
+      "fullName": "fetchWithRetryRaw honors a custom fetch implementation, using it instead of the global fetch",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:48",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 48,
+      "title": "should still resolve to the package defaults when no settings are provided",
+      "fullName": "settings resolveSettings general behavior should still resolve to the package defaults when no settings are provided",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:55",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 55,
+      "title": "should serialize the given settings",
+      "fullName": "settings resolveSettings general behavior should serialize the given settings",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:62",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 62,
+      "title": "should accept an empty settings object",
+      "fullName": "settings resolveSettings general behavior should accept an empty settings object",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:69",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 69,
+      "title": "should not throw when a settings value is null",
+      "fullName": "settings resolveSettings general behavior should not throw when a settings value is null",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:77",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 77,
+      "title": "should not throw when a nested settings value is null",
+      "fullName": "settings resolveSettings general behavior should not throw when a nested settings value is null",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:90",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 90,
+      "title": "should pass through a non-url value",
+      "fullName": "settings resolveSettings trust should pass through a non-url value",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:149",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 149,
+      "title": "should fetch URL trust values",
+      "fullName": "settings resolveSettings trust should fetch URL trust values",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:224",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 224,
+      "title": "should concatenate the fetched results of URLs when given as an array",
+      "fullName": "settings resolveSettings trust should concatenate the fetched results of URLs when given as an array",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:259",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 259,
+      "title": "should report an error when fetching a URL without a certificate",
+      "fullName": "settings resolveSettings trust should report an error when fetching a URL without a certificate",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:277",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 277,
+      "title": "should not fetch URLs for unknown keys not defined in TrustSettings",
+      "fullName": "settings resolveSettings trust should not fetch URLs for unknown keys not defined in TrustSettings",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:302",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 302,
+      "title": "should not crash when a cawgTrust boolean field is present",
+      "fullName": "settings resolveSettings trust should not crash when a cawgTrust boolean field is present",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:312",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 312,
+      "title": "should throw when a fetched response exceeds the default size limit",
+      "fullName": "settings resolveSettings trust should throw when a fetched response exceeds the default size limit",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:329",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 329,
+      "title": "should respect a per-call maxResponseBytes override",
+      "fullName": "settings resolveSettings trust should respect a per-call maxResponseBytes override",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:347",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 347,
+      "title": "should reject when an array item is not a string",
+      "fullName": "settings resolveSettings trust should reject when an array item is not a string",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:359",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 359,
+      "title": "should reject when a fetched array item fails PEM validation",
+      "fullName": "settings resolveSettings trust should reject when a fetched array item fails PEM validation",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:382",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 382,
+      "title": "applies the package defaults when no settings are given",
+      "fullName": "withDefaultSettings applies the package defaults when no settings are given",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:388",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 388,
+      "title": "merges the given settings on top of the defaults",
+      "fullName": "withDefaultSettings merges the given settings on top of the defaults",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:397",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 397,
+      "title": "creates trust settings",
+      "fullName": "createTrustSettings / createCawgTrustSettings / createVerifySettings creates trust settings",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:412",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 412,
+      "title": "creates CAWG trust settings",
+      "fullName": "createTrustSettings / createCawgTrustSettings / createVerifySettings creates CAWG trust settings",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:424",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 424,
+      "title": "creates verify settings",
+      "fullName": "createTrustSettings / createCawgTrustSettings / createVerifySettings creates verify settings",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:444",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 444,
+      "title": "creates verify settings with partial config",
+      "fullName": "createTrustSettings / createCawgTrustSettings / createVerifySettings creates verify settings with partial config",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:457",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 457,
+      "title": "merges multiple settings",
+      "fullName": "mergeSettings merges multiple settings",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:480",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 480,
+      "title": "merges settings with later values overriding earlier ones",
+      "fullName": "mergeSettings merges settings with later values overriding earlier ones",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:505",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 505,
+      "title": "deep-merges nested fields instead of overwriting whole sections",
+      "fullName": "mergeSettings deep-merges nested fields instead of overwriting whole sections",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:523",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 523,
+      "title": "converts settings to JSON with snake_case keys",
+      "fullName": "settingsToJson converts settings to JSON with snake_case keys",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:544",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 544,
+      "title": "does not emit a dead cawg_trust key, and omits trust entirely when there are no anchors",
+      "fullName": "settingsToJson does not emit a dead cawg_trust key, and omits trust entirely when there are no anchors",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:559",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 559,
+      "title": "does not include undefined values in verify settings JSON",
+      "fullName": "settingsToJson does not include undefined values in verify settings JSON",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:577",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 577,
+      "title": "does not include undefined values when merging settings",
+      "fullName": "settingsToJson does not include undefined values when merging settings",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:609",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 609,
+      "title": "loads settings from a URL",
+      "fullName": "loadSettingsFromUrl loads settings from a URL",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:621",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 621,
+      "title": "throws error for failed fetch",
+      "fullName": "loadSettingsFromUrl throws error for failed fetch",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:634",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 634,
+      "title": "throws error for network failure",
+      "fullName": "loadSettingsFromUrl throws error for network failure",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:644",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 644,
+      "title": "retries a transient 500 and returns the settings once it recovers",
+      "fullName": "loadSettingsFromUrl retries a transient 500 and returns the settings once it recovers",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    },
+    {
+      "id": "packages/c2pa-utilities/src/settings.spec.ts:663",
+      "file": "packages/c2pa-utilities/src/settings.spec.ts",
+      "line": 663,
+      "title": "honors a custom retry policy via options",
+      "fullName": "loadSettingsFromUrl honors a custom retry policy via options",
+      "platform": "node",
+      "parameterized": false,
+      "sourceMode": "normal"
+    }
+  ]
+}

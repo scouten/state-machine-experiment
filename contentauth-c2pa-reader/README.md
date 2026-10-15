@@ -24,6 +24,34 @@ cycle itself.
 
 ## What `ReadSession` validates today
 
+Reports also retain embedded-file binary assertion payloads as
+`Manifest::resources` (label, declared media type, and exact bytes without JUMBF
+framing). Malformed descriptions or missing/duplicate payload boxes fail
+explicitly. Resources require no extra host requests; callers must still use
+the report's validation results to assess their provenance. Browser bindings
+use this shared decoding seam for claim thumbnails, generator icons and
+`resourceToBytes`. An identical generator icon reference already declared in
+the claim's assertion references is hashed once, without duplicating validation
+observations. Different hashes or algorithms still produce independent checks;
+an inconsistent icon cannot hide behind the assertion's successful hash.
+
+Core statuses retain every observation in session phase-completion order.
+Assertion status URLs are absolute self JUMBF URIs naming their owning manifest,
+even when the claim's hashed reference was relative. Authenticated timestamp
+statuses name the authority's subject common name (or subject DN when absent);
+this reporting detail does not establish timestamp trust or change validation
+time. Legacy ordering, failure-only summaries and trust-list projection belong
+to the compatibility adapter, not this engine.
+For v1/v2/v3 `parentOf`/`componentOf` ingredient assertions that declare no
+source manifest, the core records owner-qualified
+`ingredient.unknownProvenance` observations (`inputTo` is exempt). This is
+informational: it does not validate an ingredient asset or historical report.
+Full ingredient-link/hash/history validation remains future work. The binding
+experiment does not implement those rules; the JS compatibility report rejects
+linked histories rather than presenting an incomplete view. Disabled
+online OCSP also records a skipped observation when no signer check plan can
+be built; it never issues a request or claims non-revocation.
+
 [`ReadSession`] reads a manifest store end to end (JUMBF parsing, claim
 decoding, report population) and verifies:
 
@@ -32,7 +60,11 @@ decoding, report population) and verifies:
   itself, hashed in-crate from chunks the host streams in.
 * **The claim signature** — checked in-crate against the signer's
   certificate.
-* **Trust** — the signer's certificate path is built and verified against
+* **Trust** — `ReadSettings::verify_trust` defaults true. Setting false omits
+  claim trusted/untrusted anchor verdicts and caps the outcome at `Valid`;
+  certificate profiles, presented path signatures and validity, claim
+  signatures, binding, timestamps, revocation and independent CAWG checks
+  still run. With verification enabled, the signer's certificate path is built and verified against
   configured trust anchors, held to the C2PA certificate profile. An RFC
   3161 timestamp in the claim signature is validated and can rescue a
   since-expired certificate: a manifest signed years ago with a
@@ -63,6 +95,21 @@ decoding, report population) and verifies:
   `redacted_assertions`: checking that an ingredient's redacted assertion
   was actually zeroed (`assertion.notRedacted`), which needs ingredient
   manifests.
+
+* **Assertion reporting** — each manifest retains assertion labels in
+  store order and decodes CBOR payloads into `Manifest::assertions`.
+  `created` follows the v2 claim's `created_assertions` references;
+  unsupported encodings and malformed CBOR remain label-only.
+
+* **Signer reporting** — claim and CAWG X.509 signatures retain algorithm,
+  certificate subject organization/common name and unsigned serial bytes only
+  after cryptographic verification. UTF-8, PrintableString and IA5String names
+  are projected; other directory-string encodings remain unprojected.
+  Authenticated matching RFC 3161 times may be reported without a trusted
+  authority, but only a trusted timestamp supplies validation time. Metadata
+  does not establish chain trust or an OCSP result. Generator-specific fields
+  are retained in `GeneratorInfo::extensions`; top-level unknown claim fields
+  remain ignored.
 
 * **CAWG identity assertions** — `cawg.identity` (and `cawg.identity__N`)
   assertions are decoded into `Manifest::identity_assertions` and

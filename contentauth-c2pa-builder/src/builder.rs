@@ -272,6 +272,7 @@ impl GeneratorInfo {
 #[derive(Debug)]
 pub struct BuilderSession {
     settings: BuilderSettings,
+    detached: bool,
     core: SessionCore<BuilderRequest>,
     state: State,
     report: Option<BuilderReport>,
@@ -346,6 +347,19 @@ impl BuilderSession {
     pub fn new(settings: BuilderSettings) -> Self {
         Self {
             settings,
+            detached: false,
+            core: SessionCore::default(),
+            state: State::Start,
+            report: None,
+        }
+    }
+
+    /// Creates a build session whose manifest store is returned detached
+    /// from the asset. Its hard binding covers the complete asset.
+    pub fn new_detached(settings: BuilderSettings) -> Self {
+        Self {
+            settings,
+            detached: true,
             core: SessionCore::default(),
             state: State::Start,
             report: None,
@@ -415,8 +429,9 @@ impl BuilderSession {
         }
     }
 
-    /// Handles [`State::Start`]: validates settings, assembles the
-    /// placeholder manifest, and asks the host to embed it.
+    /// Handles [`State::Start`]: validates settings and assembles the
+    /// placeholder manifest. Embedded builds ask the host to reserve space;
+    /// detached builds hash the complete asset without reserving space.
     fn handle_start(&mut self) -> Result<Option<Step>, Error> {
         if self.settings.certificates.is_empty() {
             return Err(Error::NoCertificates);
@@ -504,16 +519,24 @@ impl BuilderSession {
         };
 
         let manifest = ManifestBuilder::build_placeholder(&inputs)?;
-        let placeholder = manifest.placeholder_bytes().to_vec();
-
-        let request = self.core.issue(BuilderRequest::ReservePlaceholder {
-            stream: Self::PRIMARY_STREAM,
-            placeholder,
-        });
-        self.state = State::AwaitingPlaceholderReserved {
-            request,
-            manifest: Box::new(manifest),
-        };
+        let manifest = Box::new(manifest);
+        if self.detached {
+            let request = self.core.issue(BuilderRequest::AssetLength {
+                stream: Self::PRIMARY_STREAM,
+            });
+            self.state = State::AwaitingAssetLength {
+                request,
+                manifest,
+                exclusions: Vec::new(),
+            };
+        } else {
+            let placeholder = manifest.placeholder_bytes().to_vec();
+            let request = self.core.issue(BuilderRequest::ReservePlaceholder {
+                stream: Self::PRIMARY_STREAM,
+                placeholder,
+            });
+            self.state = State::AwaitingPlaceholderReserved { request, manifest };
+        }
 
         Ok(Some(Step::AwaitHost))
     }

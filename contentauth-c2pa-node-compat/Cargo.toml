@@ -21,7 +21,7 @@ contentauth-c2pa-file-reader = { path = "../contentauth-c2pa-file-reader" }
 # for c2pa-wasm and c2pa-node, since both sit on c2pa-rs's `Reader`.
 contentauth-c2pa-js-compat = { path = "../contentauth-c2pa-js-compat" }
 
-contentauth-c2pa-format-jpeg = { path = "../contentauth-c2pa-format-jpeg" }
+contentauth-c2pa-format-registry = { path = "../contentauth-c2pa-format-registry", default-features = false, features = ["jpeg", "tiff"] }
 contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
 serde_json = "1"
 contentauth-state-machine = { path = "../contentauth-state-machine" }

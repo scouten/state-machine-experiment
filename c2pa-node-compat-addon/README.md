@@ -10,17 +10,17 @@ synchronously.**
 | Who reads the file | a tokio worker thread, via a sync `Read + Seek` | Node: `FileHandle.read()` (libuv's pool), or any async source |
 | Who fetches OCSP | `reqwest` inside c2pa-rs | Node's `fetch` — proxies, agents, mocks are Node's business |
 | Threads in Rust | a process-wide multi-thread tokio runtime | none |
-| Shared state | `Arc<tokio::sync::Mutex<Reader>>` | none: a `Reader` is a parsed JSON snapshot |
+| Shared state | `Arc<tokio::sync::Mutex<Reader>>` | none: parsed JSON plus a private immutable native reader retaining embedded bytes |
 | Sync accessors | `rt.block_on(mutex.lock())` on the JS thread | plain JS over the already-parsed JSON |
 | Promise plumbing | `Deferred` + `Channel` settled from a worker | ordinary `async` JS; the addon has no `futures` feature |
 | Concurrency / back-pressure | the runtime's | the caller's (`concurrency` option) |
 | Clock | the system's | the caller's (`now` option): reproducible reads |
-| Rust exports | promise-returning functions | 4 synchronous functions (`src/lib.rs`, ~150 lines) |
+| Rust exports | promise-returning functions | 4 synchronous session functions plus one retained-resource lookup |
 
 ## The conversation
 
 ```js
-const session = native.sessionNew("image/jpeg", settingsJson);
+const session = native.sessionNew("image/jpeg", settingsJson, detachedBytes); // optional Buffer
 for (;;) {
   const step = native.sessionAdvance(session);   // sync, one bounded slice of work
   if (step.done) break;
@@ -29,7 +29,7 @@ for (;;) {
   }
   await Promise.race(inFlight);                   // Node decides when to come back
 }
-const json = native.sessionFinish(session);       // string, or null: no manifest store
+const result = native.sessionFinish(session);     // { json, reader }, or null: no store
 ```
 
 That loop is `index.mjs`'s `readStore`, about forty lines. The engine
@@ -41,7 +41,7 @@ may come back in any order.
 
 ```sh
 npm run build   # cargo build --release, then copies the cdylib to index.node
-npm test        # 27 tests under node:test
+npm test        # 39 tests under node:test
 ./coverage.sh   # coverage for the JS driver and the Rust addon (needs cargo-llvm-cov)
 npm run demo    # event-loop delay while hashing a large file
 ```
@@ -52,6 +52,52 @@ error names (`C2pa(UnsupportedType)`); the host choosing 1, 2, or N reads
 in flight; timers firing throughout a slow read; eight reads interleaving
 on one thread in well under the serial time; and a failing source
 rejecting the read.
+
+## Detached manifest reads
+
+`Reader.fromManifestDataAndAsset(manifestData, asset, settings, options)` accepts
+a `Buffer` containing a detached manifest store, with the same path/buffer/custom
+async sources, settings and host options as `fromAsset`. It snapshots that buffer
+before any await and supplies it to the existing sans-I/O file session. Source
+bytes still undergo hard-binding validation. Explicit malformed/empty sidecars
+reject rather than falling back to an embedded store or fetching a remote one;
+unrelated valid stores report their own label and binding failures.
+`isEmbedded()` is false for explicit bytes even if the asset also carries a store;
+`remoteUrl()` is empty. Ordinary embedded reads keep their existing behavior.
+
+Six actual-Node tests adapt upstream detached buffer/file cases using a real
+c2pa-rs-signed, store-free JPEG with two ingredient data resources and a thumbnail.
+The complete Trusted report equals its unfiltered c2pa-rs golden under equivalent
+named trust settings. Tests also cover asset tampering, explicit-store precedence,
+malformed/invalid arguments, source errors, snapshot isolation, concurrent trust
+settings, recovery and retained resources after source closure. Native tests compare
+against the async browser host; the signing addon tests the constructor against
+freshly signed output. These adapted cases do not increase unchanged upstream
+ledger coverage. Full Context/settings/size-limit API parity remains separate.
+
+## Embedded resources
+
+`await reader.resourceToAsset(uri, { buffer: null })` returns
+`{ buffer: Buffer, bytes_written: number }`, matching c2pa-node's result shape.
+A supplied destination buffer is not modified or used as a prefix.
+`await reader.resourceToAsset(uri, { path })` writes/truncates that caller-chosen
+file asynchronously and returns `{ buffer: Buffer.alloc(0), bytes_written }`.
+File errors reject; destination paths are the caller's responsibility.
+
+The native reader is retained behind a private field until garbage collection.
+It shares the browser adapter's exact absolute self JUMBF URI lookup for claim
+thumbnails, generator icons, ingredient thumbnails and data. Every result is an
+independent copy; no source read, network request, lock or async Rust work is
+needed. This retains resource payloads, not the whole asset. Copying a resource
+still runs synchronously on the JS thread and is not a large-resource streaming
+API. Resource extraction does not establish trust or alter validation results.
+
+Six actual-Node cases adapt the pinned upstream file-output test to the local
+claim-thumbnail fixture and verify the legacy buffer/file shapes, source-file
+removal, truncation, exact generated-fixture bytes, positional references and
+copy isolation, no post-read source/network access, tamper failures, strict
+URI/destination errors and recovery. Unsupported databox reports still reject.
+These are migration cases, not additional unchanged upstream ledger passes.
 
 `coverage.sh` produces both halves of the Node side from one instrumented
 run: `lcov.info` for the JavaScript driver (Node's built-in coverage) and
@@ -98,8 +144,8 @@ because the host, not the Rust engine, owns the network.
 * **Every request crosses the N-API boundary** (a `Buffer` copy per
   chunk). c2pa-node reads inside Rust and crosses once per call. The
   throughput above says this is not the bottleneck, but it is the cost.
-* **Not covered**: `fromManifestDataAndAsset`, `resourceToAsset`,
-  `Builder`, signers, Trustmark, formats other than JPEG. A `Builder`
+* **Not covered**: databox/external resources,
+  full `Builder`, signers, Trustmark, formats other than JPEG/TIFF. A `Builder`
   would take the same shape — `BuilderSession`'s `Sign`/`Timestamp`
   requests are the ones c2pa-node's `CallbackSigner` already answers by
   calling back into JavaScript, here simply the normal path rather than a

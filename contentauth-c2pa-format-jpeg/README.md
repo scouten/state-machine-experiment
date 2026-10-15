@@ -20,7 +20,7 @@ bytes of store per segment) this crate follows so that what it writes is
 byte-identical to what c2pa-rs would write.
 
 Both operations share one scan of the marker segments from `SOI` to
-`SOS`, reading only headers and `APP11` contents — never image data — so
+`SOS`, reading headers and `APP11` contents — never image data — so
 a large JPEG costs a few dozen small reads regardless of size:
 
 | Operation | Behavior |
@@ -29,10 +29,21 @@ a large JPEG costs a few dozen small reads regardless of size:
 | `plan_embed` | The source with any existing store's segments dropped and new ones inserted where they were; in an unsigned file, right after the last `APP0` (JFIF) segment, or right after `SOI` if there is none. |
 | `commit` | Nothing to patch: no byte of a JPEG's framing depends on the store's content except the superbox header continuation segments repeat, which the plan derived from the store's length and which `commit` verifies. |
 
+During `locate`, `APP1` payloads (each bounded by JPEG's 16-bit length field)
+are also read. Standard XMP's `dcterms:provenance` is decoded with the
+namespace-aware `roxmltree` parser; attribute, simple-text element, and RDF
+resource forms are supported. XML entities are decoded; DTDs are disabled and
+packets have a 4096-node limit. Empty or multiple references, malformed XML,
+and extended XMP fail explicitly. Non-XMP APP1 metadata is ignored.
+`ManifestLocation` can report both an embedded store and a remote URL. The
+file-reader gives embedded or caller-supplied detached bytes precedence and
+requests remote bytes only when enabled; URL policy and fetching belong to
+the host. `plan_embed` leaves XMP opaque and preserves it unchanged.
+
 ## What it does not do
 
-* Parse XMP: an `APP1` XMP packet's `dcterms:provenance` reference to a
-  remote manifest store is not reported.
+* Reassemble extended XMP or handle complex RDF provenance structures.
+* Fetch or authorize any remote URL.
 * Handle stores framed with JUMBF's 64-bit extended length field, or of
   4 GiB and up (`FormatError::Unsupported`).
 * Look past `SOS`: a store placed after the first scan's data would not be

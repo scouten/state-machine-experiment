@@ -124,12 +124,16 @@ pub(crate) enum Timestamped {
 /// `anchors` are the *timestamp* trust anchors — a different list from the
 /// claim-signing ones, because the authorities that stamp time are not the
 /// authorities that vouch for signers.
+/// `reported_time` captures an authenticated instant even without an anchor;
+/// only the returned `Trusted` outcome authorizes its use as validation time.
 pub(crate) fn validate(
     pending: &PendingTimestamp,
     anchors: &[chain::Anchor],
     url: &str,
     statuses: &mut Vec<ValidationStatus>,
+    reported_time: &mut Option<String>,
 ) -> Timestamped {
+    *reported_time = None;
     let signed_data = match signed_data(&pending.token, pending.storage) {
         Ok(signed_data) => signed_data,
         Err(reason) => {
@@ -191,14 +195,41 @@ pub(crate) fn validate(
     // the exercise is to establish what time it was.
     let path = authority_path(&signed_data, &signer);
 
-    match chain::validate(
+    let status_start = statuses.len();
+    let trust = chain::validate(
         &path,
         anchors,
         gen_time,
         url,
         chain::TIMESTAMP_AUTHORITY,
+        true,
         statuses,
-    ) {
+    );
+    let authority = signer.common_name.as_deref().unwrap_or(&signer.subject);
+    for status in &mut statuses[status_start..] {
+        status.explanation = match status.code.as_str() {
+            status_code::TIMESTAMP_VALIDATED => {
+                Some(format!("timestamp message digest matched: {authority}"))
+            }
+            status_code::TIMESTAMP_UNTRUSTED => {
+                Some(format!("timestamp cert untrusted: {authority}"))
+            }
+            _ => continue,
+        };
+    }
+    if trust != chain::Trust::Rejected {
+        let date = tst_info.gen_time.to_date_time();
+        *reported_time = Some(format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}+00:00",
+            date.year(),
+            date.month(),
+            date.day(),
+            date.hour(),
+            date.minutes(),
+            date.seconds()
+        ));
+    }
+    match trust {
         chain::Trust::Anchored => Timestamped::Trusted(gen_time),
         chain::Trust::Unanchored => Timestamped::Untrusted,
         chain::Trust::Rejected => Timestamped::Rejected,
@@ -629,7 +660,17 @@ mod tests {
         anchors: &[chain::Anchor],
     ) -> (Timestamped, Vec<String>, String) {
         let mut statuses = Vec::new();
-        let outcome = validate(pending, anchors, "self#jumbf=x", &mut statuses);
+        let mut reported_time = Some("must not survive rejection".into());
+        let outcome = validate(
+            pending,
+            anchors,
+            "self#jumbf=x",
+            &mut statuses,
+            &mut reported_time,
+        );
+        if outcome == Timestamped::Rejected {
+            assert!(reported_time.is_none());
+        }
         let explanation = statuses
             .last()
             .and_then(|status| status.explanation.clone())
@@ -646,6 +687,35 @@ mod tests {
         vec![chain::Anchor::anonymous(
             cert::decode(ANCHOR).expect("the anchor decodes"),
         )]
+    }
+
+    #[test]
+    fn authenticated_time_is_reported_without_upgrading_an_untrusted_authority() {
+        let parsed =
+            crate::manifest_store::parse(include_bytes!("../tests/fixtures/manifest_data.c2pa"))
+                .expect("real signed fixture");
+        let pending = parsed.chains[0]
+            .timestamp
+            .as_ref()
+            .expect("fixture has timestamp");
+        for (anchors, expected) in [
+            (anchors(), Timestamped::Trusted(GEN_TIME)),
+            (vec![], Timestamped::Untrusted),
+        ] {
+            let mut reported_time = None;
+            let mut statuses = vec![];
+            assert_eq!(
+                validate(
+                    pending,
+                    &anchors,
+                    "self#jumbf=x",
+                    &mut statuses,
+                    &mut reported_time
+                ),
+                expected
+            );
+            assert_eq!(reported_time.as_deref(), Some("2024-08-06T21:53:37+00:00"));
+        }
     }
 
     /// A token that is intact but stamps something other than what it is

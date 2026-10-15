@@ -20,24 +20,35 @@ use contentauth_c2pa_js_compat::{Manifest, ManifestStore};
 /// A validated manifest store, as c2pa-node's `Reader` reports one.
 ///
 /// Like c2pa-node's, a snapshot: everything was read and validated before
-/// it existed, and every accessor is synchronous, infallible, lock-free
+/// it existed, and every accessor is synchronous and lock-free
 /// and instant. (c2pa-node's reach a `tokio::sync::Mutex` by `block_on`;
 /// there is nothing here to lock because nothing else holds this.)
 #[derive(Debug)]
 pub struct Reader {
     report: ReadReport,
+    embedded: bool,
 }
 
 impl Reader {
-    pub(crate) fn new(report: ReadReport) -> Self {
-        Self { report }
+    pub(crate) fn new(report: ReadReport, embedded: bool) -> Self {
+        Self { report, embedded }
+    }
+
+    /// Borrows retained embedded bytes by their exact absolute self JUMBF URI.
+    ///
+    /// Unknown or ambiguous identifiers fail, without I/O or implicit fetching.
+    /// Hosts copy these bytes into their own output buffers or files.
+    pub fn resource_bytes(&self, uri: &str) -> Result<&[u8], crate::Error> {
+        contentauth_c2pa_js_compat::resource_bytes(&self.report, uri)
     }
 
     /// The manifest store as a pretty-printed JSON string — c2pa-node's
     /// `json()`, which is c2pa-rs's `Reader::json`.
-    pub fn json(&self) -> String {
-        serde_json::to_string_pretty(&ManifestStore::from_report(&self.report))
-            .unwrap_or_else(|_| "{}".to_string())
+    ///
+    /// Uses the shared legacy numeric-array formatting; serialization errors
+    /// propagate instead of becoming an empty report.
+    pub fn json(&self) -> Result<String, serde_json::Error> {
+        ManifestStore::from_report(&self.report).json()
     }
 
     /// The active manifest's label, if any — c2pa-node's `activeLabel()`.
@@ -52,14 +63,15 @@ impl Reader {
 
     /// The remote manifest URL, or `""` — c2pa-node's `remoteUrl()`.
     ///
-    /// Always empty: this engine reads embedded manifest stores only.
+    /// Empty for embedded and caller-supplied detached manifest stores.
     pub fn remote_url(&self) -> &str {
         ""
     }
 
     /// Whether the manifest store was embedded in the asset —
-    /// c2pa-node's `isEmbedded()`. Always `true`; see [`Self::remote_url`].
+    /// c2pa-node's `isEmbedded()`. False for caller-supplied detached bytes,
+    /// even if the asset also contains an embedded store.
     pub fn is_embedded(&self) -> bool {
-        true
+        self.embedded
     }
 }

@@ -24,7 +24,7 @@
 //! so that what it writes is byte-identical to what c2pa-rs would write.
 //!
 //! Its two operations share one scan: walk the marker segments from `SOI`
-//! to `SOS`, reading only headers and `APP11` contents (never image data),
+//! to `SOS`, reading headers and `APP11` contents (never image data),
 //! and:
 //!
 //! * [`FormatHandler::locate`] reassembles the store from its segments —
@@ -33,6 +33,8 @@
 //!   header, the total matching `LBox`) — and reports it with the range of
 //!   the whole segment run, framing included. That range is what a
 //!   `c2pa.hash.data` hard binding written for the file excludes.
+//!   Location also reads `APP1` packets and decodes standard XMP
+//!   `dcterms:provenance` references by namespace, without fetching them.
 //! * [`FormatHandler::plan_embed`] describes the output as the source with
 //!   any existing store's segments dropped and new ones inserted where
 //!   they were — or, in an unsigned file, right after the last `APP0`
@@ -44,8 +46,9 @@
 //!
 //! # What it does not know
 //!
-//! * XMP. An `APP1` XMP packet's `dcterms:provenance` reference to a
-//!   remote manifest store is not reported.
+//! * Extended XMP packets ([`FormatError::Unsupported`]). Standard XMP
+//!   is decoded with DTDs disabled and a 4096-node limit. Malformed or
+//!   ambiguous provenance is an error, not a guessed URL.
 //! * Stores framed with JUMBF's 64-bit extended length field, or of 4 GiB
 //!   and up ([`FormatError::Unsupported`]).
 //! * Anything after `SOS`. A store placed after the first scan's data
@@ -86,6 +89,7 @@ mod locate;
 mod op;
 mod scan;
 mod segment;
+mod xmp;
 
 use contentauth_c2pa_format::{
     EmbedPlan, FormatDescriptor, FormatError, FormatHandler, Patch, Signature, StreamId,

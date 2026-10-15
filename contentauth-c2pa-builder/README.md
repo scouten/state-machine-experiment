@@ -58,6 +58,13 @@ changes and `replace_payload` always succeeds — see
 [`src/jumbf.rs`](src/jumbf.rs), [`src/data_hash.rs`](src/data_hash.rs), and
 [`src/cose.rs`](src/cose.rs) for how.
 
+For a detached manifest store, `BuilderSession::new_detached` skips
+`ReservePlaceholder` and hashes the complete asset with no excluded ranges.
+The host still answers the asset reads, signature, optional timestamp, and
+`CommitManifest` request; that final manifest is returned separately rather
+than written into the asset. The ordinary `new` path retains the embedded
+placeholder validation unchanged.
+
 ## Status and scope
 
 Builds one manifest (no ingredients, no update manifests) as a C2PA v2

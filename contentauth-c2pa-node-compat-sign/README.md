@@ -2,7 +2,7 @@
 
 The Rust half of the Node binding of the baseline signing case:
 `NodeBuildSession`, a purely synchronous `advance` / `fulfill` / `finish`
-wrapper over `FileBuilderSession<JpegFormat>` with the engine's types
+wrapper over `FileBuilderSession<AnyFormat>` with the engine's types
 flattened to plain data (`PendingRequest::{Read, Length, Write, Sign}`,
 `Reply`, `SignReport`). Node owns the event loop, the files and the signing
 key; Rust never blocks, spawns or sees a key. The write-side twin of
@@ -10,4 +10,7 @@ key; Rust never blocks, spawns or sees a key. The write-side twin of
 [`c2pa-node-sign-addon`](../c2pa-node-sign-addon).
 
 `tests/sync_drive.rs` drives it with a plain synchronous loop and reads the
-signed result back through `contentauth-c2pa-rs-compat`.
+signed result back through `contentauth-c2pa-rs-compat`. JPEG and
+TIFF/BigTIFF/DNG aliases use the reader's shared registry selector; the TIFF
+regression case proves the selected handler is actually used and preserves
+two separate exclusions.
