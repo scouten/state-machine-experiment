@@ -6,6 +6,7 @@
 #include <set>
 
 #include "contentauth/c2pa_sm_coro.hpp"
+#include "contentauth/c2pa_sm_sign.hpp"
 #include "support.hpp"
 
 using namespace c2pa::sm;

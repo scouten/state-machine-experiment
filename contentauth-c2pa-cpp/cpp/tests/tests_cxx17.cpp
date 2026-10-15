@@ -3,15 +3,573 @@
 
 // The core and the thread-based drivers, built as C++17 on purpose.
 
+#include <cstdlib>
 #include <sstream>
 #include <type_traits>
+#include <openssl/ecdsa.h>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+
+#if defined(__unix__) || defined(__APPLE__)
+#include <csignal>
+#include <sys/resource.h>
+#include <unistd.h>
+#endif
 
 #include "contentauth/c2pa_sm_sign.hpp"
 #include "contentauth_c2pa_sm_sign.h"
+#include "fixtures.hpp"
 #include "support.hpp"
 
 using namespace c2pa::sm;
 using namespace support;
+
+TEST(build_session_is_move_only_and_rejects_invalid_settings) {
+    static_assert(!std::is_copy_constructible_v<BuildSession>);
+    static_assert(!std::is_copy_assignable_v<BuildSession>);
+    static_assert(std::is_nothrow_move_constructible_v<BuildSession>);
+    static_assert(std::is_nothrow_move_assignable_v<BuildSession>);
+    bool rejected = false;
+    try {
+        BuildSession session(BuildSettings{});
+    } catch (const Exception &) {
+        rejected = true;
+    }
+    CHECK(rejected);
+}
+
+static std::vector<uint8_t> signing_certificate() {
+    std::ifstream input(signing_cert_path, std::ios::binary);
+    if (!input) throw std::runtime_error("missing signing certificate");
+    return {std::istreambuf_iterator<char>(input), {}};
+}
+
+static BuildSettings signing_settings(bool timestamp = false) {
+    BuildSettings settings;
+    settings.definition_json = signing_definition;
+    settings.certificates = {signing_certificate()};
+    if (timestamp) settings.definition_json.insert(1, "\"tsa_url\":\"https://tsa.example/\",");
+    return settings;
+}
+
+TEST(build_settings_reject_embedded_nuls_without_truncation) {
+    for (int field = 0; field < 3; ++field) {
+        auto settings = signing_settings();
+        auto &value = field == 0 ? settings.definition_json : field == 1 ? settings.format : settings.algorithm;
+        value.push_back('\0');
+        value += "ignored suffix";
+        CHECK_THROWS_CODE(BuildSession(settings), ErrorCode::InvalidArgument);
+    }
+}
+
+static std::vector<uint8_t> fixture_sign(const std::string &algorithm, const std::vector<uint8_t> &data) {
+    if (algorithm != "es256") throw std::runtime_error("unexpected signing algorithm");
+    std::unique_ptr<BIO, decltype(&BIO_free)> input(BIO_new_file(signing_key_path, "r"), BIO_free);
+    if (!input) throw std::runtime_error("missing signing key");
+    std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(
+        PEM_read_bio_PrivateKey(input.get(), nullptr, nullptr, nullptr), EVP_PKEY_free);
+    std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> context(EVP_MD_CTX_new(), EVP_MD_CTX_free);
+    size_t size = 0;
+    if (!key || !context || EVP_DigestSignInit(context.get(), nullptr, EVP_sha256(), nullptr, key.get()) != 1 ||
+        EVP_DigestSign(context.get(), nullptr, &size, data.data(), data.size()) != 1)
+        throw std::runtime_error("cannot initialize fixture signer");
+    std::vector<uint8_t> der(size);
+    if (EVP_DigestSign(context.get(), der.data(), &size, data.data(), data.size()) != 1)
+        throw std::runtime_error("fixture signing failed");
+    const auto *cursor = der.data();
+    std::unique_ptr<ECDSA_SIG, decltype(&ECDSA_SIG_free)> signature(
+        d2i_ECDSA_SIG(nullptr, &cursor, static_cast<long>(size)), ECDSA_SIG_free);
+    if (!signature) throw std::runtime_error("invalid fixture signature");
+    const BIGNUM *first = nullptr;
+    const BIGNUM *second = nullptr;
+    ECDSA_SIG_get0(signature.get(), &first, &second);
+    std::vector<uint8_t> raw(64);
+    if (BN_bn2binpad(first, raw.data(), 32) != 32 || BN_bn2binpad(second, raw.data() + 32, 32) != 32)
+        throw std::runtime_error("fixture signature conversion failed");
+    return raw;
+}
+
+static std::string trusted_signing_json(const std::vector<uint8_t> &bytes) {
+    const auto certificate = signing_certificate();
+    std::string base64(4 * ((certificate.size() + 2) / 3), '\0');
+    EVP_EncodeBlock(reinterpret_cast<unsigned char *>(base64.data()), certificate.data(),
+                    static_cast<int>(certificate.size()));
+    const std::string settings = "{\"trust\":{\"trust_anchors\":\"-----BEGIN CERTIFICATE-----\\n" +
+        base64 + "\\n-----END CERTIFICATE-----\"}}";
+    MemoryHost host(bytes, kNow);
+    return json_of(read(Session("image/jpeg", settings), host));
+}
+
+TEST(blocking_signing_round_trips_trusted_with_owned_report) {
+    auto settings = signing_settings();
+    BuildSession session(settings);
+    settings.definition_json.clear();
+    settings.certificates.clear();
+    MemoryBuildHost host(fixture_bytes(), fixture_sign);
+    auto report = build_and_sign(std::move(session), host);
+    const auto json = trusted_signing_json(host.output());
+    CHECK(json.find("Trusted") != std::string::npos);
+    CHECK(json.find("baseline.jpg") != std::string::npos);
+    CHECK(json.find("c2pa.actions.v2") != std::string::npos);
+    CHECK(!report.manifest.empty());
+    CHECK(!report.exclusions.empty());
+    uint64_t previous = 0;
+    for (const auto &range : report.exclusions) {
+        CHECK(range.start >= previous);
+        CHECK(range.start <= host.output().size());
+        CHECK(range.len <= host.output().size() - range.start);
+        previous = range.start;
+    }
+    const auto copied = report;
+    report.manifest.clear();
+    report.exclusions.clear();
+    CHECK(!copied.manifest.empty());
+    CHECK(!copied.exclusions.empty());
+}
+
+TEST(build_session_moves_consumes_and_preserves_owned_pending_values) {
+    BuildSession original(signing_settings());
+    const auto first = original.advance();
+    CHECK(!first.done);
+    CHECK(!first.requests.empty());
+    CHECK(original.advance().requests.empty());
+    CHECK(!original.advance().done);
+    BuildSession moved(std::move(original));
+    CHECK_THROWS_CODE(original.advance(), ErrorCode::InvalidArgument);
+    BuildSession assigned(signing_settings());
+    assigned = std::move(moved);
+    CHECK_THROWS_CODE(moved.fulfill(0, Failed{"moved"}), ErrorCode::InvalidArgument);
+    const auto id = request_id(first.requests.front());
+    CHECK_THROWS_CODE(assigned.fulfill(id, Signature{{}}), ErrorCode::InvalidArgument);
+    CHECK_THROWS_CODE(assigned.fulfill(UINT64_MAX, Length{0}), ErrorCode::InvalidArgument);
+    MemoryBuildHost host(fixture_bytes(), fixture_sign);
+    for (const auto &pending : first.requests) assigned.fulfill(request_id(pending), answer(host, pending));
+    CHECK_THROWS_CODE(assigned.fulfill(id, Length{0}), ErrorCode::InvalidArgument);
+    std::vector<BuildRequest> retained;
+    for (;;) {
+        const auto step = assigned.advance();
+        if (step.done) break;
+        CHECK(!step.requests.empty());
+        if (step.requests.empty()) throw std::runtime_error("unexpected stalled build");
+        for (const auto &pending : step.requests) {
+            retained.push_back(pending);
+            assigned.fulfill(request_id(pending), answer(host, pending));
+        }
+    }
+    const auto report = std::move(assigned).finish();
+    CHECK(!report.manifest.empty());
+    CHECK_THROWS_CODE(assigned.advance(), ErrorCode::InvalidArgument);
+    bool saw_sign = false;
+    bool saw_write = false;
+    for (const auto &pending : retained) {
+        if (const auto *sign = std::get_if<SignRequest>(&pending)) {
+            CHECK_EQ(sign->algorithm, "es256");
+            CHECK(!sign->data.empty());
+            saw_sign = true;
+        }
+        if (const auto *write = std::get_if<WriteRequest>(&pending)) {
+            CHECK(!write->bytes.empty());
+            saw_write = true;
+        }
+    }
+    CHECK(saw_sign && saw_write);
+}
+
+TEST(premature_finish_consumes_build_and_moved_from_finish_is_safe) {
+    BuildSession session(signing_settings());
+    CHECK_THROWS_CODE(std::move(session).finish(), ErrorCode::InvalidArgument);
+    CHECK_THROWS_CODE(std::move(session).finish(), ErrorCode::InvalidArgument);
+    CHECK_THROWS_CODE(session.advance(), ErrorCode::InvalidArgument);
+}
+
+TEST(memory_build_host_keeps_streams_distinct_and_checks_bounds) {
+    MemoryBuildHost host({1, 2, 3});
+    CHECK_EQ(host.length(BuildStream::Source), uint64_t(3));
+    CHECK_EQ(host.length(BuildStream::Output), uint64_t(0));
+    host.write(BuildStream::Output, 1, {9, 8});
+    CHECK_EQ(host.read(BuildStream::Source, 1, 2), (std::vector<uint8_t>{2, 3}));
+    CHECK_EQ(host.read(BuildStream::Output, 0, 3), (std::vector<uint8_t>{0, 9, 8}));
+    CHECK(std::holds_alternative<Failed>(answer(host, BuildReadRequest{1, BuildStream::Source, 2, 2})));
+    CHECK(std::holds_alternative<Failed>(answer(host, BuildReadRequest{1, BuildStream::Output, UINT64_MAX, 1})));
+    CHECK(std::holds_alternative<Failed>(answer(host, WriteRequest{1, BuildStream::Output, UINT64_MAX, {1}})));
+    CHECK(std::holds_alternative<Failed>(answer(host, WriteRequest{1, BuildStream::Source, 0, {1}})));
+    CHECK(std::holds_alternative<Written>(answer(host, WriteRequest{1, BuildStream::Output, 0, {1}})));
+    CHECK_EQ(std::get<Length>(answer(host, BuildLengthRequest{1, BuildStream::Output})).value, uint64_t(3));
+}
+
+TEST(build_request_conversion_rejects_unknown_abi_values) {
+    bool rejected = false;
+    try { detail::build_stream(99); } catch (const std::runtime_error &) { rejected = true; }
+    CHECK(rejected);
+    C2paSmBuildRequest pending{};
+    pending.kind = 99;
+    rejected = false;
+    try { detail::describe(pending); } catch (const std::runtime_error &) { rejected = true; }
+    CHECK(rejected);
+}
+
+TEST(build_request_conversion_accepts_empty_buffers_without_dereferencing_them) {
+    CHECK(detail::build_bytes({nullptr, 0}).empty());
+    CHECK(detail::build_string({nullptr, 0}).empty());
+    C2paSmBuildRequest pending{};
+    pending.id = 42;
+    pending.kind = C2PA_SM_BUILD_REQUEST_SIGN;
+    const auto sign = std::get<SignRequest>(detail::describe(pending));
+    CHECK_EQ(sign.id, uint64_t(42));
+    CHECK(sign.algorithm.empty());
+    CHECK(sign.data.empty());
+    pending.kind = C2PA_SM_BUILD_REQUEST_TIMESTAMP;
+    const auto timestamp = std::get<TimestampRequest>(detail::describe(pending));
+    CHECK_EQ(timestamp.id, uint64_t(42));
+    CHECK(timestamp.url.empty());
+    CHECK(timestamp.body.empty());
+    pending.kind = C2PA_SM_BUILD_REQUEST_WRITE;
+    pending.stream = C2PA_SM_BUILD_OUTPUT;
+    const auto write = std::get<WriteRequest>(detail::describe(pending));
+    CHECK_EQ(write.id, uint64_t(42));
+    CHECK(write.stream == BuildStream::Output);
+    CHECK(write.bytes.empty());
+}
+
+TEST(build_hosts_accept_empty_io_at_eof_without_changing_output) {
+    MemoryBuildHost memory({1, 2, 3});
+    std::istringstream source("abc");
+    std::stringstream output;
+    IOStreamBuildHost streams(source, output);
+    for (SyncBuildHost *host : {static_cast<SyncBuildHost *>(&memory), static_cast<SyncBuildHost *>(&streams)}) {
+        CHECK(std::get<Bytes>(answer(*host, BuildReadRequest{1, BuildStream::Source, 3, 0})).data.empty());
+        CHECK(std::get<Bytes>(answer(*host, BuildReadRequest{2, BuildStream::Output, 0, 0})).data.empty());
+        CHECK(std::holds_alternative<Written>(answer(*host, WriteRequest{3, BuildStream::Output, 0, {}})));
+        CHECK_EQ(host->length(BuildStream::Output), uint64_t(0));
+        CHECK(std::holds_alternative<Failed>(answer(*host, BuildReadRequest{4, BuildStream::Source, 4, 0})));
+    }
+    CHECK(memory.output().empty());
+    CHECK(output.str().empty());
+}
+
+TEST(blocking_signing_supports_seekable_iostreams) {
+    const auto source = fixture_bytes();
+    std::istringstream input(std::string(source.begin(), source.end()));
+    std::stringstream output;
+    IOStreamBuildHost host(input, output, fixture_sign);
+    const auto report = build_and_sign(BuildSession(signing_settings()), host);
+    CHECK(!report.manifest.empty());
+    const auto bytes = output.str();
+    CHECK(trusted_signing_json({bytes.begin(), bytes.end()}).find("Trusted") != std::string::npos);
+}
+
+TEST(stream_host_rejects_alias_nonempty_failed_and_short_io) {
+    std::stringstream input("abc");
+    std::stringstream output;
+    bool rejected = false;
+    try { IOStreamBuildHost host(input, input); } catch (const std::exception &) { rejected = true; }
+    CHECK(rejected);
+    rejected = false;
+    try { IOStreamBuildHost host(output, input); } catch (const std::exception &) { rejected = true; }
+    CHECK(rejected);
+    IOStreamBuildHost host(input, output);
+    CHECK(std::holds_alternative<Failed>(answer(host, BuildReadRequest{1, BuildStream::Source, 2, 2})));
+    CHECK(std::holds_alternative<Failed>(answer(host, WriteRequest{1, BuildStream::Source, 0, {1}})));
+    output.setstate(std::ios::badbit);
+    CHECK(std::holds_alternative<Failed>(answer(host, WriteRequest{1, BuildStream::Output, 0, {1}})));
+    CHECK(std::holds_alternative<Failed>(answer(host, BuildLengthRequest{1, BuildStream::Output})));
+    input.exceptions(std::ios::badbit);
+    try { input.setstate(std::ios::badbit); } catch (const std::exception &) {}
+    CHECK(std::holds_alternative<Failed>(answer(host, BuildReadRequest{1, BuildStream::Source, 0, 1})));
+}
+
+TEST(stream_host_detects_short_reads_short_writes_flush_and_seek_failures) {
+    struct ShortRead : std::stringbuf {
+        ShortRead() : std::stringbuf("abc") {}
+        std::streamsize xsgetn(char *destination, std::streamsize count) override {
+            return std::stringbuf::xsgetn(destination, count > 0 ? count - 1 : 0);
+        }
+    } short_read;
+    struct ShortWrite : std::stringbuf {
+        std::streamsize xsputn(const char *, std::streamsize count) override {
+            return count > 0 ? count - 1 : 0;
+        }
+    } short_write;
+    struct FailedFlush : std::stringbuf {
+        int sync() override { return -1; }
+    } failed_flush;
+    std::istream source(&short_read);
+    std::stringstream output;
+    IOStreamBuildHost reader(source, output);
+    CHECK(std::holds_alternative<Failed>(answer(reader, BuildReadRequest{1, BuildStream::Source, 0, 3})));
+    std::istringstream input("abc");
+    std::iostream short_output(&short_write);
+    IOStreamBuildHost writer(input, short_output);
+    CHECK(std::holds_alternative<Failed>(answer(writer, WriteRequest{1, BuildStream::Output, 0, {1, 2, 3}})));
+    std::iostream unflushed(&failed_flush);
+    IOStreamBuildHost flushing(input, unflushed);
+    CHECK(std::holds_alternative<Failed>(answer(flushing, WriteRequest{1, BuildStream::Output, 0, {1}})));
+    CHECK(std::holds_alternative<Failed>(answer(reader, WriteRequest{1, BuildStream::Output, UINT64_MAX, {1}})));
+    struct Unseekable : std::streambuf {} unseekable;
+    std::iostream invalid(&unseekable);
+    bool rejected = false;
+    try { IOStreamBuildHost host(input, invalid); } catch (const std::exception &) { rejected = true; }
+    CHECK(rejected);
+}
+
+TEST(stream_host_converts_exceptions_from_each_io_operation_into_failures) {
+    struct ThrowingBuffer : std::stringbuf {
+        enum class Operation { None, Seek, SeekPosition, Tell, Read, Write, Flush };
+        explicit ThrowingBuffer(const std::string &contents = {}) : std::stringbuf(contents) {}
+        Operation operation = Operation::None;
+        pos_type seekoff(off_type offset, std::ios_base::seekdir direction,
+                         std::ios_base::openmode mode) override {
+            if (operation == Operation::Seek) throw std::runtime_error("seek refused");
+            if (operation == Operation::Tell && direction == std::ios::cur)
+                throw std::runtime_error("position refused");
+            return std::stringbuf::seekoff(offset, direction, mode);
+        }
+        pos_type seekpos(pos_type position, std::ios_base::openmode mode) override {
+            if (operation == Operation::Seek || operation == Operation::SeekPosition)
+                throw std::runtime_error("seek refused");
+            return std::stringbuf::seekpos(position, mode);
+        }
+        std::streamsize xsgetn(char *destination, std::streamsize count) override {
+            if (operation == Operation::Read) throw std::runtime_error("read refused");
+            return std::stringbuf::xsgetn(destination, count);
+        }
+        std::streamsize xsputn(const char *source, std::streamsize count) override {
+            if (operation == Operation::Write) throw std::runtime_error("write refused");
+            return std::stringbuf::xsputn(source, count);
+        }
+        int sync() override {
+            if (operation == Operation::Flush) throw std::runtime_error("flush refused");
+            return std::stringbuf::sync();
+        }
+    };
+    for (auto operation : {ThrowingBuffer::Operation::Seek, ThrowingBuffer::Operation::SeekPosition,
+                           ThrowingBuffer::Operation::Tell, ThrowingBuffer::Operation::Read,
+                           ThrowingBuffer::Operation::Write, ThrowingBuffer::Operation::Flush}) {
+        ThrowingBuffer source_buffer("abc");
+        ThrowingBuffer output_buffer;
+        std::istream source(&source_buffer);
+        std::iostream output(&output_buffer);
+        source.exceptions(std::ios::badbit | std::ios::failbit);
+        output.exceptions(std::ios::badbit | std::ios::failbit);
+        IOStreamBuildHost host(source, output);
+        if (operation != ThrowingBuffer::Operation::Write && operation != ThrowingBuffer::Operation::Flush) {
+            source_buffer.operation = operation;
+            CHECK(std::holds_alternative<Failed>(answer(host, BuildReadRequest{1, BuildStream::Source, 0, 1})));
+        }
+        if (operation != ThrowingBuffer::Operation::Read && operation != ThrowingBuffer::Operation::Tell) {
+            output_buffer.operation = operation;
+            CHECK(std::holds_alternative<Failed>(answer(host, WriteRequest{2, BuildStream::Output, 0, {1}})));
+        }
+    }
+}
+
+TEST(stream_host_rejects_an_unavailable_current_position_after_a_successful_seek) {
+    struct MissingPosition : std::stringbuf {
+        MissingPosition() : std::stringbuf("abc") {}
+        pos_type seekoff(off_type offset, std::ios_base::seekdir direction,
+                         std::ios_base::openmode mode) override {
+            if (direction == std::ios::cur) return pos_type(off_type(-1));
+            return std::stringbuf::seekoff(offset, direction, mode);
+        }
+    } buffer;
+    std::istream source(&buffer);
+    std::stringstream output;
+    IOStreamBuildHost host(source, output);
+    CHECK(std::holds_alternative<Failed>(answer(host, BuildLengthRequest{1, BuildStream::Source})));
+    CHECK(source.good());
+}
+
+TEST(missing_throwing_and_invalid_signers_fail_the_build) {
+    const std::vector<BuildSigner> signers{
+        {},
+        [](const auto &, const auto &) -> std::vector<uint8_t> { throw std::runtime_error("signer refused"); },
+        [](const auto &, const auto &) -> std::vector<uint8_t> { throw 42; },
+        [](const auto &, const auto &) { return std::vector<uint8_t>{1}; },
+    };
+    for (const auto &signer : signers) {
+        MemoryBuildHost host(fixture_bytes(), signer);
+        CHECK_THROWS_CODE(build_and_sign(BuildSession(signing_settings()), host), static_cast<ErrorCode>(C2PA_SM_ERR_BUILD));
+    }
+}
+
+TEST(timestamp_callback_receives_url_and_der_and_failures_fail_closed) {
+    std::vector<BuildTimestamp> callbacks{
+        {},
+        [](const auto &, const auto &) -> std::vector<uint8_t> { throw std::runtime_error("offline"); },
+        [](const auto &, const auto &) -> std::vector<uint8_t> { throw 42; },
+        [](const auto &, const auto &) { return std::vector<uint8_t>{1, 2}; },
+        [](const auto &, const auto &) { return std::vector<uint8_t>{0x30, 5, 0x30, 3, 2, 1, 2}; },
+    };
+    for (const auto &callback : callbacks) {
+        MemoryBuildHost host(fixture_bytes(), fixture_sign, callback);
+        CHECK_THROWS_CODE(build_and_sign(BuildSession(signing_settings(true)), host), static_cast<ErrorCode>(C2PA_SM_ERR_BUILD));
+    }
+    bool called = false;
+    MemoryBuildHost host(fixture_bytes(), fixture_sign, [&](const auto &url, const auto &body) {
+        CHECK_EQ(url, "https://tsa.example/");
+        CHECK(!body.empty() && body.front() == 0x30);
+        called = true;
+        return std::vector<uint8_t>{0x30, 8, 0x30, 3, 2, 1, 0, 0x30, 1, 0};
+    });
+    const auto report = build_and_sign(BuildSession(signing_settings(true)), host);
+    CHECK(called);
+    CHECK(!report.manifest.empty());
+}
+
+TEST(short_reads_and_host_failures_fail_without_spinning) {
+    struct Broken : MemoryBuildHost {
+        explicit Broken(int failure) : MemoryBuildHost(fixture_bytes(), fixture_sign), failure_(failure) {}
+        std::vector<uint8_t> read(BuildStream stream, uint64_t start, uint64_t len) override {
+            if (failure_ == 0) return {};
+            return MemoryBuildHost::read(stream, start, len);
+        }
+        uint64_t length(BuildStream stream) override {
+            if (failure_ == 1) throw std::runtime_error("length failed");
+            return MemoryBuildHost::length(stream);
+        }
+        void write(BuildStream stream, uint64_t offset, const std::vector<uint8_t> &bytes) override {
+            if (failure_ == 2) throw 42;
+            MemoryBuildHost::write(stream, offset, bytes);
+        }
+        int failure_;
+    };
+    for (int failure = 0; failure < 3; ++failure) {
+        Broken host(failure);
+        CHECK_THROWS_CODE(build_and_sign(BuildSession(signing_settings()), host), static_cast<ErrorCode>(C2PA_SM_ERR_BUILD));
+    }
+}
+
+#if defined(__unix__) || defined(__APPLE__)
+TEST(file_signing_publishes_only_success_and_cleans_temporaries) {
+    std::string pattern = (std::filesystem::temp_directory_path() / "c2pa-sign-test-XXXXXX").string();
+    if (!::mkdtemp(pattern.data())) throw std::runtime_error("cannot create test directory");
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() { std::error_code error; std::filesystem::remove_all(path, error); }
+    } cleanup{pattern};
+    const auto destination = cleanup.path / "signed.jpg";
+    const auto settings = signing_settings();
+    {
+        struct FileSizeLimit {
+            struct rlimit previous_limit{};
+            struct sigaction previous_action{};
+            explicit FileSizeLimit(rlim_t maximum) {
+                if (::getrlimit(RLIMIT_FSIZE, &previous_limit) != 0)
+                    throw std::runtime_error("cannot inspect file-size limit");
+                struct sigaction ignored{};
+                ignored.sa_handler = SIG_IGN;
+                sigemptyset(&ignored.sa_mask);
+                if (::sigaction(SIGXFSZ, &ignored, &previous_action) != 0)
+                    throw std::runtime_error("cannot ignore file-size signal");
+                auto limited = previous_limit;
+                limited.rlim_cur = maximum;
+                if (::setrlimit(RLIMIT_FSIZE, &limited) != 0) {
+                    ::sigaction(SIGXFSZ, &previous_action, nullptr);
+                    throw std::runtime_error("cannot limit file size");
+                }
+            }
+            ~FileSizeLimit() {
+                ::setrlimit(RLIMIT_FSIZE, &previous_limit);
+                ::sigaction(SIGXFSZ, &previous_action, nullptr);
+            }
+            FileSizeLimit(const FileSizeLimit &) = delete;
+            FileSizeLimit &operator=(const FileSizeLimit &) = delete;
+        };
+        FileBuildHost host(C2PA_SM_FIXTURE, destination);
+        struct rlimit initial_limit{};
+        struct sigaction initial_action{};
+        CHECK_EQ(::getrlimit(RLIMIT_FSIZE, &initial_limit), 0);
+        CHECK_EQ(::sigaction(SIGXFSZ, nullptr, &initial_action), 0);
+        const auto reply = [&host] {
+            FileSizeLimit limit(3);
+            return answer(host, WriteRequest{1, BuildStream::Output, 0, {1, 2, 3, 4, 5}});
+        }();
+        struct rlimit restored_limit{};
+        struct sigaction restored_action{};
+        CHECK_EQ(::getrlimit(RLIMIT_FSIZE, &restored_limit), 0);
+        CHECK_EQ(::sigaction(SIGXFSZ, nullptr, &restored_action), 0);
+        CHECK_EQ(restored_limit.rlim_cur, initial_limit.rlim_cur);
+        CHECK_EQ(restored_limit.rlim_max, initial_limit.rlim_max);
+        CHECK(restored_action.sa_handler == initial_action.sa_handler);
+        CHECK(std::holds_alternative<Failed>(reply));
+        CHECK_EQ(std::get<Failed>(reply).message, "build file write failed");
+        CHECK_EQ(host.length(BuildStream::Output), uint64_t(3));
+        CHECK_EQ(host.read(BuildStream::Output, 0, 3), (std::vector<uint8_t>{1, 2, 3}));
+    }
+    CHECK(std::filesystem::is_empty(cleanup.path));
+    {
+        FileBuildHost host(C2PA_SM_FIXTURE, destination);
+        const auto source_length = host.length(BuildStream::Source);
+        CHECK(source_length > 0);
+        CHECK(std::get<Bytes>(answer(host, BuildReadRequest{1, BuildStream::Source, source_length, 0})).data.empty());
+        CHECK(std::get<Bytes>(answer(host, BuildReadRequest{2, BuildStream::Output, 0, 0})).data.empty());
+        CHECK(std::holds_alternative<Written>(answer(host, WriteRequest{3, BuildStream::Output, 0, {}})));
+        CHECK_EQ(host.length(BuildStream::Output), uint64_t(0));
+        CHECK(std::holds_alternative<Failed>(answer(host, BuildReadRequest{4, BuildStream::Source, source_length, 1})));
+        CHECK(std::holds_alternative<Failed>(answer(host, BuildReadRequest{5, BuildStream::Output, UINT64_MAX, 1})));
+        CHECK(std::holds_alternative<Failed>(answer(host, WriteRequest{6, BuildStream::Source, 0, {1}})));
+        CHECK(std::holds_alternative<Failed>(answer(host, WriteRequest{7, BuildStream::Output, UINT64_MAX, {1}})));
+        CHECK_EQ(host.length(BuildStream::Source), source_length);
+        CHECK_EQ(host.length(BuildStream::Output), uint64_t(0));
+    }
+    CHECK(std::filesystem::is_empty(cleanup.path));
+    {
+        std::ofstream output(destination);
+        output << "keep me";
+    }
+    CHECK_THROWS_CODE(build_and_sign_file(settings, C2PA_SM_FIXTURE, destination, {}), static_cast<ErrorCode>(C2PA_SM_ERR_BUILD));
+    {
+        std::ifstream input(destination);
+        CHECK_EQ(std::string(std::istreambuf_iterator<char>(input), {}), "keep me");
+    }
+    CHECK_EQ(std::distance(std::filesystem::directory_iterator(cleanup.path), std::filesystem::directory_iterator{}), 1);
+    const auto report = build_and_sign_file(settings, C2PA_SM_FIXTURE, destination, fixture_sign);
+    CHECK(!report.manifest.empty());
+    std::ifstream input(destination, std::ios::binary);
+    const std::vector<uint8_t> bytes(std::istreambuf_iterator<char>(input), {});
+    CHECK(trusted_signing_json(bytes).find("Trusted") != std::string::npos);
+    const auto directory = cleanup.path / "cannot-replace";
+    std::filesystem::create_directory(directory);
+    bool rejected = false;
+    try { build_and_sign_file(settings, C2PA_SM_FIXTURE, directory, fixture_sign); }
+    catch (const std::exception &) { rejected = true; }
+    CHECK(rejected);
+    CHECK(std::filesystem::is_directory(directory));
+    CHECK_EQ(std::distance(std::filesystem::directory_iterator(cleanup.path), std::filesystem::directory_iterator{}), 2);
+    rejected = false;
+    try { build_and_sign_file(settings, cleanup.path / "missing.jpg", destination, fixture_sign); }
+    catch (const std::exception &) { rejected = true; }
+    CHECK(rejected);
+    CHECK_EQ(std::distance(std::filesystem::directory_iterator(cleanup.path), std::filesystem::directory_iterator{}), 2);
+    const auto link = cleanup.path / "link.jpg";
+    std::filesystem::create_symlink(destination, link);
+    CHECK_THROWS_CODE(build_and_sign_file(settings, C2PA_SM_FIXTURE, link, {}), static_cast<ErrorCode>(C2PA_SM_ERR_BUILD));
+    CHECK(std::filesystem::is_symlink(link));
+    build_and_sign_file(settings, C2PA_SM_FIXTURE, link, fixture_sign);
+    CHECK(!std::filesystem::is_symlink(link));
+    std::ifstream unchanged(destination, std::ios::binary);
+    CHECK_EQ(std::vector<uint8_t>(std::istreambuf_iterator<char>(unchanged), {}), bytes);
+    rejected = false;
+    try { build_and_sign_file(settings, C2PA_SM_FIXTURE, cleanup.path / "missing" / "out.jpg", fixture_sign); }
+    catch (const std::exception &) { rejected = true; }
+    CHECK(rejected);
+    for (bool invalid_source : {false, true}) {
+        auto invalid = destination.string();
+        invalid.push_back('\0');
+        invalid += "suffix";
+        rejected = false;
+        try {
+            build_and_sign_file(settings,
+                invalid_source ? std::filesystem::path(invalid) : std::filesystem::path(C2PA_SM_FIXTURE),
+                invalid_source ? destination : std::filesystem::path(invalid), fixture_sign);
+        } catch (const std::exception &) { rejected = true; }
+        CHECK(rejected);
+    }
+    CHECK_THROWS_CODE(build_and_sign_file(settings, cleanup.path, destination, fixture_sign),
+                      static_cast<ErrorCode>(C2PA_SM_ERR_BUILD));
+    CHECK_EQ(std::distance(std::filesystem::directory_iterator(cleanup.path), std::filesystem::directory_iterator{}), 3);
+}
+#endif
 
 TEST(signing_abi_values_are_grouped_enums_with_stable_integer_values) {
     static_assert(std::is_enum_v<C2paSmBuildErrorCode>);

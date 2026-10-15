@@ -6,7 +6,7 @@ behavior that a callback-based C++ API cannot?**
 
 It is a Rust static library behind a small C ABI (`src/lib.rs`,
 `include/contentauth_c2pa_sm.h`) and **C++** on top (`include/contentauth/`),
-header-only except for the thread pools (`cpp/src/`, built as `c2pa_sm_cpp`):
+header-only except for signing and the thread pools (`cpp/src/`, built as `c2pa_sm_cpp`):
 
 | Header | Standard | Provides |
 |---|---|---|
@@ -181,10 +181,13 @@ the real library, so drift is a link or test failure.
 
 Phase 1 supplies C++17 value types in `include/contentauth/c2pa_sm_sign.hpp`.
 Phase 2 supplies the signing C ABI in `include/contentauth_c2pa_sm_sign.h`,
-implemented in `src/signing.rs` over cimpl 0.4.1. There is no C++ `BuildSession`
-or signing driver yet. The C++ lifecycle below guides Phase 3; the C ABI is
-available now and tested by a Rust host that signs and reads back a JPEG as
-`Trusted` through the existing reader, with an explicit trust anchor and clock.
+implemented in `src/signing.rs` over cimpl 0.4.1. Phase 3 adds the move-only
+C++17 `BuildSession`, blocking `build_and_sign`, and memory, seekable-stream,
+and POSIX atomic-file host declarations in the same C++ header. Their
+implementations live in `cpp/src/sign.cpp`; signing callers must link the
+`c2pa_sm_cpp` CMake target, not just the Rust static library. Both Rust and C++ tests
+sign and read back the baseline JPEG as `Trusted`, with an explicit trust
+anchor and clock. Existing reader APIs are unchanged.
 
 ### Inputs and baseline
 
@@ -203,12 +206,14 @@ Do not add another signing engine or an I/O dependency to this binding.
 
 ### Session and host
 
-The proposed move-only `BuildSession(BuildSettings)` copies inputs into Rust.
+The move-only `BuildSession(BuildSettings)` copies inputs into Rust.
 `advance()` returns completion or newly issued `BuildRequest` values;
 an empty pending batch does not mean completion. `fulfill(id, BuildReply)`
 accepts any subset of outstanding replies in any order. Unknown IDs,
 duplicate replies, and wrong reply kinds are errors. `finish()` consumes a
 completed session and returns `SignReport`; premature finish is an error.
+Call it as `std::move(session).finish()`: even a failed finish consumes the
+handle. Moved-from operations throw `Exception` rather than dereferencing it.
 Neither a session nor its ABI starts host work or invokes host callbacks.
 
 | Request | Required reply | Host obligation |
@@ -229,16 +234,72 @@ All C++ payloads own their strings and bytes, not pointers into the session.
 must not alias the source, and must support random-access writes and reads:
 the builder hashes output bytes after writing them. A stream-level failure
 or cancellation can leave partial output; rollback is not a session promise.
-A later file convenience driver should use an exclusively created temporary
-file beside the destination and publish it only on success, cleaning it up
-on failure. `SignReport` contains embedded manifest bytes and all hard-binding
+The file convenience driver uses an exclusively created temporary file beside
+the destination and publishes it only on success, cleaning it up on failure.
+`SignReport` contains embedded manifest bytes and all hard-binding
 `exclusions`, not the output asset itself.
 
-An optional `tsa_url` in the definition requests timestamping. The request
-and reply types are defined now; the host driver comes in a later phase.
+An optional `tsa_url` in the definition requests timestamping. The blocking
+driver forwards the URL and DER request to the host's timestamp callback.
 Rust constructs the RFC 3161 request and unwraps the response. No configured
 TSA means no timestamp request; a configured TSA that is unavailable, refuses,
 or returns malformed data must fail rather than produce untimestamped output.
+
+### Blocking C++ signing
+
+`SyncBuildHost` defines `read(stream, start, len)`, `length(stream)`, and
+`write(stream, offset, bytes)`. The blocking driver answers every request
+without spawning or blocking inside the session. Host exceptions, including
+non-standard exceptions and callback failures, become `Failed` replies. A
+short read also becomes `Failed`; a custom write method must finish the entire
+write before returning. An empty pending batch is not a completed build.
+
+`BuildSigner` accepts `(algorithm, data)` and returns the signature bytes.
+`BuildTimestamp` accepts `(url, body)` and returns the entire DER response.
+These are `std::function` callbacks owned by the host. Missing callbacks fail
+only when requested. There is no default signer or HTTP client.
+
+```cpp
+#include <contentauth/c2pa_sm_sign.hpp>
+
+c2pa::sm::BuildSettings settings;
+settings.definition_json = definition_json;
+settings.certificates = {leaf_certificate_der};
+c2pa::sm::MemoryBuildHost host(source_jpeg, signer, timestamp_transport);
+auto report = c2pa::sm::build_and_sign(c2pa::sm::BuildSession(settings), host);
+const auto &signed_jpeg = host.output();
+```
+
+The definition must include the baseline's instance ID, label, generator and
+assertion. The signer owns the private key and signs the complete COSE input;
+ES256 returns raw `r || s`. Omit `timestamp_transport` if the definition has no
+`tsa_url`. `report` owns its manifest and exclusion ranges independently of
+the session and ABI report handle.
+
+`IOStreamBuildHost(source, output, signer, timestamp_transport)` takes a
+seekable `std::istream` and an initially empty `std::iostream`. Their stream
+buffers must differ; callers must also avoid separate buffers referring to
+the same underlying asset. Output is flushed before a write is acknowledged
+and remains readable for hard-binding hashing. Seek, short-I/O, flush and
+stream-state failures fail the build. Memory and stream hosts do not roll back
+partial output after failure.
+
+On POSIX systems, `build_and_sign_file(settings, source_path, destination_path,
+signer, timestamp_transport)` uses `FileBuildHost`: `mkstemp` exclusively creates
+an unpredictable sibling temporary, and `pread`/`pwrite` retain that descriptor
+without reopening its pathname. Writes retry interrupted or partial system
+calls. Only a completed build and successful `fsync` permit atomic `rename`.
+Failures, including rename failures, remove the temporary and preserve an
+existing destination. A destination symlink is replaced, not followed. As with
+ordinary atomic-replacement APIs, the destination directory must be controlled
+by the caller; this is not a directory-durability or hostile-directory promise.
+The file helper is intentionally unavailable on non-POSIX platforms rather
+than offering a predictable or symlink-following temporary fallback. Use the
+portable stream host with a platform-owned safe publication strategy there.
+
+The C++ tests use OpenSSL Crypto solely for the fixture ES256 signer; CMake
+therefore requires its development package. Neither production host nor the
+public signing header depends on OpenSSL.
 
 ### FFI, errors, and concurrency
 
@@ -316,11 +377,25 @@ allocation registry must not be mistaken for a guarantee of a lock-free FFI.
   docs, Wasm targets, dependency policy, and focused coverage are checked.
 * Stop for approval before implementing the C++ `BuildSession` or blocking driver.
 
+### Phase 3 completion gate
+
+* Move-only C++17 session ownership, consumed error finishes, copied settings,
+  request batches and reports, invalid/duplicate replies and moved-from use
+  are covered by the focused C++ tests.
+* Blocking memory, seekable-stream and POSIX-file builds read back as `Trusted`;
+  source/output independence, short/failing I/O, throwing/missing callbacks,
+  timestamp refusal/malformed replies and file rollback/cleanup are tested.
+* The synthetic granted timestamp checks DER response transport and embedding
+  only, not cryptographic TSA validity. Real HTTP and signing stay host-owned.
+* C++17 and C++20 compilation and focused CTest entries pass. Full five-entry
+  CTest, coverage and sanitizer acceptance remain required before submission.
+* Stop here: async, pool, future and coroutine signing belong to Phase 4.
+
 ## Not covered
 
-* **C++ signing drivers.** The value vocabulary and C ABI are implemented;
-  RAII `BuildSession`, blocking/file hosts, async/future drivers, and coroutine
-  signing remain the next phases. No production key or HTTP provider is included.
+* **Asynchronous C++ signing drivers.** Async/pool/future and coroutine signing
+  remain next. No production key or HTTP provider is included. Atomic file
+  signing currently requires POSIX; memory and stream hosts are portable C++17.
 * Resources (`get_resource`), `detailed_json`, `crjson`, fragments, remote
   manifests, formats other than JPEG, and the OCSP request path in the C++
   tests (the fixtures name no responder; it is covered from Rust).

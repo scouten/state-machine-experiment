@@ -14,7 +14,7 @@ flowchart LR
         d3["Formats: JPEG, TIFF/BigTIFF/DNG, registry"]
         d4["Bindings: rs / wasm / node, read and sign"]
         d5["Differential tests vs c2pa-rs"]
-        d6["C++ read drivers; signing C ABI + value types"]
+        d6["C++ read drivers; blocking signing<br/>memory / stream / POSIX file hosts"]
     end
     subgraph next["Next"]
         direction TB
@@ -71,10 +71,11 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 
 ## 4. Bindings and hosts
 
-* **C++ signing drivers:** the cimpl-backed C signing ABI and C++17 value
-  types are implemented and tested through the baseline JPEG/ES256 case.
-  Next are the RAII `BuildSession`, blocking host/driver, then async/future
-  and coroutine drivers and host timestamp transport.
+* **Asynchronous C++ signing drivers:** the cimpl-backed C ABI, C++17 RAII
+  `BuildSession`, blocking memory/stream/POSIX-file hosts and signer/TSA
+  callbacks are implemented and tested through the baseline JPEG/ES256 case.
+  Async/pool/future and coroutine signing remain next; real timestamp HTTP
+  transport and private-key operations remain the host's responsibility.
 * **`Builder` surface parity** for the c2pa-rs shape beyond the baseline
   case; `from_stream` and other constructors.
 * **c2pa-node:** `fromManifestDataAndAsset`, `resourceToAsset`, signers,

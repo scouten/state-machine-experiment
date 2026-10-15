@@ -111,7 +111,7 @@ flowchart TB
 | `…-rs-compat` | Binding | c2pa-rs `Context` + `Reader::with_file` slice; one of two crates with a network dependency (`reqwest` OCSP). |
 | `…-js-compat` | Binding | c2pa-wasm `WasmReader` slice; async host with `Blob`/`Platform` traits; `web` feature for `wasm-bindgen`. |
 | `…-node-compat` (+ `c2pa-node-compat-addon`) | Binding | Purely synchronous `NodeSession`; Node owns all async. Addon is a separate Neon workspace. |
-| `…-cpp` | Binding | C++17/20 reader drivers over `node-compat`; cimpl-tracked signing C ABI over `node-compat-sign`, with generated C declarations and C++ value types. C++ signing drivers are not implemented yet. |
+| `…-cpp` | Binding | C++17/20 reader drivers over `node-compat`; cimpl-tracked signing C ABI over `node-compat-sign`, with move-only C++17 `BuildSession`, blocking memory/stream/POSIX-file hosts and signer/TSA callbacks. Async signing remains next. |
 | `…-sign-baseline` | Binding | The baseline signing case (JSON definition → `BuilderSettings`) every write binding is held to. |
 | `…-rs/js/node-compat-sign` (+ `c2pa-node-sign-addon`) | Binding | The baseline case through each binding. `rs-compat-sign` is the other crate with a network dependency (`reqwest` for RFC 3161 timestamps). |
 | `c2pa-rs-compat-conformance` | Test | Separate workspace; differential tests against the real `c2pa` crate. |

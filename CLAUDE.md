@@ -210,7 +210,7 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   the one crate here allowed `unsafe`, being the FFI boundary; symbols are
   `c2pa_sm_*` to coexist with c2pa-c) wrapping `contentauth-c2pa-node-compat`'s
   flat `NodeSession`, plus C++ in `include/contentauth/` (header-only apart
-  from the compiled thread pools in `cpp/src/`):
+  from the compiled signing implementation and thread pools in `cpp/src/`):
   a C++17 core (`Session`, `Reader`, blocking `read()`), C++17 thread-based
   drivers (`Reading`/`Mailbox`, `read_parallel`, `read_future`,
   `PooledHost` over the `ThreadPool` interface, with a portable
