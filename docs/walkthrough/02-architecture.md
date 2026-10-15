@@ -27,6 +27,7 @@ flowchart BT
     RSC["rs-compat<br/><i>c2pa-rs Reader shape</i>"]
     JSC["js-compat<br/><i>c2pa-wasm shape, async</i>"]
     NDC["node-compat<br/><i>sync NodeSession</i>"]
+    CPP["cpp<br/><i>reader + signing C ABI</i>"]
 
     SB["sign-baseline"]
     RSS["rs-compat-sign"]
@@ -48,6 +49,7 @@ flowchart BT
     RSS --> SB & FB & JP
     JSS --> SB & FB & JSC
     NDS --> SB & FB & JSC
+    CPP --> NDC & NDS
 
     classDef engine fill:#dbeafe,stroke:#2563eb,color:#000
     classDef core fill:#dcfce7,stroke:#16a34a,color:#000
@@ -58,7 +60,7 @@ flowchart BT
     class RD,BD core
     class FM,JP,TF,RG fmt
     class FR,FB glue
-    class RSC,JSC,NDC,SB,RSS,JSS,NDS bind
+    class RSC,JSC,NDC,CPP,SB,RSS,JSS,NDS bind
 ```
 
 (Edges to `primitives` and `state-machine` from most crates are omitted
@@ -109,6 +111,7 @@ flowchart TB
 | `…-rs-compat` | Binding | c2pa-rs `Context` + `Reader::with_file` slice; one of two crates with a network dependency (`reqwest` OCSP). |
 | `…-js-compat` | Binding | c2pa-wasm `WasmReader` slice; async host with `Blob`/`Platform` traits; `web` feature for `wasm-bindgen`. |
 | `…-node-compat` (+ `c2pa-node-compat-addon`) | Binding | Purely synchronous `NodeSession`; Node owns all async. Addon is a separate Neon workspace. |
+| `…-cpp` | Binding | C++17/20 reader drivers over `node-compat`; cimpl-tracked signing C ABI over `node-compat-sign`, with generated C declarations and C++ value types. C++ signing drivers are not implemented yet. |
 | `…-sign-baseline` | Binding | The baseline signing case (JSON definition → `BuilderSettings`) every write binding is held to. |
 | `…-rs/js/node-compat-sign` (+ `c2pa-node-sign-addon`) | Binding | The baseline case through each binding. `rs-compat-sign` is the other crate with a network dependency (`reqwest` for RFC 3161 timestamps). |
 | `c2pa-rs-compat-conformance` | Test | Separate workspace; differential tests against the real `c2pa` crate. |

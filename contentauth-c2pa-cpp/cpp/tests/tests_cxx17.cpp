@@ -4,12 +4,48 @@
 // The core and the thread-based drivers, built as C++17 on purpose.
 
 #include <sstream>
+#include <type_traits>
 
 #include "contentauth/c2pa_sm_sign.hpp"
+#include "contentauth_c2pa_sm_sign.h"
 #include "support.hpp"
 
 using namespace c2pa::sm;
 using namespace support;
+
+TEST(signing_abi_values_are_grouped_enums_with_stable_integer_values) {
+    static_assert(std::is_enum_v<C2paSmBuildErrorCode>);
+    static_assert(std::is_enum_v<C2paSmBuildRequestKind>);
+    static_assert(std::is_enum_v<C2paSmBuildReplyKind>);
+    static_assert(std::is_enum_v<C2paSmBuildStream>);
+    static_assert(C2PA_SM_ERR_BUILD == 6);
+    static_assert(C2PA_SM_BUILD_REQUEST_READ == 0 && C2PA_SM_BUILD_REQUEST_LENGTH == 1 &&
+                  C2PA_SM_BUILD_REQUEST_WRITE == 2 && C2PA_SM_BUILD_REQUEST_SIGN == 3 &&
+                  C2PA_SM_BUILD_REQUEST_TIMESTAMP == 4);
+    static_assert(C2PA_SM_BUILD_REPLY_BYTES == 0 && C2PA_SM_BUILD_REPLY_LENGTH == 1 &&
+                  C2PA_SM_BUILD_REPLY_WRITTEN == 2 && C2PA_SM_BUILD_REPLY_SIGNATURE == 3 &&
+                  C2PA_SM_BUILD_REPLY_TIMESTAMP == 4 && C2PA_SM_BUILD_REPLY_FAILED == 5);
+    static_assert(C2PA_SM_BUILD_SOURCE == 0 && C2PA_SM_BUILD_OUTPUT == 1);
+    static_assert(std::is_same_v<decltype(C2paSmBuildReply{}.kind), int>);
+    C2paSmBuildReply reply{};
+    reply.kind = C2PA_SM_BUILD_REPLY_SIGNATURE;
+    CHECK_EQ(reply.kind, 3);
+}
+
+TEST(the_generated_signing_abi_links_and_returns_owned_errors) {
+    C2paSmBuildSession *session = nullptr;
+    C2paSmError *error = nullptr;
+    const int code = c2pa_sm_build_session_new("{}", "image/jpeg", "es256", nullptr, 0,
+                                              &session, &error);
+    CHECK_EQ(code, C2PA_SM_ERR_INVALID_ARGUMENT);
+    CHECK(session == nullptr);
+    CHECK(error != nullptr);
+    CHECK_EQ(c2pa_sm_error_code(error), code);
+    CHECK(std::string(c2pa_sm_error_message(error)).size() > 0);
+    c2pa_sm_error_free(error);
+    CHECK_EQ(c2pa_sm_build_session_free(nullptr, nullptr), C2PA_SM_OK);
+    CHECK_EQ(c2pa_sm_sign_report_free(nullptr, nullptr), C2PA_SM_OK);
+}
 
 TEST(signing_settings_keep_certificates_and_definition_as_owned_values) {
     BuildSettings settings;

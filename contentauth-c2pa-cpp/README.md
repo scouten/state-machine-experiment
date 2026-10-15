@@ -23,10 +23,10 @@ auto reader = c2pa::sm::read(c2pa::sm::Session("image/jpeg"), host);
 if (reader) std::cout << reader->json();   // nullopt: no Content Credentials
 ```
 
-Read side only at runtime; the signing value types and proposed contract are
+C++ drivers are read-only; the C signing ABI and C++ signing value types are
 described in [Signing contract](#signing-contract). Build with `./build.sh`, or
-build and test with
-`cmake -S . -B build && cmake --build build && ctest --test-dir build`
+build and run all C++ tests with `./test.sh`. Both scripts forward extra
+arguments to CMake's configure step, e.g. `./test.sh -DCMAKE_BUILD_TYPE=Release`
 (needs cargo, CMake ≥ 3.16, a C++17 compiler; the coroutine pieces need C++20).
 
 ## What the existing API looks like
@@ -180,8 +180,11 @@ the real library, so drift is a link or test failure.
 ## Signing contract
 
 Phase 1 supplies C++17 value types in `include/contentauth/c2pa_sm_sign.hpp`.
-There is no signing ABI, `BuildSession`, or signing driver yet. The following
-contract guides those later phases; it does not describe available functions.
+Phase 2 supplies the signing C ABI in `include/contentauth_c2pa_sm_sign.h`,
+implemented in `src/signing.rs` over cimpl 0.4.1. There is no C++ `BuildSession`
+or signing driver yet. The C++ lifecycle below guides Phase 3; the C ABI is
+available now and tested by a Rust host that signs and reads back a JPEG as
+`Trusted` through the existing reader, with an explicit trust anchor and clock.
 
 ### Inputs and baseline
 
@@ -194,7 +197,7 @@ and any supported assertions. The acceptance fixture includes a title and
 one `c2pa.actions.v2` assertion containing `c2pa.created`. Unknown definition
 fields fail rather than being ignored. A private key is never an input.
 
-The bridge will delegate to `contentauth-c2pa-node-compat-sign::NodeBuildSession`,
+The bridge delegates to `contentauth-c2pa-node-compat-sign::NodeBuildSession`,
 which is already a host-agnostic, synchronous wrapper over the file builder.
 Do not add another signing engine or an I/O dependency to this binding.
 
@@ -239,20 +242,50 @@ or returns malformed data must fail rather than produce untimestamped output.
 
 ### FFI, errors, and concurrency
 
-New FFI work must use [cimpl](https://github.com/contentauth/cimpl), not copy
-the existing handwritten reader bridge. Its documented tracked allocations,
-typed pointer validation, and namespace-safe free wrappers fit opaque build
-handles and owned results. The signing API must retain `c2pa_sm_*` names,
-validate foreign inputs, and prevent Rust panics from unwinding into C++.
+The new ABI uses [cimpl](https://github.com/contentauth/cimpl) 0.4.1 tracked
+allocations, exclusive session checkout, shared report checkout, and typed
+consuming free operations. Null frees are no-ops; wrong, stale, and busy
+handles are rejected. The handwritten reader ABI is unchanged. The new
+functions retain the `c2pa_sm_*` namespace and the existing panic-catching,
+owned-error boundary. cimpl's fallible Rust helpers return errors directly;
+the bridge does not use its TLS last-error macros. This preserves per-call
+errors that can cross threads independently of the session. The existing
+error allocation/access/free functions are reused, not migrated to cimpl.
 
-cimpl's documented error macros use last-error state. That must not become
-the C++ error contract: each failing bridge operation must capture its error
-on the same thread, before another call, and return an owned error through
-an out-parameter. Extend the existing error vocabulary for build failures
-rather than reporting them as read errors. Verify the selected cimpl version's
-tracking/free semantics, generated header, panic behavior, and supported
-Rust/Wasm targets with a focused bridge test in Phase 2 before building on it.
-No cimpl dependency is selected or added in Phase 1.
+`C2PA_SM_ERR_BUILD` distinguishes engine/host build failures from read errors.
+Signing values are grouped into `C2paSmBuildErrorCode`,
+`C2paSmBuildRequestKind`, `C2paSmBuildReplyKind`, and `C2paSmBuildStream`
+enums. Their existing C names and numeric values are preserved. ABI fields
+remain integers so unknown foreign reply kinds can be rejected normally,
+rather than creating an invalid Rust enum discriminant at the boundary.
+Invalid definitions, inputs, handles, IDs, and reply kinds use
+`C2PA_SM_ERR_INVALID_ARGUMENT`; unsupported formats use the existing
+unsupported-type code. All fallible signing operations return a status and
+an optional owned `C2paSmError` through an out-parameter. A valid session is
+consumed by `finish` even on failure (including null report output); invalid
+or busy handles are rejected without consuming another operation's handle.
+
+The ABI consists of `c2pa_sm_build_session_new/advance/request/fulfill/finish/free`
+and `c2pa_sm_sign_report_view/free`. `advance` returns completion and the count
+of new requests. Request views borrow session storage; callers must copy all
+payloads before advancing or fulfilling. Reports are immutable, independently
+owned handles; report views borrow their storage until the report is freed.
+Do not free a session/report concurrently with use of its borrowed storage.
+
+Generate the signing-only header from the repository root with cbindgen 0.29.2:
+
+```sh
+cargo install cbindgen --version 0.29.2 --locked
+cbindgen --config contentauth-c2pa-cpp/cbindgen.toml \
+  --output contentauth-c2pa-cpp/include/contentauth_c2pa_sm_sign.h \
+  contentauth-c2pa-cpp/src/signing.rs
+```
+
+The generator warns about the external `C2paSmError` type: it comes from the
+included reader header, not the signing module. The generated header is checked
+as C11 and C++17; a C++ test links against the real signing symbols. Native and
+both Wasm targets are checked with the pinned cimpl release. The engine remains
+sans-I/O; cimpl's allocation registry adds synchronization at the FFI boundary.
 
 A session has one driver at a time and can move between threads between calls.
 Later async completions post owned replies into a mailbox; only the driver
@@ -270,12 +303,24 @@ allocation registry must not be mistaken for a guarantee of a lock-free FFI.
   reserved for Phase 2; no reader ABI migration is included.
 * Stop for approval before adding the Rust signing dependency or ABI.
 
+### Phase 2 completion gate
+
+* The C ABI drives the baseline JPEG/ES256 build and the reader validates its
+  output as `Trusted`, with the expected title and assertion.
+* Tests cover every request/reply mapping, host failures, timestamp response
+  embedding/refusal/malformed data, invalid inputs, duplicate IDs, premature
+  finish, stale/wrong/busy handles, and cross-thread handles and owned errors.
+* The timestamp success fixture is a synthetic opaque token: this checks
+  transport/embedding, not cryptographic TSA validation.
+* Generated C declarations compile and link; Rust tests, strict lint/format,
+  docs, Wasm targets, dependency policy, and focused coverage are checked.
+* Stop for approval before implementing the C++ `BuildSession` or blocking driver.
+
 ## Not covered
 
-* **Writing.** `BuilderSession`'s `Sign` and `Timestamp` requests are the
-  strongest case for this model (an async KMS/HSM, a TSA over HTTP, without
-  parking a thread) and are the obvious next addition: a `NodeBuildSession`
-  already exists in `contentauth-c2pa-node-compat-sign` to wrap the same way.
+* **C++ signing drivers.** The value vocabulary and C ABI are implemented;
+  RAII `BuildSession`, blocking/file hosts, async/future drivers, and coroutine
+  signing remain the next phases. No production key or HTTP provider is included.
 * Resources (`get_resource`), `detailed_json`, `crjson`, fragments, remote
   manifests, formats other than JPEG, and the OCSP request path in the C++
   tests (the fixtures name no responder; it is covered from Rust).
