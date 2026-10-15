@@ -69,6 +69,7 @@ impl GeneratorInfo {
             version: Some(version.into()),
             spec_version: None,
             icon: None,
+            extensions: Default::default(),
         }
     }
 }
@@ -223,12 +224,19 @@ impl Claim {
     /// An icon pointing anywhere but the assertion store (the deprecated
     /// data-box form) is left out: this reader does not resolve data
     /// boxes, and reporting such an icon "missing" would be wrong.
+    /// An identical icon reference already listed among the assertions is
+    /// checked once; different hashes or algorithms are still checked separately.
     pub fn hashed_references(&self) -> impl Iterator<Item = &HashedUri> {
         self.assertion_references().chain(
             self.claim_generator_info
                 .iter()
                 .filter_map(|generator| generator.icon.as_ref())
-                .filter(|icon| icon.url.contains("c2pa.assertions")),
+                .filter(|icon| {
+                    icon.url.contains("c2pa.assertions")
+                        && !self
+                            .assertion_references()
+                            .any(|reference| reference == *icon)
+                }),
         )
     }
 
@@ -261,6 +269,9 @@ pub struct GeneratorInfo {
     /// `icon` — hashed reference to a `c2pa.icon` embedded-data assertion
     /// graphically representing the generator. A v2 field.
     pub icon: Option<HashedUri>,
+
+    /// Product-specific extension fields, retained as decoded CBOR values.
+    pub extensions: std::collections::BTreeMap<String, Value>,
 }
 
 /// A JUMBF URI paired with a cryptographic hash of what it points at.
@@ -387,7 +398,10 @@ fn generator_info(value: &Value) -> Result<GeneratorInfo, ClaimError> {
                 info.spec_version = Some(text(value, "claim_generator_info.specVersion")?)
             }
             Some("icon") => info.icon = Some(hashed_uri(value)?),
-            _ => {}
+            Some(key) => {
+                info.extensions.insert(key.to_string(), value.clone());
+            }
+            None => {}
         }
     }
 
@@ -681,12 +695,12 @@ mod tests {
     }
 
     #[test]
-    fn ignores_unknown_generator_info_fields() {
+    fn preserves_unknown_generator_info_fields() {
         let claim = map(vec![(
             text_value("claim_generator_info"),
             Value::Array(vec![map(vec![
                 (text_value("name"), text_value("tool")),
-                (text_value("operating_system"), text_value("ignored")),
+                (text_value("operating_system"), text_value("retained")),
             ])]),
         )]);
 
@@ -696,6 +710,10 @@ mod tests {
             Some("tool")
         );
         assert_eq!(decoded.claim_generator_info[0].version, None);
+        assert_eq!(
+            decoded.claim_generator_info[0].extensions["operating_system"],
+            text_value("retained")
+        );
     }
 
     /// A v2 claim carrying every required field, as a CBOR map.
@@ -712,6 +730,46 @@ mod tests {
             ),
             (text_value("created_assertions"), Value::Array(vec![])),
         ]
+    }
+
+    #[test]
+    fn generator_icons_do_not_repeat_identical_assertion_references() {
+        let mut claim = decode(&encode(&map(v2_claim_fields())), ClaimVersion::V2).unwrap();
+        let icon = HashedUri {
+            url: "self#jumbf=c2pa.assertions/c2pa.icon".into(),
+            hash: vec![9; 32],
+            alg: None,
+        };
+        claim.claim_generator_info[0].icon = Some(icon.clone());
+        assert_eq!(claim.hashed_references().collect::<Vec<_>>(), vec![&icon]);
+        for placement in 0..3 {
+            let mut claim = claim.clone();
+            let references = match placement {
+                0 => &mut claim.assertions,
+                1 => &mut claim.created_assertions,
+                _ => &mut claim.gathered_assertions,
+            };
+            references.push(icon.clone());
+            assert_eq!(claim.hashed_references().collect::<Vec<_>>(), vec![&icon]);
+            let references = match placement {
+                0 => &mut claim.assertions,
+                1 => &mut claim.created_assertions,
+                _ => &mut claim.gathered_assertions,
+            };
+            references[0].hash[0] ^= 1;
+            assert_eq!(claim.hashed_references().count(), 2);
+            let references = match placement {
+                0 => &mut claim.assertions,
+                1 => &mut claim.created_assertions,
+                _ => &mut claim.gathered_assertions,
+            };
+            references[0] = icon.clone();
+            references[0].alg = Some("sha512".into());
+            assert_eq!(claim.hashed_references().count(), 2);
+        }
+        claim.claim_generator_info[0].icon.as_mut().unwrap().url =
+            "self#jumbf=c2pa.databoxes/c2pa.data".into();
+        assert_eq!(claim.hashed_references().count(), 0);
     }
 
     #[test]

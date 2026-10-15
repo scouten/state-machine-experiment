@@ -28,7 +28,7 @@ mkdirSync(directory, { recursive: true });
 const evidence = join(directory, `${backend}-observations.json`);
 if (existsSync(evidence)) rmSync(evidence);
 const milestone = backend === "state-machine"
-  ? ["m1", "m2", "m3", "m3-worker", "m3-settings"].flatMap((name) => {
+  ? ["m1", "m2", "m3", "m3-worker", "m3-settings", "m3-resources"].flatMap((name) => {
     const file = `browser/${name}.spec.ts`;
     return extractTests(readFileSync(join(root, file), "utf8"), file);
   }) : [];

@@ -4,7 +4,7 @@ import { isProjection } from "./projection.ts";
 import { remoteManifestHost, type RemoteManifestOptions } from "./remote.ts";
 import { ocspHost, type OcspOptions } from "./ocsp.ts";
 import { failure, protocol, restore, type Command, type HostMessage, type WorkerMessage } from "./worker-protocol.ts";
-import { factoryContext, readerDefaults, rejectBuilderDefaults } from "./settings.ts";
+import { contextJson, factoryContext, readerDefaults, rejectBuilderDefaults } from "./settings.ts";
 
 export { Context, AssetTooLargeError } from "@contentauth/c2pa-utilities";
 export { MAX_SIZE_IN_BYTES };
@@ -178,7 +178,9 @@ export class Reader extends Resource {
     const network = (options: RemoteManifestOptions | OcspOptions | undefined) => options ? {
       allowedOrigins: [...options.allowedOrigins], maxBytes: options.maxBytes, timeoutMs: options.timeoutMs,
     } : undefined;
-    const value = await runtime.call({ method: "read", format, blob, settings: context?.settings,
+    const json = await contextJson(context, ocsp !== undefined);
+    const value = await runtime.call({ method: "read", format, blob,
+      context: json === undefined ? undefined : { settings: context?.settings, json },
       detached, remote: network(remote), ocsp: network(ocsp) }, undefined,
       { remote: remote?.signal, ocsp: ocsp?.signal });
     return value === null ? null : new Reader(runtime, resourceId(value));
@@ -194,6 +196,13 @@ export class Reader extends Resource {
     return await this.runtime.call({ method: "readerMethod", handle: this.handle, name: "activeManifest" });
   }
   async manifestStore(): Promise<ManifestProjection> { return await this.#projection("manifestStore") }
+  async resourceToBytes(uri: string): Promise<Uint8Array> {
+    this.live();
+    if (typeof uri !== "string") throw new TypeError("Resource identifier must be a string");
+    const value = await this.runtime.call({ method: "resourceToBytes", handle: this.handle, uri });
+    if (!(value instanceof Uint8Array)) throw new Error("Invalid Worker resource bytes");
+    return value;
+  }
   async json(): Promise<ManifestProjection> { return await this.#projection("json") }
   async #projection(name: "manifestStore" | "json"): Promise<ManifestProjection> {
     this.live();

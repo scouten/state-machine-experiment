@@ -75,7 +75,7 @@
 //!   all of the above: `Blob` for `web_sys::Blob`, a `WebPlatform` clock,
 //!   and a `#[wasm_bindgen]`-exported `WasmReader` whose JavaScript
 //!   surface (`fromBlob`, `activeLabel`, `manifestStore`,
-//!   `activeManifest`, `json`) is c2pa-wasm's own.
+//!   `activeManifest`, `json`, `resourceToBytes`) is c2pa-wasm's own.
 //!
 //! # What is not covered, and how it would be
 //!
@@ -84,15 +84,18 @@
 //!   `FormatHandler` exists in this workspace yet; once one does, this is
 //!   a second constructor over the same [`read_manifest`] loop with two
 //!   [`Blob`]s.
-//! * **`resourceToBytes`, `crJson`** — both depend on resource and
-//!   thumbnail data [`contentauth_c2pa_reader`] does not decode yet.
+//! * **`crJson`** — the full Content Credentials JSON projection is not
+//!   implemented. `resourceToBytes` now resolves embedded binary assertions
+//!   by absolute self JUMBF URI, including the projected claim thumbnail.
 //! * **Every format but JPEG** — `src/format.rs` is the seam, exactly as
 //!   it is in `contentauth-c2pa-rs-compat`.
 //! * **The full `@contentauth/c2pa-types` `ManifestStore` shape** —
-//!   ingredient relationships, signature metadata, thumbnails, resources,
-//!   and complete validation-result buckets remain absent. The reader now
-//!   decodes CBOR assertion payloads and created relationships, but only
-//!   reports fields it can derive from parsed JUMBF and claim data.
+//!   linked-ingredient histories/deltas and broader resource references remain
+//!   absent. Resource-free v1/v2/v3 ingredient metadata and unknown-provenance
+//!   deltas, assertion reviews, creation time and custom metadata are projected,
+//!   alongside verified signer metadata and validation buckets. Unported
+//!   ingredient history/resource/structured-metadata fields fail serialization
+//!   explicitly rather than producing a partial successful report.
 //! * **A real `fetch`-backed OCSP transport for the browser** — a
 //!   [`Platform`] whose `ocsp` posts through `fetch`. `WebPlatform`
 //!   declines OCSP today (fail-open, per the engine's own rules); a host
@@ -125,7 +128,8 @@ pub use drive::read_manifest;
 pub use error::{C2paError, Error};
 pub use format::{for_format, FORMATS};
 pub use manifest_store::{
-    ClaimGeneratorInfo, Manifest, ManifestStore, ValidationState, ValidationStatus,
+    resource_bytes, ClaimGeneratorInfo, Ingredient, IngredientDelta, Manifest, ManifestStore,
+    ResourceRef, SignatureInfo, ValidationState, ValidationStatus,
 };
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 pub use platform::OfflinePlatform;

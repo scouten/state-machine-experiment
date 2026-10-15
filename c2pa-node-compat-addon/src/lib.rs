@@ -1,7 +1,7 @@
 // Copyright 2026 Adobe. All rights reserved.
 // Licensed under the Apache License, Version 2.0 or the MIT license, at your option.
 
-//! The Neon binding: five synchronous functions, nothing else.
+//! The Neon binding: synchronous session and retained-resource functions.
 //!
 //! Compare c2pa-node's `neon_reader.rs`: a process-wide tokio runtime, a
 //! `JsPromise` settled from a `Channel` on a worker thread, a
@@ -21,6 +21,10 @@ struct Session(RefCell<Option<NodeSession>>);
 
 impl Finalize for Session {}
 
+struct Reader(contentauth_c2pa_node_compat::Reader);
+
+impl Finalize for Reader {}
+
 fn js_error<'a>(cx: &mut impl Context<'a>, err: &Error) -> JsResult<'a, JsError> {
     // `name` carries the Debug string, e.g. `C2pa(JumbfNotFound)`, which
     // is c2pa-node's own error contract (`error.rs::as_js_error`).
@@ -39,7 +43,15 @@ fn session_new(mut cx: FunctionContext) -> JsResult<JsBox<Session>> {
         .transpose()?
         .map(|s| s.value(&mut cx));
 
-    match NodeSession::new(&format, settings.as_deref()) {
+    let manifest_store = cx
+        .argument_opt(2)
+        .filter(|v| !v.is_a::<JsUndefined, _>(&mut cx))
+        .map(|v| {
+            v.downcast_or_throw::<JsBuffer, _>(&mut cx)
+                .map(|bytes| bytes.as_slice(&cx).to_vec())
+        })
+        .transpose()?;
+    match NodeSession::new(&format, settings.as_deref(), manifest_store) {
         Ok(session) => Ok(cx.boxed(Session(RefCell::new(Some(session))))),
         Err(err) => {
             let js = js_error(&mut cx, &err)?;
@@ -141,17 +153,39 @@ fn session_fulfill(mut cx: FunctionContext) -> JsResult<JsUndefined> {
     }
 }
 
-/// The manifest store as c2pa-rs-shaped JSON, or `null` if the asset has
-/// none. (JS builds its `Reader` from this, as c2pa-node's own JS `Reader`
-/// does from `readerJson`.)
+/// JSON plus a retained reader handle, or `null` if the asset has no store.
 fn session_finish(mut cx: FunctionContext) -> JsResult<JsValue> {
     let handle = cx.argument::<JsBox<Session>>(0)?;
     let Some(session) = handle.0.borrow_mut().take() else {
         return cx.throw_error("session already finished");
     };
     match session.finish() {
-        Ok(Some(reader)) => Ok(cx.string(reader.json()).upcast()),
+        Ok(Some(reader)) => match reader.json() {
+            Ok(json) => {
+                let out = cx.empty_object();
+                let json = cx.string(json);
+                let embedded = cx.boolean(reader.is_embedded());
+                let reader = cx.boxed(Reader(reader));
+                out.set(&mut cx, "json", json)?;
+                out.set(&mut cx, "reader", reader)?;
+                out.set(&mut cx, "embedded", embedded)?;
+                Ok(out.upcast())
+            }
+            Err(err) => cx.throw_error(format!("JSON serialization failed: {err}")),
+        },
         Ok(None) => Ok(cx.null().upcast()),
+        Err(err) => {
+            let js = js_error(&mut cx, &err)?;
+            cx.throw(js)
+        }
+    }
+}
+
+fn reader_resource_to_bytes(mut cx: FunctionContext) -> JsResult<JsBuffer> {
+    let handle = cx.argument::<JsBox<Reader>>(0)?;
+    let uri = cx.argument::<JsString>(1)?.value(&mut cx);
+    match handle.0.resource_bytes(&uri) {
+        Ok(bytes) => JsBuffer::from_slice(&mut cx, bytes),
         Err(err) => {
             let js = js_error(&mut cx, &err)?;
             cx.throw(js)
@@ -165,5 +199,6 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("sessionAdvance", session_advance)?;
     cx.export_function("sessionFulfill", session_fulfill)?;
     cx.export_function("sessionFinish", session_finish)?;
+    cx.export_function("readerResourceToBytes", reader_resource_to_bytes)?;
     Ok(())
 }

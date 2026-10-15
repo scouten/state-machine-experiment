@@ -1,9 +1,122 @@
 # c2pa-js migration: implementation and proof plan
 
-Status: M0 and the defined M1 slice are implemented; M2 is partial and M3 is
-in progress. Researched on 2026-10-12. The M0 browser oracle executes the legacy
-SDK, not the state-machine bindings. This document does not claim a full-parity
-shim already exists.
+Status (2026-10-15): binding feasibility is the active workstream. M0 and the
+defined M1 slice are implemented; M2/M3 remain partial on the historical
+full-parity roadmap, not the current exit gate. The M0 browser oracle executes
+the legacy SDK, not the state-machine bindings. This document does not claim a
+full-parity shim already exists.
+
+## Current priority: binding feasibility, not Rust feature parity
+
+As of 2026-10-14, the active experiment is to determine whether browser and
+Node wrappers can effectively expose the state-machine implementation's
+**existing** capabilities and accommodate its planned architecture. Full
+c2pa-js parity remains a long-term compatibility goal, not the prerequisite
+or progress measure for this experiment. The M0-M5 sequence below records the
+broader migration roadmap; it must not pull missing domain functionality into
+the binding workstream.
+
+### Ownership and scope
+
+| Layer | Responsibility | Evidence |
+| --- | --- | --- |
+| Shared Rust core | Parsing, encoding, cryptography, validation, format handling and domain workflows | Existing native tests; native differential tests for domain changes |
+| Shared compatibility projection | Translate Rust results into the legacy report contract once for both bindings | Native projection tests; classify missing semantics separately |
+| Wasm/Neon boundary | Requests/replies, bytes, settings, result/error transport and native-handle lifetime | Real binding tests for representative shapes and failures |
+| Browser/Node host | Blob/file I/O, fetch policy, clock, signing/timestamp callbacks, scheduling and cancellation | Environment-specific integration tests |
+| JS compatibility facade | Legacy names, types, defaults, Promise/synchronous behavior and lifecycle | Adapted or unchanged upstream tests applicable to available Rust capabilities |
+
+Do not implement a missing format, ingredient/history rule, builder operation
+or cryptographic capability merely to make an upstream JS test pass. Record it
+as a Rust dependency. Likewise distinguish an existing Rust result that the
+legacy projection cannot yet express from a broken binding. Never remove a
+reporting guard, drop unsupported fields or invoke legacy automatically to make
+an operation appear supported. A future native-result API can expose richer
+Rust results, but its public contract must be designed explicitly rather than
+smuggled into a compatibility method.
+
+### Binding-focused implementation sequence
+
+1. Map existing read/build session requests, replies and results to browser and
+   Node entry points. For each gap record: implemented, missing binding,
+   missing shared projection, blocked by core, or planned/not implemented.
+   Link to source and representative proof; count capabilities, not repeated
+   browser executions.
+2. Close missing binding/host paths for existing Rust functionality in coherent
+   slices. Reuse `FileReadSession`, `FileBuilderSession`, the shared projection
+   and resource resolver. Preserve the browser `Blob`/`Platform`/`AsyncSigner`
+   adapters and Node's JS-owned `advance`/`fulfill` loop unless concrete binding
+   evidence warrants a change. No new core feature is implicit in this step.
+3. Prove boundary fidelity and host behavior: exact byte ranges and ownership,
+   typed results/settings/errors, pending-request identity, partial/out-of-order
+   fulfillment, concurrent operation isolation, callback rejection, source
+   failure, cleanup/disposal and retry. Test each at its owning layer; do not
+   duplicate the entire domain test matrix across environments.
+4. Evaluate effectiveness, not just a successful call: measure host crossings,
+   copying, bounded reads, event-loop responsiveness and retained memory for a
+   representative read/build workload. Large synchronous Rust work may still
+   block a calling thread; sans-I/O does not itself imply responsiveness.
+   Compare inline/Worker and Node hosting options before selecting policy.
+5. Reassess architectural extension seams using the existing typed request
+   protocol: document how a future workflow, handler or host operation reaches
+   each binding, how unsupported requests fail, and which adapters/tests change.
+   Planned functionality is not reported as available. Do not implement
+   speculative extension frameworks.
+
+**Binding experiment exit:** real Wasm and Neon wrappers exercise the agreed
+existing read/build capability set, preserve boundary contracts and host
+ownership, have representative failure/concurrency/lifetime proof, and have
+measured scheduling/copy/memory costs with explicit limitations. Every selected
+capability has a binding result or a clearly attributed blocker; planned
+extensions have an adaptation path. Missing Rust features do not fail this
+feasibility gate, but missing bindings for selected available features do.
+
+**Verification cadence:** exhaustive domain/projection proof stays native.
+Run targeted binding/environment tests for each slice. Run the full applicable
+browser/Node/upstream and installed-package matrix at a binding milestone or
+when its shared plumbing changes; refresh evidence required by provenance
+checks, but do not treat repeated executions as newly ported functionality.
+The 249-case ledger continues to track eventual full compatibility separately.
+Legacy remains an explicit caller-selected rollback, with no default promotion,
+publication, contraction or automatic fallback.
+
+### Branch cleanup and retained dependencies (2026-10-15)
+
+Removed the standalone ingredient manifest-link validator, parser/status wiring,
+its eight core tests, two differential tests, fixture generator, six fixture
+files, one Node test and its conformance-only direct reader dependency.
+Linked-history reports still reject explicitly. This restores the core
+capability boundary before that experiment, not a new claim that linked assets
+are fully validated. A pre-cleanup recovery snapshot is held outside the
+repository in the session artifacts, together with an isolated binary-capable
+reapplication patch verified by `git apply --check`. The patch restores code
+and dedicated fixtures/tests only, not the old documentation/scope claims.
+
+The remaining Rust changes were classified rather than reverted by directory:
+
+| Retained work | Why it belongs in the binding experiment |
+| --- | --- |
+| Resource decoding/retention and verified signer/timestamp metadata | Supply the bytes and result fields already exposed by the retained browser/Node demonstrations; JS must not decode or reconstruct them |
+| Claim extension retention and owner-qualified status/provenance metadata | Preserve information at the shared Rust-to-legacy projection seam instead of duplicating report semantics in JS |
+| Explicit `verify_trust` policy and Context plumbing | Implement an already exposed caller setting in Rust; removing the policy alone would misrepresent the retained setting |
+| Exact duplicate icon-reference suppression and disabled-OCSP reporting correction | Coupled correctness fixes for retained resource/report/settings behavior; not a new domain workflow |
+| Shared legacy projection, ingredient metadata and unsupported-history guards | Existing compatibility support used by both bindings; retained, not expanded as a new feature workstream |
+| Earlier detached sessions, standard JPEG remote discovery and format selection | Already integrated capabilities behind retained host/binding demonstrations; no broad historical commit rollback |
+| Native/browser/Node/package tests and test-only performance instrumentation | Preserve regression and feasibility evidence; routine checks are targeted, not repeated domain qualification in every runtime |
+
+These are retained dependencies of the working prototype, not a claim that all
+core changes are binding code. New domain validation, formats and builder
+features belong in separate core work. Tests remain available, but execution
+counts are evidence totals, not capability completion percentages.
+
+Cleanup verification: 302 reader units, 68 shared projection units, native
+integration/doc tests, 39 actual reader-addon tests, 33 signing-addon tests,
+the retained real-SDK detached-resource differential test and 36 JS tests pass.
+TypeScript checking, a fresh release Wasm/wasm-bindgen build, both portable
+Wasm target checks, workspace all-feature/all-target Clippy and pinned formatting
+checks pass. JS tests were rerun after rebuilding the stale Wasm cache.
+The broad browser, installed-package and performance matrices were not rerun:
+their earlier counts below are historical evidence, not post-cleanup passes.
 
 ## Target and compatibility contract
 
@@ -456,14 +569,209 @@ Performance evidence now includes the new Worker path alongside
 legacy Worker and inline, with within-Worker reads distinguished from
 cross-thread messages; it does not isolate pure boundary cost.
 
-The selected five unchanged upstream reader declarations now run through both
-inline and module Worker on all three browsers (30 runtime executions).
+The selected seventeen unchanged upstream reader declarations now run through both
+inline and module Worker on all three browsers (102 runtime executions).
 The `readerRuntimes` ledger gate checks exact runtime/browser/selected-ID coverage
 and consistency with aggregate upstream outcomes. Failures on either path
 prevent a passing upstream observation; no legacy fallback or rewritten
-assertions are used. Unique upstream coverage remains 5/249, not 30/249.
-Full report equality, resources, the dedicated upstream inline-entrypoint test,
+assertions are used. Unique upstream coverage is now 17/249, not 102/249.
+The latest six additions cover omitted-format detection, explicit Contexts,
+independent Contexts on one runtime, Context resolution reuse, deprecated
+factory creation and per-call override precedence. These follow the original
+disabled-trust/creation/trusted/untrusted store goldens, embedded-thumbnail
+extraction and active-manifest equality. JSON differential cases are additional migration
+tests, not new frozen upstream declarations.
+
+The Worker now resolves the caller's Context before dispatch, using the same
+`toJson()` contract as inline instead of creating a new Context for every read.
+Typed transport carries resolved JSON plus settings for admission checks, and
+the inline reader accepts the narrow settings/toJson interface for this bridge.
+Repeated use shares the original Context's cached Promise/policy; new Contexts
+are required for changed settings. Concurrent full-report comparisons against
+legacy prove opposite trust policies stay isolated. Resolution failures and
+disposal while resolving reject without dispatch; subsequent supported reads
+work. The private Worker protocol moves to v2 so stale v1 scripts fail startup,
+not silently re-resolve settings. Installed URL/module paths prove the same
+memoized-policy and concurrent-isolation behavior. Client and Worker must ship
+together; selecting legacy remains the explicit rollback.
+Rust retains embedded binary assertion payloads, projects claim-thumbnail
+references, and supplies copied bytes via `resourceToBytes` through Wasm and
+both JS runtimes. Added tests prove exact legacy metadata/bytes, independent
+copies, missing-identifier recovery, URI scope and free/dispose behavior.
+The installed private-package proof also extracts the thumbnail on all paths.
+No new asset reads, JavaScript decoding, implicit network fetch, or legacy
+fallback is introduced. Resource payloads remain in the reader's memory and
+their provenance still depends on validation results.
+
+Generator icons now project legacy `{format, identifier}` references for exact
+embedded assertion resources in the owning manifest. Relative and already
+absolute same-owner URIs are supported; missing/ambiguous, cross-manifest,
+external and deprecated databox references reject serialization rather than
+disappearing or performing I/O. Real c2pa-rs-generated v2 fixtures match complete
+trusted active/store/parsed-JSON reports and exact independent icon bytes on
+inline and Worker. Tampering retains `assertion.hashedURI.mismatch`. A v1
+databox fixture proves explicit rejection, cleanup and subsequent modern reads.
+Installed URL/module consumers check trusted icon extraction and copy ownership,
+and the actual Node addon proves the shared metadata projection (the later
+resource slice below adds extraction). Identical icon references already in the assertion list are hashed
+once, avoiding duplicate observations; conflicting hashes/algorithms still
+validate separately. These three additional browser cases raise the bounded M3
+gate to 171 executions, without changing 17/249 upstream coverage. No builder
+icon-writing API, implicit fetch, fallback or default-backend change is added.
+
+Ingredient thumbnails now share the generator-icon exact-owner resolver.
+Supported v1/v2/v3 assertions project relative or same-owner absolute hashed
+URIs into legacy `thumbnail` references; positional resource labels remain
+distinct. Genuine c2pa-rs v2 claims match complete trusted active/store/parsed
+JSON legacy reports and exact independent resource bytes on inline and Worker.
+Tampering records live hash failures without modifying the second thumbnail.
+Native tests cover malformed/missing/ambiguous/external/cross-owner references
+and preserve linked-history guards. A real v1 databox fixture fails reporting
+explicitly, remains releasable, and permits later modern reads. All installed
+URL/module paths prove extraction and actual Node tests share both metadata
+references (the later resource slice below adds Node extraction). This raises the bounded M3 gate to 180
+executions without adding frozen upstream passes (still 17/249). Linked
+histories/redactions, databoxes and resource writing remain
+separate work; no implicit fetch, fallback or backend-default change is added.
+
+Ingredient `data` now follows the same exact-owner embedded-resource path,
+including positional labels and coexistence with a thumbnail. A genuine c2pa-rs
+v2 fixture matches complete trusted legacy active/store/parsed-JSON reports and
+exact independent bytes for both data resources on inline/Worker. Tampering one
+payload preserves its live hash failure while leaving the other data/thumbnail
+unchanged. Native tests preserve v1/v2/v3 shape/owner boundaries and linked-history
+guards; a real v1 databox-data fixture rejects explicitly and later embedded
+reads recover. Installed URL/module paths extract both kinds and Node shares
+metadata reporting. This raises the bounded M3 gate to 189 executions, not the
+17/249 frozen count. Full ingredient-link/hash/history/redaction validation,
+databoxes and resource-writing APIs remain separate. No parsing/trusting of
+extracted data, implicit fetch, fallback or backend promotion is added.
+
+The Node resource gap is now closed for these embedded assertion resources.
+`resourceToAsset` accepts legacy buffer/file destinations and returns
+`{buffer, bytes_written}` (an empty buffer for file output). `sessionFinish`
+retains an immutable private reader handle alongside JSON rather than discarding
+the validated payloads. Browser and Node readers share one exact, unique
+absolute-URI lookup; Rust performs no I/O or async work. JS owns asynchronous
+file writes, and native handles/resources live until garbage collection.
+Six actual-Node cases adapt the pinned upstream file-output test to the local
+claim-thumbnail fixture, and cover generator icons, positional ingredient
+thumbnails/data, exact copies, file shapes/truncation, source closure, no fetch,
+tamper isolation, output/lookup failures and recovery. A native differential
+test compares Node and the async browser host; shared tests reject ambiguous
+resource and manifest owners. This adds feature proof, not frozen upstream
+passes or browser cases: 17/249 and 189 M3 executions remain unchanged. Databoxes,
+external resources and full Node API parity remain open. Large resource copies
+are synchronous; this is not a new streaming or event-loop latency guarantee.
+
+The next Node slice wires `fromManifestDataAndAsset` through that existing
+session, extending `NodeSession::new` with optional detached store bytes rather
+than adding a parallel native constructor. JS snapshots the supplied Buffer
+before awaiting and retains source I/O/clock/OCSP ownership. Explicit bytes
+never fall back or cause remote-manifest fetches; binding validation still uses
+the supplied asset. `isEmbedded` distinguishes explicitly supplied stores, even
+when the asset also has a valid embedded store; `remoteUrl` stays empty.
+
+Six actual-Node cases adapt upstream detached buffer/file reads using a real
+c2pa-rs store-free JPEG, sidecar and complete Trusted JSON golden (including named
+trust provenance). They cover path/buffer/custom asynchronous sources, resource
+bytes after source closure, concurrent trust isolation, pre-await manifest
+snapshotting, malformed/unrelated sidecar precedence, tamper failures and recovery.
+Native tests compare the browser async host, a conformance test rechecks the
+fixture against real c2pa-rs, and the signing addon reads fresh output via the
+new constructor. This is bounded Node JPEG detached/resource proof, not unchanged
+upstream Node execution or full Context/settings/size-limit parity. Browser M3
+counts and unique upstream passes remain unchanged; no default promotion,
+automatic fallback or publication is added.
+
+The ingredient manifest-link validation experiment was removed from this branch
+on 2026-10-15 because it added domain behavior without unlocking a binding.
+Its code, dedicated fixtures/tests and conformance-only reader dependency are
+not part of the binding experiment. Ingredient-link/hash/history validation is
+a future core dependency; linked-history compatibility reporting remains guarded.
+
+The active-manifest slice preserves generator extensions and projects verified
+claim/CAWG X.509 signer metadata (algorithm, subject organization/common name,
+unsigned decimal serial, authenticated timestamp). `issuer` is legacy's subject
+organization field. Reported unanchored timestamp times never become trusted
+validation times. The identity compatibility field `revocation_status: true`
+matches legacy's verified-credential report, not affirmative OCSP proof; actual
+validation statuses retain their meaning. Internal hard-binding/resource
+assertions remain available in the raw core report, not the compatibility list.
+Native TIFF tests retain the exact nonadjacent-exclusion checks; browser tests
+check binding success and pixel-tamper failure through the public report.
+Three-browser comparisons cover complete active-manifest equality on both
+runtimes and metadata stability with independent claim/identity anchors.
+Object reporting surfaces use the same projection; `json()` applies legacy
+display formatting separately.
+Complete single-manifest trusted/untrusted reports now match legacy on both
+runtimes. Top-level `validation_status` contains failures only and is omitted
+when empty; success/informational observations remain in validation-result
+buckets. Reporting preserves duplicate observations, scopes assertion URLs to
+their actual manifest, orders legacy phases stably, and retains actual
+claim/timestamp trust-list provenance separately from identity trust. Identity
+credential distrust appears in the compatibility failure bucket without lowering
+the engine's store validation state. Tampering remains visible alongside
+unrelated successful checks. `verify.verifyTrust: false` now maps to an explicit
+core claim-anchor policy, not adapter-side filtering; it cannot produce `Trusted`.
+Signatures, presented certificate path/profile/validity, binding, timestamp and
+revocation validation remain enabled. Boolean `trust`/`cawgTrust.verifyTrustList`
+switches use the pinned utility's anchor omission semantics; CAWG distrust
+remains visible. An otherwise trusted compatibility report with failure
+observations is `Valid`, matching legacy without changing the engine report.
+All four independent claim/CAWG combinations match complete object/JSON reports
+against legacy on inline and Worker. Loader false defaults can be re-enabled
+per read without leaking settings; installed packages retain signature
+validation under false. Native tests retain expiration/profile/path-signature,
+trusted timestamp and damaged-asset failures.
+Linked-ingredient/history delta reports, broader resource references/external resources, `crJson`,
+the dedicated upstream inline-entrypoint test,
 and fragmented-asset declarations remain unported.
+Parsed `json()` now matches legacy for the trusted and untrusted single-manifest
+fixture on both runtimes. Like the pinned SDK, its display formatter converts
+every nonempty all-number array stored as an object field to padded standard
+base64, not only fields named `hash`. Empty/mixed arrays and direct nested arrays
+remain arrays; unsigned integers contribute their low byte, while negative and
+floating-point values are omitted. This deliberately lossy legacy view is not
+used by `manifestStore()` or `activeManifest()`, and repeated JSON calls do not
+mutate those objects. A newly signed custom assertion verifies these edge cases
+against legacy in all browsers. Native JS/Node hosts share the formatter and
+return serialization errors rather than `"{}"`; Wasm/Neon surface those errors.
+Installed-package checks verify both byte-array and base64 identity-hash views.
+This proves parsed JSON values, not whitespace/key-order byte equality or
+`crJson`. Other certificate directory-string encodings remain open.
+
+Resource-free v1/v2/v3 ingredients now project signed metadata to `ingredients`
+in assertion order, retaining positional labels and version-specific field
+names. The core emits owner-qualified `ingredient.unknownProvenance` for
+`parentOf`/`componentOf` without a declared source manifest (`inputTo` is exempt).
+The compatibility adapter groups these observations in `ingredientDeltas`;
+they never suppress live signature/binding failures or represent validated
+source assets. A newly signed four-ingredient asset's complete object/JSON
+reports match legacy on both runtimes; ingredient tampering remains `Invalid`.
+Installed packages and real Node addons exercise the shared projection.
+
+Assertion `metadata` now projects creation-time text, review ratings and custom
+extensions on all three versions. Complete legacy object/JSON comparisons cover
+empty/null optionals, ignored unknown review fields, unsigned-byte rating
+boundaries and custom metadata's array/base64 formatting. Review codes remain
+asserted opinions, never active validation statuses; review tampering still
+produces a live hashed-URI mismatch. Malformed ratings reject explicitly instead
+of silently dropping the ingredient's metadata. Creation time is not trusted
+validation time. Actual addons and private installed consumers check this path.
+
+Linked-manifest/resource references, structured metadata (`reference`,
+`dataSource`, `localizations`, `regionOfInterest`) and recorded validation
+payloads fail compatibility serialization explicitly until their interpretation
+and validation are implemented; unsupported versions and malformed supported
+fields also error (stricter than legacy's optional-field dropping). Readers
+remain releasable and subsequent supported reads succeed. No new frozen
+upstream declaration is claimed for these migration-only differential cases:
+these cases do not contribute to the current 17/249 count. Full ingredient link/hash validation,
+historical-delta comparison, resources and builder ingredient APIs remain open.
+The full-report differential also exposed a missing skipped-OCSP observation
+when online checking is disabled and no signer check plan exists; the core now
+reports that skip without new I/O or a successful-revocation claim.
 
 Complete broader upstream Worker/inline parity and package exports beyond the now-proven
 module/URL loading, external-Worker CSP, cleanup, and invalid-handle slice.

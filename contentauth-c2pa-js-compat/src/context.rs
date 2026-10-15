@@ -165,6 +165,7 @@ impl Context {
         // silently keeps its default.
         let defaults = Self::default().settings;
         let settings = ReadSettings {
+            verify_trust: doc.verify.verify_trust.unwrap_or(defaults.verify_trust),
             trust_anchors: signing_anchors,
             timestamp_trust_anchors: timestamp_anchors,
             trust_lists: signing_lists,
@@ -235,8 +236,32 @@ enum TrustListKind {
 #[derive(Default, Deserialize)]
 #[serde(default)]
 struct VerifyJson {
+    verify_trust: Option<bool>,
     ocsp_fetch: Option<bool>,
     remote_manifest_fetch: Option<bool>,
+}
+
+#[cfg(test)]
+mod trust_policy_tests {
+    use super::Context;
+
+    #[test]
+    fn claim_trust_defaults_on_and_explicit_false_is_retained() -> Result<(), super::C2paError> {
+        assert!(Context::default().settings().verify_trust);
+        assert!(Context::from_json("{}")?.settings().verify_trust);
+        assert!(
+            !Context::from_json(r#"{"verify":{"verify_trust":false}}"#)?
+                .settings()
+                .verify_trust
+        );
+        assert!(
+            Context::from_json(r#"{"verify":{"verify_trust":true}}"#)?
+                .settings()
+                .verify_trust
+        );
+        assert!(Context::from_json(r#"{"verify":{"verify_trust":"false"}}"#).is_err());
+        Ok(())
+    }
 }
 
 const PEM_BEGIN: &str = "-----BEGIN CERTIFICATE-----";

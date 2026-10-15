@@ -105,7 +105,7 @@ flowchart TB
 |---|---|---|
 | `contentauth-state-machine` | Foundation | The engine: `Session`, `SessionCore`, request tracking, protocol errors. Domain-agnostic. |
 | `contentauth-c2pa-primitives` | Foundation | The narrow shared slice: `StreamId`, `ByteRange`, hash/signing algorithms, `HostError`, COSE `Sig_structure`, RFC 3161 encode/unwrap. |
-| `contentauth-c2pa-reader` | Workflow | `ReadSession`: JUMBF, claims (v1+v2), integrity, signature, trust, timestamps, OCSP, CAWG identity assertions (X.509). |
+| `contentauth-c2pa-reader` | Workflow | `ReadSession`: JUMBF, claims (v1+v2), embedded binary assertion resources, assertion hashes, active-asset binding, signature, trust, timestamps, OCSP, CAWG identity assertions (X.509). Ingredient-link/hash/history validation remains future core work. |
 | `contentauth-c2pa-builder` | Workflow | `BuilderSession`: v2 claim generation and signing via a two-pass placeholder scheme, plus optional CAWG identity assertions. |
 | `contentauth-c2pa-format` | Format | `FormatHandler` trait, `FormatDescriptor`, `IoRequest`, `EmbedPlan`/`Patch`, test kit + conformance suite. |
 | `…-format-jpeg` | Format | APP11 segments, byte-compatible with c2pa-rs; standard XMP remote references via a bounded namespace-aware decoder. The template for other handlers. |
@@ -114,13 +114,13 @@ flowchart TB
 | `…-file-reader` | Orchestration | `FileReadSession`: `locate` + `ReadSession`; plus a blocking `Read + Seek` host. |
 | `…-file-builder` | Orchestration | `FileBuilderSession`: `plan_embed`/`commit` + `BuilderSession`, never buffering the asset; plus blocking hosts. |
 | `…-rs-compat` | Binding | c2pa-rs `Context` + `Reader::with_file` slice; one of two crates with a network dependency (`reqwest` OCSP). |
-| `…-js-compat` | Binding | c2pa-wasm `WasmReader` slice; async Blob/Platform host, shared JPEG/TIFF registry, optional browser remote/OCSP callbacks. |
-| `…-node-compat` (+ `c2pa-node-compat-addon`) | Binding | Purely synchronous `NodeSession`; Node owns all async. Addon is a separate Neon workspace. |
+| `…-js-compat` | Binding | c2pa-wasm `WasmReader` slice; async Blob/Platform host, shared JPEG/TIFF registry, claim-thumbnail and same-manifest embedded generator-icon/ingredient-thumbnail/data references and `resourceToBytes`, optional browser remote/OCSP callbacks. |
+| `…-node-compat` (+ `c2pa-node-compat-addon`) | Binding | Purely synchronous `NodeSession`, including optional explicit detached bytes; retained resources share JS-compat's strict URI lookup. Node owns all async, including `fromManifestDataAndAsset` source reads and `resourceToAsset` file output. Addon is a separate Neon workspace. |
 | `…-sign-baseline` | Binding | The baseline signing case (JSON definition → `BuilderSettings`) every write binding is held to. |
 | `…-rs/js/node-compat-sign` (+ `c2pa-node-sign-addon`) | Binding | The baseline case through each binding. `rs-compat-sign` is the other crate with a network dependency (`reqwest` for RFC 3161 timestamps). |
 | `…-web-bindings` | Binding | Combined browser `cdylib` delegating to the existing JS read/sign adapters; target-only browser dependencies. |
 | `c2pa-rs-compat-conformance` | Test | Separate workspace; differential tests against the real `c2pa` crate. |
-| `c2pa-js-state-machine` (JS package) | Binding / Test | Inline/module-Worker JPEG/TIFF read/sign facade, reader-factory settings defaults, opt-in bounded remote/OCSP hosts, caller-owned signing/timestamps, private compiled ESM/types/Wasm packaging, pinned legacy oracle, and three-browser runtime/installed-consumer/performance proof; full SDK parity remains future work. |
+| `c2pa-js-state-machine` (JS package) | Binding / Test | Inline/module-Worker JPEG/TIFF read/sign facade, embedded-resource extraction, exact active-manifest and single-manifest trusted/untrusted store/parsed JSON reporting, resource-free ingredient metadata/reviews and unknown-provenance deltas, explicit claim-trust policy and independent CAWG anchor switches, reader-factory settings defaults, caller-resolved/memoized Contexts with concurrent isolation (private Worker protocol v2), opt-in bounded remote/OCSP hosts, caller-owned signing/timestamps, private compiled ESM/types/Wasm packaging, pinned legacy oracle, and three-browser runtime/installed-consumer/performance proof; full SDK parity remains future work. |
 
 ## Rules of the road
 

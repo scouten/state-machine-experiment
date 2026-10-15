@@ -64,13 +64,16 @@
 //! very ones `contentauth-c2pa-js-compat` already reproduces. This crate
 //! adds only what is specific to c2pa-node: the synchronous session
 //! surface and the `Reader` accessors c2pa-node's JS class offers.
+//! [`NodeSession::new`] accepts optional detached manifest bytes, using the
+//! existing file session to validate the asset without locating/fetching a store.
+//! The addon exposes this as `fromManifestDataAndAsset`, while `resourceToAsset`
+//! copies retained embedded resources into buffers or JS-owned asynchronous files.
+//! [`Reader::is_embedded`] distinguishes located and explicitly supplied stores.
 //!
 //! # What is not covered
 //!
-//! `fromManifestDataAndAsset` (no detached-manifest read path in the
-//! engine yet), `resourceToAsset` (the engine does not decode resources
-//! yet), the whole of c2pa-node's `Builder`, signers, identity assertions
-//! and Trustmark, and every format but JPEG. A `Builder` counterpart
+//! Databox/external resources, full c2pa-node `Builder`, signers, identity assertions
+//! and Trustmark, and formats beyond JPEG/TIFF. A `Builder` counterpart
 //! would follow the same shape — `BuilderSession`'s
 //! `Sign`/`Timestamp` requests are exactly the ones Node's `CallbackSigner`
 //! already answers asynchronously by calling back into JavaScript.

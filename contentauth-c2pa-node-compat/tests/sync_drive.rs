@@ -54,7 +54,10 @@ fn answer(asset: &[u8], request: &PendingRequest) -> Reply {
 /// The whole conversation, synchronously. Returns the reader and how many
 /// requests of each kind the engine made.
 fn read(asset: &[u8], format: &str) -> Result<(Option<Reader>, Counts), Error> {
-    let mut session = NodeSession::new(format, None)?;
+    drive(NodeSession::new(format, None, None)?, asset)
+}
+
+fn drive(mut session: NodeSession, asset: &[u8]) -> Result<(Option<Reader>, Counts), Error> {
     let mut counts = Counts::default();
     loop {
         match session.advance()? {
@@ -67,11 +70,70 @@ fn read(asset: &[u8], format: &str) -> Result<(Option<Reader>, Counts), Error> {
                         PendingRequest::Read { .. } => counts.reads += 1,
                         _ => counts.other += 1,
                     }
+
                     session.fulfill(request.id(), answer(asset, request))?;
                 }
             }
         }
     }
+}
+
+#[test]
+fn detached_bytes_drive_the_same_validation_and_resources_as_the_async_host() {
+    let asset = include_bytes!("../../c2pa-js-state-machine/browser/fixtures/detached-data-v2.jpg");
+    let manifest =
+        include_bytes!("../../c2pa-js-state-machine/browser/fixtures/detached-data-v2.c2pa");
+    assert!(read(asset, "image/jpeg").unwrap().0.is_none());
+    let reader = drive(
+        NodeSession::new("image/jpeg", None, Some(manifest.to_vec())).unwrap(),
+        asset,
+    )
+    .unwrap()
+    .0
+    .unwrap();
+    let via_js = block_on(
+        contentauth_c2pa_js_compat::Reader::from_blob_with_detached_manifest(
+            "image/jpeg",
+            asset.as_slice(),
+            None,
+            manifest.to_vec(),
+            &Fixed,
+        ),
+    )
+    .unwrap();
+    assert_eq!(reader.json().unwrap(), via_js.json().unwrap());
+    assert!(!reader.is_embedded());
+    assert_eq!(reader.remote_url(), "");
+    let report: serde_json::Value = serde_json::from_str(&reader.json().unwrap()).unwrap();
+    let label = report["active_manifest"].as_str().unwrap();
+    let uri = report["manifests"][label]["ingredients"][0]["data"]["identifier"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        reader.resource_bytes(uri).unwrap(),
+        include_bytes!("../../c2pa-js-state-machine/browser/fixtures/ingredient-data.json")
+    );
+    let mut changed = asset.to_vec();
+    changed.push(0);
+    let altered = drive(
+        NodeSession::new("image/jpeg", None, Some(manifest.to_vec())).unwrap(),
+        &changed,
+    )
+    .unwrap()
+    .0
+    .unwrap();
+    let report: serde_json::Value = serde_json::from_str(&altered.json().unwrap()).unwrap();
+    assert_eq!(report["validation_state"], "Invalid");
+}
+
+#[test]
+fn malformed_detached_bytes_fail_without_asking_for_embedded_source_reads() {
+    for bytes in [vec![], vec![1, 2, 3]] {
+        let mut session = NodeSession::new("image/jpeg", None, Some(bytes)).unwrap();
+        assert!(session.advance().is_err());
+        assert!(session.finish().is_err());
+    }
+    assert!(read(C_JPG, "image/jpeg").unwrap().0.is_some());
 }
 
 #[derive(Default, Debug)]
@@ -112,7 +174,7 @@ fn a_synchronous_loop_reads_a_signed_jpeg() {
     assert!(reader.active_manifest().is_some());
     assert!(reader.is_embedded());
     assert_eq!(reader.remote_url(), "");
-    assert!(reader.json().contains("\"validation_state\""));
+    assert!(reader.json().unwrap().contains("\"validation_state\""));
     assert!(counts.reads > 0, "{counts:?}");
 }
 
@@ -138,7 +200,42 @@ fn it_reports_exactly_what_the_async_host_reports_for_the_same_bytes() {
     ))
     .unwrap();
 
-    assert_eq!(reader.unwrap().json(), via_js.json());
+    assert_eq!(reader.unwrap().json().unwrap(), via_js.json().unwrap());
+}
+
+#[test]
+fn retained_resources_match_the_async_host_with_strict_unknown_uri_errors() {
+    let (reader, _) = read(C_JPG, "image/jpeg").unwrap();
+    let reader = reader.unwrap();
+    let via_js = block_on(contentauth_c2pa_js_compat::Reader::from_blob(
+        "image/jpeg",
+        C_JPG,
+        None,
+        &Fixed,
+    ))
+    .unwrap();
+    let uri = via_js
+        .active_manifest()
+        .unwrap()
+        .thumbnail
+        .unwrap()
+        .identifier;
+    assert_eq!(
+        reader.resource_bytes(&uri).unwrap(),
+        via_js.resource_to_bytes(&uri).unwrap()
+    );
+    assert_eq!(reader.resource_bytes(&uri).unwrap().len(), 28486);
+    for bad in [
+        "",
+        "self#jumbf=c2pa.assertions/c2pa.thumbnail.claim.jpeg",
+        "https://example.invalid",
+    ] {
+        assert!(matches!(
+            reader.resource_bytes(bad),
+            Err(Error::C2pa(C2paError::ResourceNotFound(_)))
+        ));
+    }
+    assert!(reader.resource_bytes(&uri).is_ok());
 }
 
 #[test]
@@ -151,7 +248,7 @@ fn several_requests_are_handed_up_at_once_for_the_host_to_overlap() {
 
 #[test]
 fn each_request_is_reported_once_and_replies_may_arrive_in_any_order() {
-    let mut session = NodeSession::new("image/jpeg", None).unwrap();
+    let mut session = NodeSession::new("image/jpeg", None, None).unwrap();
     let mut seen = std::collections::HashSet::new();
 
     loop {
@@ -189,7 +286,7 @@ fn an_asset_without_a_manifest_store_finishes_with_no_reader() {
 
 #[test]
 fn a_host_that_cannot_read_the_asset_is_an_error_not_a_hang() {
-    let mut session = NodeSession::new("image/jpeg", None).unwrap();
+    let mut session = NodeSession::new("image/jpeg", None, None).unwrap();
     let outcome = loop {
         match session.advance() {
             Err(err) => break Err(err),
@@ -206,7 +303,7 @@ fn a_host_that_cannot_read_the_asset_is_an_error_not_a_hang() {
 
 #[test]
 fn protocol_misuse_is_reported_not_trusted() {
-    let mut session = NodeSession::new("image/jpeg", None).unwrap();
+    let mut session = NodeSession::new("image/jpeg", None, None).unwrap();
     assert!(session.fulfill(99, Reply::Length(1)).is_err());
 
     let Step::Pending(requests) = session.advance().unwrap() else {
@@ -226,11 +323,11 @@ fn protocol_misuse_is_reported_not_trusted() {
 #[test]
 fn bad_format_and_bad_settings_fail_before_any_request() {
     assert!(matches!(
-        NodeSession::new("image/png", None),
+        NodeSession::new("image/png", None, None),
         Err(Error::C2pa(C2paError::UnsupportedType))
     ));
     assert!(matches!(
-        NodeSession::new("image/jpeg", Some("{not json")),
+        NodeSession::new("image/jpeg", Some("{not json"), None),
         Err(Error::C2pa(C2paError::BadParam(_)))
     ));
 }

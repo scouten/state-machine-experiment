@@ -69,6 +69,9 @@ const DEFAULT_ALGORITHM: HashAlgorithm = HashAlgorithm::Sha256;
 /// These strings are defined by the C2PA specification; they are not this
 /// crate's invention, and they match the constants c2pa-rs uses.
 pub mod status_code {
+    /// A non-`inputTo` ingredient declares no source manifest.
+    pub const INGREDIENT_PROVENANCE_UNKNOWN: &str = "ingredient.unknownProvenance";
+
     /// A hashed URI's target hashed to the value the claim recorded.
     pub const ASSERTION_HASHEDURI_MATCH: &str = "assertion.hashedURI.match";
 
@@ -604,6 +607,7 @@ pub(crate) fn check_claim_signature(
         certificates: verified.certificates,
         timestamp: verified.timestamp,
         rvals: verified.rvals,
+        signature_info: verified.signature_info,
     })
 }
 
@@ -656,6 +660,8 @@ pub(crate) const CAWG_X509_SIGNATURE_CODES: SignatureCodes = SignatureCodes {
 /// evaluate once it has a time.
 #[derive(Debug)]
 pub(crate) struct VerifiedSignature {
+    /// Metadata from the verified signature and leaf certificate.
+    pub(crate) signature_info: crate::SignatureInfo,
     /// The decoded chain, signer first.
     pub(crate) certificates: Vec<cert::Certificate>,
 
@@ -767,6 +773,13 @@ pub(crate) fn check_cose_signature(
             };
 
             Some(VerifiedSignature {
+                signature_info: crate::SignatureInfo {
+                    alg: signature.alg,
+                    organization: signer.organization.clone(),
+                    common_name: signer.common_name.clone(),
+                    serial_number: signer.serial_number.clone(),
+                    time: None,
+                },
                 certificates,
                 timestamp,
                 rvals: signature.rvals,
@@ -877,7 +890,7 @@ pub(crate) fn check_assertion_hashes(
             statuses.push(ValidationStatus::for_url(
                 status_code::ASSERTION_HASHEDURI_MATCH,
                 &reference.url,
-                "assertion hashed as recorded in the claim",
+                format!("hashed uri matched: {}", reference.url),
             ));
         } else {
             statuses.push(ValidationStatus::for_url(

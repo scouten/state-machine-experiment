@@ -54,7 +54,7 @@ describe("M2 reader reporting and Context", () => {
       signer_payload?: { referenced_assertions?: { hash: unknown }[] };
     } | undefined;
     expect(Array.isArray(identityData?.signer_payload?.referenced_assertions?.[0]?.hash)).toBe(true);
-    expect(report.validation_status?.some((status) => status.code === "cawg.x509.credential.trusted")).toBe(true);
+    expect(report.validation_results.activeManifest.success.some((status) => status.code === "cawg.x509.credential.trusted")).toBe(true);
     expect(report.validation_results.specVersion).toBe("2.4.0");
     expect(report.validation_results.activeManifest.success.some(
       (status) => status.code === "claimSignature.validated",
@@ -63,8 +63,8 @@ describe("M2 reader reporting and Context", () => {
 
   test("rejects verification settings that reader cannot honor", async () => {
     const client = await runtime();
-    const context = new Context({ verify: { verifyTrust: false } });
+    const context = new Context({ verify: { remoteManifestFetch: true } });
     await expect(Reader.fromBlob(client, "image/jpeg", new Blob([]), context))
-      .rejects.toThrow(/Unsupported reader setting: verify.verifyTrust/);
+      .rejects.toThrow(/Unsupported reader setting: verify.remoteManifestFetch/);
   });
 });

@@ -26,7 +26,8 @@ export default defineConfig({
       if (trustFixtures.some((file) => id === `${file}?raw`))
         return `\0oracle-trust:${id.slice(0, -4)}`;
       if (id === "@contentauth/c2pa-web/resources/c2pa.wasm?url")
-        return (state && importer?.endsWith("/browser/methods.ts")
+        return (state && (importer?.endsWith("/browser/methods.ts") ||
+          importer === join(web, "src/lib/reader.spec.ts"))
           ? join(root, ".cache/generated/state_machine_bg.wasm")
           : fileURLToPath(import.meta.resolve("@contentauth/c2pa-web/resources/c2pa.wasm"))) + "?url";
       if (id === "test/methods.js") return join(root, "browser/methods.ts");
@@ -50,7 +51,7 @@ export default defineConfig({
   test: {
     include: performance ? ["browser/performance.spec.ts"] : [
       ".cache/upstream/packages/c2pa-web/src/lib/reader.spec.ts",
-      ...(state && runtime === "inline" ? ["browser/m1.spec.ts", "browser/m2.spec.ts", "browser/m3.spec.ts", "browser/m3-worker.spec.ts", "browser/m3-settings.spec.ts"] : []),
+      ...(state && runtime === "inline" ? ["browser/m1.spec.ts", "browser/m2.spec.ts", "browser/m3.spec.ts", "browser/m3-worker.spec.ts", "browser/m3-settings.spec.ts", "browser/m3-resources.spec.ts"] : []),
     ],
     exclude: [],
     browser: {

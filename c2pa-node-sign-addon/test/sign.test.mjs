@@ -80,12 +80,12 @@ function assertBaseline(reader) {
   const active = reader.getActive();
   assert.equal(active.title, "baseline.jpg");
   assert.equal(active.instance_id, BASELINE.instance_id);
-  assert.deepEqual(active.assertions.map((assertion) => assertion.label), ["c2pa.actions.v2", "c2pa.hash.data"]);
+  assert.deepEqual(active.assertions.map((assertion) => assertion.label), ["c2pa.actions.v2"]);
   assert.deepEqual(active.assertions[0], {
     label: "c2pa.actions.v2", created: true, data: BASELINE.assertions[0].data,
   });
-  assert.equal(active.assertions[1].data.alg, "sha256");
-  assert.equal(active.assertions[1].data.hash.length, 32);
+  assert.ok(json.validation_results.activeManifest.success.some((status) => status.code === "assertion.dataHash.match"));
+  assert.equal(active.signature_info.alg, "Es256");
 }
 
 test("the baseline case signs a JPEG file that reads back Trusted", async () => {
@@ -111,6 +111,152 @@ test("the baseline case signs a JPEG file that reads back Trusted", async () => 
   // Without the anchor, the same asset is valid but not Trusted.
   const untrusted = await Reader.fromAsset({ path: output }, { verify: { ocsp_fetch: false } });
   assert.notEqual(untrusted.json().validation_state, "Trusted");
+});
+
+test("explicit manifest data reads freshly signed output without falling back to its embedded store", async () => {
+  const result = await signAsset({ path: SOURCE }, BASELINE, testSigner());
+  const embedded = await Reader.fromAsset({ buffer: result.buffer }, trustSettings);
+  const detached = await Reader.fromManifestDataAndAsset(result.manifest,
+    { buffer: result.buffer }, trustSettings);
+  assertBaseline(detached);
+  assert.deepEqual(detached.json(), embedded.json());
+  assert.equal(embedded.isEmbedded(), true);
+  assert.equal(detached.isEmbedded(), false);
+  await assert.rejects(Reader.fromManifestDataAndAsset(Buffer.from([1, 2, 3]),
+    { buffer: result.buffer }, trustSettings));
+  assertBaseline(await Reader.fromManifestDataAndAsset(result.manifest,
+    { buffer: result.buffer }, trustSettings));
+});
+
+test("reader JSON uses the shared legacy numeric-array formatter for newly signed assertions", async () => {
+  const definition = { ...BASELINE, assertions: [...BASELINE.assertions, {
+    label: "test.numeric", data: { bytes: [0, 1, 254, 255], empty: [], nested: [[1, 2], { values: [3] }] },
+  }] };
+  const result = await signAsset({ path: SOURCE }, definition, testSigner());
+  const reader = await Reader.fromAsset({ buffer: result.buffer }, trustSettings);
+  const report = reader.json();
+  assert.equal(report.validation_state, "Trusted");
+  assert.deepEqual(report.manifests[report.active_manifest].assertions.find(
+    (assertion) => assertion.label === "test.numeric").data, {
+    bytes: "AAH+/w==", empty: [], nested: [[1, 2], { values: "Aw==" }],
+  });
+  assert.deepEqual(reader.json(), report);
+});
+
+test("real c2pa-rs embedded generator icons share reporting across Node", async () => {
+  const asset = readFileSync(fixture("c2pa-js-state-machine/browser/fixtures/generator-icons-v2.jpg"));
+  const reader = await Reader.fromAsset({ buffer: asset }, trustSettings);
+  const report = reader.json();
+  const icon = report.manifests[report.active_manifest].claim_generator_info[0].icon;
+  assert.equal(report.validation_state, "Trusted");
+  assert.deepEqual(icon, {
+    format: "image/svg+xml",
+    identifier: `self#jumbf=/c2pa/${report.active_manifest}/c2pa.assertions/c2pa.icon`,
+  });
+  const databox = readFileSync(fixture("c2pa-js-state-machine/browser/fixtures/generator-icons-v1.jpg"));
+  await assert.rejects(Reader.fromAsset({ buffer: databox }, trustSettings),
+    /generator icon.*same-manifest embedded assertion/);
+  assert.equal((await Reader.fromAsset({ buffer: asset }, trustSettings)).json().validation_state, "Trusted");
+});
+
+test("real c2pa-rs ingredient thumbnails retain positional references and reject databoxes across Node", async () => {
+  const asset = readFileSync(fixture("c2pa-js-state-machine/browser/fixtures/ingredient-thumbnails-v2.jpg"));
+  const reader = await Reader.fromAsset({ buffer: asset }, trustSettings);
+  const report = reader.json();
+  const ingredients = report.manifests[report.active_manifest].ingredients;
+  assert.equal(report.validation_state, "Trusted");
+  assert.equal(ingredients.length, 2);
+  assert.deepEqual(ingredients.map((ingredient) => ingredient.thumbnail), [
+    { format: "image/svg+xml", identifier: `self#jumbf=/c2pa/${report.active_manifest}/c2pa.assertions/c2pa.thumbnail.ingredient` },
+    { format: "image/svg+xml", identifier: `self#jumbf=/c2pa/${report.active_manifest}/c2pa.assertions/c2pa.thumbnail.ingredient__1` },
+  ]);
+  assert.equal(ingredients[0].relationship, "componentOf");
+  assert.equal(ingredients[1].relationship, "inputTo");
+  const databox = readFileSync(fixture("c2pa-js-state-machine/browser/fixtures/ingredient-thumbnails-v1.jpg"));
+  await assert.rejects(Reader.fromAsset({ buffer: databox }, trustSettings),
+    /ingredient thumbnail.*same-manifest embedded assertion/);
+  assert.equal((await Reader.fromAsset({ buffer: asset }, trustSettings)).json().validation_state, "Trusted");
+});
+
+test("real c2pa-rs ingredient data and thumbnails coexist with strict databox rejection across Node", async () => {
+  const asset = readFileSync(fixture("c2pa-js-state-machine/browser/fixtures/ingredient-data-v2.jpg"));
+  const reader = await Reader.fromAsset({ buffer: asset }, trustSettings);
+  const report = reader.json();
+  const ingredients = report.manifests[report.active_manifest].ingredients;
+  assert.equal(report.validation_state, "Trusted");
+  assert.equal(ingredients.length, 2);
+  assert.deepEqual(ingredients.map((ingredient) => ingredient.data), [
+    { format: "application/json", identifier: `self#jumbf=/c2pa/${report.active_manifest}/c2pa.assertions/c2pa.embedded-data` },
+    { format: "application/json", identifier: `self#jumbf=/c2pa/${report.active_manifest}/c2pa.assertions/c2pa.embedded-data__1` },
+  ]);
+  assert.deepEqual(ingredients[0].thumbnail, {
+    format: "image/svg+xml",
+    identifier: `self#jumbf=/c2pa/${report.active_manifest}/c2pa.assertions/c2pa.thumbnail.ingredient`,
+  });
+  const databox = readFileSync(fixture("c2pa-js-state-machine/browser/fixtures/ingredient-data-v1.jpg"));
+  await assert.rejects(Reader.fromAsset({ buffer: databox }, trustSettings),
+    /ingredient data.*same-manifest embedded assertion/);
+  assert.equal((await Reader.fromAsset({ buffer: asset }, trustSettings)).json().validation_state, "Trusted");
+});
+
+test("signed resource-free ingredients use the shared metadata and provenance-delta projection", async () => {
+  const assertion = { label: "c2pa.ingredient.v3", created: false, data: {
+    "dc:title": "Source dataset", "dc:format": "application/json", instanceID: "xmp.iid:dataset",
+    relationship: "componentOf", description: "Training input",
+    informationalURI: "https://example.invalid/dataset", dataTypes: [{ type: "dataset", version: "1" }],
+  } };
+  const result = await signAsset({ path: SOURCE }, {
+    ...BASELINE, assertions: [...BASELINE.assertions, assertion],
+  }, testSigner());
+  const reader = await Reader.fromAsset({ buffer: result.buffer }, trustSettings);
+  const report = reader.json();
+  const active = report.manifests[report.active_manifest];
+  assert.equal(report.validation_state, "Trusted");
+  assert.deepEqual(active.ingredients, [{
+    label: "c2pa.ingredient.v3", title: "Source dataset", format: "application/json",
+    instance_id: "xmp.iid:dataset", relationship: "componentOf", description: "Training input",
+    informational_URI: "https://example.invalid/dataset", data_types: [{ type: "dataset", version: "1" }],
+  }]);
+  assert.ok(!active.assertions.some((a) => a.label === assertion.label));
+  const uri = `self#jumbf=/c2pa/${report.active_manifest}/c2pa.assertions/${assertion.label}`;
+  assert.deepEqual(report.validation_results.ingredientDeltas, [{
+    ingredientAssertionURI: uri, validationDeltas: { success: [], failure: [], informational: [{
+      code: "ingredient.unknownProvenance", url: uri,
+      explanation: "Source dataset: ingredient does not have provenance",
+    }] },
+  }]);
+  const linked = await signAsset({ path: SOURCE }, {
+    ...BASELINE, assertions: [...BASELINE.assertions, { ...assertion, data: {
+      ...assertion.data, activeManifest: { url: "self#jumbf=/c2pa/missing", hash: [1] },
+    } }],
+  }, testSigner());
+  await assert.rejects(Reader.fromAsset({ buffer: linked.buffer }, trustSettings),
+    /activeManifest reporting is not yet supported/);
+  assert.equal((await Reader.fromAsset({ buffer: result.buffer }, trustSettings)).json().validation_state, "Trusted");
+});
+
+test("ingredient assertion reviews and creation time are metadata, not live validation", async () => {
+  const metadata = { dateTime: "2026-10-14T10:20:30Z", reviewRatings: [{
+    explanation: "A signed opinion", code: "ingredient.modified", value: 5,
+  }], "org.example.review": { scores: [1, 2, 255] } };
+  const definition = (value) => ({ ...BASELINE, assertions: [...BASELINE.assertions, {
+    label: "c2pa.ingredient.v3", created: false, data: { relationship: "inputTo", metadata: value },
+  }] });
+  const result = await signAsset({ path: SOURCE }, definition(metadata), testSigner());
+  const report = (await Reader.fromAsset({ buffer: result.buffer }, trustSettings)).json();
+  assert.equal(report.validation_state, "Trusted");
+  assert.deepEqual(report.manifests[report.active_manifest].ingredients[0].metadata, {
+    ...metadata, "org.example.review": { scores: "AQL/" },
+  });
+  assert.ok(!report.validation_status?.some((status) => status.code === "ingredient.modified"));
+  for (const [value, message] of [
+    [{ reference: {} }, /metadata: reference reporting is not yet supported/],
+    [{ reviewRatings: [{ explanation: "Overflow", value: 256 }] }, /review value must be an unsigned byte/],
+  ]) {
+    const bad = await signAsset({ path: SOURCE }, definition(value), testSigner());
+    await assert.rejects(Reader.fromAsset({ buffer: bad.buffer }, trustSettings), message);
+  }
+  assert.equal((await Reader.fromAsset({ buffer: result.buffer }, trustSettings)).json().validation_state, "Trusted");
 });
 
 test("with no output path the signed asset is returned, identical to the file route", async () => {
@@ -380,8 +526,9 @@ test("a tsa_url timestamps the claim: Node POSTs the request and the token lands
     assert.ok(result.manifest.includes(TOKEN), "the token must be in the manifest store");
     // The signed asset still reads back, signature and hard binding intact.
     const reader = await Reader.fromAsset({ path: output }, trustSettings);
-    assert.ok(reader.getActive().assertions.some((assertion) =>
-      assertion.label === "c2pa.hash.data" && assertion.data.alg === "sha256"));
+    assert.ok(reader.json().validation_results.activeManifest.success.some((status) =>
+      status.code === "assertion.dataHash.match"));
+    assert.equal(reader.getActive().signature_info.time, undefined);
   } finally {
     await authority.close();
   }

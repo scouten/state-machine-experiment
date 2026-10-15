@@ -116,6 +116,7 @@ pub enum Step {
 /// is, and nothing here requires either.
 pub struct NodeSession {
     inner: FileReadSession<AnyFormat>,
+    embedded: bool,
 
     /// Numbers handed to the host, mapped to the engine's own ids. The
     /// engine's `RequestId` is opaque (and rightly so); the host's handle
@@ -132,18 +133,30 @@ impl NodeSession {
     /// Starts a read of an asset of type `format` (a MIME type or bare
     /// extension, as c2pa-node's `mimeType`), under c2pa-rs settings JSON
     /// `settings_json` (none: c2pa-rs defaults).
+    /// With `manifest_store`, validates those detached bytes against the asset
+    /// instead of locating an embedded store. Invalid bytes never fall back.
     ///
     /// Fails with [`C2paError::UnsupportedType`] or
     /// [`C2paError::BadParam`] before any request is made.
-    pub fn new(format: &str, settings_json: Option<&str>) -> Result<Self, Error> {
+    pub fn new(
+        format: &str,
+        settings_json: Option<&str>,
+        manifest_store: Option<Vec<u8>>,
+    ) -> Result<Self, Error> {
         let handler = for_format(format)?;
         let context = match settings_json {
             Some(json) => Context::from_json(json)?,
             None => Context::default(),
         };
 
+        let mut inner = FileReadSession::new(&handler, context.into_settings());
+        let embedded = manifest_store.is_none();
+        if let Some(bytes) = manifest_store {
+            inner = inner.with_detached_manifest(bytes);
+        }
         Ok(Self {
-            inner: FileReadSession::new(&handler, context.into_settings()),
+            inner,
+            embedded,
             handles: HashMap::new(),
             next_handle: 0,
             reported: HashMap::new(),
@@ -205,7 +218,12 @@ impl NodeSession {
     /// turns the `JumbfNotFound` error into a `null` reader for.
     pub fn finish(self) -> Result<Option<Reader>, Error> {
         let report = self.inner.finish().map_err(C2paError::from)?;
-        Ok(report.manifest_store_found.then(|| Reader::new(report)))
+        if !report.manifest_store_found && !self.embedded {
+            return Err(C2paError::JumbfNotFound.into());
+        }
+        Ok(report
+            .manifest_store_found
+            .then(|| Reader::new(report, self.embedded)))
     }
 }
 
@@ -299,7 +317,7 @@ mod tests {
 
     #[test]
     fn an_answered_request_is_forgotten_rather_than_kept_for_the_whole_read() {
-        let mut session = NodeSession::new("image/jpeg", None).unwrap();
+        let mut session = NodeSession::new("image/jpeg", None, None).unwrap();
         let Step::Pending(requests) = session.advance().unwrap() else {
             panic!("a fresh session needs the host");
         };

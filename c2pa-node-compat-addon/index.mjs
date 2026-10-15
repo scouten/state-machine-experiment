@@ -17,7 +17,7 @@
 //   * what "now" is (`now`), which makes reads reproducible in tests.
 
 import { createRequire } from "node:module";
-import { open } from "node:fs/promises";
+import { open, writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import { extname } from "node:path";
 
@@ -25,9 +25,13 @@ const native = createRequire(import.meta.url)("./index.node");
 
 export class Reader {
   #store;
+  #reader;
+  #embedded;
 
-  constructor(store) {
+  constructor(store, reader, embedded) {
     this.#store = store;
+    this.#reader = reader;
+    this.#embedded = embedded;
   }
 
   /** The manifest store, as c2pa-rs's `Reader::json` reports it. */
@@ -49,7 +53,31 @@ export class Reader {
   }
 
   isEmbedded() {
-    return true;
+    return this.#embedded;
+  }
+
+  /**
+   * Copies an embedded resource to a buffer or file, as in c2pa-node.
+   * Resource lookup is exact and never performs source reads or network I/O.
+   * File output is asynchronous host I/O; extraction is not a trust verdict.
+   */
+  async resourceToAsset(uri, asset) {
+    if (typeof asset !== "object" || asset === null) {
+      throw new TypeError("resource destination must be a buffer or path asset");
+    }
+    const file = Object.hasOwn(asset, "path");
+    const buffer = Object.hasOwn(asset, "buffer");
+    if (file === buffer ||
+      (file && (typeof asset.path !== "string" || asset.path.length === 0)) ||
+      (buffer && asset.buffer !== null && !Buffer.isBuffer(asset.buffer))) {
+      throw new TypeError("resource destination must specify exactly one buffer or nonempty path");
+    }
+    const bytes = native.readerResourceToBytes(this.#reader, uri);
+    if (file) {
+      await writeFile(asset.path, bytes);
+      return { buffer: Buffer.alloc(0), bytes_written: bytes.length };
+    }
+    return { buffer: bytes, bytes_written: bytes.length };
   }
 
   /**
@@ -72,6 +100,23 @@ export class Reader {
    *   - `now`: `() => ms since epoch` (default `Date.now`).
    */
   static async fromAsset(asset, settings, options = {}) {
+    return Reader.#read(asset, settings, options);
+  }
+
+  /**
+   * Validates caller-supplied detached manifest bytes against `asset`.
+   * Snapshots the Buffer before any await. Malformed/unrelated bytes never
+   * fall back to an embedded store or trigger remote-manifest fetching.
+   * Settings and host options are the same as `fromAsset`.
+   */
+  static async fromManifestDataAndAsset(manifestData, asset, settings, options = {}) {
+    if (!Buffer.isBuffer(manifestData)) {
+      throw new TypeError("manifestData must be a Buffer");
+    }
+    return Reader.#read(asset, settings, options, Buffer.from(manifestData));
+  }
+
+  static async #read(asset, settings, options, manifestData) {
     const source = await openSource(asset);
     try {
       // An explicit mime type is taken as given. Otherwise the bytes decide
@@ -87,8 +132,9 @@ export class Reader {
           ? JSON.stringify(settings)
           : (settings ?? undefined),
         options,
+        manifestData,
       );
-      return store === null ? null : new Reader(JSON.parse(store));
+      return store === null ? null : new Reader(JSON.parse(store.json), store.reader, store.embedded);
     } finally {
       await source.close();
     }
@@ -97,10 +143,10 @@ export class Reader {
 
 // ---------------------------------------------------------------------------
 
-async function readStore(source, format, settings, options) {
+async function readStore(source, format, settings, options, manifestData) {
   const { concurrency = Infinity, now = Date.now, ocspPolicy } = options;
   const doFetch = options.fetch ?? globalThis.fetch;
-  const session = native.sessionNew(format, settings);
+  const session = native.sessionNew(format, settings, manifestData);
 
   const answer = (request) => answerRequest(request, source, { doFetch, now, ocspPolicy });
 

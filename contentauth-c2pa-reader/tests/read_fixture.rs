@@ -100,7 +100,12 @@ enum Ask {
 impl Host<'_> {
     /// Drives a read session to completion.
     fn read(&self) -> Result<ReadReport, Error> {
+        self.read_with_trust(true)
+    }
+
+    fn read_with_trust(&self, verify_trust: bool) -> Result<ReadReport, Error> {
         let mut session = ReadSession::new(ReadSettings {
+            verify_trust,
             trust_anchors: self.anchors.clone(),
             timestamp_trust_anchors: self.timestamp_anchors.clone(),
             trust_lists: self.trust_lists.clone(),
@@ -179,6 +184,33 @@ fn host() -> Host<'static> {
 
 fn read() -> ReadReport {
     host().read().expect("fixture should read cleanly")
+}
+
+#[test]
+fn disabled_claim_trust_keeps_timestamp_trust_and_asset_integrity() {
+    let host = Host {
+        anchors: vec![FIXTURE_ISSUER.to_vec()],
+        timestamp_anchors: vec![TIMESTAMP_ANCHOR.to_vec()],
+        ..host()
+    };
+    let report = host.read_with_trust(false).expect("fixture reads");
+    assert_eq!(report.validation_state, Some(ValidationState::Valid));
+    let observed = codes(&report);
+    assert!(observed.contains(&status_code::TIMESTAMP_TRUSTED));
+    assert!(observed.contains(&status_code::CLAIM_SIGNATURE_VALIDATED));
+    assert!(!observed.contains(&status_code::SIGNING_CREDENTIAL_TRUSTED));
+    assert!(!observed.contains(&status_code::SIGNING_CREDENTIAL_UNTRUSTED));
+    let mut damaged = ASSET.to_vec();
+    let last = damaged.len() - 1;
+    damaged[last] ^= 1;
+    let report = Host {
+        asset: Some(&damaged),
+        ..host
+    }
+    .read_with_trust(false)
+    .expect("damaged fixture reads");
+    assert_eq!(report.validation_state, Some(ValidationState::Invalid));
+    assert!(codes(&report).contains(&status_code::ASSERTION_DATAHASH_MISMATCH));
 }
 
 /// Returns the status codes recorded, in order.
@@ -741,7 +773,7 @@ fn tampering_with_an_assertion_is_detected() {
 
     assert_eq!(
         mismatches,
-        ["self#jumbf=c2pa.assertions/c2pa.thumbnail.claim.jpeg"],
+        ["self#jumbf=/c2pa/contentauth:urn:uuid:b2b1f7fa-b119-4de1-9c0d-c97fbea3f2c3/c2pa.assertions/c2pa.thumbnail.claim.jpeg"],
         "only the tampered assertion should fail: {report:#?}"
     );
     assert_eq!(report.validation_state, Some(ValidationState::Invalid));

@@ -43,9 +43,9 @@ use crate::{
 /// ```no_run
 /// use contentauth_c2pa_js_compat::{OfflinePlatform, Reader};
 ///
-/// # async fn example(jpeg: Vec<u8>) -> Result<(), contentauth_c2pa_js_compat::Error> {
+/// # async fn example(jpeg: Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
 /// let reader = Reader::from_blob("image/jpeg", &jpeg, None, &OfflinePlatform).await?;
-/// println!("{}", reader.json());
+/// println!("{}", reader.json()?);
 /// # Ok(())
 /// # }
 /// ```
@@ -229,15 +229,21 @@ impl Reader {
         self.report.manifests.last().map(Manifest::from_inner)
     }
 
+    /// Copies an embedded resource identified by its absolute self JUMBF URI.
+    ///
+    /// Unknown or ambiguous identifiers fail rather than selecting a resource
+    /// by basename or fetching an external URL.
+    pub fn resource_to_bytes(&self, uri: &str) -> Result<Vec<u8>, Error> {
+        crate::resource_bytes(&self.report, uri).map(<[u8]>::to_vec)
+    }
+
     /// The manifest store as a pretty-printed JSON string — c2pa-wasm's
     /// `json()`, which is c2pa-rs's `Reader::json`.
     ///
-    /// Returns `"{}"` if serialization fails, as c2pa-rs's does. Nothing in
-    /// [`ManifestStore`] (plain strings, `Vec`s, and a `BTreeMap` with
-    /// string keys) can actually fail to serialize, so that branch is
-    /// expected to stay unreachable — kept for the contract rather than
-    /// because it is needed.
-    pub fn json(&self) -> String {
-        serde_json::to_string_pretty(&self.manifest_store()).unwrap_or_else(|_| "{}".to_string())
+    /// Numeric-array object fields use the pinned SDK's base64 display format.
+    /// Object accessors retain arrays. Serialization errors propagate rather
+    /// than returning an empty success-shaped report.
+    pub fn json(&self) -> Result<String, serde_json::Error> {
+        self.manifest_store().json()
     }
 }

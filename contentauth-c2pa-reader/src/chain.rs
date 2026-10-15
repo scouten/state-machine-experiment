@@ -99,6 +99,8 @@ pub(crate) struct PendingChain {
     /// the header was absent or malformed — see [`crate::cose`]'s own
     /// parsing of it for why a malformed staple is not itself a finding.
     pub(crate) rvals: Vec<Vec<u8>>,
+    /// Metadata from the verified signature, retained for reporting.
+    pub(crate) signature_info: crate::SignatureInfo,
 }
 
 /// The status codes one chain evaluation reports its findings under.
@@ -221,6 +223,7 @@ pub(crate) fn validate(
     now: i64,
     url: &str,
     status_code_vocabulary: Vocabulary,
+    verify_trust: bool,
     statuses: &mut Vec<ValidationStatus>,
 ) -> Trust {
     let Some((leaf, rest)) = chain.split_first() else {
@@ -239,7 +242,7 @@ pub(crate) fn validate(
         return Trust::Rejected;
     }
 
-    let (path, anchor) = build_path(leaf, rest, anchors);
+    let (path, anchor) = build_path(leaf, rest, if verify_trust { anchors } else { &[] });
 
     // Each certificate must name the next one as its issuer, that issuer
     // must be allowed to issue it, and the signature must actually verify.
@@ -307,6 +310,10 @@ pub(crate) fn validate(
             url,
             "every certificate in the path was inside its validity window",
         ));
+    }
+
+    if !verify_trust {
+        return Trust::Unanchored;
     }
 
     if let Some(anchor) = anchor {
@@ -671,12 +678,50 @@ mod tests {
             now,
             "self#jumbf=x",
             CLAIM_SIGNER,
+            true,
             &mut statuses,
         );
         (
             trust,
             statuses.into_iter().map(|status| status.code).collect(),
         )
+    }
+
+    #[test]
+    fn disabling_anchor_verdict_does_not_disable_certificate_validation() {
+        let anchors = anonymous(&[decode(ROOT)]);
+        let run_disabled = |chain: &[Certificate], now| {
+            let mut statuses = Vec::new();
+            let trust = validate(
+                chain,
+                &anchors,
+                now,
+                "self#jumbf=x",
+                CLAIM_SIGNER,
+                false,
+                &mut statuses,
+            );
+            assert!(!statuses.iter().any(|status| matches!(
+                status.code.as_str(),
+                status_code::SIGNING_CREDENTIAL_TRUSTED | status_code::SIGNING_CREDENTIAL_UNTRUSTED
+            )));
+            (trust, statuses)
+        };
+        let (trust, statuses) = run_disabled(&chain(), NOW);
+        assert_eq!(trust, Trust::Unanchored);
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(
+            statuses[0].code,
+            status_code::CLAIM_SIGNATURE_INSIDE_VALIDITY
+        );
+        assert_eq!(run_disabled(&chain(), 0).0, Trust::Rejected);
+        assert_eq!(
+            run_disabled(&[decode(WRONG_EKU), decode(INTERMEDIATE)], NOW).0,
+            Trust::Rejected
+        );
+        let mut broken = chain();
+        broken[0].signature[0] ^= 1;
+        assert_eq!(run_disabled(&broken, NOW).0, Trust::Rejected);
     }
 
     /// The explanation of the single status a rejecting run recorded.
@@ -689,6 +734,7 @@ mod tests {
                 now,
                 "self#jumbf=x",
                 CLAIM_SIGNER,
+                true,
                 &mut statuses
             ),
             Trust::Rejected
@@ -734,6 +780,7 @@ mod tests {
             NOW,
             "self#jumbf=x",
             CLAIM_SIGNER,
+            true,
             &mut statuses,
         );
         assert!(statuses.iter().all(|status| !status.is_failure()));
@@ -1027,6 +1074,7 @@ mod tests {
                     now,
                     "self#jumbf=x",
                     CLAIM_SIGNER,
+                    true,
                     &mut statuses
                 ),
                 Trust::Rejected
@@ -1059,6 +1107,7 @@ mod tests {
                 NOW,
                 "self#jumbf=x",
                 CLAIM_SIGNER,
+                true,
                 &mut statuses
             ),
             Trust::Rejected
@@ -1084,6 +1133,7 @@ mod tests {
                 NOW,
                 "self#jumbf=x",
                 CLAIM_SIGNER,
+                true,
                 &mut statuses
             ),
             Trust::Rejected
@@ -1116,6 +1166,7 @@ mod tests {
             NOW,
             "self#jumbf=x",
             CLAIM_SIGNER,
+            true,
             &mut statuses,
         );
 

@@ -59,7 +59,7 @@
 //! — plus [`Certificate::ocsp_responder_url`], read straight off the
 //! certificate rather than decided by policy here.
 
-use der::{oid::ObjectIdentifier, Decode, Encode};
+use der::{oid::ObjectIdentifier, Decode, Encode, Tagged};
 use pkcs1::RsaPssParams;
 use x509_cert::{
     ext::pkix::{
@@ -117,6 +117,12 @@ pub struct Certificate {
     /// Distinguished name of the issuer, in RFC 4514 form. Chain building
     /// matches this against the subject of the issuing certificate.
     pub issuer: String,
+
+    /// Last common-name attribute in the certificate's subject.
+    pub common_name: Option<String>,
+
+    /// Last organization attribute in the certificate's subject.
+    pub organization: Option<String>,
 
     /// DER-encoded `SubjectPublicKeyInfo`.
     ///
@@ -299,6 +305,8 @@ pub fn decode(der: &[u8]) -> Result<Certificate, CertError> {
     Ok(Certificate {
         subject: tbs.subject.to_string(),
         issuer: tbs.issuer.to_string(),
+        common_name: name_attribute(&tbs.subject, ObjectIdentifier::new_unwrap("2.5.4.3"))?,
+        organization: name_attribute(&tbs.subject, ObjectIdentifier::new_unwrap("2.5.4.10"))?,
         public_key,
         not_before: unix_seconds(&tbs.validity.not_before),
         not_after: unix_seconds(&tbs.validity.not_after),
@@ -318,6 +326,37 @@ pub fn decode(der: &[u8]) -> Result<Certificate, CertError> {
         serial_number: tbs.serial_number.as_bytes().to_vec(),
         ocsp_responder_url,
     })
+}
+
+fn name_attribute(
+    name: &x509_cert::name::Name,
+    oid: ObjectIdentifier,
+) -> Result<Option<String>, CertError> {
+    use der::asn1::{Ia5StringRef, PrintableStringRef, Utf8StringRef};
+    let Some(attribute) = name
+        .0
+        .iter()
+        .flat_map(|rdn| rdn.0.iter())
+        .rfind(|attribute| attribute.oid == oid)
+    else {
+        return Ok(None);
+    };
+    let value = &attribute.value;
+    let text = match value.tag() {
+        der::Tag::Utf8String => value
+            .decode_as::<Utf8StringRef>()
+            .map(|s| s.as_str().to_string()),
+        der::Tag::PrintableString => value
+            .decode_as::<PrintableStringRef>()
+            .map(|s| s.as_str().to_string()),
+        der::Tag::Ia5String => value
+            .decode_as::<Ia5StringRef>()
+            .map(|s| s.as_str().to_string()),
+        // Other directory-string encodings remain unprojected, not a
+        // reason to reject a previously accepted certificate.
+        _ => return Ok(None),
+    };
+    text.map(Some).map_err(|_| CertError::Malformed)
 }
 
 /// `id-ad-ocsp` (RFC 5280 §4.2.2.1): the Authority Information Access

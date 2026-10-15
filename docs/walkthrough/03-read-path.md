@@ -43,7 +43,7 @@ flowchart TD
     F --> H[RFC 3161 timestamp<br/>can rescue expired cert]
     G --> I[Revocation, spec §15.9:<br/>stapled OCSP, then online]
     C --> J[CAWG identity assertions<br/>cawg.x509.cose, own anchors]
-    D & E & G & H & I --> V{{"Report:<br/>Trusted / Valid / Invalid<br/>+ status codes"}}
+    D & E & G & H & I --> V{{"Report:<br/>Trusted / Valid / Invalid / Incomplete<br/>+ status codes"}}
     J -.->|"scoped: never lowers the state"| V
 ```
 
@@ -69,8 +69,10 @@ flowchart TD
   payloads. The report marks v2 `created_assertions`; unsupported assertion
   encodings remain visible by label without a decoded payload.
 
-Not yet checked: ingredient manifests, remote-pointer parsing in JPEG/TIFF,
-`assertion.notRedacted`.
+Not yet checked: ingredient manifest links/hashes/history/redaction rules, TIFF/extended-XMP
+remote pointers and `assertion.notRedacted`. Standard JPEG XMP discovery belongs
+to its format handler. The JS compatibility projection still rejects linked
+histories rather than silently dropping unimplemented report fields.
 
 ## Request vocabulary (reader)
 

@@ -99,11 +99,23 @@ pub struct Manifest {
     /// in [`Self::assertion_labels`] but have no decoded value here.
     pub assertions: Vec<Assertion>,
 
+    /// Embedded binary assertion payloads, in assertion-store order.
+    ///
+    /// These bytes are decoded content, not a separate trust verdict. Consult
+    /// the report's validation statuses before relying on their provenance.
+    pub resources: Vec<EmbeddedResource>,
+
     /// True if the manifest carries a claim signature box.
     ///
     /// Whether that signature *verifies* is a validation finding rather
     /// than a property of the manifest, and is reported as a status.
     pub has_signature: bool,
+
+    /// Signer metadata for a cryptographically verified claim signature.
+    ///
+    /// This is not a trust verdict. A reported timestamp may be authentic but
+    /// untrusted, and does not replace the host clock for validation.
+    pub signature_info: Option<SignatureInfo>,
 
     /// The manifest's hard binding to its asset, if it carries a
     /// well-formed `c2pa.hash.data` assertion.
@@ -134,6 +146,118 @@ pub struct Assertion {
 
     /// Decoded CBOR payload.
     pub data: Option<c2pa_cbor::Value>,
+}
+
+impl Assertion {
+    /// The ingredient assertion version, retaining unsupported numeric versions.
+    ///
+    /// Positional `__N` suffixes are ignored only when `N` contains digits.
+    pub fn ingredient_version(&self) -> Option<&str> {
+        let base = match self.label.rsplit_once("__") {
+            Some((base, instance))
+                if !instance.is_empty() && instance.bytes().all(|b| b.is_ascii_digit()) =>
+            {
+                base
+            }
+            _ => &self.label,
+        };
+        match base {
+            "c2pa.ingredient" => Some("1"),
+            _ => base.strip_prefix("c2pa.ingredient.v").filter(|version| {
+                !version.is_empty() && version.bytes().all(|b| b.is_ascii_digit())
+            }),
+        }
+    }
+}
+
+/// A binary resource stored in an embedded-file assertion.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct EmbeddedResource {
+    /// Assertion label within its manifest.
+    pub label: String,
+    /// Media type from the embedded-file description.
+    pub format: String,
+    /// Exact embedded-file data, excluding JUMBF framing.
+    pub bytes: Vec<u8>,
+}
+
+/// Metadata decoded from a verified COSE signature and its signing certificate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct SignatureInfo {
+    /// Algorithm from the COSE protected header.
+    pub alg: crate::SigningAlg,
+    /// Organization in the signing certificate's subject.
+    ///
+    /// Compatibility reports call this `issuer`; it is not the issuer DN.
+    pub organization: Option<String>,
+    /// Common name in the signing certificate's subject.
+    pub common_name: Option<String>,
+    /// Certificate serial number as unsigned big-endian bytes.
+    pub serial_number: Vec<u8>,
+    /// RFC 3339 time from an authenticated, matching timestamp, if present.
+    ///
+    /// This does not imply that the timestamp authority is trusted.
+    pub time: Option<String>,
+}
+
+const EMBEDDED_FILE_UUID: [u8; 16] = [
+    0x40, 0xcb, 0x0c, 0x32, 0xbb, 0x8a, 0x48, 0x9d, 0xa7, 0x0b, 0x2a, 0xd6, 0xf4, 0x7f, 0x43, 0x69,
+];
+
+fn read_resources(store: &SuperBox<'_>, manifest: &str) -> Result<Vec<EmbeddedResource>, Error> {
+    child_superboxes(store)
+        .filter(|assertion| assertion.desc.uuid == &EMBEDDED_FILE_UUID)
+        .map(|assertion| {
+            let malformed = || Error::MalformedManifest {
+                manifest: manifest.to_string(),
+                reason: "malformed embedded-file assertion",
+            };
+            let label = assertion.desc.label.ok_or_else(malformed)?;
+            let mut descriptions = assertion
+                .child_boxes
+                .iter()
+                .filter_map(|child| match child {
+                    ChildBox::DataBox(data) if data.tbox == BoxType(*b"bfdb") => Some(data.data),
+                    _ => None,
+                });
+            let description = descriptions.next().ok_or_else(malformed)?;
+            if descriptions.next().is_some() {
+                return Err(malformed());
+            }
+            let (&flags, fields) = description.split_first().ok_or_else(malformed)?;
+            let end = fields
+                .iter()
+                .position(|byte| *byte == 0)
+                .ok_or_else(malformed)?;
+            let format = std::str::from_utf8(&fields[..end]).map_err(|_| malformed())?;
+            let remaining = &fields[end + 1..];
+            let valid_filename = flags == 1
+                && remaining.last() == Some(&0)
+                && !remaining[..remaining.len().saturating_sub(1)].contains(&0)
+                && std::str::from_utf8(&remaining[..remaining.len().saturating_sub(1)]).is_ok();
+            if format.is_empty() || !(flags == 0 && remaining.is_empty() || valid_filename) {
+                return Err(malformed());
+            }
+            let mut payloads = assertion
+                .child_boxes
+                .iter()
+                .filter_map(|child| match child {
+                    ChildBox::DataBox(data) if data.tbox == BoxType(*b"bidb") => Some(data.data),
+                    _ => None,
+                });
+            let bytes = payloads.next().ok_or_else(malformed)?;
+            if payloads.next().is_some() {
+                return Err(malformed());
+            }
+            Ok(EmbeddedResource {
+                label: label.to_string(),
+                format: format.to_string(),
+                bytes: bytes.to_vec(),
+            })
+        })
+        .collect()
 }
 
 /// The result of reading a manifest store.
@@ -239,6 +363,7 @@ fn read_manifest(
     chains: &mut Vec<PendingChain>,
     identity_chains: &mut Vec<PendingChain>,
 ) -> Result<Manifest, Error> {
+    let status_start = statuses.len();
     let label = manifest
         .desc
         .label
@@ -281,7 +406,7 @@ fn read_manifest(
     // both are read here rather than carried out to the report: the
     // signature's detached payload is the sibling box's bytes.
     let signature = child_by_uuid(manifest, &SIGNATURE_UUID);
-    chains.extend(validation::check_claim_signature(
+    let verified = validation::check_claim_signature(
         &label,
         claim_cbor,
         match signature.map(|sbox| content(sbox, CBOR)) {
@@ -290,7 +415,9 @@ fn read_manifest(
             Some(Some(bytes)) => validation::SignatureBox::Present(bytes),
         },
         statuses,
-    ));
+    );
+    let signature_info = verified.as_ref().map(|chain| chain.signature_info.clone());
+    chains.extend(verified);
 
     let assertion_boxes = child_by_uuid(manifest, &ASSERTIONS_UUID);
     let assertion_labels = assertion_boxes
@@ -300,7 +427,7 @@ fn read_manifest(
                 .collect()
         })
         .unwrap_or_default();
-    let assertions = assertion_boxes
+    let assertions: Vec<Assertion> = assertion_boxes
         .map(|store| {
             child_superboxes(store)
                 .filter_map(|assertion| {
@@ -320,7 +447,42 @@ fn read_manifest(
         })
         .unwrap_or_default();
 
+    for assertion in &assertions {
+        if !matches!(assertion.ingredient_version(), Some("1" | "2" | "3")) {
+            continue;
+        }
+        if let Some(fields) = assertion.data.as_ref().and_then(c2pa_cbor::Value::as_map) {
+            let field = |name: &str| {
+                fields
+                    .get(&c2pa_cbor::Value::Text(name.into()))
+                    .filter(|value| **value != c2pa_cbor::Value::Null)
+            };
+            if matches!(
+                field("relationship").and_then(c2pa_cbor::Value::as_str),
+                Some("parentOf" | "componentOf")
+            ) && field("activeManifest").is_none()
+                && field("c2pa_manifest").is_none()
+            {
+                let title = field("dc:title")
+                    .and_then(c2pa_cbor::Value::as_str)
+                    .unwrap_or("no title");
+                statuses.push(ValidationStatus::for_url(
+                    crate::validation::status_code::INGREDIENT_PROVENANCE_UNKNOWN,
+                    &format!(
+                        "self#jumbf=/c2pa/{label}/c2pa.assertions/{}",
+                        assertion.label
+                    ),
+                    format!("{title}: ingredient does not have provenance"),
+                ));
+            }
+        }
+    }
+
     let data_hash = read_data_hash(manifest, statuses);
+    let resources = assertion_boxes
+        .map(|store| read_resources(store, &label))
+        .transpose()?
+        .unwrap_or_default();
 
     // After the claim and its assertion hashes: an identity assertion is
     // checked against what the claim lists, so the claim has to be read.
@@ -333,12 +495,24 @@ fn read_manifest(
     )
     .assertions;
 
+    for status in &mut statuses[status_start..] {
+        if let Some(path) = status
+            .url
+            .as_deref()
+            .and_then(|url| url.strip_prefix("self#jumbf=c2pa.assertions/"))
+        {
+            status.url = Some(format!("self#jumbf=/c2pa/{label}/c2pa.assertions/{path}"));
+        }
+    }
+
     Ok(Manifest {
         label,
         claim,
         assertion_labels,
         assertions,
+        resources,
         has_signature: signature.is_some(),
+        signature_info,
         data_hash,
         identity_assertions,
     })
@@ -440,6 +614,164 @@ mod tests {
         let parsed = parse(&manifest_store(&[])).unwrap();
         assert!(parsed.manifests.is_empty());
         assert_eq!(parsed.active_manifest, None);
+    }
+
+    #[test]
+    fn ingredient_labels_require_version_and_instance_boundaries() {
+        for (label, version) in [
+            ("c2pa.ingredient", Some("1")),
+            ("c2pa.ingredient__2", Some("1")),
+            ("c2pa.ingredient.v2", Some("2")),
+            ("c2pa.ingredient.v3__1", Some("3")),
+            ("c2pa.ingredient.v4", Some("4")),
+            ("c2pa.ingredient.extra", None),
+            ("c2pa.ingredient.v3__x", None),
+            ("c2pa.ingredient.v3__", None),
+            ("c2pa.ingredient.v", None),
+            ("example.c2pa.ingredient", None),
+        ] {
+            let assertion = Assertion {
+                label: label.into(),
+                created: false,
+                data: None,
+            };
+            assert_eq!(assertion.ingredient_version(), version, "{label}");
+        }
+    }
+
+    #[test]
+    fn unknown_ingredient_provenance_is_informational_and_owned_by_its_manifest() {
+        use c2pa_cbor::Value;
+        let make_manifest = |label: &str| {
+            let assertions: Vec<_> = ["parentOf", "componentOf", "inputTo"]
+                .iter()
+                .enumerate()
+                .map(|(index, relationship)| {
+                    let fields = std::collections::BTreeMap::from([(
+                        Value::Text("relationship".into()),
+                        Value::Text((*relationship).into()),
+                    )]);
+                    superbox(
+                        type_uuid(*b"cbor"),
+                        &format!("c2pa.ingredient.v3__{index}"),
+                        &[boxed(
+                            b"cbor",
+                            &c2pa_cbor::to_vec(&Value::Map(fields)).unwrap(),
+                        )],
+                    )
+                })
+                .collect();
+            superbox(
+                MANIFEST_UUID,
+                label,
+                &[
+                    claim_box("output.jpg"),
+                    superbox(ASSERTIONS_UUID, "c2pa.assertions", &assertions),
+                ],
+            )
+        };
+        let bytes = manifest_store(&[make_manifest("first"), make_manifest("active")]);
+        let parsed = parse(&bytes).unwrap();
+        let statuses: Vec<_> = parsed
+            .statuses
+            .iter()
+            .filter(|status| status.code == status_code::INGREDIENT_PROVENANCE_UNKNOWN)
+            .collect();
+        assert_eq!(statuses.len(), 4);
+        for (index, status) in statuses.iter().enumerate() {
+            let owner = if index < 2 { "first" } else { "active" };
+            assert_eq!(
+                status.url.as_deref(),
+                Some(
+                    format!(
+                        "self#jumbf=/c2pa/{owner}/c2pa.assertions/c2pa.ingredient.v3__{}",
+                        index % 2
+                    )
+                    .as_str()
+                )
+            );
+            assert!(!status.is_failure());
+            assert!(!status.is_unchecked());
+        }
+    }
+
+    #[test]
+    fn embedded_resources_preserve_exact_payload_and_media_type() {
+        for description in [
+            b"\0image/jpeg\0".as_slice(),
+            b"\x01image/jpeg\0thumbnail.jpg\0",
+        ] {
+            let bytes = manifest_store(&[superbox(
+                MANIFEST_UUID,
+                "urn:uuid:resource",
+                &[
+                    claim_box("resource.jpg"),
+                    superbox(
+                        ASSERTIONS_UUID,
+                        "c2pa.assertions",
+                        &[superbox(
+                            EMBEDDED_FILE_UUID,
+                            "c2pa.thumbnail.claim",
+                            &[boxed(b"bfdb", description), boxed(b"bidb", &[0, 255, 1, 2])],
+                        )],
+                    ),
+                ],
+            )]);
+            let parsed = parse(&bytes).unwrap();
+            let resource = &parsed.manifests[0].resources[0];
+            assert_eq!(resource.label, "c2pa.thumbnail.claim");
+            assert_eq!(resource.format, "image/jpeg");
+            assert_eq!(resource.bytes, [0, 255, 1, 2]);
+        }
+    }
+
+    #[test]
+    fn malformed_embedded_resources_fail_explicitly() {
+        for children in [
+            vec![boxed(b"bidb", &[1])],
+            vec![boxed(b"bfdb", b"\0image/jpeg\0")],
+            vec![boxed(b"bfdb", b"\0image/jpeg"), boxed(b"bidb", &[1])],
+            vec![boxed(b"bfdb", b"\x02image/jpeg\0"), boxed(b"bidb", &[1])],
+            vec![
+                boxed(b"bfdb", b"\x01image/jpeg\0file"),
+                boxed(b"bidb", &[1]),
+            ],
+            vec![boxed(b"bfdb", b"\0\xff\0"), boxed(b"bidb", &[1])],
+            vec![
+                boxed(b"bfdb", b"\0image/jpeg\0"),
+                boxed(b"bidb", &[1]),
+                boxed(b"bidb", &[2]),
+            ],
+            vec![
+                boxed(b"bfdb", b"\0image/jpeg\0"),
+                boxed(b"bfdb", b"\0image/jpeg\0"),
+                boxed(b"bidb", &[1]),
+            ],
+        ] {
+            let bytes = manifest_store(&[superbox(
+                MANIFEST_UUID,
+                "urn:uuid:bad",
+                &[
+                    claim_box("bad.jpg"),
+                    superbox(
+                        ASSERTIONS_UUID,
+                        "c2pa.assertions",
+                        &[superbox(
+                            EMBEDDED_FILE_UUID,
+                            "c2pa.thumbnail.claim",
+                            &children,
+                        )],
+                    ),
+                ],
+            )]);
+            assert!(matches!(
+                parse(&bytes),
+                Err(Error::MalformedManifest {
+                    reason: "malformed embedded-file assertion",
+                    ..
+                })
+            ));
+        }
     }
 
     #[test]
@@ -759,7 +1091,10 @@ mod tests {
 
             assert_eq!(self_redacted.len(), 1, "{uri}");
             assert!(self_redacted[0].is_failure());
-            assert_eq!(self_redacted[0].url.as_deref(), Some(uri));
+            assert_eq!(
+                self_redacted[0].url.as_deref(),
+                Some("self#jumbf=/c2pa/urn:uuid:v2/c2pa.assertions/c2pa.thumbnail")
+            );
         }
     }
 
@@ -858,11 +1193,14 @@ mod tests {
                 .iter()
                 .filter(|s| s.code == status_code::ASSERTION_HASHEDURI_MATCH)
                 .count(),
-            2,
-            "the claim's own reference and the icon's"
+            1,
+            "an identical claim and icon reference is checked once"
         );
 
         let wrong = statuses_for_icon("self#jumbf=c2pa.assertions/c2pa.icon", vec![0; 32]);
+        assert!(wrong
+            .iter()
+            .any(|s| s.code == status_code::ASSERTION_HASHEDURI_MATCH));
         assert!(wrong
             .iter()
             .any(|s| s.code == status_code::ASSERTION_HASHEDURI_MISMATCH && s.is_failure()));
@@ -934,7 +1272,7 @@ mod tests {
             [
                 (
                     status_code::ASSERTION_HASHEDURI_MATCH.to_string(),
-                    Some("self#jumbf=c2pa.assertions/c2pa.actions".to_string())
+                    Some("self#jumbf=/c2pa/urn:uuid:u/c2pa.assertions/c2pa.actions".to_string())
                 ),
                 (
                     status_code::CLAIM_SIGNATURE_VALIDATED.to_string(),
@@ -949,6 +1287,28 @@ mod tests {
         let parsed = parse(&manifest_store(&[])).unwrap();
         assert!(parsed.manifests.is_empty());
         assert!(parsed.statuses.is_empty());
+    }
+
+    #[test]
+    fn local_assertion_statuses_keep_their_own_manifest_in_a_multiple_manifest_store() {
+        let parsed = parse(&manifest_store(&[
+            manifest("urn:uuid:first", "first.jpg", &["c2pa.actions"]),
+            manifest("urn:uuid:second", "second.jpg", &["c2pa.actions"]),
+        ]))
+        .unwrap();
+        let urls: Vec<_> = parsed
+            .statuses
+            .iter()
+            .filter(|status| status.code == status_code::ASSERTION_HASHEDURI_MATCH)
+            .filter_map(|status| status.url.as_deref())
+            .collect();
+        assert_eq!(
+            urls,
+            [
+                "self#jumbf=/c2pa/urn:uuid:first/c2pa.assertions/c2pa.actions",
+                "self#jumbf=/c2pa/urn:uuid:second/c2pa.assertions/c2pa.actions",
+            ]
+        );
     }
 
     #[test]

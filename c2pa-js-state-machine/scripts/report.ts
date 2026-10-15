@@ -45,7 +45,7 @@ if (m1) {
   }
   const required = [
     ...inventory.tests.filter((test) => test.file === "packages/c2pa-web/src/lib/reader.spec.ts" && pin.oracleTests.includes(test.title)),
-    ...["m1", "m2", "m3", "m3-worker", "m3-settings"].flatMap((name) => {
+    ...["m1", "m2", "m3", "m3-worker", "m3-settings", "m3-resources"].flatMap((name) => {
       const file = `browser/${name}.spec.ts`;
       return extractTests(readFileSync(join(root, file), "utf8"), file);
     }),
@@ -62,7 +62,7 @@ const m1Ids = new Set([
   ...extractTests(readFileSync(join(root, "browser/m1.spec.ts"), "utf8"), "browser/m1.spec.ts"),
 ].map((test) => test.id));
 const m2Tests = extractTests(readFileSync(join(root, "browser/m2.spec.ts"), "utf8"), "browser/m2.spec.ts");
-const m3Tests = ["m3", "m3-worker", "m3-settings"].flatMap((name) => {
+const m3Tests = ["m3", "m3-worker", "m3-settings", "m3-resources"].flatMap((name) => {
   const file = `browser/${name}.spec.ts`;
   return extractTests(readFileSync(join(root, file), "utf8"), file);
 });
@@ -80,7 +80,7 @@ const m2 = m1 ? {
     .every((outcome) => outcome.status === "passed")),
   executions: m1.runs.reduce((count, run) => count + run.outcomes
     .filter((outcome) => m2Tests.some((test) => test.id === outcome.id)).length, 0),
-  scope: "CBOR assertion payloads, validation-result buckets, CAWG trust anchors, unsupported verifyTrust rejection",
+  scope: "CBOR assertion payloads, validation-result buckets, CAWG trust anchors, unsupported unchecked remote-manifest setting rejection",
 } : { passed: false, blocker: "M2 browser proof has not run" };
 const m3 = m1 ? {
   browsers: m1.browsers,
@@ -89,7 +89,7 @@ const m3 = m1 ? {
     .every((outcome) => outcome.status === "passed")),
   executions: m1.runs.reduce((count, run) => count + run.outcomes
     .filter((outcome) => m3Tests.some((test) => test.id === outcome.id)).length, 0),
-  scope: "Detached input/output and full-asset binding; JPEG XMP remote discovery and bounded host fetch with CORS/retry; signed browser OCSP with default-off, revocation, inaccessible, limits/deadlines/abort; TIFF/BigTIFF both byte orders, separate exclusions, tampering, detached reads and legacy classic-TIFF validation; module Worker URL/precompiled loading, read/sign callbacks, network cancellation and resource cleanup; genuine local RFC3161 Worker timestamps with inline/legacy read-back, concurrent routing, URL precedence, detached parity, wrong-imprint reporting and explicit failure/retry; supported reader-factory loader defaults, legacy deep merging and static Context isolation, runtime snapshots, builder-default rejection and inherited OCSP host gating",
+  scope: "Detached input/output and full-asset binding; JPEG XMP remote discovery and bounded host fetch with CORS/retry; signed browser OCSP with default-off, revocation, inaccessible, limits/deadlines/abort; TIFF/BigTIFF both byte orders, tampering, detached reads and legacy classic-TIFF validation (native tests pin separate exclusions); module Worker URL/precompiled loading, read/sign callbacks, network cancellation and resource cleanup; genuine local RFC3161 Worker timestamps with inline/legacy read-back, concurrent routing, URL precedence, detached parity, wrong-imprint reporting and explicit failure/retry; supported reader-factory loader defaults, legacy deep merging and static Context isolation, runtime snapshots, builder-default rejection and inherited OCSP host gating; embedded binary assertion extraction with legacy claim-thumbnail metadata/bytes, independent copies, unknown-ID recovery, URI scoping and free/dispose checks; exact legacy active-manifest and single-manifest trusted/untrusted store equality, verified signer metadata unchanged by independent claim/identity trust anchors, failure-only summaries preserving tamper failures and unrelated successes, and scoped named trust-list provenance; parsed legacy JSON equality for trusted/untrusted stores, signed numeric-array/base64 display edge cases, unchanged object views and repeated-call/lifecycle checks on inline and Worker; explicit claim-trust opt-out and independent CAWG anchor switches with complete object/JSON legacy comparisons, failure-preserving Valid cap and factory false-default re-enabling; v1/v2/v3 ingredient metadata and unknown-provenance deltas with complete object/JSON legacy comparison, explicit linked/history rejection, lifecycle recovery and preserved live tamper failures; real c2pa-rs-signed embedded generator icons and positional ingredient thumbnails/data with complete trusted legacy reports, exact independent bytes, thumbnail/data coexistence, isolated live tamper failures, explicit databox rejection and recovery; external/cross-owner/malformed/missing/ambiguous reference rejection without implicit fetching",
 } : { passed: false, blocker: "M3 browser proof has not run" };
 const packagePath = join(root, "results/package.json");
 let packaging: { passed: boolean; executions?: number; scope?: string; blocker?: string } =
@@ -102,13 +102,13 @@ if (existsSync(packagePath)) {
     harnessSha256: harnessFingerprint(), artifactsSha256: hash(JSON.stringify(stateArtifacts())),
   });
   packaging = { passed: true, executions: evidence.reports.reduce((count, run) => count + run.paths.length, 0),
-    scope: "Private npm tarball installed in an isolated consumer; emitted ESM/types/Wasm exports; Vite production build; inline/module Worker URL and precompiled Wasm loading, sign/read cross-validation, detached output, malformed rejection and cleanup in three browsers" };
+    scope: "Private npm tarball installed in an isolated consumer; emitted ESM/types/Wasm exports; Vite production build; inline/module Worker URL and precompiled Wasm loading, sign/read cross-validation, detached output, exact claim-thumbnail/generator-icon/positional ingredient-thumbnail/data extraction and copy ownership with thumbnail/data coexistence, claim signer metadata, failure summaries and distinct legacy JSON base64/object-array views, disabled claim-trust overrides retaining signature validation, ingredient metadata/reviews, malformed rejection and cleanup, concurrent Context isolation and cached-policy reuse in three browsers" };
 }
 const readerRuntimes = m1?.runtimeRuns ? {
   passed: m1.runtimeRuns.every((run) => run.exit === 0 && run.outcomes.every((o) => o.status === "passed")),
   executions: m1.runtimeRuns.reduce((count, run) => count + run.outcomes.length, 0),
   runtimes: ["inline", "worker"], browsers: ["chromium", "firefox", "webkit"],
-  scope: "Five unchanged pinned upstream reader cases on both state-machine runtime paths; runtime executions do not increase the unique upstream declaration count",
+  scope: `${pin.oracleTests.length} unchanged pinned upstream reader cases on both state-machine runtime paths, including creation/omitted-format detection, explicit/independent/reused Contexts, deprecated factory creation/merging, embedded thumbnail extraction, active-manifest and trusted/untrusted/disabled-trust store equality; runtime executions do not increase the unique upstream declaration count`,
 } : { passed: false, blocker: "Upstream inline/Worker matrix has not run" };
 const completeReport = { ...report, m1: milestone, m2, m3, packaging, readerRuntimes };
 mkdirSync(join(root, "results"), { recursive: true });

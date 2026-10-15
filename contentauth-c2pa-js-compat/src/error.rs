@@ -63,6 +63,10 @@ pub enum C2paError {
     #[error("unknown algorithm")]
     UnknownAlgorithm,
 
+    /// No unique embedded resource matches the supplied identifier.
+    #[error("resource not found: {0}")]
+    ResourceNotFound(String),
+
     /// `format` names a container format no `FormatHandler` in this build
     /// recognizes.
     ///

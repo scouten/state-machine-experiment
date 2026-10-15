@@ -45,6 +45,13 @@ use crate::{
 /// read-relevant subset of the c2pa-rs settings system.
 #[derive(Clone, Debug)]
 pub struct ReadSettings {
+    /// Whether to evaluate the claim signer's path against configured anchors.
+    ///
+    /// Enabled by default. Disabling this prevents a `Trusted` result and
+    /// omits claim trusted/untrusted observations, but does not disable
+    /// signatures, certificate profiles/path signatures/validity, hard binding,
+    /// timestamps, revocation, or independent CAWG identity validation.
+    pub verify_trust: bool,
     /// If true, the session may issue an HTTP-fetch-style request to
     /// retrieve a remote manifest store referenced by the asset.
     ///
@@ -178,6 +185,7 @@ pub struct TrustList {
 impl Default for ReadSettings {
     fn default() -> Self {
         Self {
+            verify_trust: true,
             fetch_remote_manifests: false,
             trust_anchors: vec![],
             timestamp_trust_anchors: vec![],
@@ -361,7 +369,11 @@ fn plan_hard_binding(
     // the latter already recorded while parsing.
     let data_hash = active.data_hash.as_ref()?;
 
-    let url = format!("self#jumbf=c2pa.assertions/{}", data_hash::LABEL);
+    let url = format!(
+        "self#jumbf=/c2pa/{}/c2pa.assertions/{}",
+        active.label,
+        data_hash::LABEL
+    );
     let named = data_hash.alg.as_deref().or(active.claim.alg.as_deref());
 
     let algorithm = match named {
@@ -769,6 +781,7 @@ impl ReadSession {
         for pending in chains {
             let mut statuses = Vec::new();
 
+            let mut reported_time = None;
             let attested =
                 pending.timestamp.as_ref().and_then(|timestamp| {
                     match timestamp::validate(
@@ -776,11 +789,28 @@ impl ReadSession {
                         &self.timestamp_anchors,
                         &pending.url,
                         &mut statuses,
+                        &mut reported_time,
                     ) {
                         timestamp::Timestamped::Trusted(gen_time) => Some(gen_time),
                         _ => None,
                     }
                 });
+
+            if let Some(info) = self
+                .report
+                .manifests
+                .iter_mut()
+                .find(|manifest| manifest.label == pending.manifest_label)
+                .and_then(|manifest| {
+                    manifest
+                        .identity_assertions
+                        .iter_mut()
+                        .find(|identity| identity.url == pending.url)
+                })
+                .and_then(|identity| identity.signature_info.as_mut())
+            {
+                info.time = reported_time;
+            }
 
             match attested.or(now) {
                 Some(instant) => {
@@ -790,6 +820,7 @@ impl ReadSession {
                         instant,
                         &pending.url,
                         chain::CAWG_X509_SIGNER,
+                        true,
                         &mut statuses,
                     );
                 }
@@ -841,14 +872,25 @@ impl ReadSession {
         for pending in chains {
             let mut statuses = Vec::new();
 
+            let mut reported_time = None;
             let stamped = pending.timestamp.as_ref().map(|timestamp| {
                 timestamp::validate(
                     timestamp,
                     &self.timestamp_anchors,
                     &pending.url,
                     &mut statuses,
+                    &mut reported_time,
                 )
             });
+            if let Some(info) = self
+                .report
+                .manifests
+                .iter_mut()
+                .find(|manifest| manifest.label == pending.manifest_label)
+                .and_then(|manifest| manifest.signature_info.as_mut())
+            {
+                info.time = reported_time;
+            }
 
             // Only a trusted authority's word on the time is taken. An
             // untrusted or broken token leaves the fallback in place: the
@@ -884,6 +926,7 @@ impl ReadSession {
                 instant,
                 &pending.url,
                 chain::CLAIM_SIGNER,
+                self.settings.verify_trust,
                 &mut statuses,
             );
             self.report.statuses.append(&mut statuses);
@@ -908,9 +951,15 @@ impl ReadSession {
 
             let mut online_checks = Vec::new();
 
-            for chain::OcspCheckPlan { check, is_signer } in
-                chain::ocsp_checks(&pending.certificates, &self.anchors)
-            {
+            let checks = chain::ocsp_checks(&pending.certificates, &self.anchors);
+            if !self.settings.check_ocsp && !checks.iter().any(|plan| plan.is_signer) {
+                self.record(ValidationStatus::for_url(
+                    status_code::SIGNING_CREDENTIAL_OCSP_SKIPPED,
+                    &pending.url,
+                    "the credential has no available signer OCSP check and online OCSP checking is disabled",
+                ));
+            }
+            for chain::OcspCheckPlan { check, is_signer } in checks {
                 let staple_outcome = pending.rvals.iter().find_map(|response_der| {
                     match ocsp::evaluate_stapled(&check, response_der, now, attested) {
                         ocsp::StapledOutcome::Inconclusive => None,
@@ -1673,38 +1722,44 @@ mod tests {
 
     #[test]
     fn a_manifest_whose_signature_does_not_verify_skips_the_trust_evaluation() {
-        let mut session = ReadSession::new(ReadSettings::default());
-        assert_eq!(session.advance().unwrap(), ReadStep::AwaitHost);
+        for verify_trust in [true, false] {
+            let mut session = ReadSession::new(ReadSettings {
+                verify_trust,
+                ..ReadSettings::default()
+            });
+            assert_eq!(session.advance().unwrap(), ReadStep::AwaitHost);
 
-        let id = session.outstanding_requests()[0].id;
-        session
-            .fulfill(
-                id,
-                ReadHostReply::ManifestStore(Some(test_support::manifest_store(&[
-                    test_support::manifest_with_broken_signature(
-                        "urn:uuid:broken",
-                        &[],
-                        test_support::claim_box("broken.jpg"),
-                    ),
-                ]))),
-            )
-            .unwrap();
+            let id = session.outstanding_requests()[0].id;
+            session
+                .fulfill(
+                    id,
+                    ReadHostReply::ManifestStore(Some(test_support::manifest_store(&[
+                        test_support::manifest_with_broken_signature(
+                            "urn:uuid:broken",
+                            &[],
+                            test_support::claim_box("broken.jpg"),
+                        ),
+                    ]))),
+                )
+                .unwrap();
 
-        // No chain to evaluate, so the clock is never asked for: judging
-        // whose key signed a claim is moot once the signature says it was
-        // not that key.
-        assert_eq!(session.advance().unwrap(), ReadStep::Complete);
+            // No chain to evaluate, so the clock is never asked for: judging
+            // whose key signed a claim is moot once the signature says it was
+            // not that key.
+            assert_eq!(session.advance().unwrap(), ReadStep::Complete);
 
-        let report = session.finish().unwrap();
-        assert_eq!(
-            report
-                .statuses
-                .iter()
-                .map(|s| s.code.as_str())
-                .collect::<Vec<_>>(),
-            [status_code::CLAIM_SIGNATURE_MISMATCH]
-        );
-        assert_eq!(report.validation_state, Some(ValidationState::Invalid));
+            let report = session.finish().unwrap();
+            assert_eq!(
+                report
+                    .statuses
+                    .iter()
+                    .map(|s| s.code.as_str())
+                    .collect::<Vec<_>>(),
+                [status_code::CLAIM_SIGNATURE_MISMATCH]
+            );
+            assert_eq!(report.validation_state, Some(ValidationState::Invalid));
+            assert!(report.manifests[0].signature_info.is_none());
+        }
     }
 
     /// Drives a session with a synthetic asset, the way a host would.
@@ -2214,6 +2269,36 @@ mod tests {
             certificates,
             timestamp: None,
             rvals: vec![],
+            signature_info: crate::SignatureInfo {
+                alg: crate::SigningAlg::Es256,
+                organization: None,
+                common_name: None,
+                serial_number: vec![],
+                time: None,
+            },
+        }
+    }
+
+    #[test]
+    fn disabled_ocsp_without_a_signer_check_reports_one_skip_without_io() {
+        let chain = chain_with_responder("http://ocsp.example/");
+        let chains = [pending_chain("active", "self#jumbf=x", chain[..1].to_vec())];
+        for check_ocsp in [false, true] {
+            let mut session = ReadSession::new(ReadSettings {
+                check_ocsp,
+                ..ReadSettings::default()
+            });
+            assert!(session.evaluate_trust(&chains, Some(NOW)).is_empty());
+            assert!(session.outstanding_requests().is_empty());
+            assert_eq!(
+                session
+                    .report
+                    .statuses
+                    .iter()
+                    .filter(|status| status.code == status_code::SIGNING_CREDENTIAL_OCSP_SKIPPED)
+                    .count(),
+                usize::from(!check_ocsp)
+            );
         }
     }
 

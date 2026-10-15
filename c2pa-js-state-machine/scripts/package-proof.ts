@@ -40,6 +40,13 @@ try {
   cpSync(join(root, "browser/package-consumer"), directory, { recursive: true });
   mkdirSync(join(directory, "public"));
   cpSync(join(root, ".cache/generated/fixtures.json"), join(directory, "public/fixtures.json"));
+  for (const name of ["C_with_CAWG_data.jpg", "C_with_CAWG_data_thumbnail.jpg"]) {
+    cpSync(join(root, ".cache/upstream/packages/c2pa-web/test/assets", name), join(directory, "public", name));
+  }
+  for (const name of ["generator-icons-v2.jpg", "generator-icon.svg", "ingredient-thumbnails-v2.jpg",
+    "ingredient-data-v2.jpg", "ingredient-data.json"]) {
+    cpSync(join(root, "browser/fixtures", name), join(directory, "public", name));
+  }
   writeFileSync(join(directory, "tsconfig.json"), JSON.stringify({
     compilerOptions: { target: "ES2022", module: "ESNext", moduleResolution: "Bundler", strict: true,
       noEmit: true, resolveJsonModule: true, lib: ["ES2022", "DOM", "WebWorker"], skipLibCheck: true },

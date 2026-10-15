@@ -7,10 +7,22 @@
   "legacyIntegrity": "sha512-dpNW5CSWyN4kPkB3vb+7IWc0qfF87brxMDCZcIJqa110GjNE+xBWm3AhgXgegniYmArOS7cnkhTmG1ZP09mYOg==",
   "packages": ["c2pa-web", "c2pa-node", "c2pa-types", "c2pa-utilities"],
   "oracleTests": [
+    "should detect the format from the blob bytes when format is omitted",
+    "should apply the given Context",
+    "supports different Contexts for Readers created from the same c2pa instance",
+    "does not re-resolve the same Context on repeated fromBlob calls",
+    "creates a Reader via c2pa.reader.fromBlob",
+    "merges per-call settings over the top-level settings passed to createC2pa, with per-call taking precedence",
+    "should report a \"valid\" (not \"trusted\") asset when trust settings are disabled",
+    "should return c2pa data when created from a blob",
     "should return null when reading an asset with no C2PA data",
     "should throw AssetTooLargeError when the blob exceeds the max size",
     "should report c2pa-rs errors correctly",
     "should be freeable",
-    "does not expose its internal worker/id via enumeration or serialization"
+    "does not expose its internal worker/id via enumeration or serialization",
+    "should return an embedded thumbnail",
+    "should return the asset's active manifest",
+    "should report a trusted asset when when configured to verify trust",
+    "should report an untrusted asset when configured to verify trust"
   ]
 }

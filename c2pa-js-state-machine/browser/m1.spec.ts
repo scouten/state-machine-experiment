@@ -117,7 +117,8 @@ describe("M1", () => {
       expect(await reader!.activeLabel()).toBe(fixtures.definition.label);
       await reader!.free();
       const asset = await (await fetch(legacyAssetSrc)).blob();
-      const stateContext = new Context({ trust: { trustAnchors: legacyRoot }, verify: { verifyTrust: true, ocspFetch: false } });
+      const stateContext = new Context({ trust: { trustAnchors: legacyRoot },
+        cawgTrust: { trustAnchors: legacyIdentityRoot }, verify: { verifyTrust: true, ocspFetch: false } });
       const legacyContext = new LegacyContext({ trust: { trustAnchors: legacyRoot },
         cawgTrust: { trustAnchors: legacyIdentityRoot }, verify: { verifyTrust: true, ocspFetch: false } });
       const [oldReader, newReader] = await Promise.all([
@@ -175,9 +176,11 @@ describe("M1", () => {
     const builder = await Builder.fromDefinition(client, { ...fixtures.definition, tsa_url: "https://example.invalid/tsa" });
     await expect(builder.sign(await signer(), "image/jpeg", source())).rejects.toThrow(/timestamp/i);
     await expect(Reader.fromBlob(client, "image/jpeg", source(), new Context({ verify: { ocspFetch: true } }))).rejects.toThrow(/Unsupported reader setting/);
-    await expect(Reader.fromBlob(client, "image/jpeg", source(), new Context({ verify: { verifyTrust: false } }))).rejects.toThrow(/Unsupported reader setting/);
+    await expect(Reader.fromBlob(client, "image/jpeg", source(), new Context({ verify: { remoteManifestFetch: true } }))).rejects.toThrow(/Unsupported reader setting/);
     const legacy = await (await fetch(legacyAssetSrc)).blob();
-    const defaultTrust = await Reader.fromBlob(client, "image/jpeg", legacy, new Context({ trust: { trustAnchors: legacyRoot } }));
+    const defaultTrust = await Reader.fromBlob(client, "image/jpeg", legacy, new Context({
+      trust: { trustAnchors: legacyRoot }, cawgTrust: { trustAnchors: legacyIdentityRoot },
+    }));
     expect((await defaultTrust!.manifestStore()).validation_state).toBe("Trusted");
     expect(await Reader.fromBlob(client, "image/jpeg", await (await fetch(unsignedSrc)).blob())).toBeNull();
   });

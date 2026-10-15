@@ -249,10 +249,21 @@ impl WasmReader {
             .map_err(serde_error)
     }
 
+    /// Returns a copy of the embedded resource's bytes.
+    #[wasm_bindgen(js_name = resourceToBytes)]
+    pub fn resource_to_bytes(&self, uri: &str) -> Result<Uint8Array, JsString> {
+        self.inner
+            .resource_to_bytes(uri)
+            .map(|bytes| Uint8Array::from(bytes.as_slice()))
+            .map_err(JsString::from)
+    }
+
     /// Returns a JSON representation of the asset's manifest store.
     #[wasm_bindgen]
-    pub fn json(&self) -> String {
-        self.inner.json()
+    pub fn json(&self) -> Result<String, JsString> {
+        self.inner
+            .json()
+            .map_err(|err| JsString::from(format!("JSON serialization failed: {err}")))
     }
 }
 

@@ -4,7 +4,7 @@ import { remoteManifestHost, type RemoteManifestOptions } from "./remote.ts";
 export type { RemoteManifestOptions } from "./remote.ts";
 import { ocspHost, type OcspOptions } from "./ocsp.ts";
 import { isProjection } from "./projection.ts";
-import { contextJson, factoryContext, readerDefaults, rejectBuilderDefaults } from "./settings.ts";
+import { contextJson, factoryContext, readerDefaults, rejectBuilderDefaults, type ReaderContext } from "./settings.ts";
 export type { OcspOptions } from "./ocsp.ts";
 
 export { Context, AssetTooLargeError } from "@contentauth/c2pa-utilities";
@@ -111,7 +111,7 @@ export class Reader implements Resource {
     runtime: Runtime,
     format: string | undefined,
     blob: Blob,
-    context?: Context,
+    context?: ReaderContext,
     detachedManifest?: Uint8Array,
     remoteManifest?: RemoteManifestOptions,
     ocsp?: OcspOptions,
@@ -161,8 +161,17 @@ export class Reader implements Resource {
   }
   async activeLabel(): Promise<string | null> { return this.#handle().activeLabel() ?? null }
   async activeManifest(): Promise<unknown> { return this.#handle().activeManifest() }
+  async resourceToBytes(uri: string): Promise<Uint8Array> {
+    const handle = this.#handle();
+    if (typeof uri !== "string") throw new TypeError("Resource identifier must be a string");
+    try { return handle.resourceToBytes(uri) }
+    catch (cause) { throw error(cause) }
+  }
   async manifestStore(): Promise<ManifestProjection> { return projection(this.#handle().manifestStore()) }
-  async json(): Promise<ManifestProjection> { return projection(JSON.parse(this.#handle().json()) as unknown) }
+  async json(): Promise<ManifestProjection> {
+    try { return projection(JSON.parse(this.#handle().json()) as unknown) }
+    catch (cause) { throw error(cause) }
+  }
   requestFree(): void {
     this.#ffi?.free();
     this.#ffi = undefined;

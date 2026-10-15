@@ -1,4 +1,4 @@
-import { Builder, Context, createC2pa, Reader, type Runtime, type Signer } from "./index.ts";
+import { Builder, createC2pa, Reader, type Runtime, type Signer } from "./index.ts";
 import { failure, protocol, restore, type Command, type HostMessage, type Outcome, type WorkerMessage } from "./worker-protocol.ts";
 
 const scope = self as DedicatedWorkerGlobalScope;
@@ -45,8 +45,12 @@ async function execute(id: number, command: Command): Promise<unknown> {
       const controllers = { remote: new AbortController(), ocsp: new AbortController() };
       reads.set(id, controllers);
       try {
+        const context = command.context;
+        // Preserve the caller Context's cached resolution across the Worker boundary.
         const reader = await Reader.fromBlob(client, command.format, command.blob,
-          command.settings ? new Context(command.settings) : undefined, command.detached,
+          context === undefined ? undefined : {
+            settings: context.settings, toJson: () => Promise.resolve(context.json),
+          }, command.detached,
           command.remote ? { ...command.remote, signal: controllers.remote.signal } : undefined,
           command.ocsp ? { ...command.ocsp, signal: controllers.ocsp.signal } : undefined);
         return reader ? retain(reader) : null;
@@ -57,6 +61,11 @@ async function execute(id: number, command: Command): Promise<unknown> {
       const resource = handle(command.handle);
       if (!(resource instanceof Reader)) throw new Error("Worker handle is not a Reader");
       return await resource[command.name]();
+    }
+    case "resourceToBytes": {
+      const resource = handle(command.handle);
+      if (!(resource instanceof Reader)) throw new Error("Worker handle is not a Reader");
+      return await resource.resourceToBytes(command.uri);
     }
     case "sign": {
       const resource = handle(command.handle);

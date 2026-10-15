@@ -53,8 +53,14 @@ impl BrowserReader {
         self.inner.active_manifest()
     }
 
+    /// Returns a copy of an embedded resource identified by its JUMBF URI.
+    #[wasm_bindgen(js_name = resourceToBytes)]
+    pub fn resource_to_bytes(&self, uri: &str) -> Result<js_sys::Uint8Array, JsString> {
+        self.inner.resource_to_bytes(uri)
+    }
+
     /// Returns the current manifest projection as JSON.
-    pub fn json(&self) -> String {
+    pub fn json(&self) -> Result<String, JsString> {
         self.inner.json()
     }
 }

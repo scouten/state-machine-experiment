@@ -436,12 +436,11 @@ describe("M3 detached and remote manifests", () => {
       const report = await reader!.manifestStore();
       expect(report.validation_state).toBe("Trusted");
       const active = report.manifests[report.active_manifest!] as {
-        assertions: { label: string; data: { exclusions: { start: number; length: number }[] } }[];
+        assertions: { label: string }[];
       };
-      const exclusions = active.assertions.find((assertion) => assertion.label === "c2pa.hash.data")!.data.exclusions;
-      expect(exclusions).toHaveLength(2);
-      expect(exclusions[0].start + exclusions[0].length).toBeLessThan(exclusions[1].start);
-      expect(exclusions[1].start + exclusions[1].length).toBe(output.asset.length);
+      expect(active.assertions.some((assertion) => assertion.label === "c2pa.hash.data")).toBe(false);
+      expect(report.validation_results.activeManifest.success)
+        .toContainEqual(expect.objectContaining({ code: "assertion.dataHash.match" }));
       const damaged = new Uint8Array(output.asset);
       damaged[input.length - 1] ^= 1;
       const invalid = await Reader.fromBlob(client, "tiff", new Blob([damaged]), trusted());

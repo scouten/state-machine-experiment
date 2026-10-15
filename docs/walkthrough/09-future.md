@@ -20,6 +20,7 @@ flowchart LR
         d9["M3 slice: JPEG XMP remote discovery<br/>opt-in bounded browser host transport"]
         d10["M3 slices: bounded browser OCSP<br/>TIFF/BigTIFF browser read/sign"]
         d11["M3 slice: explicit module Worker<br/>callbacks, cleanup, network, CSP proof"]
+        d12["M3 feature slices: resources / reports / trust<br/>ingredient metadata / Context parity, 17/249 upstream"]
     end
     subgraph next["Next"]
         direction TB
@@ -36,12 +37,12 @@ flowchart LR
 
 | Item | Why it matters |
 |---|---|
-| **Ingredients / parent manifests** | Largest functional gap. Needs the reader to recurse over manifests; likely new request shape for ingredient assets. |
+| **Ingredients / parent manifests** | Metadata/reviews, same-owner embedded thumbnails/data and unknown-provenance deltas are projected. Ingredient manifest-link/hash validation, schema/signature rules, redactions, secure historical-delta comparison, linked-history/resource reporting and structured metadata remain core/projection dependencies, not binding feasibility tasks. Ingredient-asset validation may need new host requests. |
 | **Redaction checks** (`assertion.notRedacted`) | Depends on ingredients. |
 | **Remote manifest breadth** | JPEG standard XMP discovery and opt-in bounded browser fetching (including CORS/retry proof) are implemented; extended XMP and other format pointers remain open. |
 | **CRLs** | Outside the spec §15.9 OCSP-only process the engine follows, but real certs use them. |
 | **Other hard bindings** (box hash, BMFF) | Only `c2pa.hash.data` is validated. |
-| **Decoded assertion values** (thumbnails, resources) | Needed for fuller `ManifestStore` and `crJson`/`resourceToBytes` parity. |
+| **Broader resource projection** | Embedded binary assertions, claim-thumbnail references and browser `resourceToBytes` are implemented. Generator icons, ingredient-resource references, external resources and `crJson` parity remain open. |
 
 ## 2. More container formats
 
@@ -81,10 +82,11 @@ for the staged browser/Node parity work and compatibility-shim rollout.
 
 * **`Builder` surface parity** for the c2pa-rs shape beyond the baseline
   case; `from_stream` and other constructors.
-* **c2pa-node:** `fromManifestDataAndAsset`, `resourceToAsset`, signers,
+* **c2pa-node:** full Context/settings/size-limit parity, databox/external resources, signers,
   CAWG identity assertions (the X.509 type is done on the core read and
   write paths; this is the bindings), Trustmark.
-* **Browser:** full reporting/settings/resources, full upstream Worker parity,
+* **Browser:** linked-ingredient/history delta reports and resources,
+  broader settings/resources, full upstream Worker parity,
   classic-Worker/full-settings compatibility, registry publication and broader
   bundler compatibility. Private ESM/types/Wasm packaging now passes an isolated
   installed-consumer TypeScript/Vite production proof in three browsers, with
@@ -93,8 +95,51 @@ for the staged browser/Node parity work and compatibility-shim rollout.
   Context isolation, with runtime snapshots and explicit OCSP host gating;
   full settings and builder inheritance remain open.
   M1 runs the real read/sign adapters inline in three browsers;
-  five unchanged upstream cases now pass through both inline and Worker in
-  three browsers (30 executions), with 244 declarations still unported.
+  seventeen unchanged upstream cases now pass through both inline and Worker in
+  three browsers (102 executions), with 232 declarations still unported.
+  Omitted-format detection, explicit/independent/reused Contexts and deprecated
+  factory creation/merging now pass. Worker reads preserve caller-side Context
+  memoization; concurrent trust policies remain isolated and stale private v1
+  Workers reject startup under protocol v2.
+  Feature coverage includes exact embedded-thumbnail and generator-icon
+  extraction, active-manifest
+  equality, trusted/untrusted complete-store and blob-creation goldens, with extra
+  ownership/lifecycle, failure-preservation and installed-package report checks.
+  Real c2pa-rs-signed generator icons now match complete legacy reports and exact
+  bytes; cross-manifest/external/databox icons still fail explicitly. Identical
+  icon/assertion hash checks no longer duplicate observations; conflicting
+  hashes remain checked. This adds migration proof, not frozen upstream passes.
+  Same-manifest embedded ingredient thumbnails now reuse that resolver, including
+  positional labels, complete legacy object/JSON equality and exact bytes from
+  real c2pa-rs fixtures. Native v1/v2/v3 boundaries, live tamper failures,
+  databox rejection/retry, installed extraction and Node metadata are proven.
+  Same-owner ingredient data resources now also match complete legacy reports
+  and exact independent bytes, including two positional resources alongside a
+  thumbnail. Tamper isolation, v1 databox rejection/retry, native boundaries,
+  installed extraction and Node metadata are proven. Linked histories/redactions,
+  full ingredient-link/hash validation and databoxes remain open.
+  Node now also extracts these resources through `resourceToAsset` buffer/file
+  destinations. Native and browser readers share one strict absolute-URI lookup;
+  private native payloads survive source closure until garbage collection, and
+  asynchronous file I/O remains JS-owned. Actual-Node tests cover exact bytes,
+  legacy result shapes, truncation, copy/tamper isolation and failures/retry.
+  This is bounded Node resource support, not full API or streaming parity.
+  Node now accepts explicit sidecars through `fromManifestDataAndAsset`, using
+  the existing detached file session and reporting `isEmbedded` false. Genuine
+  c2pa-rs store-free fixtures match complete Trusted reports and resource bytes;
+  native browser-host comparison, binding tampering, snapshot/concurrent
+  isolation, no-fallback precedence and error recovery are proven. These are
+  adapted Node tests, not extra unchanged upstream declarations.
+  Parsed legacy JSON now matches the trusted/untrusted fixture; signed custom
+  assertions verify numeric-array/base64 display quirks without changing object
+  views. `crJson` and whitespace/key-order byte equality remain unproven.
+  Disabled claim-trust verification and independent CAWG anchor switches now
+  match legacy full reports, with signature/integrity checks preserved.
+  Resource-free v1/v2/v3 ingredient metadata and owner-qualified
+  unknown-provenance deltas now match full object/JSON legacy reports for
+  newly signed inputs; inputTo is exempt and live tamper failures stay visible.
+  Linked/resource/history fields still fail compatibility reporting explicitly;
+  these additional differential cases do not increase the 17/249 count.
   M3 adds opt-in bounded remote/OCSP JavaScript hosts, real local signed OCSP
   proof, and browser TIFF/BigTIFF read/sign in both byte orders. Real responder
   and DNG corpus breadth remains open. An explicit module-Worker entry now hosts
