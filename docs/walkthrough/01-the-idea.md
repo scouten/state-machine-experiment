@@ -101,7 +101,11 @@ sequenceDiagram
 ```
 
 The engine crate has no C2PA logic: a request/reply vocabulary trait,
-request tracking (`SessionCore`), and a protocol-error vocabulary. Concrete
+request tracking (`SessionCore`), and a protocol-error vocabulary. A
+session's workflow can be a hand-written phase enum over `SessionCore`
+(the reader) or an `async fn` over `Workflow` that the compiler turns into
+the state machine (the builder) — polled with a no-op waker, so still no
+runtime, and the host cannot tell the difference. Concrete
 workflows (reader, builder, and the file sessions that compose them) are
 separate crates with their own request vocabularies. Sessions can *nest*:
 a session answers some of an inner session's requests itself and forwards

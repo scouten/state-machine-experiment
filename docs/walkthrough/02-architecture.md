@@ -96,7 +96,7 @@ flowchart TB
 
 | Crate | Layer | What it is |
 |---|---|---|
-| `contentauth-state-machine` | Foundation | The engine: `Session`, `SessionCore`, request tracking, protocol errors. Domain-agnostic. |
+| `contentauth-state-machine` | Foundation | The engine: `Session`, `SessionCore` (hand-written phase enum) or `Workflow` (an `async fn`, no runtime), request tracking, protocol errors. Domain-agnostic. |
 | `contentauth-c2pa-primitives` | Foundation | The narrow shared slice: `StreamId`, `ByteRange`, hash/signing algorithms, `HostError`, COSE `Sig_structure`, RFC 3161 encode/unwrap. |
 | `contentauth-c2pa-reader` | Workflow | `ReadSession`: JUMBF, claims (v1+v2), integrity, signature, trust, timestamps, OCSP, CAWG identity assertions (X.509). |
 | `contentauth-c2pa-builder` | Workflow | `BuilderSession`: v2 claim generation and signing via a two-pass placeholder scheme, plus optional CAWG identity assertions. |

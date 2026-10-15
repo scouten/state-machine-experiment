@@ -101,19 +101,6 @@ pub enum Error {
         actual: u64,
     },
 
-    /// A streamed asset hash was finalized before every byte was folded in.
-    ///
-    /// Indicates a bug in this crate's own chunk bookkeeping rather than
-    /// anything wrong with the asset.
-    #[error("asset hash folded {folded} of {expected} bytes")]
-    IncompleteAssetHash {
-        /// Bytes folded into the hasher.
-        folded: u64,
-
-        /// Bytes that should have been folded.
-        expected: u64,
-    },
-
     /// The host's signature was not exactly the expected length.
     #[error("host returned a signature of {actual} bytes; expected exactly {expected}")]
     SignatureLengthMismatch {
