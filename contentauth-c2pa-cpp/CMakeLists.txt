@@ -66,7 +66,7 @@ endfunction()
 # ---- the C++ library --------------------------------------------------------
 # The signing implementation and thread pools are compiled; reader drivers
 # stay header-only. Clients see `include/`; `cpp/include/` is private.
-set(C2PA_SM_CPP_SOURCES cpp/src/simple_thread_pool.cpp cpp/src/sign.cpp)
+set(C2PA_SM_CPP_SOURCES cpp/src/simple_thread_pool.cpp cpp/src/sign.cpp cpp/src/sign_async.cpp)
 if(APPLE)
   list(APPEND C2PA_SM_CPP_SOURCES cpp/src/apple_thread_pool.cpp)
 endif()

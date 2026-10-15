@@ -17,6 +17,7 @@
 #endif
 
 #include "contentauth/c2pa_sm_sign.hpp"
+#include "contentauth/c2pa_sm_sign_async.hpp"
 #include "contentauth_c2pa_sm_sign.h"
 #include "fixtures.hpp"
 #include "support.hpp"
@@ -98,6 +99,300 @@ static std::string trusted_signing_json(const std::vector<uint8_t> &bytes) {
         base64 + "\\n-----END CERTIFICATE-----\"}}";
     MemoryHost host(bytes, kNow);
     return json_of(read(Session("image/jpeg", settings), host));
+}
+
+class ManualBuildHost : public AsyncBuildHost {
+public:
+    MemoryBuildHost backing{fixture_bytes(), fixture_sign};
+    std::vector<std::pair<BuildRequest, BuildCompletion>> pending;
+    void start(BuildRequest request, BuildCompletion done) override {
+        pending.emplace_back(std::move(request), std::move(done));
+    }
+    void deliver() {
+        auto batch = std::move(pending);
+        pending.clear();
+        for (auto item = batch.rbegin(); item != batch.rend(); ++item)
+            item->second(answer(backing, item->first));
+    }
+};
+
+TEST(async_build_rejects_overlapping_driver_calls_without_consuming_the_session) {
+    struct BlockingStart : ManualBuildHost {
+        std::mutex mutex;
+        std::condition_variable ready;
+        bool entered = false, released = false;
+        void start(BuildRequest request, BuildCompletion done) override {
+            {
+                std::unique_lock<std::mutex> lock(mutex);
+                entered = true;
+                ready.notify_all();
+                ready.wait(lock, [&] { return released; });
+            }
+            ManualBuildHost::start(std::move(request), std::move(done));
+        }
+    } host;
+    Building building(BuildSession(signing_settings()), host);
+    std::exception_ptr driver_error;
+    std::thread driver([&] {
+        try { building.step(); } catch (...) { driver_error = std::current_exception(); }
+    });
+    {
+        std::unique_lock<std::mutex> lock(host.mutex);
+        host.ready.wait(lock, [&] { return host.entered; });
+    }
+    CHECK_THROWS_CODE(building.step(), ErrorCode::InvalidArgument);
+    CHECK_THROWS_CODE(std::move(building).finish(), ErrorCode::InvalidArgument);
+    { std::lock_guard<std::mutex> lock(host.mutex); host.released = true; }
+    host.ready.notify_all();
+    driver.join();
+    CHECK(!driver_error);
+    host.deliver();
+    while (!building.step()) host.deliver();
+    CHECK(!std::move(building).finish().manifest.empty());
+    CHECK(trusted_signing_json(host.backing.output()).find("Trusted") != std::string::npos);
+}
+
+TEST(async_builds_interleave_without_redispatch_or_empty_batch_completion) {
+    ManualBuildHost first_host, second_host;
+    Building first(BuildSession(signing_settings()), first_host);
+    Building second(BuildSession(signing_settings()), second_host);
+    bool first_done = false, second_done = false;
+    while (!first_done || !second_done) {
+        if (!first_done) first_done = first.step();
+        if (!second_done) second_done = second.step();
+        if (!first_done) {
+            const auto count = first.started();
+            CHECK(!first.step());
+            CHECK_EQ(first.started(), count);
+        }
+        first_host.deliver();
+        second_host.deliver();
+    }
+    CHECK(!std::move(first).finish().manifest.empty());
+    CHECK(!std::move(second).finish().manifest.empty());
+    CHECK(trusted_signing_json(first_host.backing.output()).find("Trusted") != std::string::npos);
+    CHECK(trusted_signing_json(second_host.backing.output()).find("Trusted") != std::string::npos);
+}
+
+TEST(async_build_moves_cancel_late_callbacks_and_preserve_request_storage) {
+    static_assert(!std::is_copy_constructible_v<Building>);
+    static_assert(std::is_nothrow_move_assignable_v<Building>);
+    ManualBuildHost host;
+    {
+        Building original(BuildSession(signing_settings()), host);
+        CHECK(!original.step());
+        Building moved(std::move(original));
+        CHECK_THROWS_CODE(original.step(), ErrorCode::InvalidArgument);
+        Building assigned(BuildSession(signing_settings()), host);
+        assigned = std::move(moved);
+        CHECK_THROWS_CODE(moved.step(), ErrorCode::InvalidArgument);
+        CHECK(assigned.in_flight() > 0);
+        CHECK_EQ(assigned.max_in_flight(), assigned.in_flight());
+        CHECK(assigned.mailbox().set_waker([] { throw std::runtime_error("cancelled waker ran"); }));
+    }
+    host.deliver();
+    CHECK(host.pending.empty());
+}
+
+TEST(build_mailbox_wakers_cover_delivery_registration_race_and_reentry) {
+    for (int iteration = 0; iteration < 32; ++iteration) {
+        BuildMailbox mailbox;
+        std::atomic<int> wakes{0};
+        std::thread delivery([&] { mailbox.post(7, Length{9}); });
+        const bool registered = mailbox.set_waker([&] { ++wakes; mailbox.clear_waker(); });
+        delivery.join();
+        CHECK_EQ(wakes.load(), registered ? 1 : 0);
+        mailbox.wait();
+        CHECK(!mailbox.set_waker([] {}));
+        CHECK_EQ(mailbox.drain().size(), size_t{1});
+        CHECK(mailbox.set_waker([&] { ++wakes; }));
+        mailbox.clear_waker();
+        mailbox.post(8, Written{});
+        CHECK_EQ(wakes.load(), registered ? 1 : 0);
+    }
+}
+
+TEST(async_build_protocol_errors_are_terminal_instead_of_hanging) {
+    for (bool bad_id : {false, true}) {
+        ManualBuildHost host;
+        Building building(BuildSession(signing_settings()), host);
+        CHECK(!building.step());
+        building.mailbox().post(bad_id ? UINT64_MAX : request_id(host.pending.front().first), Signature{{}});
+        CHECK_THROWS_CODE(building.step(), ErrorCode::InvalidArgument);
+        CHECK_THROWS_CODE(building.step(), ErrorCode::InvalidArgument);
+        CHECK_THROWS_CODE(std::move(building).finish(), ErrorCode::InvalidArgument);
+        host.deliver();
+    }
+    ManualBuildHost host;
+    Building premature(BuildSession(signing_settings()), host);
+    CHECK_THROWS_CODE(std::move(premature).finish(), ErrorCode::InvalidArgument);
+    CHECK_THROWS_CODE(premature.step(), ErrorCode::InvalidArgument);
+}
+
+class InlineBuildHost : public AsyncBuildHost {
+public:
+    MemoryBuildHost backing{fixture_bytes(), fixture_sign};
+    Building *operation = nullptr;
+    int failure = 0;
+    void start(BuildRequest request, BuildCompletion done) override {
+        if (failure == 1) throw std::runtime_error("start failed");
+        if (failure == 2) throw 42;
+        if (operation) CHECK_THROWS_CODE(operation->step(), ErrorCode::InvalidArgument);
+        done(answer(backing, request));
+        done(Failed{"duplicate ignored"});
+        throw std::runtime_error("completion already won");
+    }
+};
+
+TEST(inline_build_callbacks_do_not_recurse_and_finish_is_consumed) {
+    InlineBuildHost host;
+    Building building(BuildSession(signing_settings()), host);
+    host.operation = &building;
+    while (!building.step()) building.mailbox().wait();
+    const auto count = building.started();
+    CHECK(building.step());
+    CHECK_EQ(building.started(), count);
+    CHECK_EQ(building.in_flight(), size_t{0});
+    CHECK(!std::move(building).finish().manifest.empty());
+    CHECK_THROWS_CODE(building.step(), ErrorCode::InvalidArgument);
+    CHECK_THROWS_CODE(std::move(building).finish(), ErrorCode::InvalidArgument);
+    CHECK(trusted_signing_json(host.backing.output()).find("Trusted") != std::string::npos);
+}
+
+TEST(build_futures_own_progress_and_deliver_standard_and_nonstandard_start_errors) {
+    for (int failure : {0, 1, 2}) {
+        auto host = std::make_shared<InlineBuildHost>();
+        host->failure = failure;
+        auto future = build_future(BuildSession(signing_settings()), host);
+        if (failure) CHECK_THROWS_CODE(future.get(), static_cast<ErrorCode>(C2PA_SM_ERR_BUILD));
+        else CHECK(!future.get().manifest.empty());
+    }
+    CHECK_THROWS_CODE(build_future(BuildSession(signing_settings()), nullptr), ErrorCode::InvalidArgument);
+}
+
+TEST(pooled_build_submission_failure_and_throwing_completion_do_not_escape_workers) {
+    struct RejectingPool : ThreadPool {
+        void post(std::function<void()>) override { throw std::runtime_error("pool rejected task"); }
+    } rejected;
+    MemoryBuildHost backing(fixture_bytes(), fixture_sign);
+    PooledBuildHost refused(backing, rejected);
+    CHECK_THROWS_CODE(build_parallel(BuildSession(signing_settings()), refused),
+                      static_cast<ErrorCode>(C2PA_SM_ERR_BUILD));
+    CHECK_THROWS_CODE(PooledBuildHost(std::shared_ptr<SyncBuildHost>{}, rejected), ErrorCode::InvalidArgument);
+    auto pool = make_simple_thread_pool(2);
+    PooledBuildHost accepted(backing, *pool);
+    std::promise<BuildReply> result;
+    auto future = result.get_future();
+    accepted.start(BuildLengthRequest{1, BuildStream::Source}, [&](BuildReply reply) {
+        result.set_value(std::move(reply));
+        throw std::runtime_error("completion refused");
+    });
+    const auto reply = future.get();
+    pool.reset();
+    CHECK_EQ(std::get<Length>(reply).value, backing.length(BuildStream::Source));
+}
+
+TEST(pooled_builds_round_trip_memory_and_seekable_streams) {
+    auto pool = make_simple_thread_pool(4);
+    auto memory = std::make_shared<MemoryBuildHost>(fixture_bytes(), fixture_sign);
+    auto pooled = std::make_shared<PooledBuildHost>(memory, *pool);
+    CHECK(!build_future(BuildSession(signing_settings()), pooled).get().manifest.empty());
+    CHECK(trusted_signing_json(memory->output()).find("Trusted") != std::string::npos);
+    const auto source_bytes = fixture_bytes();
+    std::istringstream source(std::string(source_bytes.begin(), source_bytes.end()));
+    std::stringstream output;
+    IOStreamBuildHost streams(source, output, fixture_sign);
+    PooledBuildHost stream_pool(streams, *pool);
+    CHECK(!build_parallel(BuildSession(signing_settings()), stream_pool).manifest.empty());
+    const auto bytes = output.str();
+    CHECK(trusted_signing_json({bytes.begin(), bytes.end()}).find("Trusted") != std::string::npos);
+}
+
+TEST(pooled_build_host_serializes_competing_writes_to_mutable_output) {
+    struct ControlledHost : MemoryBuildHost {
+        ControlledHost() : MemoryBuildHost({}) {}
+        std::mutex mutex;
+        std::condition_variable ready;
+        bool entered = false, released = false;
+        std::atomic<int> active{0};
+        std::atomic<bool> overlapped{false};
+        void write(BuildStream stream, uint64_t offset, const std::vector<uint8_t> &bytes) override {
+            if (active.fetch_add(1) != 0) overlapped.store(true);
+            {
+                std::unique_lock<std::mutex> lock(mutex);
+                if (!entered) {
+                    entered = true;
+                    ready.notify_all();
+                    ready.wait(lock, [&] { return released; });
+                }
+            }
+            MemoryBuildHost::write(stream, offset, bytes);
+            active.fetch_sub(1);
+        }
+    } host;
+    auto pool = make_simple_thread_pool(4);
+    PooledBuildHost adapter(host, *pool);
+    size_t finished = 0, written = 0;
+    auto complete = [&](BuildReply reply) {
+        std::lock_guard<std::mutex> lock(host.mutex);
+        if (std::holds_alternative<Written>(reply)) ++written;
+        ++finished;
+        host.ready.notify_all();
+    };
+    adapter.start(WriteRequest{1, BuildStream::Output, 0, {0}}, complete);
+    {
+        std::unique_lock<std::mutex> lock(host.mutex);
+        host.ready.wait(lock, [&] { return host.entered; });
+    }
+    for (uint64_t index = 1; index < 8; ++index)
+        adapter.start(WriteRequest{index + 1, BuildStream::Output, index, {static_cast<uint8_t>(index)}}, complete);
+    {
+        std::unique_lock<std::mutex> lock(host.mutex);
+        host.released = true;
+        host.ready.notify_all();
+        host.ready.wait(lock, [&] { return finished == 8; });
+    }
+    pool.reset();
+    CHECK_EQ(written, size_t{8});
+    CHECK(!host.overlapped.load());
+    CHECK_EQ(host.active.load(), 0);
+    CHECK_EQ(host.output(), (std::vector<uint8_t>{0, 1, 2, 3, 4, 5, 6, 7}));
+}
+
+TEST(pooled_adapter_and_operation_can_die_while_owned_host_work_is_in_flight) {
+    std::mutex mutex;
+    std::condition_variable ready;
+    bool entered = false, released = false, signalled = false;
+    auto pool = make_simple_thread_pool(2);
+    auto host = std::make_shared<MemoryBuildHost>(fixture_bytes(), [&](const auto &algorithm, const auto &data) {
+        std::unique_lock<std::mutex> lock(mutex);
+        entered = true;
+        ready.notify_all();
+        ready.wait(lock, [&] { return released; });
+        return fixture_sign(algorithm, data);
+    });
+    std::weak_ptr<SyncBuildHost> retained = host;
+    auto adapter = std::make_unique<PooledBuildHost>(host, *pool);
+    auto operation = std::make_unique<Building>(BuildSession(signing_settings()), *adapter);
+    while (!operation->step()) {
+        if (!operation->mailbox().set_waker([&] {
+            std::lock_guard<std::mutex> lock(mutex);
+            signalled = true;
+            ready.notify_all();
+        })) continue;
+        std::unique_lock<std::mutex> lock(mutex);
+        ready.wait(lock, [&] { return entered || signalled; });
+        signalled = false;
+        if (entered) break;
+    }
+    operation.reset();
+    adapter.reset();
+    host.reset();
+    CHECK(!retained.expired());
+    { std::lock_guard<std::mutex> lock(mutex); released = true; }
+    ready.notify_all();
+    pool.reset();
+    CHECK(retained.expired());
 }
 
 TEST(blocking_signing_round_trips_trusted_with_owned_report) {

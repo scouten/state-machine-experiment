@@ -23,7 +23,7 @@ auto reader = c2pa::sm::read(c2pa::sm::Session("image/jpeg"), host);
 if (reader) std::cout << reader->json();   // nullopt: no Content Credentials
 ```
 
-C++ drivers are read-only; the C signing ABI and C++ signing value types are
+C++ drivers support reading and signing; the signing ABI and C++ APIs are
 described in [Signing contract](#signing-contract). Build with `./build.sh`, or
 build and run all C++ tests with `./test.sh`. Both scripts forward extra
 arguments to CMake's configure step, e.g. `./test.sh -DCMAKE_BUILD_TYPE=Release`
@@ -245,6 +245,16 @@ Rust constructs the RFC 3161 request and unwraps the response. No configured
 TSA means no timestamp request; a configured TSA that is unavailable, refuses,
 or returns malformed data must fail rather than produce untimestamped output.
 
+### Async C++ signing
+
+Phase 4 adds `c2pa_sm_sign_async.hpp`, compiled in `cpp/src/sign_async.cpp`.
+`Building` owns a single-driver session; `AsyncBuildHost::start` owns requests,
+and callbacks only post to `BuildMailbox`. `step` never waits; use its mailbox
+wait/waker or `build_parallel`. `build_future` owns its driver thread and host;
+dropping the future joins. Cancellation discards late replies, not host work.
+`PooledBuildHost` serializes host operations, including signer/TSA callbacks,
+without holding a mutex during user code. See the header for lifetime boundaries.
+
 ### Blocking C++ signing
 
 `SyncBuildHost` defines `read(stream, start, len)`, `length(stream)`, and
@@ -389,12 +399,24 @@ allocation registry must not be mistaken for a guarantee of a lock-free FFI.
   only, not cryptographic TSA validity. Real HTTP and signing stay host-owned.
 * C++17 and C++20 compilation and focused CTest entries pass. Full five-entry
   CTest, coverage and sanitizer acceptance remain required before submission.
-* Stop here: async, pool, future and coroutine signing belong to Phase 4.
+* Phase 4 adds async/pool/future signing; coroutine signing is Phase 5.
+
+### Phase 4 completion gate
+
+* Queued single-thread hosts and pooled memory/stream hosts sign baseline JPEGs
+  that read back as `Trusted`; callbacks own requests and only enqueue replies.
+* Tests cover synchronous and out-of-order delivery, overlapping/reentrant driver
+  rejection, waker registration races, terminal protocol errors, cancellation,
+  late callbacks, and host/pool submission failures.
+* Pooled access to mutable hosts is serialized. Futures retain the host and
+  propagate errors; destroying the last future waits for its driver thread.
+* C++17/C++20 builds, all five CTest entries, coverage, ASan and TSan are checked.
+* Stop for approval before Phase 5's C++20 coroutine signing driver.
 
 ## Not covered
 
-* **Asynchronous C++ signing drivers.** Async/pool/future and coroutine signing
-  remain next. No production key or HTTP provider is included. Atomic file
+* **C++20 coroutine signing (Phase 5).** C++17 async/pool/future is implemented.
+  No production key or HTTP provider is included. Atomic file
   signing currently requires POSIX; memory and stream hosts are portable C++17.
 * Resources (`get_resource`), `detailed_json`, `crjson`, fragments, remote
   manifests, formats other than JPEG, and the OCSP request path in the C++
