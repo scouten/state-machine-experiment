@@ -23,7 +23,8 @@ auto reader = c2pa::sm::read(c2pa::sm::Session("image/jpeg"), host);
 if (reader) std::cout << reader->json();   // nullopt: no Content Credentials
 ```
 
-Read side only; see [Not covered](#not-covered). Build with `./build.sh`, or
+Read side only at runtime; the signing value types and proposed contract are
+described in [Signing contract](#signing-contract). Build with `./build.sh`, or
 build and test with
 `cmake -S . -B build && cmake --build build && ctest --test-dir build`
 (needs cargo, CMake ≥ 3.16, a C++17 compiler; the coroutine pieces need C++20).
@@ -175,6 +176,99 @@ the real library, so drift is a link or test failure.
   its keep: it caught the C++ wrapper evaluating `check(f(&error), error)`
   in an unspecified order, which leaked every error and replaced its message
   with a placeholder.
+
+## Signing contract
+
+Phase 1 supplies C++17 value types in `include/contentauth/c2pa_sm_sign.hpp`.
+There is no signing ABI, `BuildSession`, or signing driver yet. The following
+contract guides those later phases; it does not describe available functions.
+
+### Inputs and baseline
+
+`BuildSettings` owns the definition JSON, format (default `image/jpeg`),
+algorithm (default `es256`), and DER certificate chain, leaf first. The first
+end-to-end milestone supports JPEG + ES256. The definition uses the existing
+`contentauth-c2pa-sign-baseline::Definition`: the host supplies `instance_id`
+and `label` (there is no engine RNG), exactly one `claim_generator_info`,
+and any supported assertions. The acceptance fixture includes a title and
+one `c2pa.actions.v2` assertion containing `c2pa.created`. Unknown definition
+fields fail rather than being ignored. A private key is never an input.
+
+The bridge will delegate to `contentauth-c2pa-node-compat-sign::NodeBuildSession`,
+which is already a host-agnostic, synchronous wrapper over the file builder.
+Do not add another signing engine or an I/O dependency to this binding.
+
+### Session and host
+
+The proposed move-only `BuildSession(BuildSettings)` copies inputs into Rust.
+`advance()` returns completion or newly issued `BuildRequest` values;
+an empty pending batch does not mean completion. `fulfill(id, BuildReply)`
+accepts any subset of outstanding replies in any order. Unknown IDs,
+duplicate replies, and wrong reply kinds are errors. `finish()` consumes a
+completed session and returns `SignReport`; premature finish is an error.
+Neither a session nor its ABI starts host work or invokes host callbacks.
+
+| Request | Required reply | Host obligation |
+|---|---|---|
+| `BuildReadRequest` | `Bytes` | Read exactly `len` bytes at `start` of `stream` |
+| `BuildLengthRequest` | `Length` | Return the selected stream's length |
+| `WriteRequest` | `Written` | Write all `bytes` at `offset`; acknowledge only once subsequent reads see them |
+| `SignRequest` | `Signature` | Sign the complete COSE `Sig_structure` in `data` using `algorithm`; ES256 returns 64-byte raw `r \|\| s`, not DER |
+| `TimestampRequest` | `TimestampResponse` | POST `body` to `url` as `application/timestamp-query`; return the unmodified DER `TimeStampResp` |
+
+`Failed` is valid for every request and fails the build. A host must finish
+partial reads/writes itself or report failure, never acknowledge a short
+operation as successful. `BuildReply` reuses the reader's `Bytes`, `Length`,
+and `Failed`; signing has its own request variant because it has two streams.
+All C++ payloads own their strings and bytes, not pointers into the session.
+
+`BuildStream::Source` is read-only. `BuildStream::Output` must start empty,
+must not alias the source, and must support random-access writes and reads:
+the builder hashes output bytes after writing them. A stream-level failure
+or cancellation can leave partial output; rollback is not a session promise.
+A later file convenience driver should use an exclusively created temporary
+file beside the destination and publish it only on success, cleaning it up
+on failure. `SignReport` contains embedded manifest bytes and all hard-binding
+`exclusions`, not the output asset itself.
+
+An optional `tsa_url` in the definition requests timestamping. The request
+and reply types are defined now; the host driver comes in a later phase.
+Rust constructs the RFC 3161 request and unwraps the response. No configured
+TSA means no timestamp request; a configured TSA that is unavailable, refuses,
+or returns malformed data must fail rather than produce untimestamped output.
+
+### FFI, errors, and concurrency
+
+New FFI work must use [cimpl](https://github.com/contentauth/cimpl), not copy
+the existing handwritten reader bridge. Its documented tracked allocations,
+typed pointer validation, and namespace-safe free wrappers fit opaque build
+handles and owned results. The signing API must retain `c2pa_sm_*` names,
+validate foreign inputs, and prevent Rust panics from unwinding into C++.
+
+cimpl's documented error macros use last-error state. That must not become
+the C++ error contract: each failing bridge operation must capture its error
+on the same thread, before another call, and return an owned error through
+an out-parameter. Extend the existing error vocabulary for build failures
+rather than reporting them as read errors. Verify the selected cimpl version's
+tracking/free semantics, generated header, panic behavior, and supported
+Rust/Wasm targets with a focused bridge test in Phase 2 before building on it.
+No cimpl dependency is selected or added in Phase 1.
+
+A session has one driver at a time and can move between threads between calls.
+Later async completions post owned replies into a mailbox; only the driver
+calls `advance`/`fulfill`. Destroying the operation abandons the session, not
+host I/O already in flight. Mailboxes must outlive outstanding completions,
+and hosts must outlive their own work. The engine remains sans-I/O; cimpl's
+allocation registry must not be mistaken for a guarantee of a lock-free FFI.
+
+### Phase 1 completion gate
+
+* The value types compile as C++17 and their ownership is tested in `cxx17`.
+* The baseline inputs, stream semantics, request/reply mapping, lifecycle,
+  error ownership, and cancellation responsibilities are explicit above.
+* The cimpl approach is documented, with version-specific verification
+  reserved for Phase 2; no reader ABI migration is included.
+* Stop for approval before adding the Rust signing dependency or ABI.
 
 ## Not covered
 

@@ -5,10 +5,84 @@
 
 #include <sstream>
 
+#include "contentauth/c2pa_sm_sign.hpp"
 #include "support.hpp"
 
 using namespace c2pa::sm;
 using namespace support;
+
+TEST(signing_settings_keep_certificates_and_definition_as_owned_values) {
+    BuildSettings settings;
+    CHECK_EQ(settings.format, "image/jpeg");
+    CHECK_EQ(settings.algorithm, "es256");
+    CHECK(settings.certificates.empty());
+    settings.definition_json = "{}";
+    settings.certificates = {{1, 2}, {3, 4}};
+    auto copied = settings;
+    settings.definition_json.clear();
+    settings.certificates.front().clear();
+    CHECK_EQ(copied.definition_json, "{}");
+    CHECK_EQ(copied.certificates.front(), (std::vector<uint8_t>{1, 2}));
+    CHECK_EQ(copied.certificates.back(), (std::vector<uint8_t>{3, 4}));
+}
+
+TEST(signing_requests_identify_streams_and_own_their_payloads) {
+    static_assert(std::variant_size_v<BuildRequest> == 5);
+    std::vector<BuildRequest> requests{
+        BuildReadRequest{10, BuildStream::Source, 20, 30},
+        BuildLengthRequest{11, BuildStream::Source},
+        WriteRequest{12, BuildStream::Output, 40, {1, 2}},
+        SignRequest{13, "es256", {3, 4}},
+        TimestampRequest{14, "https://tsa.example", {5, 6}},
+        BuildReadRequest{15, BuildStream::Output, 50, 60},
+        BuildLengthRequest{16, BuildStream::Output},
+    };
+    uint64_t expected_id = 10;
+    for (const auto &request : requests) {
+        CHECK_EQ(std::visit([](const auto &pending) { return pending.id; }, request), expected_id);
+        ++expected_id;
+    }
+    const auto copied = requests;
+    std::get<WriteRequest>(requests[2]).bytes.clear();
+    std::get<SignRequest>(requests[3]).data.clear();
+    std::get<TimestampRequest>(requests[4]).body.clear();
+    CHECK(std::get<BuildReadRequest>(copied[0]).stream == BuildStream::Source);
+    CHECK_EQ(std::get<BuildReadRequest>(copied[0]).start, uint64_t(20));
+    CHECK_EQ(std::get<BuildReadRequest>(copied[0]).len, uint64_t(30));
+    CHECK(std::get<BuildReadRequest>(copied[5]).stream == BuildStream::Output);
+    CHECK(std::get<BuildLengthRequest>(copied[6]).stream == BuildStream::Output);
+    CHECK(std::get<WriteRequest>(copied[2]).stream == BuildStream::Output);
+    CHECK_EQ(std::get<WriteRequest>(copied[2]).offset, uint64_t(40));
+    CHECK_EQ(std::get<WriteRequest>(copied[2]).bytes, (std::vector<uint8_t>{1, 2}));
+    CHECK_EQ(std::get<SignRequest>(copied[3]).algorithm, "es256");
+    CHECK_EQ(std::get<SignRequest>(copied[3]).data, (std::vector<uint8_t>{3, 4}));
+    CHECK_EQ(std::get<TimestampRequest>(copied[4]).url, "https://tsa.example");
+    CHECK_EQ(std::get<TimestampRequest>(copied[4]).body, (std::vector<uint8_t>{5, 6}));
+}
+
+TEST(signing_replies_and_report_hold_plain_values) {
+    static_assert(std::variant_size_v<BuildReply> == 6);
+    BuildReply reply = Bytes{{1, 2}};
+    CHECK_EQ(std::get<Bytes>(reply).data.size(), size_t(2));
+    reply = Length{42};
+    CHECK_EQ(std::get<Length>(reply).value, uint64_t(42));
+    reply = Written{};
+    CHECK(std::holds_alternative<Written>(reply));
+    reply = Signature{{3, 4}};
+    CHECK_EQ(std::get<Signature>(reply).data, (std::vector<uint8_t>{3, 4}));
+    reply = TimestampResponse{{5, 6}};
+    CHECK_EQ(std::get<TimestampResponse>(reply).data, (std::vector<uint8_t>{5, 6}));
+    reply = Failed{"signer unavailable"};
+    CHECK_EQ(std::get<Failed>(reply).message, "signer unavailable");
+    SignReport report{{7, 8}, {{10, 2}, {30, 4}}};
+    auto copied = report;
+    report.manifest.clear();
+    report.exclusions.clear();
+    CHECK_EQ(copied.manifest, (std::vector<uint8_t>{7, 8}));
+    CHECK_EQ(copied.exclusions.size(), size_t(2));
+    CHECK_EQ(copied.exclusions.front().start, uint64_t(10));
+    CHECK_EQ(copied.exclusions.back().len, uint64_t(4));
+}
 
 TEST(a_signed_jpeg_reads_through_the_blocking_driver) {
     MemoryHost host = fixture_host();
