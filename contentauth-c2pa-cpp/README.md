@@ -411,12 +411,47 @@ allocation registry must not be mistaken for a guarantee of a lock-free FFI.
 * Pooled access to mutable hosts is serialized. Futures retain the host and
   propagate errors; destroying the last future waits for its driver thread.
 * C++17/C++20 builds, all five CTest entries, coverage, ASan and TSan are checked.
-* Stop for approval before Phase 5's C++20 coroutine signing driver.
+* Phase 5 adds the opt-in C++20 coroutine signing driver below.
+
+### Phase 5 completion gate
+
+Include `contentauth/c2pa_sm_sign_coro.hpp` and link `c2pa_sm_coro`, which
+transitively links `c2pa_sm_cpp`. Only consumers of this new target require
+C++20; `c2pa_sm_cpp` and its existing consumers remain C++17.
+
+```cpp
+Task<SignReport> sign(BuildSession session, AsyncBuildHost &host) {
+    co_return co_await co_build_and_sign(std::move(session), host);
+}
+```
+
+* The compiled implementation is `cpp/src/sign_coro.cpp`. It reuses `Building`,
+  `BuildMailbox`, `Task<T>` and `spawn`, without a scheduler or worker of its own.
+  `.get()` blocks its caller; `co_await` and `spawn` suspend at host boundaries.
+* Replies resume on their delivery thread. Inline replies are drained without
+  recursive resumption; atomic mailbox registration prevents lost wakeups.
+* Destroying a quiescent suspended task disarms shared wake state; callbacks
+  retain owned requests and replies, not a bare coroutine handle. The caller
+  must serialize destruction against execution and callback-driven resumption,
+  including a wakeup already selected for delivery. This is not concurrent
+  cancellation of a running `Task`. Hosts must outlive all started work,
+  including work remaining after task destruction. Pool ownership is unchanged.
+* Focused tests cover Trusted JPEG/ES256, owned reports, queued interleaving,
+  reverse-order and inline replies, late callbacks, pooled thread migration,
+  get/await/spawn, host exceptions, invalid replies and timestamp failure paths.
+  The synthetic granted TSA response proves transport and embedding only,
+  not cryptographic timestamp validity. Keys and real HTTP remain host-owned.
+* Acceptance passed the full five-entry CTest suite in coverage, ASan and TSan
+  builds. The coroutine source covers 31/31 executable lines and 38/70 branch
+  outcomes, including repeated immediate frame destruction after cross-thread
+  completion. This stress test does not deterministically force simultaneous
+  delivery during wakeup publication.
+* Stop for approval before Phase 6 hardening; no new crypto or ABI.
 
 ## Not covered
 
-* **C++20 coroutine signing (Phase 5).** C++17 async/pool/future is implemented.
-  No production key or HTTP provider is included. Atomic file
+* **Signing hardening (Phase 6).** No production key or HTTP provider is
+  included. Atomic file
   signing currently requires POSIX; memory and stream hosts are portable C++17.
 * Resources (`get_resource`), `detailed_json`, `crjson`, fragments, remote
   manifests, formats other than JPEG, and the OCSP request path in the C++

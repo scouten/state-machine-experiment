@@ -71,10 +71,13 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 
 ## 4. Bindings and hosts
 
-* **C++20 coroutine signing (Phase 5):** the cimpl-backed C ABI, C++17 RAII
+* **C++ signing hardening (Phase 6):** the cimpl-backed C ABI, C++17 RAII
   `BuildSession`, blocking memory/stream/POSIX-file hosts and signer/TSA
   callbacks are implemented and tested through the baseline JPEG/ES256 case.
-  C++17 async/pool/future signing is implemented; real timestamp HTTP
+  C++17 async/pool/future and opt-in C++20 `co_build_and_sign` signing are
+  implemented. The coroutine driver shares reader `Task`/`spawn` and suspends
+  on host replies without owning a scheduler; full coverage and sanitizer
+  acceptance remain parent gates before hardening. Real timestamp HTTP
   transport and private-key operations remain the host's responsibility.
 * **`Builder` surface parity** for the c2pa-rs shape beyond the baseline
   case; `from_stream` and other constructors.

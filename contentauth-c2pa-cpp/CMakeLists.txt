@@ -78,6 +78,12 @@ target_link_libraries(c2pa_sm_cpp PUBLIC c2pa_sm)
 set_target_properties(c2pa_sm_cpp PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 c2pa_sm_target_flags(c2pa_sm_cpp)
 
+add_library(c2pa_sm_coro STATIC cpp/src/sign_coro.cpp)
+target_link_libraries(c2pa_sm_coro PUBLIC c2pa_sm_cpp)
+target_compile_features(c2pa_sm_coro PUBLIC cxx_std_20)
+set_target_properties(c2pa_sm_coro PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+c2pa_sm_target_flags(c2pa_sm_coro)
+
 # ---- tests and examples -----------------------------------------------------
 enable_testing()
 set(FIXTURE "${WORKSPACE_ROOT}/contentauth-c2pa-reader/tests/fixtures/C.jpg")
@@ -106,8 +112,8 @@ c2pa_sm_target_flags(c2pa_sm_tests_cxx17)
 add_test(NAME cxx17 COMMAND c2pa_sm_tests_cxx17)
 
 add_executable(c2pa_sm_tests_cxx20 cpp/tests/tests_cxx20.cpp)
-target_link_libraries(c2pa_sm_tests_cxx20 PRIVATE c2pa_sm_cpp)
-target_include_directories(c2pa_sm_tests_cxx20 PRIVATE cpp/include)
+target_link_libraries(c2pa_sm_tests_cxx20 PRIVATE c2pa_sm_coro OpenSSL::Crypto)
+target_include_directories(c2pa_sm_tests_cxx20 PRIVATE cpp/include "${CMAKE_CURRENT_BINARY_DIR}")
 set_target_properties(c2pa_sm_tests_cxx20 PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_definitions(c2pa_sm_tests_cxx20 PRIVATE C2PA_SM_FIXTURE="${FIXTURE}")
 c2pa_sm_target_flags(c2pa_sm_tests_cxx20)
