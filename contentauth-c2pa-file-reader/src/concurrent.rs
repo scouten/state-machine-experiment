@@ -155,33 +155,28 @@ where
     // it returns, so the workers see their queue close and the scope can
     // join them.
     thread::scope(move |scope| {
-        for index in 0..workers.get() {
+        for _ in 0..workers.get() {
             let done_tx = done_tx.clone();
 
-            thread::Builder::new()
-                .name(format!("c2pa-read-{index}"))
-                .spawn_scoped(scope, move || loop {
-                    // The lock is held only while waiting for a job, never
-                    // while answering one.
-                    let job = match job_rx.lock() {
-                        Ok(queue) => queue.recv(),
-                        Err(_) => return,
-                    };
-                    let Ok((id, request)) = job else { return };
+            scope.spawn(move || loop {
+                // The lock is only ever held across `recv`, which cannot
+                // panic, so a poisoned guard still holds a usable receiver:
+                // recover it rather than abandon the worker.
+                let job = job_rx
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .recv();
+                let Ok((id, request)) = job else { return };
 
-                    // A panic in the host's `RangeSource` must not strand
-                    // the caller: catch it, report it as a missing reply,
-                    // and stop this worker.
-                    let reply =
-                        panic::catch_unwind(AssertUnwindSafe(|| answer(source, &request))).ok();
-                    let panicked = reply.is_none();
-                    if done_tx.send((id, reply)).is_err() || panicked {
-                        return;
-                    }
-                })
-                .map_err(|err| {
-                    Error::ConcurrentHost(format!("could not start a worker thread: {err}"))
-                })?;
+                // A panic in the host's `RangeSource` must not strand the
+                // caller: catch it, report it as a missing reply, and stop
+                // this worker.
+                let reply = panic::catch_unwind(AssertUnwindSafe(|| answer(source, &request))).ok();
+                let panicked = reply.is_none();
+                if done_tx.send((id, reply)).is_err() || panicked {
+                    return;
+                }
+            });
         }
 
         // Only the workers' clones remain, so if they all stop, `recv`
@@ -197,12 +192,10 @@ where
             }
 
             for request in session.outstanding_requests() {
-                if dispatched.insert(request.id)
-                    && job_tx.send((request.id, request.kind.clone())).is_err()
-                {
-                    return Err(Error::ConcurrentHost(
-                        "every worker thread stopped".to_string(),
-                    ));
+                if dispatched.insert(request.id) {
+                    // The job receiver lives for the whole scope, so this
+                    // send cannot fail.
+                    let _ = job_tx.send((request.id, request.kind.clone()));
                 }
             }
 
