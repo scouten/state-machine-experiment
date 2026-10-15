@@ -46,6 +46,7 @@ use std::{
     collections::HashSet,
     io,
     num::NonZeroUsize,
+    panic::{self, AssertUnwindSafe},
     sync::{mpsc, Mutex},
     thread,
 };
@@ -145,7 +146,10 @@ where
     let (job_tx, job_rx) = mpsc::channel::<(RequestId, FileReadRequest)>();
     let job_rx = Mutex::new(job_rx);
     let job_rx = &job_rx;
-    let (done_tx, done_rx) = mpsc::channel::<(RequestId, FileReadReply)>();
+    // `None` as the reply marks a worker that panicked servicing a request:
+    // it reaches the caller so the read fails with an error instead of
+    // blocking forever on a reply that will never come.
+    let (done_tx, done_rx) = mpsc::channel::<(RequestId, Option<FileReadReply>)>();
 
     // `move`: `job_tx` must be dropped when this closure returns, however
     // it returns, so the workers see their queue close and the scope can
@@ -165,7 +169,13 @@ where
                     };
                     let Ok((id, request)) = job else { return };
 
-                    if done_tx.send((id, answer(source, &request))).is_err() {
+                    // A panic in the host's `RangeSource` must not strand
+                    // the caller: catch it, report it as a missing reply,
+                    // and stop this worker.
+                    let reply =
+                        panic::catch_unwind(AssertUnwindSafe(|| answer(source, &request))).ok();
+                    let panicked = reply.is_none();
+                    if done_tx.send((id, reply)).is_err() || panicked {
                         return;
                     }
                 })
@@ -210,7 +220,14 @@ where
 
             for (id, reply) in std::iter::once(first).chain(done_rx.try_iter()) {
                 dispatched.remove(&id);
-                session.fulfill(id, reply)?;
+                match reply {
+                    Some(reply) => session.fulfill(id, reply)?,
+                    None => {
+                        return Err(Error::ConcurrentHost(
+                            "a worker thread panicked servicing a host request".to_string(),
+                        ))
+                    }
+                }
             }
         }
     })
@@ -264,5 +281,76 @@ mod tests {
             let kind = bytes.read_range(bad).err().map(|err| err.kind());
             assert_eq!(kind, Some(io::ErrorKind::UnexpectedEof), "{bad:?}");
         }
+    }
+
+    /// A source that cannot report its length or serve a read.
+    struct Unavailable;
+
+    impl RangeSource for Unavailable {
+        fn length(&self) -> io::Result<u64> {
+            Err(io::Error::other("length unavailable"))
+        }
+
+        fn read_range(&self, _range: ByteRange) -> io::Result<Vec<u8>> {
+            Err(io::Error::other("read unavailable"))
+        }
+    }
+
+    #[test]
+    fn answer_maps_every_request_kind_including_failures() {
+        use contentauth_c2pa_primitives::StreamId;
+
+        let stream = StreamId::new(0);
+        let bytes: &[u8] = &[1, 2, 3, 4, 5];
+
+        assert!(matches!(
+            answer(bytes, &FileReadRequest::Read { stream, range: range(0, 3) }),
+            FileReadReply::Bytes(got) if got == vec![1, 2, 3]
+        ));
+        assert!(matches!(
+            answer(
+                bytes,
+                &FileReadRequest::Read {
+                    stream,
+                    range: range(10, 1)
+                }
+            ),
+            FileReadReply::Failed(_)
+        ));
+        assert!(matches!(
+            answer(bytes, &FileReadRequest::Length { stream }),
+            FileReadReply::Length(5)
+        ));
+        // The `source.length()` error arm.
+        assert!(matches!(
+            answer(&Unavailable, &FileReadRequest::Length { stream }),
+            FileReadReply::Failed(_)
+        ));
+        // The `source.read_range()` error arm.
+        assert!(matches!(
+            answer(
+                &Unavailable,
+                &FileReadRequest::Read {
+                    stream,
+                    range: range(0, 1)
+                }
+            ),
+            FileReadReply::Failed(_)
+        ));
+        assert!(matches!(
+            answer(bytes, &FileReadRequest::CurrentDateTime),
+            FileReadReply::CurrentDateTime(_)
+        ));
+        // This host always answers OCSP unavailable (fail-open).
+        assert!(matches!(
+            answer(
+                bytes,
+                &FileReadRequest::Ocsp {
+                    url: "http://ocsp.example".to_string(),
+                    request_der: vec![],
+                }
+            ),
+            FileReadReply::Failed(_)
+        ));
     }
 }

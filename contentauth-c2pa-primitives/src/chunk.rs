@@ -263,4 +263,17 @@ mod tests {
             Ok(HashWindow::DEFAULT)
         );
     }
+
+    #[test]
+    fn a_window_try_from_matches_new_and_names_the_bounds_on_error() {
+        assert_eq!(HashWindow::try_from(16), HashWindow::new(16));
+        assert!(HashWindow::try_from(0).is_err());
+
+        let message = HashWindow::try_from(0)
+            .err()
+            .map(|err| err.to_string())
+            .unwrap_or_default();
+        assert!(message.contains("0 chunks"), "{message}");
+        assert!(message.contains("32"), "{message}");
+    }
 }

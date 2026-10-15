@@ -28,7 +28,7 @@ use std::{
 };
 
 use contentauth_c2pa_file_reader::{
-    read_manifest, read_manifest_concurrent, ChunkSize, Error, RangeSource, ReadReport,
+    read_manifest, read_manifest_concurrent, ChunkSize, Error, HashWindow, RangeSource, ReadReport,
     ReadSettings,
 };
 use contentauth_c2pa_format_jpeg::JpegFormat;
@@ -54,6 +54,15 @@ fn settings() -> ReadSettings {
 
 fn workers(count: usize) -> NonZeroUsize {
     NonZeroUsize::new(count).unwrap()
+}
+
+/// [`settings`] with a non-default in-flight window, to prove the
+/// `hash_window` field is honored end to end.
+fn settings_with_window(window: HashWindow) -> ReadSettings {
+    ReadSettings {
+        hash_window: window,
+        ..settings()
+    }
 }
 
 /// A source that takes a moment to answer each read, and records how many
@@ -120,6 +129,25 @@ impl RangeSource for FailsPartway<'_> {
         if range.start >= self.fail_from {
             return Err(std::io::Error::other("connection reset"));
         }
+        self.bytes.read_range(range)
+    }
+}
+
+/// A source that panics once reads reach `panic_from`, as a buggy host
+/// callback might. Unlike a returned error, a panic kills the worker
+/// thread.
+struct PanicsPartway<'a> {
+    bytes: &'a [u8],
+    panic_from: u64,
+}
+
+impl RangeSource for PanicsPartway<'_> {
+    fn length(&self) -> std::io::Result<u64> {
+        self.bytes.length()
+    }
+
+    fn read_range(&self, range: ByteRange) -> std::io::Result<Vec<u8>> {
+        assert!(range.start < self.panic_from, "simulated host panic");
         self.bytes.read_range(range)
     }
 }
@@ -209,6 +237,68 @@ fn a_read_that_fails_partway_fails_the_read_rather_than_hanging() {
     let result = read_manifest_concurrent(&JpegFormat, &source, settings(), workers(4));
 
     assert!(matches!(result, Err(Error::Read(_))), "{result:?}");
+}
+
+#[test]
+fn a_panicking_source_fails_the_read_rather_than_hanging() {
+    // Several workers, so when one panics the others are mid-read or idle:
+    // the caller must still surface an error instead of blocking on a reply
+    // the dead worker will never send.
+    let source = PanicsPartway {
+        bytes: C_JPG,
+        panic_from: 90_000,
+    };
+
+    let result = read_manifest_concurrent(&JpegFormat, &source, settings(), workers(4));
+
+    assert!(
+        matches!(result, Err(Error::ConcurrentHost(_))),
+        "{result:?}"
+    );
+}
+
+#[test]
+fn a_larger_hash_window_setting_overlaps_beyond_the_default() {
+    let probe = Probe::new(C_JPG, Duration::from_millis(2));
+    let window = HashWindow::new(16).unwrap();
+
+    let report = read_manifest_concurrent(
+        &JpegFormat,
+        &probe,
+        settings_with_window(window),
+        workers(16),
+    )
+    .unwrap();
+
+    assert_eq!(report.validation_state, Some(ValidationState::Trusted));
+    // Would be capped at the default of 8 if `hash_window` were ignored.
+    assert!(
+        probe.peak() > SESSION_WINDOW,
+        "a window of 16 should overlap beyond the default {SESSION_WINDOW}, peak was {}",
+        probe.peak()
+    );
+}
+
+#[test]
+fn a_smaller_hash_window_setting_caps_overlap_below_the_default() {
+    let probe = Probe::new(C_JPG, Duration::from_millis(2));
+    let window = HashWindow::new(2).unwrap();
+
+    let report = read_manifest_concurrent(
+        &JpegFormat,
+        &probe,
+        settings_with_window(window),
+        workers(8),
+    )
+    .unwrap();
+
+    assert_eq!(report.validation_state, Some(ValidationState::Trusted));
+    // Eight workers are available, but a window of 2 must hold overlap to 2.
+    assert!(
+        (1..=2).contains(&probe.peak()),
+        "a window of 2 caps overlap at 2, peak was {}",
+        probe.peak()
+    );
 }
 
 #[cfg(unix)]

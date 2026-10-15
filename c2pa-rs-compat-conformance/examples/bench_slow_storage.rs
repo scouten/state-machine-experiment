@@ -163,13 +163,19 @@ impl RangeSource for BufferedRangeSource {
     }
 
     fn read_range(&self, range: ByteRange) -> io::Result<Vec<u8>> {
-        if range.len > SMALL_READ_MAX {
-            return self.inner.read_range(range);
-        }
-
         let len = self.inner.bytes.len() as u64;
         let block_start = range.start - range.start % self.block;
-        let block_len = self.block.min(len - block_start);
+        let block_len = self.block.min(len.saturating_sub(block_start));
+
+        // A large chunk, or a small read that reaches past the one cached
+        // block (it straddles a boundary), goes straight to the store: the
+        // single cached block cannot serve it, and slicing it would wrongly
+        // report a read past the end of the asset.
+        if range.len > SMALL_READ_MAX
+            || range.start.saturating_add(range.len) > block_start + block_len
+        {
+            return self.inner.read_range(range);
+        }
 
         let mut cached = self
             .cached
@@ -588,10 +594,13 @@ fn run() -> Result<(), String> {
         for _ in 0..options.runs {
             runs.push(timed(&store, || scenario.run(&store, block))?);
         }
+        // Any run finding the asset invalid fails the benchmark, in either
+        // backend's spelling: c2pa-rs reports "Invalid", the workspace
+        // reader "Some(Invalid)".
+        invalid |= runs.iter().any(|run| run.state.contains("Invalid"));
         let outcome = median(&mut runs);
 
         let baseline = *baseline.get_or_insert(outcome.elapsed);
-        invalid |= outcome.state == "Invalid";
 
         println!(
             "{:<70} {:>8.2}s {:>9} {:>5} {:>7.2}x  {}",
