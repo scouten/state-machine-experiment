@@ -58,7 +58,18 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 ## 3. Write-side breadth
 
 * **Ingredients and update manifests** (the builder's biggest gap;
-  `redacted_assertions` has no use without them).
+  `redacted_assertions` has no use without them). **Security requirement
+  when this lands:** an update manifest that inherits a data hash must not
+  recompute the signed `c2pa.hash.data` exclusion from the current asset
+  using the format's own length fields unbounded — c2pa-rs PR #2610 was a
+  validation bypass where a forged TIFF IFD `count` (tag `0xCD41`), or a
+  non-contiguous JPEG `APP11` run, widened the exclusion so foreign,
+  unhashed bytes still validated. Bound the recomputed window to the
+  measured update-manifest delta and enforce spec 15.12.1 (the exclusion
+  may contain only the Manifest Store + padding); as additional hardening,
+  bound a located store's `count`/segment run to the actual JUMBF superbox
+  length. The current reader is safe only because it uses the assertion's
+  own exclusions and has no such recomputation.
 * **Policy for already-signed assets**: `plan_embed` always replaces;
   whether to carry the old store forward as a parent is the caller's call —
   currently nobody makes it.
