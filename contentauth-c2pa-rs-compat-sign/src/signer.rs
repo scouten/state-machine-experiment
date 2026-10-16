@@ -37,13 +37,27 @@ pub trait Signer {
     /// DER `TimeStampReq`, and the result must be the DER `TimeStampResp`
     /// it answers with.
     ///
-    /// The default POSTs it over HTTP (`application/timestamp-query`);
+    /// With the default `http` feature, POSTs it over HTTP
+    /// (`application/timestamp-query`). Without `http`, returns an error;
     /// override it to reach an authority some other way — a proxy, a
     /// client certificate, an in-process fake. Unlike c2pa-rs's
     /// `send_timestamp_request`, which receives the bytes to timestamp and
     /// builds the request itself, this receives the request already built
     /// and unwraps the token afterwards, so an override is only transport.
+    #[cfg(feature = "http")]
     fn send_timestamp_request(&self, url: &str, request: &[u8]) -> Result<Vec<u8>, HostError> {
         crate::tsa::post(url, request)
+    }
+
+    /// Sends a DER `TimeStampReq` and returns the DER `TimeStampResp`.
+    ///
+    /// Without `http`, the default fails explicitly. Override this method
+    /// to provide the host's transport; encoding and token extraction
+    /// remain the build engine's responsibility.
+    #[cfg(not(feature = "http"))]
+    fn send_timestamp_request(&self, _url: &str, _request: &[u8]) -> Result<Vec<u8>, HostError> {
+        Err(HostError::new(
+            "default timestamp transport requires the http feature; override Signer::send_timestamp_request",
+        ))
     }
 }
