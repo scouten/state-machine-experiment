@@ -6,7 +6,8 @@ and the reader, builder and format handlers know nothing about each other.**
 
 ## Dependency graph
 
-Arrows point from a crate to what it depends on (workspace crates only).
+Arrows point from a crate to what it depends on. Dashed edges include the
+standalone shared-Worker proof and its existing Neon binding.
 
 ```mermaid
 flowchart BT
@@ -26,12 +27,15 @@ flowchart BT
 
     RSC["rs-compat<br/><i>c2pa-rs Reader shape</i>"]
     JSC["js-compat<br/><i>c2pa-wasm shape, async</i>"]
-    NDC["node-compat<br/><i>sync NodeSession</i>"]
+    NDC["node-compat<br/><i>portable sync NodeSession bridge</i>"]
 
     SB["sign-baseline"]
     RSS["rs-compat-sign"]
     JSS["js-compat-sign"]
     NDS["node-compat-sign"]
+    POC["worker-poc/shared<br/><i>one JS host in both Workers</i>"]
+    PW["worker-poc/wasm<br/><i>standalone synchronous Wasm boundary</i>"]
+    PN["c2pa-node-compat-addon<br/><i>existing Neon boundary</i>"]
 
     RD --> SM & PR
     BD --> SM & PR
@@ -48,6 +52,9 @@ flowchart BT
     RSS --> SB & FB & JP
     JSS --> SB & FB & JSC
     NDS --> SB & FB & JSC
+    POC -.-> PW & PN
+    PW -.-> NDC
+    PN -.-> NDC
 
     classDef engine fill:#dbeafe,stroke:#2563eb,color:#000
     classDef core fill:#dcfce7,stroke:#16a34a,color:#000
@@ -112,6 +119,7 @@ flowchart TB
 | `…-sign-baseline` | Binding | The baseline signing case (JSON definition → `BuilderSettings`) every write binding is held to. |
 | `…-rs/js/node-compat-sign` (+ `c2pa-node-sign-addon`) | Binding | The baseline case through each binding. `rs-compat-sign` is the other crate with a network dependency (`reqwest` for RFC 3161 timestamps). |
 | `c2pa-rs-compat-conformance` | Test | Separate workspace; differential tests against the real `c2pa` crate. |
+| `worker-poc-wasm` + `worker-poc/shared` | Binding proof | Standalone Wasm workspace over the existing `NodeSession`; shared JS host/facade in browser and Node Workers, Node retaining Neon. |
 
 ## Rules of the road
 

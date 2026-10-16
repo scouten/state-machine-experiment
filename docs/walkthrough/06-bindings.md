@@ -12,9 +12,16 @@ flowchart TB
     E --> N["node-compat<br/>no host in Rust at all"]
     R --> R1["Reader::from_context(ctx).with_file(path)"]
     J --> J1["Reader::from_blob(fmt, blob, ctx, platform).await"]
-    N --> N1["NodeSession.advance / fulfill / finish"]
+    N --> N1["NodeSession<br/>portable advance / fulfill / finish"]
     N1 --> N2["JS loop in index.mjs<br/>(fs, fetch, event loop)"]
+    N1 --> W["Shared JS loop in Worker proof<br/>same facade and protocol"]
+    W --> WB["Browser Worker<br/>synchronous Wasm binding"]
+    W --> WN["Node Worker<br/>synchronous Neon binding"]
 ```
+
+The branches show host arrangements, not crate dependency arrows. Both Worker
+bindings expose the same existing `NodeSession`; the browser proof does not use
+the separate async `js-compat` host.
 
 | Binding | Mirrors | Async lives in | Notable |
 |---|---|---|---|
@@ -23,6 +30,24 @@ flowchart TB
 | `node-compat` | c2pa-node `Reader` | Node itself | Rust has no runtime, threads, locks, or `async`. 4 synchronous exports (~150 lines of Neon). |
 
 ## Where the c2pa-rs shapes break down
+
+The separate [shared-Worker proof](../../worker-poc/README.md) takes a different
+host arrangement: the same JS `advance`/`fulfill` driver runs inside a browser
+module Worker or Node Worker thread. A small synchronous Wasm adapter exposes
+the existing `NodeSession` on the browser side; Node reuses Neon unchanged.
+One facade/protocol handles input snapshots, queued reads, results and disposal.
+Actual tests compare complete reports and request bytes across all three
+browsers and Node, including 64 MiB signed reads and application task progress.
+No Tokio, new domain behavior or cooperative scheduling is needed for this
+isolated, read-only workflow. Whole-input cloning and abrupt termination remain
+explicit limits; signing callbacks are a future proof, not an implemented API.
+
+The proof also shows that `NodeSession` is a historical name, not a runtime
+restriction: the wrapper contains no Node APIs or Neon code. The
+[neutral naming proposal](../../worker-poc/README.md#proposed-neutral-session-name)
+recommends `ReadSessionBridge` in a shared `contentauth-c2pa-session-bridge`
+crate, keeping compatibility policy out of the generic engine. That extraction
+is proposed, not implemented; current code still uses `NodeSession`.
 
 Honest differences, found by building these:
 

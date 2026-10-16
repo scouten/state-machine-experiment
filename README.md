@@ -21,6 +21,12 @@ experiment grows.
 
 ## Walkthrough
 
+For a bounded cross-platform architecture proof, see
+[`worker-poc`](worker-poc/README.md): the same JavaScript facade, Worker
+protocol and session driver over browser Wasm and Node Neon, with actual
+end-to-end read tests and performance observations. It adds no Rust domain
+features and uses no Tokio runtime.
+
 New here? [`docs/walkthrough`](docs/walkthrough/README.md) is a guided tour —
 how this differs from c2pa-rs and its bindings, the architecture, and
 where it could go next — written in Markdown with Mermaid diagrams.

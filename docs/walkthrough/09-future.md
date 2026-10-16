@@ -75,9 +75,16 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 * **c2pa-node:** `fromManifestDataAndAsset`, `resourceToAsset`, signers,
   CAWG identity assertions (the X.509 type is done on the core read and
   write paths; this is the bindings), Trustmark.
-* **Browser:** a `fetch`-backed OCSP `Platform`; actually *running* the
-  `web` modules (there's no browser in CI today); a Worker-hosted session
-  for hashing off the main thread.
+* **Worker-hosted shared JS loop:** the
+  [read-only proof](../../worker-poc/README.md) now runs the same facade,
+  protocol and session driver over browser Wasm and Node Neon. Local
+  Chromium/Firefox/WebKit and Node tests establish complete-report/request
+  equality and application task progress for signed 64 MiB reads.
+  No new core features or Tokio are involved. Shared signing callbacks,
+  streaming sources and production distribution remain unproven.
+* **Browser:** a `fetch`-backed OCSP `Platform`; the existing async `web`
+  modules still have no browser CI coverage. The separate Worker proof
+  runs its synchronous Wasm session boundary locally, not those modules.
 * **Other host languages** — Python, Swift, Kotlin, .NET: the Node binding
   shows the minimal shape (a handful of synchronous functions plus a host
   loop). Each is a good test of whether the flattened `PendingRequest`/

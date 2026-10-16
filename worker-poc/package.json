@@ -1,0 +1,15 @@
+{
+  "name": "state-machine-shared-worker-proof",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:bindings": "npm --prefix ../c2pa-node-compat-addon run build && cargo build --manifest-path wasm/Cargo.toml --release --target wasm32-unknown-unknown && wasm-bindgen wasm/target/wasm32-unknown-unknown/release/worker_poc_wasm.wasm --target web --out-dir generated",
+    "fixtures": "npm --prefix ../c2pa-node-sign-addon run build && node test/fixtures.mjs",
+    "test": "node --test test/node.test.mjs",
+    "test:browser": "node test/browser.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.60.0"
+  }
+}
