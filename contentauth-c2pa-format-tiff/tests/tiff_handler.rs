@@ -172,6 +172,64 @@ fn a_plan_copies_the_source_around_its_one_rewritten_pointer() {
     assert_eq!(plan.replaced, None);
 }
 
+// Regression for the exploit in c2pa-rs PR #2282 (memory amplification when
+// cloning strip/tile/BigTable data): a crafted TIFF whose strip byte counts sum
+// to far more than the file makes a re-serializing cloner re-copy the input
+// until it runs out of memory. The fixture is hostile on purpose — sixteen
+// overlapping strips that all alias the header, each declaring a ~1 GB byte
+// count (~16 GB in all, millions of times the file). This handler never
+// re-serializes strips — it splices the source verbatim and appends the store
+// ("nothing moves"), so the bytes it copies from the source always sum to
+// exactly the source length, whatever the strip entries claim.
+#[test]
+fn embedding_copies_the_source_exactly_once_so_strips_cannot_amplify() {
+    const STRIPS: u64 = 16;
+    const GIB: u64 = 1_000_000_000;
+    for kind in ALL_KINDS {
+        // StripOffsets/StripByteCounts as arrays of `STRIPS` overlapping strips
+        // (every offset aliases the header, every byte count claims `GIB`), so
+        // the declared strip bytes dwarf the file. Both are `LONG` (4 bytes).
+        let hl = kind.header_len() as u64;
+        let offsets = hl + kind.ifd_len(2) as u64;
+        let counts = offsets + STRIPS * 4;
+        let mut source = kind.header(hl);
+        source.extend(kind.ifd(
+            &[
+                kind.entry(273, 4, STRIPS, offsets), // StripOffsets
+                kind.entry(279, 4, STRIPS, counts),  // StripByteCounts
+            ],
+            0,
+        ));
+        source.extend((0..STRIPS).flat_map(|_| kind.uint(hl, 4)));
+        source.extend((0..STRIPS).flat_map(|_| kind.uint(GIB, 4)));
+
+        let plan = MemoryHost::of(source.clone())
+            .run(TiffFormat.plan_embed(STREAM, 64))
+            .unwrap();
+
+        let copied: u64 = plan
+            .edits
+            .iter()
+            .filter_map(|edit| match edit {
+                Edit::Copy(range) => Some(range.len),
+                _ => None,
+            })
+            .sum();
+        // The amplification invariant: cumulative source copy never exceeds the
+        // source length (here it is the whole file minus the one rewritten
+        // pointer), so strips can never make it re-copy the input.
+        assert!(
+            copied <= source.len() as u64,
+            "cumulative source copy ({copied}) must not exceed the source length ({})",
+            source.len()
+        );
+        assert!(
+            copied + u64::from(kind.word() as u32) >= source.len() as u64,
+            "the source should be copied nearly whole, minus the rewritten pointer"
+        );
+    }
+}
+
 /// A TIFF written by another tool: its C2PA entry sits among IFD 0's
 /// others, with the store's data in the middle of the file.
 fn foreign(kind: Kind, manifest: &[u8]) -> Vec<u8> {
