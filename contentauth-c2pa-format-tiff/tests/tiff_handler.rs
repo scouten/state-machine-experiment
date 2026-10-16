@@ -210,6 +210,47 @@ fn embedding_copies_the_source_exactly_once_so_strips_cannot_amplify() {
     }
 }
 
+// Regression for the exploit in c2pa-rs PR #2669 (cumulative amplification
+// across many IFD entries): a TIFF whose many private tags — including the
+// 8-byte element types that had no size check at all — all alias the same
+// bytes with large counts, summing to many times the file size. This handler
+// reads no entry's data except the single C2PA store entry (`continue`s past
+// every other tag) and splices the source verbatim on embed, so neither the
+// count of entries nor their claimed sizes can amplify anything.
+#[test]
+fn many_aliasing_entries_do_not_amplify_on_embed() {
+    for kind in [ALL_KINDS[2], ALL_KINDS[3]] {
+        let hl = kind.header_len() as u64;
+
+        // 200 private tags, each a Long8 (8-byte type) claiming 600 KB at the
+        // same aliasing offset.
+        let entries: Vec<Vec<u8>> = (0..200u16)
+            .map(|i| kind.entry(0x8000 + i, 16, 600_000, hl))
+            .collect();
+        let mut asset = kind.header(hl);
+        asset.extend(kind.ifd(&entries, 0));
+        asset.extend(vec![0u8; 100]);
+
+        let plan = MemoryHost::of(asset.clone())
+            .run(TiffFormat.plan_embed(STREAM, 64))
+            .unwrap();
+
+        let copied: u64 = plan
+            .edits
+            .iter()
+            .filter_map(|edit| match edit {
+                Edit::Copy(range) => Some(range.len),
+                _ => None,
+            })
+            .sum();
+        assert!(
+            copied <= asset.len() as u64,
+            "cumulative source copy ({copied}) must not exceed the source length ({})",
+            asset.len()
+        );
+    }
+}
+
 /// A TIFF written by another tool: its C2PA entry sits among IFD 0's
 /// others, with the store's data in the middle of the file.
 fn foreign(kind: Kind, manifest: &[u8]) -> Vec<u8> {
