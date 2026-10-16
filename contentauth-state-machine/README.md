@@ -50,9 +50,10 @@ A session is **not re-entrant**, and the Rust code provides **no locks**
 around it. Any host that employs a thread model must ensure the session's
 methods are never called simultaneously from multiple threads (nor
 re-entered from within a call in progress on the same session). Crashes or
-unpredictable behavior are likely if this constraint is violated. A session
-may be moved between threads between calls, and independent sessions may be
-driven concurrently; the constraint is per session. In safe Rust the
+unpredictable behavior are likely if this constraint is violated. Calls on
+*different* sessions may safely run at the same time; only calls on the
+*same* session must not. A session may also move to another thread between
+calls. In safe Rust the
 `&mut self` receivers enforce this at compile time; hosts reaching a session
 through a raw-handle binding must enforce it themselves.
 

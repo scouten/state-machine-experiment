@@ -86,8 +86,9 @@ pub enum Step {
 /// handles, the host must enforce it itself. Violating the constraint is
 /// likely to cause crashes or unpredictable behavior.
 ///
-/// Moving a session between threads *between* calls is fine, as is driving
-/// many independent sessions concurrently — the constraint is per session.
+/// Calls on *different* sessions may safely run at the same time; only calls
+/// on the *same* session must not. Moving a session to another thread
+/// between calls is also fine.
 ///
 /// This trait
 /// carries no logic of its own; it exists so that host-side code (a test
