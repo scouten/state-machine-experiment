@@ -54,10 +54,11 @@ of the "Not applicable" verdicts:
 - **The clock, network, randomness and signing are host inputs, not ambient
   calls** — so time-of-check bugs, SSRF via asset-supplied URLs, and similar
   shift to a boundary the host controls explicitly.
-- **Writers splice, they don't re-serialize.** Embedding copies the source
-  bytes verbatim and appends the store ("nothing moves"); it never walks and
-  re-emits the container's internal structures, so clone-time amplification
-  has nothing to amplify.
+- **Writers splice, they don't re-serialize.** Embedding inserts or replaces
+  the store while copying other source bytes unchanged. JPEG insertion can
+  shift later bytes to new offsets, but it never walks and re-emits the
+  container's internal structures, so clone-time amplification has nothing
+  to amplify.
 - **Hard bindings are checked against the manifest's own signed exclusions**,
   never recomputed from the container's length fields — so a forged length
   can't widen an unhashed window.
