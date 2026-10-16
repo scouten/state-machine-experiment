@@ -374,11 +374,11 @@ jobs:
     runs-on: ubuntu-latest
 
     # `contentauth-c2pa-cpp` is a Rust static library behind a C ABI plus
-    # header-only C++ (C++17 core and thread-based drivers, C++20
-    # coroutines). Its Rust half is an ordinary workspace member, tested by
+    # C++17 readers, compiled signing/thread pools and C++20 coroutines.
+    # Its Rust half is an ordinary workspace member, tested by
     # the jobs above; this job builds the C++ half against it with CMake
     # and runs the C++ tests and examples three ways:
-    #   - plain, with coverage of the C++ headers (uploaded to Codecov);
+    #   - plain, with coverage of C++ headers and sources (uploaded to Codecov);
     #   - under AddressSanitizer (leaks, use-after-free on cancellation);
     #   - under ThreadSanitizer (the session handed between threads, and
     #     completions racing the driver).
@@ -406,6 +406,9 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: ". -> contentauth-c2pa-cpp/build/cargo"
+
+      - name: Install OpenSSL development package
+        run: sudo apt-get update && sudo apt-get install --yes libssl-dev
 
       - name: Configure
         working-directory: contentauth-c2pa-cpp

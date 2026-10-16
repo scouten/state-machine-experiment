@@ -6,7 +6,11 @@
 #include <set>
 
 #include "contentauth/c2pa_sm_coro.hpp"
+#include "contentauth/c2pa_sm_sign.hpp"
+#include "contentauth/c2pa_sm_sign_async.hpp"
+#include "contentauth/c2pa_sm_sign_coro.hpp"
 #include "support.hpp"
+#include "signing_support.hpp"
 
 using namespace c2pa::sm;
 using namespace support;
@@ -221,6 +225,190 @@ TEST(destroying_a_suspended_coroutine_cancels_the_read) {
         host.complete(0);
     }
     CHECK(!done);
+}
+
+namespace {
+
+class InlineBuildHost : public AsyncBuildHost {
+public:
+    MemoryBuildHost backing;
+
+    explicit InlineBuildHost(BuildTimestamp timestamp = {})
+        : backing(fixture_bytes(), fixture_sign, std::move(timestamp)) {}
+
+    void start(BuildRequest request, BuildCompletion done) override {
+        auto reply = answer(backing, request);
+        done(reply);
+        done(std::move(reply));
+    }
+};
+
+Task<SignReport> chained_build(AsyncBuildHost &host, std::thread::id &resumed) {
+    auto report = co_await co_build_and_sign(BuildSession(signing_settings()), host);
+    resumed = std::this_thread::get_id();
+    co_return report;
+}
+
+Task<SignReport> throwing_build_chain(AsyncBuildHost &host) {
+    (void)co_await co_build_and_sign(BuildSession(signing_settings()), host);
+    throw std::runtime_error("after signing");
+    co_return SignReport{};
+}
+
+}
+
+TEST(coroutine_signing_inline_get_returns_owned_trusted_report) {
+    SignReport owned;
+    {
+        InlineBuildHost host;
+        owned = co_build_and_sign(BuildSession(signing_settings()), host).get();
+        const auto json = trusted_signing_json(host.backing.output());
+        CHECK(json.find("Trusted") != std::string::npos);
+        CHECK(json.find("c2pa.actions.v2") != std::string::npos);
+        CHECK(json.find("baseline.jpg") != std::string::npos);
+    }
+    CHECK(!owned.manifest.empty());
+    CHECK(!owned.exclusions.empty());
+}
+
+TEST(coroutine_signing_queued_builds_interleave_without_redispatch) {
+    ManualBuildHost first, second;
+    int completed = 0;
+    auto done = [&](Outcome<SignReport> result) {
+        CHECK(std::holds_alternative<SignReport>(result));
+        CHECK(!std::get<SignReport>(result).manifest.empty());
+        ++completed;
+    };
+    spawn(co_build_and_sign(BuildSession(signing_settings()), first), done);
+    spawn(co_build_and_sign(BuildSession(signing_settings()), second), done);
+    CHECK_EQ(completed, 0);
+    CHECK_EQ(first.pending.size(), second.pending.size());
+    const auto stalled = first.pending.size();
+    CHECK(stalled > 0);
+    second.deliver();
+    CHECK_EQ(first.pending.size(), stalled);
+    for (size_t round = 0; completed != 2 && round < 1000; ++round) {
+        if (!first.pending.empty()) first.deliver();
+        if (!second.pending.empty()) second.deliver();
+    }
+    CHECK_EQ(completed, 2);
+    CHECK(trusted_signing_json(first.backing.output()).find("Trusted") != std::string::npos);
+    CHECK(trusted_signing_json(second.backing.output()).find("Trusted") != std::string::npos);
+}
+
+TEST(coroutine_signing_cancellation_keeps_owned_requests_and_late_callbacks_safe) {
+    ManualBuildHost host;
+    {
+        auto task = co_build_and_sign(BuildSession(signing_settings()), host);
+        task.await_suspend(std::noop_coroutine()).resume();
+        for (size_t round = 0; round < 1000; ++round) {
+            CHECK(!host.pending.empty());
+            if (std::holds_alternative<WriteRequest>(host.pending.front().first)) break;
+            host.deliver();
+        }
+        CHECK(std::holds_alternative<WriteRequest>(host.pending.front().first));
+    }
+    const auto &write = std::get<WriteRequest>(host.pending.front().first);
+    CHECK(!write.bytes.empty());
+    host.deliver();
+    CHECK(host.pending.empty());
+}
+
+TEST(coroutine_signing_pool_resumes_await_chain_on_delivery_thread) {
+    std::promise<void> release;
+    auto ready = release.get_future().share();
+    MemoryBuildHost backing(fixture_bytes(), [ready](const auto &algorithm, const auto &data) {
+        ready.wait();
+        return fixture_sign(algorithm, data);
+    });
+    SimpleThreadPool pool(2);
+    PooledBuildHost host(backing, pool);
+    std::thread::id resumed;
+    std::promise<Outcome<SignReport>> completed;
+    auto result = completed.get_future();
+    spawn(chained_build(host, resumed), [&](Outcome<SignReport> outcome) {
+        completed.set_value(std::move(outcome));
+    });
+    release.set_value();
+    auto report = std::get<SignReport>(result.get());
+    CHECK(resumed != std::this_thread::get_id());
+    CHECK(!report.manifest.empty());
+    CHECK(trusted_signing_json(backing.output()).find("Trusted") != std::string::npos);
+}
+
+TEST(coroutine_signing_get_can_free_frames_immediately_after_cross_thread_completion) {
+    auto pool = make_simple_thread_pool(4);
+    for (size_t iteration = 0; iteration < 32; ++iteration) {
+        auto backing = std::make_shared<MemoryBuildHost>(fixture_bytes(), fixture_sign);
+        PooledBuildHost host(backing, *pool);
+        const auto report = co_build_and_sign(BuildSession(signing_settings()), host).get();
+        CHECK(!report.manifest.empty());
+        CHECK(!report.exclusions.empty());
+        if (iteration == 31)
+            CHECK(trusted_signing_json(backing->output()).find("Trusted") != std::string::npos);
+    }
+    pool.reset();
+}
+
+TEST(coroutine_signing_await_chain_captures_user_exceptions) {
+    InlineBuildHost host;
+    bool caught = false;
+    try { (void)throwing_build_chain(host).get(); }
+    catch (const std::runtime_error &error) { caught = std::string(error.what()) == "after signing"; }
+    CHECK(caught);
+}
+
+TEST(coroutine_signing_spawn_propagates_start_throws_and_bad_replies) {
+    struct Broken : AsyncBuildHost {
+        int mode = 0;
+
+        void start(BuildRequest, BuildCompletion done) override {
+            if (mode == 0) throw std::runtime_error("start refused");
+            if (mode == 1) throw 42;
+            if (mode == 2) done(Written{});
+            else done(Failed{"host refused"});
+        }
+    } host;
+    for (int mode = 0; mode < 4; ++mode) {
+        host.mode = mode;
+        bool completed = false;
+        spawn(co_build_and_sign(BuildSession(signing_settings()), host), [&](Outcome<SignReport> result) {
+            CHECK(std::holds_alternative<std::exception_ptr>(result));
+            bool caught = false;
+            try { std::rethrow_exception(std::get<std::exception_ptr>(result)); }
+            catch (const Exception &) { caught = true; }
+            CHECK(caught);
+            completed = true;
+        });
+        CHECK(completed);
+    }
+    CHECK_THROWS_CODE(co_build_and_sign(BuildSession(signing_settings()), host).get(),
+                      static_cast<ErrorCode>(C2PA_SM_ERR_BUILD));
+}
+
+TEST(coroutine_signing_timestamp_transport_fails_closed) {
+    const std::vector<BuildTimestamp> callbacks{
+        {},
+        [](const auto &, const auto &) -> std::vector<uint8_t> { throw std::runtime_error("offline"); },
+        [](const auto &, const auto &) -> std::vector<uint8_t> { throw 42; },
+        [](const auto &, const auto &) { return std::vector<uint8_t>{1, 2}; },
+        [](const auto &, const auto &) { return std::vector<uint8_t>{0x30, 5, 0x30, 3, 2, 1, 2}; },
+    };
+    for (const auto &callback : callbacks) {
+        InlineBuildHost host(callback);
+        CHECK_THROWS_CODE(co_build_and_sign(BuildSession(signing_settings(true)), host).get(),
+                          static_cast<ErrorCode>(C2PA_SM_ERR_BUILD));
+    }
+    bool called = false;
+    InlineBuildHost synthetic_tsa([&](const auto &url, const auto &body) {
+        CHECK_EQ(url, "https://tsa.example/");
+        CHECK(!body.empty() && body.front() == 0x30);
+        called = true;
+        return std::vector<uint8_t>{0x30, 8, 0x30, 3, 2, 1, 0, 0x30, 1, 0};
+    });
+    const auto report = co_build_and_sign(BuildSession(signing_settings(true)), synthetic_tsa).get();
+    CHECK(called);
+    CHECK(!report.manifest.empty());
 }
 
 int main() { return check::run_all(); }

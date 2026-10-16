@@ -71,6 +71,9 @@ use contentauth_c2pa_node_compat::{
     C2paError, Error, NodeSession, PendingRequest, Reader, Reply, Step,
 };
 
+mod signing;
+pub use signing::*;
+
 /// Success.
 pub const C2PA_SM_OK: c_int = 0;
 /// A null or malformed argument, an unknown or already-answered request
@@ -181,6 +184,7 @@ pub struct C2paSmReply {
 }
 
 /// What went wrong, before it is boxed for the caller.
+#[derive(Debug)]
 struct Failure {
     code: c_int,
     message: String,

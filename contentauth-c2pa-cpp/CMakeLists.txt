@@ -1,5 +1,5 @@
-# The C++ binding of the sans-I/O C2PA reader: a Rust static library behind a
-# C ABI (built here with cargo), and header-only C++ on top.
+# The C++ binding of the sans-I/O C2PA reader and builder: a Rust static library
+# behind a C ABI, with header-only readers and compiled signing/thread pools.
 #
 #   cmake -S . -B build && cmake --build build && ctest --test-dir build
 #
@@ -64,9 +64,9 @@ function(c2pa_sm_target_flags target)
 endfunction()
 
 # ---- the C++ library --------------------------------------------------------
-# The drivers stay header-only; only the thread pools are compiled. Clients
-# see `include/`; `cpp/include/` (the concrete pool classes) is private.
-set(C2PA_SM_CPP_SOURCES cpp/src/simple_thread_pool.cpp)
+# The signing implementation and thread pools are compiled; reader drivers
+# stay header-only. Clients see `include/`; `cpp/include/` is private.
+set(C2PA_SM_CPP_SOURCES cpp/src/simple_thread_pool.cpp cpp/src/sign.cpp cpp/src/sign_async.cpp)
 if(APPLE)
   list(APPEND C2PA_SM_CPP_SOURCES cpp/src/apple_thread_pool.cpp)
 endif()
@@ -78,14 +78,34 @@ target_link_libraries(c2pa_sm_cpp PUBLIC c2pa_sm)
 set_target_properties(c2pa_sm_cpp PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 c2pa_sm_target_flags(c2pa_sm_cpp)
 
+add_library(c2pa_sm_coro STATIC cpp/src/sign_coro.cpp)
+target_link_libraries(c2pa_sm_coro PUBLIC c2pa_sm_cpp)
+target_compile_features(c2pa_sm_coro PUBLIC cxx_std_20)
+set_target_properties(c2pa_sm_coro PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+c2pa_sm_target_flags(c2pa_sm_coro)
+
 # ---- tests and examples -----------------------------------------------------
 enable_testing()
 set(FIXTURE "${WORKSPACE_ROOT}/contentauth-c2pa-reader/tests/fixtures/C.jpg")
 
+find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${WORKSPACE_ROOT}/contentauth-c2pa-sign-baseline/src/definition.rs")
+file(READ "${WORKSPACE_ROOT}/contentauth-c2pa-sign-baseline/src/definition.rs" SIGN_DEFINITION_SOURCE)
+string(REGEX MATCH "pub const BASELINE_DEFINITION: &str = r#\"[^#]*\"#;" SIGN_DEFINITION "${SIGN_DEFINITION_SOURCE}")
+string(REGEX REPLACE "^pub const BASELINE_DEFINITION: &str = r#\"|\"#;$" "" SIGN_DEFINITION "${SIGN_DEFINITION}")
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/signing-definition.json" CONTENT "${SIGN_DEFINITION}")
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/fixtures.hpp" CONTENT
+"#pragma once
+inline constexpr char signing_definition[] = R\"json(${SIGN_DEFINITION})json\";
+inline constexpr char signing_cert_path[] = \"${WORKSPACE_ROOT}/contentauth-c2pa-builder/tests/fixtures/test-signer.der\";
+inline constexpr char signing_key_path[] = \"${WORKSPACE_ROOT}/contentauth-c2pa-builder/tests/fixtures/test-signer.key.pem\";
+")
+
 # The core and the thread-based drivers must stay C++17.
 add_executable(c2pa_sm_tests_cxx17 cpp/tests/tests_cxx17.cpp)
-target_link_libraries(c2pa_sm_tests_cxx17 PRIVATE c2pa_sm_cpp)
-target_include_directories(c2pa_sm_tests_cxx17 PRIVATE cpp/include)
+target_link_libraries(c2pa_sm_tests_cxx17 PRIVATE c2pa_sm_cpp OpenSSL::Crypto)
+target_include_directories(c2pa_sm_tests_cxx17 PRIVATE cpp/include "${CMAKE_CURRENT_BINARY_DIR}")
 target_compile_features(c2pa_sm_tests_cxx17 PRIVATE cxx_std_17)
 set_target_properties(c2pa_sm_tests_cxx17 PROPERTIES CXX_STANDARD 17 CXX_EXTENSIONS OFF)
 target_compile_definitions(c2pa_sm_tests_cxx17 PRIVATE C2PA_SM_FIXTURE="${FIXTURE}")
@@ -93,8 +113,8 @@ c2pa_sm_target_flags(c2pa_sm_tests_cxx17)
 add_test(NAME cxx17 COMMAND c2pa_sm_tests_cxx17)
 
 add_executable(c2pa_sm_tests_cxx20 cpp/tests/tests_cxx20.cpp)
-target_link_libraries(c2pa_sm_tests_cxx20 PRIVATE c2pa_sm_cpp)
-target_include_directories(c2pa_sm_tests_cxx20 PRIVATE cpp/include)
+target_link_libraries(c2pa_sm_tests_cxx20 PRIVATE c2pa_sm_coro OpenSSL::Crypto)
+target_include_directories(c2pa_sm_tests_cxx20 PRIVATE cpp/include "${CMAKE_CURRENT_BINARY_DIR}")
 set_target_properties(c2pa_sm_tests_cxx20 PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_definitions(c2pa_sm_tests_cxx20 PRIVATE C2PA_SM_FIXTURE="${FIXTURE}")
 c2pa_sm_target_flags(c2pa_sm_tests_cxx20)
