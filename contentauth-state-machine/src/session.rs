@@ -76,14 +76,15 @@ pub enum Step {
 /// # Not re-entrant, and not locked
 ///
 /// Sessions are **not re-entrant** and the Rust code provides **no locks**
-/// around them: every method takes `&mut self` (or `self`), and nothing
-/// serializes callers beyond that. A host that employs a thread model must
+/// around them. A host that employs a thread model must
 /// ensure that the methods of a session (`advance`, `fulfill`,
 /// `outstanding_requests`, `finish`) are never called simultaneously from
 /// multiple threads, nor re-entered from within a call already in progress
-/// on the same session. Within safe Rust the borrow checker enforces this
-/// for you; across an FFI or other binding boundary that hands out raw
-/// handles, the host must enforce it itself. Violating the constraint is
+/// on the same session. In safe Rust the borrow checker does much of this
+/// for you (`advance` and `fulfill` take `&mut self`, `finish` takes `self`),
+/// but it is no substitute for the host's own serialization: wrapping a
+/// session in a lock-free shared cell, or reaching it through an FFI or other
+/// binding that hands out raw handles, bypasses it. Violating the constraint is
 /// likely to cause crashes or unpredictable behavior.
 ///
 /// Calls on *different* sessions may safely run at the same time; only calls

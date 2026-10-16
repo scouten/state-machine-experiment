@@ -54,8 +54,10 @@ unpredictable behavior are likely if this constraint is violated. Calls on
 *different* sessions may safely run at the same time; only calls on the
 *same* session must not. A session may also move to another thread between
 calls. In safe Rust the
-`&mut self` receivers enforce this at compile time; hosts reaching a session
-through a raw-handle binding must enforce it themselves.
+borrow checker does much of this for you (`advance` and `fulfill` take
+`&mut self`, `finish` takes `self`), but hosts that share a session through
+interior mutability or reach it through a raw-handle binding must enforce
+it themselves.
 
 See the `Session` trait and `SessionCore` in [`src/session.rs`](src/session.rs)
 for the concrete API.
