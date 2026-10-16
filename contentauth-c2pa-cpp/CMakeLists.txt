@@ -120,6 +120,14 @@ target_compile_definitions(c2pa_sm_tests_cxx20 PRIVATE C2PA_SM_FIXTURE="${FIXTUR
 c2pa_sm_target_flags(c2pa_sm_tests_cxx20)
 add_test(NAME cxx20 COMMAND c2pa_sm_tests_cxx20)
 
+# Known-hazard stress tests (see the file header); deliberately not add_test'd.
+add_executable(c2pa_sm_tests_stress cpp/tests/tests_stress.cpp)
+target_link_libraries(c2pa_sm_tests_stress PRIVATE c2pa_sm_coro OpenSSL::Crypto)
+target_include_directories(c2pa_sm_tests_stress PRIVATE cpp/include "${CMAKE_CURRENT_BINARY_DIR}")
+set_target_properties(c2pa_sm_tests_stress PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_definitions(c2pa_sm_tests_stress PRIVATE C2PA_SM_FIXTURE="${FIXTURE}")
+c2pa_sm_target_flags(c2pa_sm_tests_stress)
+
 add_executable(c2pa_sm_tests_pool cpp/tests/tests_pool.cpp)
 target_link_libraries(c2pa_sm_tests_pool PRIVATE c2pa_sm_cpp)
 set_target_properties(c2pa_sm_tests_pool PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
