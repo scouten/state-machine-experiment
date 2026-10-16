@@ -11,7 +11,11 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   a request/reply vocabulary trait, request tracking, a protocol-error
   vocabulary, and the `advance` / `fulfill` / `finish` interaction
   contract. See [`src/session.rs`](contentauth-state-machine/src/session.rs)
-  for `Session`/`SessionCore` and [`README.md`](contentauth-state-machine/README.md)
+  for `Session`/`SessionCore` (a hand-written phase enum) and
+  [`src/workflow.rs`](contentauth-state-machine/src/workflow.rs) for
+  `Workflow`/`Host` (the same contract, with the workflow written as an
+  `async fn` the compiler turns into the state machine — no runtime;
+  `BuilderSession` uses it, `ReadSession` does not yet), and [`README.md`](contentauth-state-machine/README.md)
   for the interaction contract diagram.
 - **`contentauth-c2pa-reader`** — a from-scratch, sans-I/O reader/validator
   for C2PA manifest stores, built on the engine above. An experimental

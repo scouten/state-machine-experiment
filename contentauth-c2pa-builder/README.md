@@ -17,7 +17,12 @@ This crate carries no engine logic of its own: request tracking, session
 lifecycle bookkeeping, and protocol-level errors all come from
 `contentauth-state-machine`. [`BuilderSession`] implements that crate's
 `Session` trait, adding only the build/sign workflow and its own request
-vocabulary. See the sibling crate's
+vocabulary. That workflow is written as one `async fn` over the engine's
+`Workflow` — the compiler, not a hand-written phase enum, generates the
+state machine — so the whole build reads top to bottom in
+[`src/builder.rs`](src/builder.rs)'s `build`. No async runtime is involved,
+and hosts see exactly the `Session` contract they always did. See the
+sibling crate's
 [README](../contentauth-state-machine/README.md) for the interaction
 contract and the `advance` / `outstanding_requests` / `fulfill` / `finish`
 cycle itself. [`contentauth-c2pa-primitives`](../contentauth-c2pa-primitives)

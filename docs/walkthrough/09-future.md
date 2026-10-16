@@ -14,6 +14,7 @@ flowchart LR
         d3["Formats: JPEG, TIFF/BigTIFF/DNG, registry"]
         d4["Bindings: rs / wasm / node, read and sign"]
         d5["Differential tests vs c2pa-rs"]
+        d6["Engine: async-fn workflows, no runtime<br/>(builder ported)"]
     end
     subgraph next["Next"]
         direction TB
@@ -22,6 +23,7 @@ flowchart LR
         n3["Write-side breadth"]
         n4["Bindings and hosts"]
         n5["Proof at scale"]
+        n6["Engine ergonomics"]
     end
     done --> next
 ```
@@ -97,6 +99,14 @@ changes. Choose formats for *what they exercise*, as TIFF did:
   refuse hostile input by design, but nothing yet hammers that.
 * **Benchmarks** against c2pa-rs for large assets (the Node numbers are
   encouraging but not comparative).
+
+## 6. Engine ergonomics
+
+| Item | Why it matters |
+|---|---|
+| **Port `ReadSession` onto `Workflow`** | The builder already runs as an `async fn`; the reader is the larger test — OCSP fan-out across chains, and the recursion ingredients and remote manifests will need (`Box::pin(validate(ingredient))` instead of a stack of hand-nested sessions). |
+| **Typed replies** | `host.request(..)` still resolves to the whole reply enum, so each request's own wrong-kind check stays (in one helper now, not per state). A reply type per request would make it a compile-time fact. |
+| **Composing sessions as `async fn`s** | `FileReadSession`/`FileBuilderSession` translate an inner session's vocabulary by hand; as sub-workflows they could simply `.await` it. |
 
 ## Questions for discussion
 
