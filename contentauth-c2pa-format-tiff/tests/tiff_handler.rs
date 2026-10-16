@@ -365,6 +365,29 @@ fn a_bigtiff_store_entry_with_an_overflowing_value_count_is_refused_not_panicked
     }
 }
 
+// Regression for the exploit in c2pa-rs PR #2059 (forged IFD entry count →
+// multi-GB allocation / OOM): a BigTIFF store entry of Byte type whose count
+// claims ~10 billion bytes. This handler validates the store's byte range
+// against the source length before any read (`check_entry`), so the forged
+// count is refused rather than driving an allocation the file could never fill.
+#[test]
+fn a_bigtiff_byte_entry_claiming_billions_of_bytes_is_refused_not_allocated() {
+    const TEN_BILLION: u64 = 10_000_000_000;
+    for kind in [ALL_KINDS[2], ALL_KINDS[3]] {
+        let hl = kind.header_len() as u64;
+        let data = hl + kind.ifd_len(1) as u64;
+        let mut asset = kind.header(hl);
+        // Store entry (tag 0xCD41) of Byte type claiming billions of bytes.
+        asset.extend(kind.ifd(&[kind.entry(0xcd41, 1, TEN_BILLION, data)], 0));
+        asset.extend(vec![0u8; 100]);
+
+        assert!(
+            matches!(locate_err(asset), FormatError::Malformed(m) if m.contains("past the end")),
+            "a forged BigTIFF entry count must be refused, not allocated"
+        );
+    }
+}
+
 // Regression for the exploit in c2pa-rs PR #2068 (cyclic IFD chain → infinite
 // loop / OOM): an IFD whose `next` pointer points to an already-visited offset.
 // This handler tracks visited IFD offsets in a set (`seen`) and refuses a
