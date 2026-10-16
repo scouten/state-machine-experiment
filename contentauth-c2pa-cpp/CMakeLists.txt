@@ -1,5 +1,5 @@
-# The C++ binding of the sans-I/O C2PA reader: a Rust static library behind a
-# C ABI (built here with cargo), and header-only C++ on top.
+# The C++ binding of the sans-I/O C2PA reader and builder: a Rust static library
+# behind a C ABI, with header-only readers and compiled signing/thread pools.
 #
 #   cmake -S . -B build && cmake --build build && ctest --test-dir build
 #
@@ -94,6 +94,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 file(READ "${WORKSPACE_ROOT}/contentauth-c2pa-sign-baseline/src/definition.rs" SIGN_DEFINITION_SOURCE)
 string(REGEX MATCH "pub const BASELINE_DEFINITION: &str = r#\"[^#]*\"#;" SIGN_DEFINITION "${SIGN_DEFINITION_SOURCE}")
 string(REGEX REPLACE "^pub const BASELINE_DEFINITION: &str = r#\"|\"#;$" "" SIGN_DEFINITION "${SIGN_DEFINITION}")
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/signing-definition.json" CONTENT "${SIGN_DEFINITION}")
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/fixtures.hpp" CONTENT
 "#pragma once
 inline constexpr char signing_definition[] = R\"json(${SIGN_DEFINITION})json\";

@@ -14,7 +14,7 @@ flowchart LR
         d3["Formats: JPEG, TIFF/BigTIFF/DNG, registry"]
         d4["Bindings: rs / wasm / node, read and sign"]
         d5["Differential tests vs c2pa-rs"]
-        d6["C++ read drivers; blocking + async signing<br/>memory / stream / POSIX file / pool / future"]
+        d6["C++ read + sign; blocking / pool / future / coroutine<br/>atomic file signing + Trusted read-back example"]
     end
     subgraph next["Next"]
         direction TB
@@ -71,14 +71,13 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 
 ## 4. Bindings and hosts
 
-* **C++ signing hardening (Phase 6):** the cimpl-backed C ABI, C++17 RAII
-  `BuildSession`, blocking memory/stream/POSIX-file hosts and signer/TSA
-  callbacks are implemented and tested through the baseline JPEG/ES256 case.
-  C++17 async/pool/future and opt-in C++20 `co_build_and_sign` signing are
-  implemented. The coroutine driver shares reader `Task`/`spawn` and suspends
-  on host replies without owning a scheduler; full coverage and sanitizer
-  acceptance remain parent gates before hardening. Real timestamp HTTP
-  transport and private-key operations remain the host's responsibility.
+* **C++ host integrations:** production private-key providers and real TSA HTTP
+  transport remain host responsibilities, as do atomic publication on non-POSIX
+  systems and packaging (`install`/`find_package`, vcpkg, Conan). The baseline
+  JPEG/ES256 case already has blocking, async/pool/future and coroutine drivers,
+  atomic file failure tests and a runnable signing/read-back example included
+  in the coverage and sanitizer CI matrix. Concurrent destruction of a running
+  coroutine is not supported; its documented host-lifetime rules still apply.
 * **`Builder` surface parity** for the c2pa-rs shape beyond the baseline
   case; `from_stream` and other constructors.
 * **c2pa-node:** `fromManifestDataAndAsset`, `resourceToAsset`, signers,

@@ -1,6 +1,6 @@
 # contentauth-c2pa-cpp
 
-An experimental C++ binding for the sans-I/O C2PA reader, written to answer
+An experimental C++ binding for the sans-I/O C2PA reader and builder, written to answer
 one question: **can the session model express asynchronous and threaded
 behavior that a callback-based C++ API cannot?**
 
@@ -14,6 +14,9 @@ header-only except for signing and the thread pools (`cpp/src/`, built as `c2pa_
 | `c2pa_sm_async.hpp` | C++17 | `AsyncHost`, `Reading`, `Mailbox`, `read_parallel`, `read_future`, `PooledHost` |
 | `thread_pool.hpp` | C++17 | the `ThreadPool` interface, `make_simple_thread_pool`, and on Apple platforms `make_apple_thread_pool` (GCD) |
 | `c2pa_sm_coro.hpp` | C++20 | `Task`, `co_read`, `spawn` |
+| `c2pa_sm_sign.hpp` | C++17 | `BuildSession`, blocking memory / stream / POSIX file hosts and signing driver |
+| `c2pa_sm_sign_async.hpp` | C++17 | `Building`, `BuildMailbox`, pooled / future / parallel signing |
+| `c2pa_sm_sign_coro.hpp` | C++20 | `co_build_and_sign`; link the separate `c2pa_sm_coro` target |
 
 ```cpp
 #include "contentauth/c2pa_sm.hpp"
@@ -27,7 +30,31 @@ C++ drivers support reading and signing; the signing ABI and C++ APIs are
 described in [Signing contract](#signing-contract). Build with `./build.sh`, or
 build and run all C++ tests with `./test.sh`. Both scripts forward extra
 arguments to CMake's configure step, e.g. `./test.sh -DCMAKE_BUILD_TYPE=Release`
-(needs cargo, CMake ≥ 3.16, a C++17 compiler; the coroutine pieces need C++20).
+(needs cargo, CMake ≥ 3.16, OpenSSL Crypto development headers and a C++17
+compiler; the coroutine pieces need C++20).
+
+### Signing example
+
+On POSIX, `examples/sign.cpp` builds as `c2pa_sm_sign`. It uses only public
+library headers and supplies an OpenSSL-backed ES256 callback in the host:
+
+```sh
+./build/c2pa_sm_sign input.jpg output.jpg definition.json certificate.der key.pem
+```
+
+The definition includes the required instance ID, label, generator and
+assertions. The certificate is DER and the key is an unencrypted ES256 PEM;
+encrypted keys are rejected without prompting. The output is published
+atomically, then read back with the supplied certificate explicitly trusted,
+and its validation JSON is printed. This demonstrates caller-selected trust,
+not independent proof that a supplied certificate is trustworthy. An optional
+last argument supplies Unix seconds for reproducible validation; otherwise the
+host uses the system clock. No HTTP transport is supplied, so a definition
+requesting a timestamp fails closed rather than omitting it.
+
+CTest runs the example with the baseline fixtures and a fixed validation time,
+requiring `validation_state: Trusted`. Its usage-error test checks a nonzero
+exit. `./test.sh` and CI include both through normal CTest registration.
 
 ## What the existing API looks like
 
@@ -307,9 +334,10 @@ The file helper is intentionally unavailable on non-POSIX platforms rather
 than offering a predictable or symlink-following temporary fallback. Use the
 portable stream host with a platform-owned safe publication strategy there.
 
-The C++ tests use OpenSSL Crypto solely for the fixture ES256 signer; CMake
-therefore requires its development package. Neither production host nor the
-public signing header depends on OpenSSL.
+The C++ tests use OpenSSL Crypto for the fixture ES256 signer, and the signing
+example uses it for its host-owned callback. CMake therefore requires its
+development package. Neither the library's production hosts nor its public
+signing headers depend on OpenSSL.
 
 ### FFI, errors, and concurrency
 
@@ -446,12 +474,30 @@ Task<SignReport> sign(BuildSession session, AsyncBuildHost &host) {
   outcomes, including repeated immediate frame destruction after cross-thread
   completion. This stress test does not deterministically force simultaneous
   delivery during wakeup publication.
-* Stop for approval before Phase 6 hardening; no new crypto or ABI.
+* Phase 5 added no new crypto or ABI.
+
+### Phase 6 hardening and integration
+
+The atomic-file tests now check that missing, throwing, malformed and refusing
+TSA responses preserve existing destinations, never publish a new destination,
+and remove temporary files. Same-path signing is tested for successful Trusted
+replacement and preservation on signing failure. The public-header signing
+example exercises file signing and read-back as an actual executable.
+
+The CI C++ matrix runs every CTest entry in coverage, ASan and TSan builds,
+including the new example; it installs OpenSSL explicitly and measures library
+headers and compiled sources, not demo or test helpers. The Rust static library
+is not sanitizer-instrumented by that C++ matrix. Local acceptance passed all
+seven CTest entries in coverage, ASan and TSan builds, plus workflow YAML and
+runner syntax checks. The three signing implementation sources cover 435/442
+executable lines (98.42%) and 348/553 branch outcomes (62.93%); examples and
+test helpers are not included in those figures. Remote CI must still run before
+merge. Real private keys, HTTP and trust policy stay with the host. The coroutine
+destruction boundaries documented above remain unchanged.
 
 ## Not covered
 
-* **Signing hardening (Phase 6).** No production key or HTTP provider is
-  included. Atomic file
+* No production key or HTTP provider is included. Atomic file
   signing currently requires POSIX; memory and stream hosts are portable C++17.
 * Resources (`get_resource`), `detailed_json`, `crjson`, fragments, remote
   manifests, formats other than JPEG, and the OCSP request path in the C++

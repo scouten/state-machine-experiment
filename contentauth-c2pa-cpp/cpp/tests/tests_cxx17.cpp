@@ -752,11 +752,46 @@ TEST(file_signing_publishes_only_success_and_cleans_temporaries) {
         CHECK_EQ(std::string(std::istreambuf_iterator<char>(input), {}), "keep me");
     }
     CHECK_EQ(std::distance(std::filesystem::directory_iterator(cleanup.path), std::filesystem::directory_iterator{}), 1);
+    const std::vector<BuildTimestamp> timestamp_failures{
+        {},
+        [](const auto &, const auto &) -> std::vector<uint8_t> { throw std::runtime_error("offline"); },
+        [](const auto &, const auto &) -> std::vector<uint8_t> { throw 42; },
+        [](const auto &, const auto &) { return std::vector<uint8_t>{1, 2}; },
+        [](const auto &, const auto &) { return std::vector<uint8_t>{0x30, 5, 0x30, 3, 2, 1, 2}; },
+    };
+    const auto absent = cleanup.path / "not-published.jpg";
+    for (const auto &timestamp : timestamp_failures) {
+        for (const auto &output_path : {destination, absent}) {
+            CHECK_THROWS_CODE(build_and_sign_file(signing_settings(true), C2PA_SM_FIXTURE, output_path,
+                                                  fixture_sign, timestamp),
+                              static_cast<ErrorCode>(C2PA_SM_ERR_BUILD));
+            std::ifstream preserved(destination);
+            CHECK_EQ(std::string(std::istreambuf_iterator<char>(preserved), {}), "keep me");
+            CHECK(!std::filesystem::exists(absent));
+            CHECK_EQ(std::distance(std::filesystem::directory_iterator(cleanup.path),
+                                   std::filesystem::directory_iterator{}), 1);
+        }
+    }
     const auto report = build_and_sign_file(settings, C2PA_SM_FIXTURE, destination, fixture_sign);
     CHECK(!report.manifest.empty());
     std::ifstream input(destination, std::ios::binary);
     const std::vector<uint8_t> bytes(std::istreambuf_iterator<char>(input), {});
     CHECK(trusted_signing_json(bytes).find("Trusted") != std::string::npos);
+    const auto in_place = cleanup.path / "in-place.jpg";
+    std::filesystem::copy_file(destination, in_place);
+    CHECK_THROWS_CODE(build_and_sign_file(settings, in_place, in_place, {}),
+                      static_cast<ErrorCode>(C2PA_SM_ERR_BUILD));
+    {
+        std::ifstream preserved(in_place, std::ios::binary);
+        CHECK_EQ(std::vector<uint8_t>(std::istreambuf_iterator<char>(preserved), {}), bytes);
+    }
+    CHECK(!build_and_sign_file(settings, in_place, in_place, fixture_sign).manifest.empty());
+    {
+        std::ifstream signed_input(in_place, std::ios::binary);
+        const std::vector<uint8_t> signed_bytes(std::istreambuf_iterator<char>(signed_input), {});
+        CHECK(trusted_signing_json(signed_bytes).find("Trusted") != std::string::npos);
+    }
+    std::filesystem::remove(in_place);
     const auto directory = cleanup.path / "cannot-replace";
     std::filesystem::create_directory(directory);
     bool rejected = false;
