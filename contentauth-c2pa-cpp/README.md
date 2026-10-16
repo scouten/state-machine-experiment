@@ -180,8 +180,8 @@ the real library, so drift is a link or test failure.
 
 * **Writing.** `BuilderSession`'s `Sign` and `Timestamp` requests are the
   strongest case for this model (an async KMS/HSM, a TSA over HTTP, without
-  parking a thread) and are the obvious next addition: a `NodeBuildSession`
-  already exists in `contentauth-c2pa-node-compat-sign` to wrap the same way.
+  parking a thread) and are the obvious next addition: a `BuildSessionBridge`
+  already exists in `contentauth-c2pa-session-bridge::build` to wrap the same way.
 * Resources (`get_resource`), `detailed_json`, `crjson`, fragments, remote
   manifests, formats other than JPEG, and the OCSP request path in the C++
   tests (the fixtures name no responder; it is covered from Rust).

@@ -22,7 +22,7 @@ definition plus what a *signer* decides into `BuilderSettings`. Bindings:
 |---|---|---|---|
 | Rust, synchronous (c2pa-rs `Builder` shape) | [`contentauth-c2pa-rs-compat-sign`](../contentauth-c2pa-rs-compat-sign) | `Signer` trait | `Read + Seek` / `Read + Write + Seek`, or paths |
 | JS/Wasm, async (c2pa-wasm shape) | [`contentauth-c2pa-js-compat-sign`](../contentauth-c2pa-js-compat-sign) | `AsyncSigner` → JS `Promise` | `Blob` / `Vec<u8>` |
-| Node, Rust fully synchronous | [`contentauth-c2pa-node-compat-sign`](../contentauth-c2pa-node-compat-sign) + [`c2pa-node-sign-addon`](../c2pa-node-sign-addon) | JS async callback (`node:crypto`, KMS, …) | Node owns the files |
+| Node, Rust fully synchronous | [`contentauth-c2pa-session-bridge`](../contentauth-c2pa-session-bridge) + [`c2pa-node-sign-addon`](../c2pa-node-sign-addon) | JS async callback (`node:crypto`, KMS, …) | Node owns the files |
 
 `instance_id` and `label` are required in the definition: the engine has no
 RNG, so the host mints them.

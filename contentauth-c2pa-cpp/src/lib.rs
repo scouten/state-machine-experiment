@@ -67,8 +67,8 @@ use std::{
     ptr, slice,
 };
 
-use contentauth_c2pa_node_compat::{
-    C2paError, Error, NodeSession, PendingRequest, Reader, Reply, Step,
+use contentauth_c2pa_session_bridge::read::{
+    C2paError, Error, PendingRequest, ReadSessionBridge, Reader, Reply, Step,
 };
 
 /// Success.
@@ -126,7 +126,7 @@ pub struct C2paSmError {
 
 /// A read in progress. Opaque.
 pub struct C2paSmSession {
-    inner: NodeSession,
+    inner: ReadSessionBridge,
     /// The requests reported by the most recent `advance` — the ones
     /// [`c2pa_sm_session_request`] hands out borrows of.
     fresh: Vec<PendingRequest>,
@@ -305,7 +305,7 @@ pub unsafe extern "C" fn c2pa_sm_session_new(
             } else {
                 Some(utf8(settings_json, "settings_json")?)
             };
-            let inner = NodeSession::new(format, settings)?;
+            let inner = ReadSessionBridge::new(format, settings)?;
             *out_session = Box::into_raw(Box::new(C2paSmSession {
                 inner,
                 fresh: Vec::new(),
@@ -455,7 +455,7 @@ pub unsafe extern "C" fn c2pa_sm_session_request(
             described.body = request_der.as_ptr();
             described.body_len = request_der.len();
         }
-        // `PendingRequest` is `#[non_exhaustive]`; `NodeSession` already
+        // `PendingRequest` is `#[non_exhaustive]`; `ReadSessionBridge` already
         // fails the read for a request it cannot describe, so none of
         // these can be reported to the host.
         _ => return false,

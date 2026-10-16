@@ -12,8 +12,9 @@ flowchart LR
         d1["Read + validate: integrity, signature,<br/>trust, RFC 3161, OCSP, v1+v2 claims"]
         d2["Write: v2 claim, data hash, any signing alg,<br/>timestamp"]
         d3["Formats: JPEG, TIFF/BigTIFF/DNG, registry"]
-        d4["Bindings: rs / wasm / node, read and sign"]
+        d4["Bindings: rs / wasm / node, read and sign<br/>C++ reader: C ABI + blocking / threaded / coroutine hosts"]
         d5["Differential tests vs c2pa-rs"]
+        d6["Shared JS Worker read + baseline sign<br/>browser Wasm / Node Neon, async signer callbacks"]
     end
     subgraph next["Next"]
         direction TB
@@ -36,6 +37,7 @@ flowchart LR
 | **CRLs** | Outside the spec §15.9 OCSP-only process the engine follows, but real certs use them. |
 | **Other hard bindings** (box hash, BMFF) | Only `c2pa.hash.data` is validated. |
 | **Decoded assertion values** (thumbnails, resources) | Needed for fuller `ManifestStore` and `crJson`/`resourceToBytes` parity. |
+| **Action semantic validation** | The SDK benchmark found that the existing validator rejects a created action without `digitalSourceType` while this reader accepts it. Preserve this as a known parity gap, not a transport issue. |
 
 ## 2. More container formats
 
@@ -75,9 +77,30 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 * **c2pa-node:** `fromManifestDataAndAsset`, `resourceToAsset`, signers,
   CAWG identity assertions (the X.509 type is done on the core read and
   write paths; this is the bindings), Trustmark.
-* **Browser:** a `fetch`-backed OCSP `Platform`; actually *running* the
-  `web` modules (there's no browser in CI today); a Worker-hosted session
-  for hashing off the main thread.
+* **Worker-hosted shared JS loop:** the
+  [private JavaScript package](../../js/README.md) now runs the same facade,
+  protocol and session drivers over browser Wasm and Node Neon. Local
+  Chromium/Firefox/WebKit and Node tests establish complete-report/request
+  equality and application task progress for signed 64 MiB reads.
+  Baseline ES256 signing also proves caller-owned async callbacks, failure and
+  disposal handling, queued operation routing and trusted read-back.
+  No new core features or Tokio are involved. A paired JSON/binary Wasm
+  write-payload comparison preserves both contracts and reduces median local
+  large-build time by about 6.7–8.5 times; binary is now the browser default.
+  The [actual SDK comparison](../../js/findings.md#sdk-to-sdk-performance-comparison)
+  now supersedes prototype-only timings as the performance baseline: competitive
+  browser results, slower large Node operations, and a concrete action-validation
+  gap preclude general speed or parity claims.
+  Streaming sources/outputs, measured peak memory and production distribution
+  remain unproven.
+  The neutral read/build bridges and compatibility vocabulary now live in
+  `contentauth-c2pa-session-bridge`; Wasm and Neon are consumers. Node and all
+  three browser contracts are wired into CI. Next, migrate the older host
+  capabilities behind compatibility facades with preservation tests before
+  removing their separate loops.
+* **Browser:** a `fetch`-backed OCSP `Platform`; the existing async `web`
+  modules still have no browser CI coverage. The shared-host browser CI runs
+  the synchronous Wasm session boundary, not those alternative modules.
 * **Other host languages** — Python, Swift, Kotlin, .NET: the Node binding
   shows the minimal shape (a handful of synchronous functions plus a host
   loop). Each is a good test of whether the flattened `PendingRequest`/
@@ -95,8 +118,9 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 * **Track c2pa-rs releases** — the compat layer follows a moving target.
 * **Fuzzing** the parsers (JUMBF, COSE, TIFF graph walks) — they already
   refuse hostile input by design, but nothing yet hammers that.
-* **Benchmarks** against c2pa-rs for large assets (the Node numbers are
-  encouraging but not comparative).
+* **Broader SDK benchmarks:** the warm offline JPEG baseline is measured in
+  Node and three browsers. Extend it to representative assets, peak memory,
+  cold start and feature parity before making production performance claims.
 
 ## Questions for discussion
 

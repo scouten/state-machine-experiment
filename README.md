@@ -21,6 +21,15 @@ experiment grows.
 
 ## Walkthrough
 
+For the preferred cross-platform JavaScript host, see
+[`js`](js/README.md): the same JavaScript facade, Worker
+protocol and session driver over browser Wasm and Node Neon, with actual
+end-to-end read/signing tests, caller-owned async signer callbacks and
+SDK-to-SDK benchmarks. Its supported slice is offline JPEG reading and baseline
+ES256 signing, not full c2pa-js parity. It adds no Rust domain features and uses
+no Tokio runtime. The older Rust async browser hosts and the broader addon
+JavaScript drivers remain available; their capabilities have not been removed.
+
 New here? [`docs/walkthrough`](docs/walkthrough/README.md) is a guided tour —
 how this differs from c2pa-rs and its bindings, the architecture, and
 where it could go next — written in Markdown with Mermaid diagrams.
@@ -87,20 +96,46 @@ where it could go next — written in Markdown with Mermaid diagrams.
   entirely in this interface-specific layer — an async host awaiting a
   `Blob` and a `Platform` at every request the sans-I/O engine makes —
   and, under a browser-only `web` feature, the `wasm-bindgen` end of it.
+  This is the earlier alternative Rust-owned async host, not the host used
+  by the shared JavaScript package.
+* [`contentauth-c2pa-session-bridge`](contentauth-c2pa-session-bridge) —
+  neutral synchronous `ReadSessionBridge` and `BuildSessionBridge`, extracted
+  from the former Node-named crates. Owns explicit SDK compatibility vocabulary
+  shared with the alternative async host.
+* [`contentauth-c2pa-cpp`](contentauth-c2pa-cpp) — an experimental C ABI
+  consumer of the read bridge, with blocking, thread-pool and coroutine C++ hosts.
 
 Outside the workspace (see its own README for why):
 
+* [`contentauth-c2pa-wasm`](contentauth-c2pa-wasm) — synchronous wasm-bindgen
+  adapters consumed by the shared JavaScript host. Its standalone workspace
+  pins the binding CLI schema.
+* [`c2pa-node-compat-addon`](c2pa-node-compat-addon) and
+  [`c2pa-node-sign-addon`](c2pa-node-sign-addon) — thin Neon consumers of the
+  same neutral bridge. Their existing JavaScript facades retain file/network
+  behavior outside the shared in-memory Worker baseline.
 * [`c2pa-rs-compat-conformance`](c2pa-rs-compat-conformance) — a
   differential test harness proving `contentauth-c2pa-rs-compat` reports
   the same thing as the real c2pa-rs `Reader` for the same file, and a
   seam (`examples/compare_corpus.rs`) for running that comparison across a
   whole directory of assets rather than one fixture.
 
+## Specification reference
+
+[`reference/c2pa-spec`](reference/c2pa-spec) contains a pinned
+snapshot of the C2PA Technical Specification's `.adoc` source (version `2.4`),
+kept for reference alongside the reader and builder crates that implement
+it. See its [README](reference/c2pa-spec/README.md) for provenance,
+scope, and license — those files are CC-BY-4.0, separate from the MIT OR
+Apache-2.0 terms covering the rest of this repository.
+
 ## C FFI
 
 Bindings that expose a C API should be built on the
 [`cimpl`](https://github.com/contentauth/cimpl) crate rather than a
-hand-rolled C FFI. No such binding exists yet.
+hand-rolled C FFI for new interfaces. The existing experimental
+[`contentauth-c2pa-cpp`](contentauth-c2pa-cpp) binding currently uses a
+hand-written C ABI; it has not yet been migrated to `cimpl`.
 
 ## Building
 
