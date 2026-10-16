@@ -334,6 +334,37 @@ fn refuses_a_malformed_store_entry() {
     assert!(matches!(locate_err(two), FormatError::Malformed(m) if m.contains("more than one")));
 }
 
+// Regression for the exploit in c2pa-rs PR #2012 (integer-overflow panic in
+// BigTIFF processing): a crafted 64-bit `value_count` of 0x2000000000000001
+// that, multiplied by a wide type's size, overflows `u64`. This handler never
+// multiplies a count by a type size — it reads the store entry as UNDEFINED
+// (one byte per value) and bounds the range with `checked_add` — so the
+// crafted count is refused as malformed rather than panicking.
+#[test]
+fn a_bigtiff_store_entry_with_an_overflowing_value_count_is_refused_not_panicked() {
+    for kind in [ALL_KINDS[2], ALL_KINDS[3]] {
+        assert!(
+            kind.big,
+            "this regression is specific to BigTIFF's 64-bit counts"
+        );
+
+        let mut asset = foreign(kind, &store(64));
+
+        // The C2PA entry is the second in the IFD; overwrite its `count`
+        // field with the PoC value.
+        let count_len = kind.ifd_len(0) - kind.word();
+        let entry_len = kind.ifd_len(1) - kind.ifd_len(0);
+        let count_at = kind.header_len() + count_len + entry_len + 4;
+        asset[count_at..count_at + kind.word()]
+            .copy_from_slice(&kind.uint(0x2000_0000_0000_0001, kind.word()));
+
+        assert!(
+            matches!(locate_err(asset), FormatError::Malformed(_)),
+            "a crafted BigTIFF value_count must be refused, not overflow"
+        );
+    }
+}
+
 #[test]
 fn a_host_failure_surfaces_rather_than_hanging() {
     let mut op = TiffFormat.locate(STREAM);
