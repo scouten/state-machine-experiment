@@ -12,7 +12,7 @@ flowchart TB
     E --> N["node-compat<br/>no host in Rust at all"]
     R --> R1["Reader::from_context(ctx).with_file(path)"]
     J --> J1["Reader::from_blob(fmt, blob, ctx, platform).await"]
-    N --> N1["NodeSession<br/>portable advance / fulfill / finish"]
+    N --> N1["Portable read bridge<br/>advance / fulfill / finish"]
     N1 --> N2["JS loop in index.mjs<br/>(fs, fetch, event loop)"]
     N1 --> W["Shared JS loop in Worker proof<br/>same facade and protocol"]
     W --> WB["Browser Worker<br/>synchronous Wasm binding"]
@@ -20,7 +20,7 @@ flowchart TB
 ```
 
 The branches show host arrangements, not crate dependency arrows. Both Worker
-bindings expose the same existing `NodeSession`; the browser proof does not use
+bindings expose the same existing read bridge; the browser proof does not use
 the separate async `js-compat` host.
 
 | Binding | Mirrors | Async lives in | Notable |
@@ -34,13 +34,18 @@ the separate async `js-compat` host.
 The separate [shared-Worker proof](../../worker-poc/README.md) takes a different
 host arrangement: the same JS `advance`/`fulfill` driver runs inside a browser
 module Worker or Node Worker thread. A small synchronous Wasm adapter exposes
-the existing `NodeSession` on the browser side; Node reuses Neon unchanged.
-One facade/protocol handles input snapshots, queued reads, results and disposal.
+the existing read bridge on the browser side; Node reuses Neon unchanged.
+One facade/protocol handles input snapshots, queued reads/builds, results and disposal.
 Actual tests compare complete reports and request bytes across all three
 browsers and Node, including 64 MiB signed reads and application task progress.
 No Tokio, new domain behavior or cooperative scheduling is needed for this
-isolated, read-only workflow. Whole-input cloning and abrupt termination remain
-explicit limits; signing callbacks are a future proof, not an implemented API.
+isolated workflow. Baseline ES256 signing uses the existing portable build bridge
+and a caller-owned async signer through the same Worker service. Signer replies
+bypass its top-level operation queue to avoid deadlock; both operation and
+request IDs route the reply. Delayed callbacks, failures, disposal races and
+trusted read-back run in Node and all three browsers. Whole-input/output
+buffering and abrupt termination remain explicit limits; disposing a Worker
+cannot cancel a caller-owned signer.
 
 The proof also shows that `NodeSession` is a historical name, not a runtime
 restriction: the wrapper contains no Node APIs or Neon code. The
@@ -85,7 +90,9 @@ flowchart LR
     D["JSON definition"] --> SB["sign-baseline<br/>Definition → BuilderSettings"]
     SB --> RS["rs-compat-sign<br/>blocking Builder + Signer trait<br/>(reqwest TSA default)"]
     SB --> JS["js-compat-sign<br/>async Builder + AsyncSigner<br/>(JS Promise / WebCrypto)"]
-    SB --> ND["node-compat-sign + addon<br/>NodeBuildSession<br/>(Node signs, owns files)"]
+    SB --> ND["node-compat-sign + addon<br/>portable build bridge<br/>(Node signs, owns files)"]
+    ND --> WP["Shared Worker proof<br/>same build bridge via Neon / Wasm"]
+    WP --> CB["Caller-owned async signer<br/>COSE bytes out, signature back<br/>key outside Worker and Rust"]
 ```
 
 * The signer is where the models diverge most: a blocking trait, an

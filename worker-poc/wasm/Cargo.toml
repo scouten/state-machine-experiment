@@ -13,6 +13,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 contentauth-c2pa-node-compat = { path = "../../contentauth-c2pa-node-compat" }
+contentauth-c2pa-node-compat-sign = { path = "../../contentauth-c2pa-node-compat-sign" }
 js-sys = "0.3"
 serde_json = "1"
 wasm-bindgen = "=0.2.122"

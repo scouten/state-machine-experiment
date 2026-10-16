@@ -21,10 +21,13 @@ const definition = {
   claim_generator_info: [{ name: "shared-worker-proof", version: "1" }],
   assertions: [{ label: "c2pa.actions.v2", data: { actions: [{ action: "c2pa.created" }] } }],
 };
+let signingRequests;
 const signer = { alg: "es256", certs: [cert], async sign(data) {
+  signingRequests.push({ alg: this.alg, data: Array.from(data) });
   return sign("sha256", data, { key, dsaEncoding: "ieee-p1363" });
 } };
 const files = {};
+const signing = { definition, certs: [Array.from(cert)], files: {} };
 const client = createClient();
 try {
   for (const [name, length] of [["small", 4], ["large", 64 * 1024 * 1024]]) {
@@ -33,6 +36,7 @@ try {
     const input = new URL(`${name}-source.jpg`, directory);
     await writeFile(input, source);
     let result;
+    signingRequests = [];
     try { result = await new Builder(definition).sign({ path: input.pathname }, signer) }
     finally { await unlink(input) }
     await writeFile(new URL(`${name}.jpg`, directory), result.buffer);
@@ -47,7 +51,12 @@ try {
     files[name] = { bytes: result.buffer.length,
       sha256: createHash("sha256").update(result.buffer).digest("hex"),
       report: expected, stats: worker.stats };
+    signing.files[name] = { sourceBytes: length, requests: signingRequests,
+      exclusions: result.exclusions, manifestBytes: result.manifest.length };
   }
-  await writeFile(new URL("fixtures.json", directory), JSON.stringify({ now, settings, files }, null, 2));
+  // Public repository TEST ONLY key, used by the application-side WebCrypto
+  // test signer in both environments. Never sent to a Worker.
+  await writeFile(new URL("test-signer.pk8", directory), key.export({ type: "pkcs8", format: "der" }));
+  await writeFile(new URL("fixtures.json", directory), JSON.stringify({ now, settings, files, signing }, null, 2));
 } finally { await client.dispose() }
 console.log("Generated small/64 MiB signed fixtures; direct Neon host and Worker reports agree.");

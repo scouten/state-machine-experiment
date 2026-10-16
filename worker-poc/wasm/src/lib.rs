@@ -1,10 +1,12 @@
-//! Synchronous Wasm boundary for the existing plain-data reader session.
+//! Synchronous Wasm boundaries for the existing plain-data read and build sessions.
 
 #![deny(unsafe_code, missing_docs, clippy::unwrap_used, clippy::expect_used)]
 
 use contentauth_c2pa_node_compat::{Error, NodeSession, PendingRequest, Reply, Step};
 use serde_json::json;
 use wasm_bindgen::prelude::*;
+
+mod build;
 
 fn error(err: Error) -> JsValue {
     let value = js_sys::Error::new(&err.to_string());

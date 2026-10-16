@@ -7,7 +7,9 @@ and the reader, builder and format handlers know nothing about each other.**
 ## Dependency graph
 
 Arrows point from a crate to what it depends on. Dashed edges include the
-standalone shared-Worker proof and its existing Neon binding.
+standalone shared-Worker proof and its existing Neon bindings.
+The outlined C++ and Python nodes are possible consumers, not implemented
+crates; their labeled dotted edges indicate prospective reuse.
 
 ```mermaid
 flowchart BT
@@ -27,7 +29,7 @@ flowchart BT
 
     RSC["rs-compat<br/><i>c2pa-rs Reader shape</i>"]
     JSC["js-compat<br/><i>c2pa-wasm shape, async</i>"]
-    NDC["node-compat<br/><i>portable sync NodeSession bridge</i>"]
+    NDC["node-compat<br/><i>portable synchronous read bridge</i>"]
 
     SB["sign-baseline"]
     RSS["rs-compat-sign"]
@@ -36,6 +38,9 @@ flowchart BT
     POC["worker-poc/shared<br/><i>one JS host in both Workers</i>"]
     PW["worker-poc/wasm<br/><i>standalone synchronous Wasm boundary</i>"]
     PN["c2pa-node-compat-addon<br/><i>existing Neon boundary</i>"]
+    PNS["c2pa-node-sign-addon<br/><i>existing signing Neon boundary</i>"]
+    CPP["POSSIBLE: C++ host + binding adapter<br/><i>not implemented or tested</i>"]
+    PY["POSSIBLE: Python host + binding adapter<br/><i>not implemented or tested</i>"]
 
     RD --> SM & PR
     BD --> SM & PR
@@ -52,20 +57,25 @@ flowchart BT
     RSS --> SB & FB & JP
     JSS --> SB & FB & JSC
     NDS --> SB & FB & JSC
-    POC -.-> PW & PN
-    PW -.-> NDC
+    POC -.-> PW & PN & PNS
+    PW -.-> NDC & NDS
     PN -.-> NDC
+    PNS -.-> NDS
+    CPP -.->|"could drive same bridge protocol"| NDC & NDS
+    PY -.->|"could drive same bridge protocol"| NDC & NDS
 
     classDef engine fill:#dbeafe,stroke:#2563eb,color:#000
     classDef core fill:#dcfce7,stroke:#16a34a,color:#000
     classDef fmt fill:#fef9c3,stroke:#ca8a04,color:#000
     classDef glue fill:#fae8ff,stroke:#a21caf,color:#000
     classDef bind fill:#fee2e2,stroke:#dc2626,color:#000
+    classDef proposed fill:#fff,stroke:#64748b,stroke-dasharray:5 5,color:#000
     class SM,PR engine
     class RD,BD core
     class FM,JP,TF,RG fmt
     class FR,FB glue
     class RSC,JSC,NDC,SB,RSS,JSS,NDS bind
+    class CPP,PY proposed
 ```
 
 (Edges to `primitives` and `state-machine` from most crates are omitted
@@ -115,11 +125,31 @@ flowchart TB
 | `…-file-builder` | Orchestration | `FileBuilderSession`: `plan_embed`/`commit` + `BuilderSession`, never buffering the asset; plus blocking hosts. |
 | `…-rs-compat` | Binding | c2pa-rs `Context` + `Reader::with_file` slice; one of two crates with a network dependency (`reqwest` OCSP). |
 | `…-js-compat` | Binding | c2pa-wasm `WasmReader` slice; async host with `Blob`/`Platform` traits; `web` feature for `wasm-bindgen`. |
-| `…-node-compat` (+ `c2pa-node-compat-addon`) | Binding | Purely synchronous `NodeSession`; Node owns all async. Addon is a separate Neon workspace. |
+| `…-node-compat` (+ `c2pa-node-compat-addon`) | Binding | Portable synchronous read bridge, reused by browser Wasm and Node Neon in the Worker proof; the host owns all async. Addon is a separate Neon workspace. |
 | `…-sign-baseline` | Binding | The baseline signing case (JSON definition → `BuilderSettings`) every write binding is held to. |
 | `…-rs/js/node-compat-sign` (+ `c2pa-node-sign-addon`) | Binding | The baseline case through each binding. `rs-compat-sign` is the other crate with a network dependency (`reqwest` for RFC 3161 timestamps). |
 | `c2pa-rs-compat-conformance` | Test | Separate workspace; differential tests against the real `c2pa` crate. |
-| `worker-poc-wasm` + `worker-poc/shared` | Binding proof | Standalone Wasm workspace over the existing `NodeSession`; shared JS host/facade in browser and Node Workers, Node retaining Neon. |
+| `worker-poc-wasm` + `worker-poc/shared` | Binding proof | Standalone Wasm workspace over existing portable read/build bridges; shared JS host and caller-owned async signer callbacks in browser and Node Workers, Node retaining Neon. |
+
+Diagrams describe the bridges by their runtime-neutral roles. The Rust read
+wrapper is still named `NodeSession` in the existing compatibility crate;
+[`ReadSessionBridge` is the proposed name](../../worker-poc/README.md#proposed-neutral-session-name),
+not an implemented rename or a new dependency in this graph.
+
+The possible C++/Python reuse follows from the existing Rust contract, not a
+claim of tested bindings: the [read wrapper](../../contentauth-c2pa-node-compat/src/session.rs)
+exposes numeric handles, byte vectors, strings and synchronous
+`advance`/`fulfill`/`finish` methods; its
+[crate dependencies](../../contentauth-c2pa-node-compat/Cargo.toml) contain no
+Neon or Node runtime dependency. The
+[build wrapper](../../contentauth-c2pa-node-compat-sign/src/session.rs) follows
+the same host-driven pattern. A C++ binding could supply a C ABI or other
+interop adapter; Python could supply an extension-module adapter. Both must
+translate Rust types/errors and define session and buffer ownership. The Rust
+enums are not directly a stable foreign ABI, and neither consumer needs to use
+the shared JavaScript driver or Workers. The current wrappers still reuse
+JavaScript-oriented compatibility settings/results in Rust; separating that
+policy from the reusable protocol remains part of the proposed extraction.
 
 ## Rules of the road
 

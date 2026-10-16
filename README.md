@@ -24,7 +24,8 @@ experiment grows.
 For a bounded cross-platform architecture proof, see
 [`worker-poc`](worker-poc/README.md): the same JavaScript facade, Worker
 protocol and session driver over browser Wasm and Node Neon, with actual
-end-to-end read tests and performance observations. It adds no Rust domain
+end-to-end read/signing tests, caller-owned async signer callbacks and
+performance observations. It adds no Rust domain
 features and uses no Tokio runtime.
 
 New here? [`docs/walkthrough`](docs/walkthrough/README.md) is a guided tour —

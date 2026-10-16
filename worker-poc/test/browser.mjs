@@ -36,20 +36,26 @@ try {
     const browser = await engine.launch({ headless: true });
     try {
       const page = await browser.newPage();
-      page.on("pageerror", (error) => console.error(name, error));
+      const errors = [];
+      page.on("pageerror", (error) => errors.push(error.message));
       await page.goto(origin);
       const result = await page.evaluate(async () => {
         const { createClient } = await import("/browser/client.mjs");
         const { contract } = await import("/test/contract.mjs");
+        const { signingContract } = await import("/test/signing.mjs");
         const fixture = await (await fetch("/generated/fixtures.json")).json();
         const load = async (name) => new Uint8Array(await (await fetch(`/generated/${name}.jpg`)).arrayBuffer());
-        return { ...(await contract(createClient, await load("small"), await load("large"), fixture)),
+        const signing = await signingContract(createClient, fixture,
+          await (await fetch("/generated/test-signer.pk8")).arrayBuffer());
+        return { ...(await contract(createClient, await load("small"), await load("large"), fixture)), signing,
           userAgent: navigator.userAgent };
       });
+      assert.deepEqual(errors, [], `${name}: unhandled application error`);
       await mkdir(new URL("../results/", import.meta.url), { recursive: true });
       await writeFile(new URL(`../results/${name}.json`, import.meta.url),
         JSON.stringify({ measuredAt: new Date().toISOString(), fingerprints: await fingerprints(), ...result }, null, 2));
       console.log(`${name}: all ${result.checks.length} shared contract checks pass`);
+      console.log(`${name}: all ${result.signing.checks.length} shared signing checks pass`);
     } finally { await browser.close() }
   }
 } finally { await new Promise((resolve) => server.close(resolve)) }

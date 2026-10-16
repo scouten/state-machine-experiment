@@ -14,6 +14,7 @@ flowchart LR
         d3["Formats: JPEG, TIFF/BigTIFF/DNG, registry"]
         d4["Bindings: rs / wasm / node, read and sign"]
         d5["Differential tests vs c2pa-rs"]
+        d6["Shared JS Worker read + baseline sign<br/>browser Wasm / Node Neon, async signer callbacks"]
     end
     subgraph next["Next"]
         direction TB
@@ -76,12 +77,15 @@ changes. Choose formats for *what they exercise*, as TIFF did:
   CAWG identity assertions (the X.509 type is done on the core read and
   write paths; this is the bindings), Trustmark.
 * **Worker-hosted shared JS loop:** the
-  [read-only proof](../../worker-poc/README.md) now runs the same facade,
-  protocol and session driver over browser Wasm and Node Neon. Local
+  [read/sign proof](../../worker-poc/README.md) now runs the same facade,
+  protocol and session drivers over browser Wasm and Node Neon. Local
   Chromium/Firefox/WebKit and Node tests establish complete-report/request
   equality and application task progress for signed 64 MiB reads.
-  No new core features or Tokio are involved. Shared signing callbacks,
-  streaming sources and production distribution remain unproven.
+  Baseline ES256 signing also proves caller-owned async callbacks, failure and
+  disposal handling, queued operation routing and trusted read-back.
+  No new core features or Tokio are involved. Binary Wasm write-payload
+  transport is a useful next comparison; streaming sources/outputs, measured
+  peak memory and production distribution remain unproven.
 * **Browser:** a `fetch`-backed OCSP `Platform`; the existing async `web`
   modules still have no browser CI coverage. The separate Worker proof
   runs its synchronous Wasm session boundary locally, not those modules.

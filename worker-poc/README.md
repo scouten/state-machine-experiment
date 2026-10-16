@@ -7,11 +7,12 @@ environments. Run that loop in a browser module Worker over Wasm, or a Node
 `worker_threads.Worker` over Neon. Rust remains synchronous and sans-I/O.
 Neither Tokio nor a custom scheduler is required for this example.
 
-This is a **read-only architecture proof**, not a replacement SDK or a legacy
-API migration. Reading is sufficient to exercise request/reply transport,
-signature and hard-binding validation, settings, reporting, thread isolation
-and lifecycle end to end. Signing is used only to generate fixtures with the
-existing builder; a shared signing facade/callback bridge is not proven here.
+This is a **read and baseline-signing architecture proof**, not a replacement
+SDK or a legacy API migration. Reading exercises validation, settings and
+reporting; signing exercises source/output I/O requests and an asynchronous
+caller-owned signer across the Worker boundary. Both use existing Rust domain
+functionality, with shared JavaScript transport, isolation and lifecycle logic.
+Signing is limited to the existing JPEG/ES256 baseline, without timestamps.
 
 The branch starts from `main` at `97fac9b`. No migration-branch changes or domain
 features were copied. The original experimental worktree remains untouched.
@@ -20,17 +21,22 @@ features were copied. The original experimental worktree remains untouched.
 
 ```mermaid
 flowchart TB
-    App["Application: await client.read(bytes)"]
+    App["Application: await client.read / sign"]
     Client["Shared JS Client<br/>snapshot, IDs, errors, disposal"]
     Service["Shared Worker service<br/>serialized operations"]
     Drive["Shared JS host loop<br/>advance / answer / fulfill / finish"]
     Browser["Browser adapter<br/>synchronous wasm-bindgen calls"]
     Node["Node adapter<br/>synchronous Neon calls"]
-    Session["Existing NodeSession<br/>portable plain-data bridge"]
-    Reader["FileReadSession + C2PA reader"]
+    Session["Portable read / build bridges<br/>plain-data requests and replies"]
+    Reader["FileReadSession / FileBuilderSession<br/>C2PA reader / builder"]
+    Signer["Application-owned async signer<br/>key stays outside Worker and Rust"]
     App --> Client
     Client -->|"postMessage: clone bytes, no transfer"| Service
     Service --> Drive
+    Service -->|"sign request: operation + request ID"| Client
+    Client --> Signer
+    Signer -->|"signature or error"| Client
+    Client -->|"signer reply bypasses operation queue"| Service
     Drive --> Browser & Node
     Browser --> Session
     Node --> Session
@@ -44,10 +50,10 @@ own these behaviors:
 
 | Module | Shared responsibility |
 | --- | --- |
-| [client.mjs](shared/client.mjs) | Public Promise API; request identity; input snapshot; reply/error handling; disposal |
-| [service.mjs](shared/service.mjs) | Worker command dispatch and serial operation queue |
-| [drive.mjs](shared/drive.mjs) | Session progression; byte ranges; clock/length replies; request accounting; cleanup |
-| [contract.mjs](test/contract.mjs) | Identical acceptance checks in Node and all three browsers |
+| [client.mjs](shared/client.mjs) | Public Promise API; request identity; input snapshot; signer callbacks; reply/error handling; disposal |
+| [service.mjs](shared/service.mjs) | Worker command dispatch; serial operation queue; independently dispatched signer replies |
+| [drive.mjs](shared/drive.mjs) | Read/build session progression; source/output bytes; host replies; request accounting; cleanup |
+| [contract.mjs](test/contract.mjs), [signing.mjs](test/signing.mjs) | Identical read and signing acceptance checks in Node and all three browsers |
 
 The existing `NodeSession` name describes its original consumer, not a runtime
 dependency. It already compiles to Wasm. The small standalone
@@ -55,9 +61,11 @@ dependency. It already compiles to Wasm. The small standalone
 use the existing browser async host or duplicate C2PA logic. The
 [naming proposal below](#proposed-neutral-session-name) records how to make that
 shared role explicit; the rename/extraction is not part of this proof.
+The [signing Wasm boundary](wasm/src/build.rs) likewise wraps the existing
+`NodeBuildSession`, without adding builder behavior or a Rust async runtime.
 
-Wasm serializes new request metadata as JSON. Neon returns objects and expects
-Buffers for byte replies. Adapters normalize those differences. This is a
+Wasm serializes requests as JSON, including build write payloads as byte arrays.
+Neon returns objects and expects Buffers for byte replies. Adapters normalize those differences. This is a
 deliberately simple boundary, not a claim of optimal serialization performance.
 
 ### Proposed neutral session name
@@ -109,7 +117,7 @@ protocol in both.
 ### Reuse beyond JavaScript
 
 The proposed bridge is language-neutral, not merely shared between two
-JavaScript runtimes. A Python, Swift, Kotlin or C# host could use the same
+JavaScript runtimes. A C++, Python, Swift, Kotlin or C# host could use the same
 `advance` / `fulfill` / `finish` protocol, answering requests with its own I/O,
 clock and networking APIs and choosing its own concurrency model. Promises,
 Workers and JavaScript event loops are not requirements of that protocol.
@@ -134,8 +142,8 @@ rename. Prove a concrete additional consumer before introducing further
 abstractions.
 
 The following is a **proposed ownership model**, not the current dependency
-graph. Solid paths have existing JavaScript consumers; the dotted path is a
-possible, unproven additional consumer. The neutral crate and rename are not
+graph. Solid paths have existing JavaScript consumers; the dotted paths are
+possible, unproven additional consumers. The neutral crate and rename are not
 implemented.
 
 ```mermaid
@@ -143,14 +151,16 @@ flowchart TB
     JS["Shared JS host<br/>browser and Node Workers"]
     Wasm["Browser binding<br/>wasm-bindgen"]
     Neon["Node binding<br/>Neon"]
-    Other["Possible other-language host + adapter<br/>not implemented or tested"]
+    CPP["Possible C++ host + interop adapter<br/>not implemented or tested"]
+    Python["Possible Python host + extension adapter<br/>not implemented or tested"]
     Bridge["PROPOSED: ReadSessionBridge<br/>contentauth-c2pa-session-bridge<br/>plain-data requests / replies"]
     File["FileReadSession<br/>typed Rust session"]
     Rust["Existing Rust host<br/>direct typed access"]
     JS --> Wasm & Neon
     Wasm --> Bridge
     Neon --> Bridge
-    Other -.-> Bridge
+    CPP -.-> Bridge
+    Python -.-> Bridge
     Bridge --> File
     Rust --> File
 ```
@@ -160,22 +170,60 @@ flowchart TB
 - One Worker per client. Workers are reused; top-level operations are queued.
   Pending requests within one operation can be answered as a batch.
 - Native handles and Wasm objects never cross Worker boundaries. Results are
-  plain reports, not remote reader objects.
-- `read()` copies input before its first await, then uses structured cloning.
+  plain reports and, for signing, output/manifest bytes and exclusion ranges.
+- `read()` and `sign()` copy input before their first await, then use structured cloning.
   Caller buffers remain attached and mutation cannot change a queued read.
   This costs memory and synchronous caller work proportional to input size.
+- Signing also snapshots the definition and public certificates. The signer
+  function and private key stay in the application realm. Only the COSE signing
+  input and raw signature/error cross the Worker protocol.
+- Build output is buffered in a growable in-memory array inside the Worker,
+  then copied and cloned back. This is not file-backed or constant-memory.
 - This proof accepts in-memory JPEG bytes only. It does not promise streaming
   input, constant memory, zero-copy transfer or free result transport.
 - Successful `finish` consumes the Rust session. Wasm wrappers are explicitly
   freed in `finally`; Neon error handles become eligible for isolate GC.
   Client disposal terminates its Worker, releasing that isolate's resources.
 - Disposal rejects pending calls. It is **abrupt termination**, not graceful
-  cancellation. There are no file writes or network operations to clean up.
+  cancellation. There are no external file writes or Worker-owned network
+  operations. Caller-owned signing cannot be cancelled by terminating the
+  Worker; its late success/rejection is consumed without posting a reply.
 - No periodic task yields are inserted. A busy Worker can delay its own control
   messages; the application remains on a separate event loop. Responsive
   cancellation/progress or concurrent shared-Worker execution is not promised.
-- Only offline reading is covered. OCSP and future unrecognized host requests
-  fail explicitly. Core validation remains Rust-owned.
+- OCSP, timestamps and unrecognized host requests fail explicitly. Core
+  validation and manifest generation remain Rust-owned.
+
+### Signer callbacks and queueing
+
+```mermaid
+sequenceDiagram
+    participant A as Application / shared client
+    participant W as Worker / shared service
+    participant R as Rust builder via Wasm or Neon
+    A->>W: build(operation ID, source, definition, certificates)
+    W->>R: advance / fulfill byte requests
+    R-->>W: Sign(request ID, algorithm, COSE bytes)
+    W->>A: signer request(operation ID, request ID)
+    Note over W: Build awaits reply; message handler stays available
+    A->>A: await caller-owned signer
+    A->>W: signature or error(operation ID, request ID)
+    Note over W: Dispatch reply outside top-level operation queue
+    W->>R: fulfill signature, advance, finish
+    W-->>A: signed bytes, manifest, exclusions, statistics
+```
+
+Top-level reads/builds are serialized, but signer replies are not top-level
+operations. Queueing a reply behind its own waiting build would deadlock.
+Replies must match both the operation ID and the Rust request handle.
+Signer throws/rejections preserve their name/message across the protocol, not
+their original object identity or stack.
+
+A callback must not await another operation on the **same client**: that
+operation is queued behind the build awaiting the callback. Use a separate
+client for such work. A signer that never settles blocks its client's queue
+until disposal; signer/network timeouts are caller policy, not an automatic
+timeout or cancellation guarantee of this proof.
 
 ## Run the proof
 
@@ -202,6 +250,10 @@ The independent Neon and Wasm workspaces are not built by root `cargo test`.
 assets with the repository's public TEST ONLY ES256 credentials, and checks
 their full reports against the existing direct Node host. It requires no
 external service and does not add signing functionality to Rust.
+It also records the direct signer's exact COSE input/algorithm and exclusion
+ranges, and exports the repository's public TEST ONLY key in PKCS#8 form for the
+application-side WebCrypto test signer. Never substitute production credentials
+in these generated fixtures.
 
 An application uses the same calls with a different platform entry:
 
@@ -215,6 +267,17 @@ try {
     settings: { verify: { ocsp_fetch: false } },
   });
   console.log(report, stats);
+  // definition supplies the baseline title, instance_id, label, generator
+  // and c2pa.created assertion; privateKey is an application-held P-256 key.
+  const signed = await client.sign(unsignedJpeg, definition, {
+    alg: "es256",
+    certs: [certificateDer],
+    async sign(data) {
+      return new Uint8Array(await crypto.subtle.sign(
+        { name: "ECDSA", hash: "SHA-256" }, privateKey, data));
+    },
+  });
+  console.log(signed.asset, signed.manifest, signed.exclusions);
 } finally {
   await client.dispose();
 }
@@ -227,7 +290,7 @@ seconds by its small Wasm bridge; current dates and frozen fixture time fit.
 ## Acceptance and findings
 
 `npm test` and `npm run test:browser` must actually load the native addon and
-Wasm. No mocks substitute for the read boundary. The shared contract checks:
+Wasm. No mocks substitute for the read/build boundaries. The shared read contract checks:
 
 1. Complete report equality with the existing direct Neon host, including
    `Trusted`, signature and data-hash statuses.
@@ -241,19 +304,38 @@ Wasm. No mocks substitute for the read boundary. The shared contract checks:
 9. Disposal rejecting a pending operation and subsequent calls.
 10. A second Worker continuing after the first client is disposed.
 
-The Node tests additionally exercise facade startup/crash error propagation
-through a controlled port failure. This is not a native-process crash test.
+The [shared signing contract](test/signing.mjs) additionally proves:
+
+- Full trusted read-back for small and 64 MiB signed assets, matching direct
+  host reports, output/manifest lengths and hard-binding exclusions.
+- Exact COSE signing input and algorithm equality with the existing direct
+  signing host; randomized signatures need not be byte-identical.
+- A caller-owned, non-extractable WebCrypto key works in all four environments.
+- Input/definition/certificate snapshots, delayed callbacks and application
+  task progress while a build awaits its signature.
+- Synchronous throws, asynchronous rejections, invalid reply types/lengths,
+  malformed definitions and subsequent successful operations.
+- A 64-byte but invalid signature reads `Invalid`: reply-shape checks do not
+  establish cryptographic correctness or make build success a trust verdict.
+- Queued mixed reads/builds route correctly, and a second Worker can finish a
+  different build while the first Worker's signer remains pending.
+- Disposal rejects a pending build; both late signer success and rejection are
+  safely handled without affecting another client.
+
+The Node tests additionally exercise startup/crash and callback transport
+failures, plus assert that neither late callback outcome posts to a disposed
+port. These controlled port tests are not native-process crash tests.
 
 The architecture works in Node and Chromium/Firefox/WebKit. Importantly,
 **Neon loads inside a Node Worker without a Rust runtime or binding rewrite**.
-Both adapters use the same pre-existing Rust session and the same JS host.
+Both adapters use the same pre-existing Rust sessions and the same JS host.
 The 64 MiB asset needs 1,029 reads totaling 67,110,652 bytes, at most 64 KiB per
 read, and 137 advances, identically across all four environments.
 
 ### Performance interpretation
 
 Ignored `results/{node,chromium,firefox,webkit}.json` records three warm measured
-reads, task progress, caller/Worker duration and input/binary/source
+reads and three builds, task progress, caller/Worker duration and input/binary/source
 fingerprints. The checked-in [findings](findings.md) summarize a local run.
 Timing is **not** a pass threshold. The only scheduling assertion is that
 application tasks actually run before the read completes.
@@ -262,7 +344,8 @@ The synthetic asset is JPEG framing plus a zero-filled tail signed using the
 existing core. This exercises logical hashing, not realistic image metadata,
 physical I/O, a legacy comparison or cold-start distributions. Caller time
 includes input snapshot/cloning, queueing, report transfer and parsing;
-Worker time includes session construction, hashing and report serialization.
+Worker time includes session construction, hashing and report serialization;
+build time also includes output assembly and the awaited application signer.
 Their difference is not an isolated FFI cost.
 
 Worker isolation does not remove copying: each read snapshots and clones the
@@ -275,8 +358,11 @@ No new domain validation, formats, compatibility shims, identity/timestamp
 support, network hosts, worker pools, custom schedulers, public cancellation
 API or streaming-storage abstraction. No production publication.
 
-The next useful extension, if selected, is signing through this same Worker
-service with a purpose/operation-scoped caller callback. File/Blob sources
-could follow when whole-input cloning becomes an actual workload constraint.
-Neither requires making the core asynchronous. Do not add cooperative Worker
-scheduling without a required message/progress behavior that fails a test.
+The next useful measurement, if selected, is a controlled comparison of binary
+versus JSON transport for Wasm build write payloads: current large browser
+builds are much slower than reads, and only builds serialize whole output
+chunks as JSON byte arrays. This is a candidate bottleneck, not an isolated
+root cause. File/Blob-backed inputs and outputs could follow when copying or
+peak memory becomes a measured workload constraint. Neither requires making
+the core asynchronous. Do not add cooperative Worker scheduling without a
+required message/progress behavior that fails a test.
