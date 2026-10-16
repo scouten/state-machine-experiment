@@ -365,6 +365,72 @@ fn a_bigtiff_store_entry_with_an_overflowing_value_count_is_refused_not_panicked
     }
 }
 
+// Regression for the exploit in c2pa-rs PR #2068 (cyclic IFD chain → infinite
+// loop / OOM): an IFD whose `next` pointer points to an already-visited offset.
+// This handler tracks visited IFD offsets in a set (`seen`) and refuses a
+// pointer back to any of them, so a self-referential IFD (A→A, the 14-byte PoC)
+// is rejected rather than looped on. The mutual cycle (A→B→A) is covered by
+// `refuses_what_is_malformed`.
+#[test]
+fn a_self_referential_ifd_chain_is_refused_not_looped() {
+    for kind in ALL_KINDS {
+        let mut asset = tiff(kind, 1, 0);
+
+        // The single IFD sits right after the header; point its `next`
+        // field back at itself.
+        let next_at = kind.header_len() + kind.ifd_len(3) - kind.word();
+        asset[next_at..next_at + kind.word()]
+            .copy_from_slice(&kind.uint(kind.header_len() as u64, kind.word()));
+
+        assert!(
+            matches!(locate_err(asset), FormatError::Malformed(m) if m.contains("loops")),
+            "a self-referential IFD chain must be refused, not looped on"
+        );
+    }
+}
+
+// The two proof-of-concept cycles from c2pa-rs PR #2068 (cyclic IFD chain →
+// infinite loop / OOM), as explicit little-endian byte layouts. Each IFD here
+// carries one dummy entry so it passes this handler's non-empty-IFD check and
+// the chain is actually followed — proving the cycle itself is what gets
+// refused (via the `seen`-offset set), not the empty IFD. Against the unfixed
+// c2pa-rs parser each would loop forever.
+#[test]
+fn cyclic_ifd_self_loop_is_refused() {
+    // 14-byte PoC's shape: IFD at offset 8 whose next-offset is 8 (A → A).
+    #[rustfmt::skip]
+    let crafted: Vec<u8> = vec![
+        0x49, 0x49, // byte order: little-endian
+        0x2A, 0x00, // magic: 42
+        0x08, 0x00, 0x00, 0x00, // first IFD at offset 8
+        // IFD at offset 8:
+        0x01, 0x00, // entry count: 1
+        0x00, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, // dummy entry (tag 256)
+        0x08, 0x00, 0x00, 0x00, // next IFD offset: 8 (self-loop)
+    ];
+    assert!(matches!(locate_err(crafted), FormatError::Malformed(m) if m.contains("loops")));
+}
+
+#[test]
+fn cyclic_ifd_two_node_cycle_is_refused() {
+    // 20-byte PoC's shape: A (offset 8) → B (offset 26) → A (offset 8).
+    #[rustfmt::skip]
+    let crafted: Vec<u8> = vec![
+        0x49, 0x49, // byte order: little-endian
+        0x2A, 0x00, // magic: 42
+        0x08, 0x00, 0x00, 0x00, // first IFD at offset 8
+        // IFD A at offset 8:
+        0x01, 0x00, // entry count: 1
+        0x00, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, // dummy entry
+        0x1A, 0x00, 0x00, 0x00, // next IFD offset: 26 (IFD B)
+        // IFD B at offset 26:
+        0x01, 0x00, // entry count: 1
+        0x00, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, // dummy entry
+        0x08, 0x00, 0x00, 0x00, // next IFD offset: 8 (back to IFD A)
+    ];
+    assert!(matches!(locate_err(crafted), FormatError::Malformed(m) if m.contains("loops")));
+}
+
 #[test]
 fn a_host_failure_surfaces_rather_than_hanging() {
     let mut op = TiffFormat.locate(STREAM);
