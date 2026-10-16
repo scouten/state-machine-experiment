@@ -492,3 +492,28 @@ jobs:
       - name: Test
         working-directory: contentauth-c2pa-cpp
         run: ctest --test-dir build --output-on-failure
+
+  swift-compat:
+    name: c2pa-swift-compat tests (macOS)
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master@2026-06-30
+        with:
+          toolchain: stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Build contentauth-c2pa-c-api
+        run: cargo build -p contentauth-c2pa-c-api
+
+      - name: Verify generated Swift C header is current
+        run: diff -u contentauth-c2pa-c-api/include/contentauth_c2pa_c_api.h c2pa-swift-compat/Sources/CContentauthC2pa/include/contentauth_c2pa_c_api.h
+
+      - name: Run Swift tests
+        run: swift test --package-path c2pa-swift-compat

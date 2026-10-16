@@ -12,7 +12,7 @@ flowchart LR
         d1["Read + validate: integrity, signature,<br/>trust, RFC 3161, OCSP, v1+v2 claims"]
         d2["Write: v2 claim, data hash, any signing alg,<br/>timestamp"]
         d3["Formats: JPEG, TIFF/BigTIFF/DNG, registry"]
-        d4["Bindings: rs / wasm / node, read and sign"]
+        d4["Bindings: rs / wasm / node / swift, read and sign"]
         d5["Differential tests vs c2pa-rs"]
     end
     subgraph next["Next"]
@@ -78,10 +78,11 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 * **Browser:** a `fetch`-backed OCSP `Platform`; actually *running* the
   `web` modules (there's no browser in CI today); a Worker-hosted session
   for hashing off the main thread.
-* **Other host languages** — Python, Swift, Kotlin, .NET: the Node binding
-  shows the minimal shape (a handful of synchronous functions plus a host
+* **Other host languages** — Python, Kotlin, .NET: the Node and Swift
+  bindings show the minimal shape (a handful of synchronous functions plus a host
   loop). Each is a good test of whether the flattened `PendingRequest`/
-  `Reply` data model is the right wire format.
+  `Reply` data model is the right wire format. (Swift is implemented in
+  `c2pa-swift-compat` on top of `contentauth-c2pa-c-api`.)
 * **A WIT / Wasm component** exposing `advance`/`fulfill`/`finish` as the
   language-neutral form of the contract.
 * **Cancellation and progress** — c2pa-rs's `Context` has them; here they'd

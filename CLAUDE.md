@@ -260,6 +260,17 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   features independently select the exported workflows and their
   subordinate crates. The header always declares both APIs; calling a
   disabled API fails at link time.
+- **`c2pa-swift-compat`** — a pure Swift 6 package (strict concurrency)
+  that uses `contentauth-c2pa-c-api` as an alternative foundation for
+  `c2pa-swift`, resolving iOS/macOS thread creation policy violations
+  (`c2pa-swift#30`, `c2pa-rs#1660`) and `DispatchSemaphore` executor
+  starvation. Swift owns all threading and scheduling; I/O is streamed via
+  `AsyncByteSource`/`AsyncByteSink`, network via `URLSession`, and signing
+  via Apple `CryptoKit`/`AsyncSigner`. Zero Mach threads are spawned by
+  Rust, caller QoS is preserved, and Task cancellation is handled
+  cooperatively. Not a Cargo workspace member; CI builds the C API and runs
+  `swift test` in its own macOS job, and checks its copy of the generated
+  header matches the C API crate's.
 - **`c2pa-rs-compat-conformance`** — a differential test harness for the
   crate above, proving the same client code gets the same answer reading
   a file through the real `c2pa` crate as through
