@@ -28,6 +28,10 @@
 //!   crates address the same host requests and COSE structures with.
 //! * [`hash`] — digest computation. Verifying a hash and computing one to
 //!   record are the same operation.
+//! * [`chunk`] — [`ChunkSize`] and [`HashWindow`], how much of the asset a
+//!   session asks its
+//!   host for at a time while hashing, with the bounds the engine enforces
+//!   on whatever a host chooses.
 //! * [`cbor`] — a hand-rolled, deterministic CBOR encoder for the COSE
 //!   `Sig_structure` a claim signature covers. The reader reconstructs
 //!   these bytes to verify a signature; a builder constructs the identical
@@ -53,10 +57,12 @@
 #![deny(unsafe_code)]
 
 pub mod cbor;
+pub mod chunk;
 pub mod error;
 pub mod hash;
 pub mod tsa;
 pub mod types;
 
+pub use chunk::{ChunkSize, ChunkSizeError, HashWindow, HashWindowError};
 pub use error::HostError;
 pub use types::{ByteRange, HashAlgorithm, SigningAlg, StreamId};
