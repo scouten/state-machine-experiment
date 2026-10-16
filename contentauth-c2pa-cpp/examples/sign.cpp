@@ -87,7 +87,11 @@ int main(int argc, char **argv) {
         c2pa::sm::MemoryHost host(load_bytes(argv[2]), now);
         auto reader = c2pa::sm::read(c2pa::sm::Session("image/jpeg", reader_settings), host);
         if (!reader) throw std::runtime_error("signed output has no manifest");
-        std::printf("%s\n", reader->json().c_str());
+        const auto json = reader->json();
+        std::printf("%s\n", json.c_str());
+        // Reader exposes validation through pretty-printed JSON; match the root field.
+        if (json.find("\n  \"validation_state\": \"Trusted\"") == std::string::npos)
+            throw std::runtime_error("signed output did not validate as Trusted");
         return 0;
     } catch (const std::exception &error) {
         std::fprintf(stderr, "%s\n", error.what());

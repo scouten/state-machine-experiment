@@ -12,6 +12,12 @@ keywords = ["c2pa", "content-credentials", "compatibility", "signing"]
 categories = ["api-bindings"]
 publish = false
 
+[features]
+default = ["http"]
+# Signer::send_timestamp_request's default transport; custom signer
+# overrides work independently of this feature.
+http = ["dep:reqwest"]
+
 [dependencies]
 # The baseline definition → `BuilderSettings` step, shared by every binding.
 contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline" }
@@ -29,14 +35,14 @@ contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
 # Blocking HTTP, only for `Signer::send_timestamp_request`'s default: the
 # RFC 3161 POST. The same version and feature as
 # `contentauth-c2pa-rs-compat`, so no second copy enters the tree.
-reqwest = { version = "0.13.5", features = ["blocking"] }
+reqwest = { version = "0.13.5", features = ["blocking"], optional = true }
 
 thiserror = "2.0.20"
 
 [dev-dependencies]
 # Reads what this crate signs back through the sibling read-side compat
 # layer, exactly as a c2pa-rs user would: `Reader::from_context(..)`.
-contentauth-c2pa-rs-compat = { path = "../contentauth-c2pa-rs-compat" }
+contentauth-c2pa-rs-compat = { path = "../contentauth-c2pa-rs-compat", default-features = false }
 contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline", features = [
     "fixtures",
 ] }

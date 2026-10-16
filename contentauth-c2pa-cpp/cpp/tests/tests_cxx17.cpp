@@ -146,6 +146,58 @@ TEST(build_mailbox_wakers_cover_delivery_registration_race_and_reentry) {
     }
 }
 
+TEST(build_mailbox_preserves_replies_when_wakers_throw_and_discards_them_on_cancel) {
+    BuildMailbox mailbox;
+    for (bool standard_error : {false, true}) {
+        int wakes = 0;
+        CHECK(mailbox.set_waker([&] {
+            ++wakes;
+            if (standard_error) throw std::runtime_error("waker failed");
+            throw 42;
+        }));
+        mailbox.post(7, Length{9});
+        mailbox.wait();
+        const auto messages = mailbox.drain();
+        CHECK_EQ(wakes, 1);
+        CHECK_EQ(messages.size(), size_t{1});
+        CHECK_EQ(messages.front().first, uint64_t{7});
+        CHECK_EQ(std::get<Length>(messages.front().second).value, uint64_t{9});
+        CHECK(mailbox.drain().empty());
+    }
+    ManualBuildHost host;
+    Building building(BuildSession(signing_settings()), host);
+    auto &cancelled = building.mailbox();
+    int wakes = 0;
+    CHECK(cancelled.set_waker([&] { ++wakes; }));
+    CHECK_THROWS_CODE(std::move(building).finish(), ErrorCode::InvalidArgument);
+    cancelled.wait();
+    CHECK(!cancelled.set_waker([&] { ++wakes; }));
+    cancelled.post(8, Written{});
+    CHECK(cancelled.drain().empty());
+    CHECK_EQ(wakes, 0);
+    CHECK_THROWS_CODE(std::move(building).finish(), ErrorCode::InvalidArgument);
+}
+
+TEST(build_mailbox_wait_blocks_until_a_reply_or_cancellation) {
+    for (bool cancel : {false, true}) {
+        ManualBuildHost host;
+        Building building(BuildSession(signing_settings()), host);
+        auto &mailbox = building.mailbox();
+        std::promise<void> entered;
+        auto started = entered.get_future();
+        auto waiter = std::async(std::launch::async, [&] {
+            entered.set_value();
+            mailbox.wait();
+        });
+        started.get();
+        CHECK(waiter.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout);
+        if (cancel) CHECK_THROWS_CODE(std::move(building).finish(), ErrorCode::InvalidArgument);
+        else mailbox.post(7, Length{9});
+        waiter.get();
+        CHECK_EQ(mailbox.drain().size(), cancel ? size_t{0} : size_t{1});
+    }
+}
+
 TEST(async_build_protocol_errors_are_terminal_instead_of_hanging) {
     for (bool bad_id : {false, true}) {
         ManualBuildHost host;
@@ -224,6 +276,37 @@ TEST(pooled_build_submission_failure_and_throwing_completion_do_not_escape_worke
     const auto reply = future.get();
     pool.reset();
     CHECK_EQ(std::get<Length>(reply).value, backing.length(BuildStream::Source));
+}
+
+TEST(pooled_build_failures_release_the_host_for_later_requests) {
+    struct FailingHost : MemoryBuildHost {
+        FailingHost() : MemoryBuildHost({1, 2, 3}) {}
+        uint64_t length(BuildStream stream) override {
+            if (stream == BuildStream::Source) throw std::runtime_error("length refused");
+            throw 42;
+        }
+    } host;
+    auto pool = make_simple_thread_pool(1);
+    PooledBuildHost adapter(host, *pool);
+    for (auto stream : {BuildStream::Source, BuildStream::Output}) {
+        std::promise<BuildReply> result;
+        auto future = result.get_future();
+        adapter.start(BuildLengthRequest{1, stream}, [&](BuildReply reply) {
+            result.set_value(std::move(reply));
+        });
+        const auto reply = future.get();
+        CHECK(std::holds_alternative<Failed>(reply));
+        CHECK_EQ(std::get<Failed>(reply).message,
+                 stream == BuildStream::Source ? "length refused" : "unknown build host error");
+    }
+    std::promise<BuildReply> result;
+    auto future = result.get_future();
+    adapter.start(WriteRequest{2, BuildStream::Output, 0, {9}}, [&](BuildReply reply) {
+        result.set_value(std::move(reply));
+    });
+    CHECK(std::holds_alternative<Written>(future.get()));
+    pool.reset();
+    CHECK_EQ(host.output(), (std::vector<uint8_t>{9}));
 }
 
 TEST(pooled_builds_round_trip_memory_and_seekable_streams) {
@@ -460,6 +543,26 @@ TEST(build_request_conversion_accepts_empty_buffers_without_dereferencing_them) 
     CHECK(write.bytes.empty());
 }
 
+TEST(build_request_conversion_copies_nonempty_payloads_without_terminators) {
+    std::vector<uint8_t> bytes{1, 0, 3};
+    std::string text = "es256";
+    C2paSmBuildRequest pending{};
+    pending.id = 42;
+    pending.data = {bytes.data(), bytes.size()};
+    pending.algorithm = {reinterpret_cast<const uint8_t *>(text.data()), text.size()};
+    pending.url = pending.algorithm;
+    pending.kind = C2PA_SM_BUILD_REQUEST_SIGN;
+    const auto sign = std::get<SignRequest>(detail::describe(pending));
+    pending.kind = C2PA_SM_BUILD_REQUEST_TIMESTAMP;
+    const auto timestamp = std::get<TimestampRequest>(detail::describe(pending));
+    bytes.assign(bytes.size(), 0);
+    text.assign(text.size(), 'x');
+    CHECK_EQ(sign.algorithm, "es256");
+    CHECK_EQ(sign.data, (std::vector<uint8_t>{1, 0, 3}));
+    CHECK_EQ(timestamp.url, "es256");
+    CHECK_EQ(timestamp.body, sign.data);
+}
+
 TEST(build_hosts_accept_empty_io_at_eof_without_changing_output) {
     MemoryBuildHost memory({1, 2, 3});
     std::istringstream source("abc");
@@ -669,6 +772,36 @@ TEST(short_reads_and_host_failures_fail_without_spinning) {
 }
 
 #if defined(__unix__) || defined(__APPLE__)
+TEST(file_build_read_reports_source_truncation_after_length_check) {
+    std::string pattern = (std::filesystem::temp_directory_path() / "c2pa-truncate-test-XXXXXX").string();
+    if (!::mkdtemp(pattern.data())) throw std::runtime_error("cannot create test directory");
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() { std::error_code error; std::filesystem::remove_all(path, error); }
+    } cleanup{pattern};
+    const auto source = cleanup.path / "source.jpg";
+    { std::ofstream input(source, std::ios::binary); input << "abc"; }
+    struct TruncatingHost : FileBuildHost {
+        std::filesystem::path source;
+        TruncatingHost(const std::filesystem::path &input, const std::filesystem::path &output)
+            : FileBuildHost(input, output), source(input) {}
+        uint64_t length(BuildStream stream) override {
+            const auto size = FileBuildHost::length(stream);
+            if (stream == BuildStream::Source) std::filesystem::resize_file(source, 0);
+            return size;
+        }
+    };
+    {
+        TruncatingHost host(source, cleanup.path / "output.jpg");
+        const auto reply = answer(host, BuildReadRequest{1, BuildStream::Source, 0, 3});
+        CHECK(std::holds_alternative<Failed>(reply));
+        CHECK_EQ(std::get<Failed>(reply).message, "build file read failed");
+    }
+    CHECK_EQ(std::filesystem::file_size(source), uintmax_t{0});
+    CHECK_EQ(std::distance(std::filesystem::directory_iterator(cleanup.path),
+                           std::filesystem::directory_iterator{}), 1);
+}
+
 TEST(file_signing_publishes_only_success_and_cleans_temporaries) {
     std::string pattern = (std::filesystem::temp_directory_path() / "c2pa-sign-test-XXXXXX").string();
     if (!::mkdtemp(pattern.data())) throw std::runtime_error("cannot create test directory");
@@ -746,6 +879,14 @@ TEST(file_signing_publishes_only_success_and_cleans_temporaries) {
         std::ofstream output(destination);
         output << "keep me";
     }
+    CHECK_THROWS_CODE(build_and_sign_file(BuildSettings{}, C2PA_SM_FIXTURE, destination, fixture_sign),
+                      ErrorCode::InvalidArgument);
+    {
+        std::ifstream input(destination);
+        CHECK_EQ(std::string(std::istreambuf_iterator<char>(input), {}), "keep me");
+    }
+    CHECK_EQ(std::distance(std::filesystem::directory_iterator(cleanup.path),
+                           std::filesystem::directory_iterator{}), 1);
     CHECK_THROWS_CODE(build_and_sign_file(settings, C2PA_SM_FIXTURE, destination, {}), static_cast<ErrorCode>(C2PA_SM_ERR_BUILD));
     {
         std::ifstream input(destination);

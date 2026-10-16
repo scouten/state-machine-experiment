@@ -46,15 +46,21 @@ The definition includes the required instance ID, label, generator and
 assertions. The certificate is DER and the key is an unencrypted ES256 PEM;
 encrypted keys are rejected without prompting. The output is published
 atomically, then read back with the supplied certificate explicitly trusted,
-and its validation JSON is printed. This demonstrates caller-selected trust,
+and its validation JSON is printed. The example exits zero only when the
+read-back validation state is `Trusted`; any other state reports a verification
+error and exits 2. Verification happens after publication, so a failed check
+does not remove the output. This demonstrates caller-selected trust,
 not independent proof that a supplied certificate is trustworthy. An optional
 last argument supplies Unix seconds for reproducible validation; otherwise the
 host uses the system clock. No HTTP transport is supplied, so a definition
 requesting a timestamp fails closed rather than omitting it.
 
 CTest runs the example with the baseline fixtures and a fixed validation time,
-requiring `validation_state: Trusted`. Its usage-error test checks a nonzero
-exit. `./test.sh` and CI include both through normal CTest registration.
+requiring `validation_state: Trusted`. A mismatched P-256 key test requires an
+`Invalid` report, a verification-error diagnostic and exit 2; its temporary key
+and output are removed afterward. The usage-error test also checks a nonzero
+exit. `./test.sh` and CI include all three through normal CTest registration;
+the mismatched-key test uses the OpenSSL command-line tool to generate its key.
 
 ## What the existing API looks like
 
@@ -494,6 +500,13 @@ executable lines (98.42%) and 348/553 branch outcomes (62.93%); examples and
 test helpers are not included in those figures. Remote CI must still run before
 merge. Real private keys, HTTP and trust policy stay with the host. The coroutine
 destruction boundaries documented above remain unchanged.
+
+Additional regression tests exercise throwing mailbox wakers, cancellation
+waking a blocked waiter and discarding late replies, and pooled hosts continuing
+after standard and nonstandard I/O exceptions. Conversion tests verify that
+request payloads are owned copies, including embedded zero bytes. A file-host
+test truncates a private test source immediately after its length is checked,
+then requires an explicit read failure and temporary-output cleanup.
 
 ## Not covered
 

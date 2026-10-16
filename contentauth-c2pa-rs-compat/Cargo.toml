@@ -12,6 +12,12 @@ keywords = ["c2pa", "content-credentials", "compatibility"]
 categories = ["api-bindings"]
 publish = false
 
+[features]
+default = ["http"]
+# The blocking OCSP transport. Without it, the local file host reports
+# online OCSP requests as unavailable; stapled responses still validate.
+http = ["dep:reqwest", "dep:url"]
+
 [dependencies]
 # The sans-I/O read engine and its file-based host type (`FileReadSession`,
 # `FileReadRequest`/`FileReadReply`) — `src/host.rs` drives the session
@@ -55,14 +61,14 @@ serde_json = "1"
 # blocking shape; every other default feature (TLS, HTTP/2, system proxy
 # support, charset sniffing) is a reasonable default for a networked
 # convenience host rather than something this crate has an opinion about.
-reqwest = { version = "0.13.5", features = ["blocking"] }
+reqwest = { version = "0.13.5", features = ["blocking"], optional = true }
 # Only for `url::Host`, to tell a literal IP address host apart from a
 # domain name when checking an OCSP responder URL against
 # `src/host.rs`'s own SSRF safeguards — a literal IP bypasses the DNS
 # resolution hook those rely on otherwise. Already in the tree via
 # `reqwest` (which re-exports `Url` itself but not `Host`), so this adds
 # no second copy.
-url = "2.5"
+url = { version = "2.5", optional = true }
 
 [dev-dependencies]
 # Test-only: the concrete handlers, to embed a manifest into a fixture the

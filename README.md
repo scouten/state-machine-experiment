@@ -100,7 +100,9 @@ Outside the workspace (see its own README for why):
 
 Bindings that expose a C API should be built on the
 [`cimpl`](https://github.com/contentauth/cimpl) crate rather than a
-hand-rolled C FFI. No such binding exists yet.
+hand-rolled C FFI. [`contentauth-c2pa-c-api`](contentauth-c2pa-c-api)
+uses cimpl for tracked handles, pointer validation, error conversion, and
+memory ownership; cbindgen generates its C header.
 
 ## Building
 

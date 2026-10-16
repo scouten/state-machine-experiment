@@ -27,4 +27,10 @@ if(UNIX)
 		PASS_REGULAR_EXPRESSION "\"validation_state\"[ \t\r\n]*:[ \t\r\n]*\"Trusted\"")
 	add_test(NAME example_sign_usage COMMAND c2pa_sm_sign)
 	set_tests_properties(example_sign_usage PROPERTIES WILL_FAIL TRUE)
+	find_program(OPENSSL_EXECUTABLE openssl REQUIRED)
+	add_test(NAME example_sign_mismatched_key COMMAND "${CMAKE_COMMAND}"
+		"-DOPENSSL=${OPENSSL_EXECUTABLE}" "-DSIGNER=$<TARGET_FILE:c2pa_sm_sign>"
+		"-DSOURCE=${FIXTURE}" "-DBUILD_DIR=${CMAKE_BINARY_DIR}"
+		"-DCERTIFICATE=${WORKSPACE_ROOT}/contentauth-c2pa-builder/tests/fixtures/test-signer.der"
+		-P "${CMAKE_CURRENT_SOURCE_DIR}/test_mismatched_key.cmake")
 endif()
