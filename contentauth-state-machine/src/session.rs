@@ -71,7 +71,25 @@ pub enum Step {
 ///    result.
 ///
 /// A session is a plain, `Send` value with no interior mutability — it is
-/// meant to be handed across threads or tasks, not shared. This trait
+/// meant to be handed across threads or tasks, not shared.
+///
+/// # Not re-entrant, and not locked
+///
+/// Sessions are **not re-entrant** and the Rust code provides **no locks**
+/// around them: every method takes `&mut self` (or `self`), and nothing
+/// serializes callers beyond that. A host that employs a thread model must
+/// ensure that the methods of a session (`advance`, `fulfill`,
+/// `outstanding_requests`, `finish`) are never called simultaneously from
+/// multiple threads, nor re-entered from within a call already in progress
+/// on the same session. Within safe Rust the borrow checker enforces this
+/// for you; across an FFI or other binding boundary that hands out raw
+/// handles, the host must enforce it itself. Violating the constraint is
+/// likely to cause crashes or unpredictable behavior.
+///
+/// Moving a session between threads *between* calls is fine, as is driving
+/// many independent sessions concurrently — the constraint is per session.
+///
+/// This trait
 /// carries no logic of its own; it exists so that host-side code (a test
 /// harness, an FFI dispatcher, a generic driver loop) can be written once
 /// against any session built on this engine, whatever workflow it carries

@@ -71,6 +71,12 @@ close to it:
 * **Hashing happens on the host's thread**, in small slices between awaits.
   Moving it off-thread means running the session in a Worker — possible
   without changing the engine, but the host's job.
+* **Serializing a session's calls is the host's job.** Sessions are not
+  re-entrant and the Rust code puts no locks around them; a host with a
+  thread model must never call one session's methods simultaneously from
+  several threads. Crashes or unpredictable behavior are likely otherwise.
+  (Different sessions are independent, and a session may move between
+  threads between calls.)
 * **A second implementation to keep honest.** Reader/validator logic is
   written from scratch here, so conformance to c2pa-rs and to the spec is
   something to *keep proving*, not inherit.

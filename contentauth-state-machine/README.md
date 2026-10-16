@@ -44,6 +44,18 @@ whatever outcomes have arrived and make further progress.
    may be reported in any order.
 4. On `Complete`: consume the session with `finish` to obtain its result.
 
+### Threading
+
+A session is **not re-entrant**, and the Rust code provides **no locks**
+around it. Any host that employs a thread model must ensure the session's
+methods are never called simultaneously from multiple threads (nor
+re-entered from within a call in progress on the same session). Crashes or
+unpredictable behavior are likely if this constraint is violated. A session
+may be moved between threads between calls, and independent sessions may be
+driven concurrently; the constraint is per session. In safe Rust the
+`&mut self` receivers enforce this at compile time; hosts reaching a session
+through a raw-handle binding must enforce it themselves.
+
 See the `Session` trait and `SessionCore` in [`src/session.rs`](src/session.rs)
 for the concrete API.
 
