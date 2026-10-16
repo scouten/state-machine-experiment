@@ -122,19 +122,20 @@ should not have to adopt them just to drive the state machine. Keep legacy
 compatibility facades separate from the reusable session protocol; existing
 Rust hosts can already use the underlying typed sessions directly.
 
-Only JavaScript consumers are proven by this experiment. Other-language
-bindings and a universal ABI are not implemented or required. Prove a concrete
-additional consumer before introducing further abstractions.
+The JavaScript experiments prove the two JS consumers. The subsequently merged
+[C++ reader binding](../contentauth-c2pa-cpp/) also drives the neutral read bridge
+through its own C ABI and hosts, not this JS package. Python and a universal ABI
+remain unimplemented; no further abstraction is required for those possibilities.
 
-The following is the current JavaScript ownership model. The dotted paths are
-possible, unproven additional consumers.
+The following is the current ownership model. The dotted Python path is a
+possible, unproven additional consumer.
 
 ```mermaid
 flowchart TB
     JS["Shared JS host<br/>browser and Node Workers"]
     Wasm["Browser binding<br/>wasm-bindgen"]
     Neon["Node binding<br/>Neon"]
-    CPP["Possible C++ host + interop adapter<br/>not implemented or tested"]
+    CPP["C++ reader hosts + C ABI adapter<br/>contentauth-c2pa-cpp"]
     Python["Possible Python host + extension adapter<br/>not implemented or tested"]
     Bridge["ReadSessionBridge + BuildSessionBridge<br/>contentauth-c2pa-session-bridge<br/>plain-data requests / replies"]
     File["FileReadSession / FileBuilderSession<br/>typed Rust sessions"]
@@ -142,7 +143,7 @@ flowchart TB
     JS --> Wasm & Neon
     Wasm --> Bridge
     Neon --> Bridge
-    CPP -.-> Bridge
+    CPP -->|"read bridge"| Bridge
     Python -.-> Bridge
     Bridge --> File
     Rust --> File

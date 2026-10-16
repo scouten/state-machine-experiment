@@ -209,6 +209,24 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   member (own `[workspace]`): a Neon `cdylib` cannot link outside Node, so
   CI builds and tests it in its own `node-addon` job
   (`npm run build && npm test` in that directory).
+- **`contentauth-c2pa-cpp`** — an exploration of a C++ binding, aimed at
+  the async/threaded behavior a callback-based API cannot express. A Rust
+  static library behind a small C ABI (`src/lib.rs`, `include/contentauth_c2pa_sm.h`;
+  the one crate here allowed `unsafe`, being the FFI boundary; symbols are
+  `c2pa_sm_*` to coexist with c2pa-c) wrapping `contentauth-c2pa-session-bridge`'s
+  flat `read::ReadSessionBridge`, plus C++ in `include/contentauth/` (header-only apart
+  from the compiled thread pools in `cpp/src/`):
+  a C++17 core (`Session`, `Reader`, blocking `read()`), C++17 thread-based
+  drivers (`Reading`/`Mailbox`, `read_parallel`, `read_future`,
+  `PooledHost` over the `ThreadPool` interface, with a portable
+  `make_simple_thread_pool` and an Apple GCD `make_apple_thread_pool`) and
+  C++20 coroutines (`co_read`, `spawn`).
+  Errors are values, not thread-local, so a session can move between
+  threads. Built with CMake (`cpp/`, `CMakeLists.txt`); its README holds the
+  review of c2pa-cpp's API and the rationale for every departure. Read side
+  only. CI's `cpp-binding` job runs the C++ tests with coverage and under
+  ASan/TSan; a C++ edit must be checked with
+  `cmake -S contentauth-c2pa-cpp -B contentauth-c2pa-cpp/build && cmake --build contentauth-c2pa-cpp/build && ctest --test-dir contentauth-c2pa-cpp/build`.
 - **`contentauth-c2pa-sign-baseline`** — the *baseline signing case*
   every binding of the write path is held to: sign a JPEG with ES256 from
   a c2pa-rs-shaped JSON definition (title, one generator, one
@@ -271,6 +289,19 @@ the crate table and dependency graph in `02-architecture.md`, and the
 lands; add items a PR reveals). Diagrams are Mermaid so GitHub renders them;
 when a diagram and the code disagree, the code wins — fix the diagram.
 
+## C FFI bindings
+
+If a binding needs a C-language FFI, build it on the
+[`cimpl`](https://github.com/contentauth/cimpl) crate rather than
+hand-rolling `extern "C"` functions, pointer handling, and error plumbing.
+Consult cimpl's own documentation for its API. As with the sans-I/O
+sessions, keep the FFI layer thin: the host (C caller) owns I/O and drives
+`advance`/`fulfill`/`finish`. Any `unsafe` that cimpl cannot absorb stays
+confined to that binding crate; the engine, reader, and builder crates keep
+denying `unsafe_code`. Such a crate is subject to the same CI constraints
+as other members (or must justify living outside the workspace, as the
+Neon addons do).
+
 ## Stability
 
 This is a very experimental prototype, not a shipping product: nothing
@@ -306,13 +337,19 @@ comments for the reasoning): `cert.rs` is the only place that names an
 and `claim.rs` walks `c2pa_cbor::Value` by hand rather than using serde
 derives, so the set of claim fields understood stays explicit.
 
-Both crates deny `unsafe_code`, `missing_docs`, `clippy::unwrap_used`,
+Both crates deny `unsafe_code` (the C ABI crate `contentauth-c2pa-cpp` is
+the deliberate exception), `missing_docs`, `clippy::unwrap_used`,
 `clippy::expect_used`, and `clippy::panic` at the crate root — write
 fallible code and propagate errors through the crate's `Error` type rather
 than reaching for `.unwrap()`/`.expect()`/`panic!()`, including in new
 non-test code.
 
 ## Commands
+
+Any generative process producing a change for this repository must drive code
+coverage to the maximum reasonably possible before submitting a PR. Add or
+extend meaningful tests for changed behavior and uncovered reachable paths;
+do not stop at a passing test suite.
 
 Build/test the whole workspace from the repo root:
 
@@ -347,9 +384,11 @@ Doc build (CI denies rustdoc warnings too):
 RUSTDOCFLAGS=-Dwarnings cargo doc --no-deps --all-features
 ```
 
-Code coverage (matches the CI job; requires `cargo-llvm-cov`):
+Code coverage (matches the CI job; requires `cargo-llvm-cov` and LLVM tools):
 
 ```sh
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov
 cargo llvm-cov --all-features --tests --lcov --output-path lcov.info
 ```
 

@@ -82,6 +82,12 @@ where it could go next — written in Markdown with Mermaid diagrams.
   (reading a manifest store from a file and reporting it as JSON) on top
   of the crates above, for a caller that wants c2pa-rs's existing surface
   rather than this workspace's `Session` contract.
+* [`contentauth-c2pa-cpp`](contentauth-c2pa-cpp) — an exploration of a C++
+  binding: a C ABI over the sans-I/O reader session plus header-only C++
+  (blocking, thread-pool and C++20 coroutine drivers), written to show what
+  the session model can express — parallel and multiplexed reads, errors as
+  values, cancellation by destruction — that a callback-based API cannot.
+  See its [README](contentauth-c2pa-cpp/README.md).
 * [`contentauth-c2pa-js-compat`](contentauth-c2pa-js-compat) — the same
   experiment for the Rust side of the C2PA web SDK, [c2pa-js]'s
   `c2pa-wasm` package: a `Reader` mirroring `WasmReader`'s
@@ -96,6 +102,8 @@ where it could go next — written in Markdown with Mermaid diagrams.
   neutral synchronous `ReadSessionBridge` and `BuildSessionBridge`, extracted
   from the former Node-named crates. Owns explicit SDK compatibility vocabulary
   shared with the alternative async host.
+* [`contentauth-c2pa-cpp`](contentauth-c2pa-cpp) — an experimental C ABI
+  consumer of the read bridge, with blocking, thread-pool and coroutine C++ hosts.
 
 Outside the workspace (see its own README for why):
 
@@ -121,6 +129,14 @@ it. See its [README](reference/c2pa-spec/README.md) for provenance,
 scope, and license — those files are CC-BY-4.0, separate from the MIT OR
 Apache-2.0 terms covering the rest of this repository.
 
+## C FFI
+
+Bindings that expose a C API should be built on the
+[`cimpl`](https://github.com/contentauth/cimpl) crate rather than a
+hand-rolled C FFI for new interfaces. The existing experimental
+[`contentauth-c2pa-cpp`](contentauth-c2pa-cpp) binding currently uses a
+hand-written C ABI; it has not yet been migrated to `cimpl`.
+
 ## Building
 
 This repo is a Cargo workspace; the usual commands run across all members
@@ -131,6 +147,18 @@ cargo test
 ```
 
 Minimum supported Rust version: 1.96.0.
+
+Any generative process producing a change for this repository must drive
+code coverage to the maximum reasonably possible before submitting a PR,
+adding meaningful tests for changed behavior and uncovered reachable paths.
+Install the coverage tool and Rust's LLVM tools component, then measure
+coverage:
+
+```sh
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov
+cargo llvm-cov --all-features --tests --lcov --output-path lcov.info
+```
 
 Code format uses nightly rustfmt:
 

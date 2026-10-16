@@ -12,7 +12,7 @@ flowchart LR
         d1["Read + validate: integrity, signature,<br/>trust, RFC 3161, OCSP, v1+v2 claims"]
         d2["Write: v2 claim, data hash, any signing alg,<br/>timestamp"]
         d3["Formats: JPEG, TIFF/BigTIFF/DNG, registry"]
-        d4["Bindings: rs / wasm / node, read and sign"]
+        d4["Bindings: rs / wasm / node, read and sign<br/>C++ reader: C ABI + blocking / threaded / coroutine hosts"]
         d5["Differential tests vs c2pa-rs"]
         d6["Shared JS Worker read + baseline sign<br/>browser Wasm / Node Neon, async signer callbacks"]
     end

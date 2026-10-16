@@ -19,9 +19,10 @@ private keys. Errors, request ordering and one-time request reporting are
 unchanged. Read/build request vocabularies remain separate modules.
 
 Compatibility policy remains explicit: JPEG selection, settings JSON, baseline
-definition conversion and reports are not generic engine concepts. C++, Python
-and other hosts could supply their own ABI/ownership adapters, but none are
-implemented or tested. Rust enums are not a stable cross-language ABI.
+definition conversion and reports are not generic engine concepts.
+The [C++ reader binding](../contentauth-c2pa-cpp/) also consumes the read bridge
+through a C ABI with its own ownership adapter. Python and other bindings remain
+prospective. Rust enums are not a stable cross-language ABI.
 
 The older browser-shaped async hosts remain in
 [`contentauth-c2pa-js-compat`](../contentauth-c2pa-js-compat/) and its signing

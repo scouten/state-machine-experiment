@@ -14,6 +14,7 @@ flowchart TB
     J --> J1["Reader::from_blob(fmt, blob, ctx, platform).await"]
     N --> N1["Portable read bridge<br/>advance / fulfill / finish"]
     N1 --> N2["JS loop in index.mjs<br/>(fs, fetch, event loop)"]
+    N1 --> CPP["C ABI + C++ reader hosts<br/>blocking / thread-pool / coroutine"]
     N1 --> W["Shared JS host<br/>same facade and protocol"]
     W --> WB["Browser Worker<br/>synchronous Wasm binding"]
     W --> WN["Node Worker<br/>synchronous Neon binding"]
@@ -28,6 +29,7 @@ the separate async `js-compat` host.
 | `rs-compat` | c2pa-rs `Context`, `Reader`, `Manifest` | Nowhere — blocking | One of two network dependencies (with `rs-compat-sign`): `reqwest` answers `Ocsp`. Owns format *policy* (`src/format.rs`). |
 | `js-compat` | c2pa-wasm `WasmReader` | One `async fn` driving the session (`src/drive.rs`) | `Blob` ≈ `Blob.size` + `slice().arrayBuffer()`; `Platform` supplies clock/OCSP, which c2pa-rs gets implicitly. `web` feature adds a `#[wasm_bindgen]` `WasmReader`. |
 | `session-bridge` + Wasm/Neon | Host-driven read/build, with explicit SDK compatibility policy | Shared JavaScript host in browser/Node Workers; broader existing addon hosts also retained | Rust has no runtime, threads, locks or `async`. |
+| `session-bridge` + `cpp` | Host-driven read through a C ABI | C++ blocking, thread-pool or coroutine driver | Independent non-JS consumer of the same read bridge; signing is not implemented. |
 
 ## Where the c2pa-rs shapes break down
 

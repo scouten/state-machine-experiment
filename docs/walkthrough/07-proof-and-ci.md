@@ -40,6 +40,9 @@ both Neon addons, then runs the shared Node and Chromium/Firefox/WebKit read and
 signing contracts. It requires real bindings and installed browsers: no skips
 or mock-only substitute. The SDK-to-SDK benchmark is a local command requiring
 an existing sibling SDK build, not a dependency of PR CI.
+The C++ binding jobs exercise the Rust C ABI plus C++17, C++20 and pool
+drivers on Linux and macOS. The Linux matrix covers C++ coverage, AddressSanitizer
+and ThreadSanitizer; macOS also exercises the Apple thread pool.
 
 ```mermaid
 flowchart LR
@@ -51,6 +54,7 @@ flowchart LR
     PR --> C["compat-conformance<br/>(differential tests vs c2pa-rs)"]
     PR --> N["node-addon,<br/>node-sign-addon"]
     PR --> JS["javascript-host<br/>real Wasm + Neon<br/>Node + 3 browsers"]
+    PR --> CPP["cpp-binding / cpp-binding-macos<br/>C ABI + C++ drivers<br/>coverage / ASan / TSan"]
 ```
 
 The Wasm checks are a design assertion: **the engine and everything over it
