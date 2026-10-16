@@ -21,5 +21,10 @@ publish = false
 c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
     "rust_native_crypto",
 ] }
+# Reference-counted byte buffers for payloads that cross the host boundary
+# (asset chunks, manifest stores, placeholders): cloning or slicing one is a
+# refcount bump, not a copy, and a `Vec<u8>` converts in without copying.
+# Already in the tree through `reqwest`; `Send + 'static`, no_std-friendly.
+bytes = "1.12.1"
 sha2 = "0.11.0"
 thiserror = "2.0.20"

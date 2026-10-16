@@ -40,6 +40,10 @@
 //! * [`error::HostError`] — the "the host couldn't do it" wrapper every
 //!   sans-I/O session's reply vocabulary needs, regardless of what kind of
 //!   work the session does.
+//! * [`Bytes`] — re-exported from the `bytes` crate: the one buffer type
+//!   every vocabulary carries bulk payloads in (asset chunks, manifest
+//!   stores, placeholders), so a host or session can clone or slice one
+//!   without copying it, and every crate agrees on which `Bytes` it is.
 //!
 //! What is deliberately *not* here: anything about reading or writing a
 //! manifest store itself (JUMBF/claim/assertion structure, certificate
@@ -58,5 +62,6 @@ pub mod hash;
 pub mod tsa;
 pub mod types;
 
+pub use bytes::Bytes;
 pub use error::HostError;
 pub use types::{ByteRange, HashAlgorithm, SigningAlg, StreamId};

@@ -47,6 +47,15 @@ whatever outcomes have arrived and make further progress.
 See the `Session` trait and `SessionCore` in [`src/session.rs`](src/session.rs)
 for the concrete API.
 
+Synchronous hosts can use `session.respond(|request| answer(request))?`
+after each `AwaitHost`. This borrows each request, obtains its owned reply,
+and calls `fulfill` before servicing the next request: no request clones
+or intermediate reply batch are needed. It stops on the first protocol
+error, leaves earlier replies delivered, and does not call `advance`.
+Host-operation failures are carried in the vocabulary's reply type.
+Async hosts and hosts that service only a subset or choose another order
+continue to use `outstanding_requests` / `fulfill` directly.
+
 ## Building
 
 ```sh

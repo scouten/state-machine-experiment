@@ -13,7 +13,7 @@
 
 //! What [`FormatHandler::locate`](crate::FormatHandler::locate) reports.
 
-use contentauth_c2pa_primitives::ByteRange;
+use contentauth_c2pa_primitives::{ByteRange, Bytes};
 
 /// Where an asset's C2PA manifest store is — embedded in the asset,
 /// referenced remotely, both, or neither.
@@ -44,7 +44,7 @@ impl ManifestLocation {
     /// container structure that carries it, and the ranges a hard binding
     /// for the asset excludes (see [`EmbeddedManifest::range`] and
     /// [`EmbeddedManifest::exclusions`]).
-    pub fn embedded(jumbf: Vec<u8>, range: ByteRange, exclusions: Vec<ByteRange>) -> Self {
+    pub fn embedded(jumbf: impl Into<Bytes>, range: ByteRange, exclusions: Vec<ByteRange>) -> Self {
         Self {
             embedded: Some(EmbeddedManifest::new(jumbf, range, exclusions)),
             remote: None,
@@ -83,7 +83,11 @@ pub struct EmbeddedManifest {
     /// Exactness matters beyond reading: a signer that carries this store
     /// forward as a parent manifest must reproduce these bytes verbatim,
     /// since the new claim's ingredient assertion hashes them.
-    pub jumbf: Vec<u8>,
+    ///
+    /// A [`Bytes`], so a handler that read the store in one piece hands
+    /// over the host's own buffer, and a session passing it on to a reader
+    /// shares it rather than copying it.
+    pub jumbf: Bytes,
 
     /// The range of the asset occupied by the container structure carrying
     /// the store — framing included, so for a JPEG this spans the `APP11`
@@ -102,9 +106,9 @@ pub struct EmbeddedManifest {
 
 impl EmbeddedManifest {
     /// Describes an embedded manifest store.
-    pub fn new(jumbf: Vec<u8>, range: ByteRange, exclusions: Vec<ByteRange>) -> Self {
+    pub fn new(jumbf: impl Into<Bytes>, range: ByteRange, exclusions: Vec<ByteRange>) -> Self {
         Self {
-            jumbf,
+            jumbf: jumbf.into(),
             range,
             exclusions,
         }

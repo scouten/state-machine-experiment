@@ -239,7 +239,7 @@ fn describe(handle: u64, request: &FileReadRequest) -> Result<PendingRequest, C2
 /// The engine's form of the host's `reply`.
 fn engine_reply(reply: Reply) -> FileReadReply {
     match reply {
-        Reply::Bytes(bytes) => FileReadReply::Bytes(bytes),
+        Reply::Bytes(bytes) => FileReadReply::Bytes(bytes.into()),
         Reply::Length(len) => FileReadReply::Length(len),
         Reply::Time(secs) => FileReadReply::CurrentDateTime(secs),
         Reply::Ocsp(bytes) => FileReadReply::OcspResponse(bytes),
@@ -335,7 +335,9 @@ mod tests {
 
     #[test]
     fn every_host_reply_becomes_the_engines_reply_of_the_same_kind() {
-        assert!(matches!(engine_reply(Reply::Bytes(vec![1])), FileReadReply::Bytes(b) if b == [1]));
+        assert!(
+            matches!(engine_reply(Reply::Bytes(vec![1])), FileReadReply::Bytes(b) if b[..] == [1])
+        );
         assert!(matches!(
             engine_reply(Reply::Length(9)),
             FileReadReply::Length(9)

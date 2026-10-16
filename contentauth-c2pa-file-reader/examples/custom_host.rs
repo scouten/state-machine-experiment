@@ -25,7 +25,7 @@
 //! Run with `cargo run --example custom_host -p contentauth-c2pa-file-reader`.
 
 use contentauth_c2pa_file_reader::{
-    Error, FileReadReply, FileReadRequest, FileReadSession, ReadSettings,
+    Bytes, Error, FileReadReply, FileReadRequest, FileReadSession, ReadSettings,
 };
 use contentauth_c2pa_format_jpeg::JpegFormat;
 use contentauth_c2pa_primitives::HostError;
@@ -49,10 +49,7 @@ fn main() -> Result<(), Error> {
             return Ok(());
         }
 
-        for request in session.outstanding_requests().to_vec() {
-            let reply = answer(&request.kind);
-            session.fulfill(request.id, reply)?;
-        }
+        session.respond(answer)?;
     }
 }
 
@@ -64,7 +61,7 @@ fn answer(request: &FileReadRequest) -> FileReadReply {
             let start = range.start as usize;
             let end = start + range.len as usize;
             match ASSET.get(start..end) {
-                Some(bytes) => FileReadReply::Bytes(bytes.to_vec()),
+                Some(bytes) => FileReadReply::Bytes(Bytes::from_static(bytes)),
                 None => FileReadReply::Failed(HostError::new("range lies past the end of ASSET")),
             }
         }

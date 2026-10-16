@@ -40,8 +40,10 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   (`BuilderSession` in [`src/builder.rs`](contentauth-c2pa-builder/src/builder.rs);
   see its [README.md](contentauth-c2pa-builder/README.md)).
 - **`contentauth-c2pa-primitives`** — the narrow slice of vocabulary
-  (`StreamId`, `ByteRange`, hash and signing algorithms, `HostError`) and
-  deterministic encoders the reader and builder genuinely share.
+  (`StreamId`, `ByteRange`, hash and signing algorithms, `HostError`, and
+  `Bytes` — the refcounted buffer every vocabulary carries bulk payloads
+  in, so hosts slice and clone rather than copy) and deterministic encoders
+  the reader and builder genuinely share.
 - **`contentauth-c2pa-format`** — the contract between those sessions
   and container formats: the `FormatHandler` trait (`descriptor`,
   `locate`, `plan_embed`, `commit`), the plain-data `FormatDescriptor`
