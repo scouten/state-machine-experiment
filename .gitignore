@@ -1,3 +1,4 @@
 /target
 lcov.info
 Cargo.lock
+!/contentauth-c2pa-wasm/Cargo.lock

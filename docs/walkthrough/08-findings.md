@@ -6,7 +6,7 @@ about C2PA itself.
 ## The architecture mostly held
 
 * **One engine under three async models worked.** The js-compat and
-  node-compat tests compare against the synchronous host's output; the
+  session-bridge tests compare against the synchronous host's output; the
   engine did not change to accommodate either binding.
 * **Request *sets* are the right primitive.** The reader's hashing window
   (concurrent 64 KiB reads) maps directly onto Node overlapping `fs` reads

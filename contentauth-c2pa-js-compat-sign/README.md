@@ -7,6 +7,13 @@ asynchronous thing the host has — in a browser, a `Promise` from WebCrypto
 (a non-extractable `CryptoKey` never enters Wasm memory), a remote signing
 service, a hardware token.
 
+**Status:** retained alternative Rust-owned async host, not the signing host
+used by the preferred [`shared JavaScript package`](../js/). That package drives
+[`BuildSessionBridge`](../contentauth-c2pa-session-bridge/) through synchronous
+Wasm/Neon adapters instead. This crate's Blob, signer and timestamp behavior and
+tests remain unchanged; do not retire it until intended compatibility behavior
+is preserved by shared-host facades.
+
 ```rust
 pub trait AsyncSigner {
     fn alg(&self) -> SigningAlg;

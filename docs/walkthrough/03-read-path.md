@@ -94,7 +94,7 @@ flowchart LR
     S --- H1["read_manifest<br/>blocking Read + Seek<br/>file-reader"]
     S --- H2["Reader::with_file<br/>blocking + reqwest OCSP<br/>rs-compat"]
     S --- H3["Reader::from_blob<br/>async, Blob.slice().arrayBuffer()<br/>js-compat"]
-    S --- H4["Portable read bridge<br/>synchronous calls<br/>currently in node-compat"]
+    S --- H4["ReadSessionBridge<br/>synchronous calls<br/>session-bridge"]
     H4 --- N["Existing Node JS host<br/>Neon"]
     H4 --- W["Shared JS Worker host proof<br/>browser Wasm / Node Neon"]
 ```
