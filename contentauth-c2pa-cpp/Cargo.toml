@@ -1,0 +1,24 @@
+[package]
+name = "contentauth-c2pa-cpp"
+version = "0.1.0"
+description = "Experimental C ABI over the sans-I/O C2PA reader session, for the header-only C++ binding in this directory"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["c2pa", "content-credentials", "ffi", "cpp"]
+categories = ["api-bindings"]
+publish = false
+
+[lib]
+# `rlib` so this crate's own tests (and `cargo test`) link normally; the
+# other two are what a C++ build consumes.
+crate-type = ["rlib", "staticlib", "cdylib"]
+
+[dependencies]
+# The flat, synchronous `advance`/`fulfill`/`finish` session this ABI
+# exposes. Despite the name it is host-agnostic: plain-data requests and
+# replies, no runtime, no Node types.
+contentauth-c2pa-node-compat = { path = "../contentauth-c2pa-node-compat" }
