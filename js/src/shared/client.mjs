@@ -10,6 +10,12 @@ export function remoteError(value) {
   return error;
 }
 
+export function snapshotAsset(asset) {
+  if (asset instanceof Uint8Array) return new Uint8Array(asset);
+  if (asset instanceof Blob) return asset;
+  throw new TypeError("asset must be Uint8Array, Blob or File");
+}
+
 export class Client {
   #port;
   #pending = new Map();
@@ -17,8 +23,14 @@ export class Client {
   #closed;
   #ready;
   #termination;
-  constructor(port) {
+  #snapshot;
+  #destination;
+  constructor(port, snapshot = snapshotAsset, destination = () => {
+    throw new TypeError("file destinations require the Node client");
+  }) {
     this.#port = port;
+    this.#snapshot = snapshot;
+    this.#destination = destination;
     this.#ready = new Promise((resolve, reject) => {
       this.#pending.set(0, { resolve, reject });
     });
@@ -41,30 +53,29 @@ export class Client {
   }
   async read(asset, { settings, now = Math.floor(Date.now() / 1000) } = {}) {
     if (this.#closed) throw this.#closed;
-    if (!(asset instanceof Uint8Array)) throw new TypeError("asset must be Uint8Array");
     if (!Number.isInteger(now) || now < -2147483648 || now > 2147483647)
       throw new TypeError("proof clock must be signed 32-bit Unix seconds");
     // Snapshot before await; no transfer means caller's bytes stay attached.
-    const snapshot = new Uint8Array(asset);
+    const snapshot = this.#snapshot(asset);
     const json = settings === undefined ? undefined : JSON.stringify(settings);
     await this.#ready;
     if (this.#closed) throw this.#closed;
     return this.#call({ method: "read", asset: snapshot, settings: json, now });
   }
-  async sign(asset, definition, signer) {
+  async sign(asset, definition, signer, destination) {
     if (this.#closed) throw this.#closed;
-    if (!(asset instanceof Uint8Array)) throw new TypeError("asset must be Uint8Array");
     if (signer?.alg !== "es256" || typeof signer.sign !== "function")
       throw new TypeError("proof signer must supply es256 and sign(data)");
     if (!Array.isArray(signer.certs) || !signer.certs.every((cert) => cert instanceof Uint8Array))
       throw new TypeError("signer certs must be Uint8Array[]");
-    const snapshot = new Uint8Array(asset);
+    const snapshot = this.#snapshot(asset);
+    const output = destination === undefined ? undefined : this.#destination(destination);
     const certs = signer.certs.map((cert) => new Uint8Array(cert));
     const json = typeof definition === "string" ? definition : JSON.stringify(definition);
     const sign = signer.sign.bind(signer);
     await this.#ready;
     if (this.#closed) throw this.#closed;
-    return this.#call({ method: "build", asset: snapshot, definition: json, certs }, sign);
+    return this.#call({ method: "build", asset: snapshot, definition: json, certs, destination: output }, sign);
   }
   #call(command, sign) {
     const id = this.#next++;

@@ -41,6 +41,12 @@ the sibling crate it depends on via a plain path dependency.
   entry's `count` field and the store), which it compares exactly.
   (`compare_tiff_signed_by_c2pa_rs.rs` also checks the handler reports the
   very exclusions c2pa-rs wrote.)
+* `tests/v2_manifests.rs` — v1/v2 interoperability controls and a known-gap
+  characterization: a freshly signed `c2pa.created` action missing
+  `digitalSourceType` passes both readers' cryptographic checks, but only
+  c2pa-rs reports `assertion.action.malformed`. This deliberately records a
+  divergence, not a parity success; change the expectation when domain action
+  validation lands. See the [investigation](../js/experiments/2026-10-16-validation-parity.md).
 * `examples/compare_corpus.rs` — the same comparison, generalized to a
   whole directory tree:
 
