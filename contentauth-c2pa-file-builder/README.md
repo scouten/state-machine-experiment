@@ -117,6 +117,16 @@ rustup toolchain add nightly
 cargo +nightly fmt
 ```
 
+## Comparing performance across revisions
+
+`examples/bench_build.rs` builds and signs an in-memory JPEG (optionally
+padded to megabytes in size) through `FileBuilderSession` and reports the
+output, request count, allocations and timing. Build it at two revisions
+and compare instruction counts under `valgrind --tool=callgrind` rather
+than wall-clock time, which drifts with CPU frequency; its header comment
+has the details. It was used to confirm that writing the builder as an
+`async fn` over `Workflow` costs nothing measurable.
+
 ## License
 
 Licensed under either the [Apache License, Version 2.0](../LICENSE-APACHE) or
