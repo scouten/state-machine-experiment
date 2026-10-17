@@ -1,9 +1,9 @@
-import { read, build } from "./drive.mjs";
+import { read, build, source, memoryOutput } from "./drive.mjs";
 import { protocol, failure, remoteError } from "./client.mjs";
 
 export { protocol, failure };
 
-export function serve(port, adapter) {
+export function serve(port, adapter, openSource = source, openOutput = () => memoryOutput()) {
   let queue = Promise.resolve();
   const callbacks = new Map();
   port.onMessage((message) => {
@@ -24,20 +24,29 @@ export function serve(port, adapter) {
       try {
         if (message.method !== "read" && message.method !== "build")
           throw new Error("invalid Worker command");
-        const result = message.method === "read"
-          ? await read(adapter, message.asset, message.settings, message.now)
-          : await build(adapter, message.asset, message.definition, message.certs, (request) =>
-            new Promise((resolve, reject) => {
-              if (callbacks.has(message.id)) throw new Error("signer callback already pending");
-              callbacks.set(message.id, { requestId: request.id, resolve, reject });
-              try {
-                port.post({ protocol, method: "sign", id: message.id,
-                  requestId: request.id, alg: request.alg, data: request.data });
-              } catch (error) {
-                callbacks.delete(message.id);
-                reject(error);
-              }
-            }));
+        const input = await openSource(message.asset);
+        let output;
+        let result;
+        try {
+          if (message.method === "build") output = await openOutput(message.destination);
+          result = message.method === "read"
+            ? await read(adapter, input, message.settings, message.now)
+            : await build(adapter, input, message.definition, message.certs, (request) =>
+              new Promise((resolve, reject) => {
+                if (callbacks.has(message.id)) throw new Error("signer callback already pending");
+                callbacks.set(message.id, { requestId: request.id, resolve, reject });
+                try {
+                  port.post({ protocol, method: "sign", id: message.id,
+                    requestId: request.id, alg: request.alg, data: request.data });
+                } catch (error) {
+                  callbacks.delete(message.id);
+                  reject(error);
+                }
+              }), output);
+        } finally {
+          try { await output?.close() }
+          finally { await input.close() }
+        }
         port.post({ protocol, id: message.id, ok: true,
           value: { ...result, workerMs: performance.now() - started } });
       } catch (error) {

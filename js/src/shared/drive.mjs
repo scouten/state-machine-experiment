@@ -1,10 +1,26 @@
-function range(start, len, length) {
+export function range(start, len, length) {
   if (!Number.isSafeInteger(start) || !Number.isSafeInteger(len) ||
       !Number.isSafeInteger(start + len) || start < 0 || len < 0 || start + len > length)
     throw new Error("invalid asset range");
 }
 
-export async function read(adapter, asset, settings, now) {
+export function source(asset) {
+  const length = asset instanceof Blob ? asset.size : asset.length;
+  return {
+    length,
+    async close() {},
+    async read(start, len) {
+      range(start, len, length);
+      const bytes = asset instanceof Blob
+        ? new Uint8Array(await asset.slice(start, start + len).arrayBuffer())
+        : asset.subarray(start, start + len);
+      if (bytes.length !== len) throw new Error("short asset read");
+      return bytes;
+    },
+  };
+}
+
+export async function read(adapter, input, settings, now) {
   const session = adapter.create(settings);
   const stats = { reads: 0, bytes: 0, maxReadBytes: 0, advances: 0 };
   try {
@@ -21,15 +37,14 @@ export async function read(adapter, asset, settings, now) {
         switch (request.kind) {
           case "read": {
             const { start, len } = request;
-            range(start, len, asset.length);
-            const bytes = asset.subarray(start, start + len);
+            const bytes = await input.read(start, len);
             stats.reads++;
             stats.bytes += bytes.length;
             stats.maxReadBytes = Math.max(stats.maxReadBytes, bytes.length);
             session.fulfill(request.id, "bytes", bytes);
             break;
           }
-          case "length": session.fulfill(request.id, "length", asset.length); break;
+          case "length": session.fulfill(request.id, "length", input.length); break;
           case "time": session.fulfill(request.id, "time", now); break;
           default: throw new Error(`unsupported host request: ${request.kind}`);
         }
@@ -38,14 +53,34 @@ export async function read(adapter, asset, settings, now) {
   } finally { session.close() }
 }
 
-export async function build(adapter, asset, definition, certs, sign) {
-  const session = adapter.createBuild(definition, certs);
+export function memoryOutput() {
   let output = new Uint8Array(0);
   let length = 0;
-  const stats = { reads: 0, bytes: 0, writes: 0, writtenBytes: 0, signs: 0, advances: 0 };
+  return {
+    get length() { return length },
+    read: (start, len) => source(output.subarray(0, length)).read(start, len),
+    async write(offset, bytes) {
+      range(offset, bytes.length, Number.MAX_SAFE_INTEGER);
+      const end = offset + bytes.length;
+      if (end > output.length) {
+        const next = new Uint8Array(Math.max(end, output.length * 2, 4096));
+        next.set(output);
+        output = next;
+      }
+      output.set(bytes, offset);
+      length = Math.max(length, end);
+    },
+    async finish() { return { asset: output.slice(0, length) } },
+    async close() {},
+  };
+}
+
+export async function build(adapter, input, definition, certs, sign, output = memoryOutput()) {
+  const session = adapter.createBuild(definition, certs);
+  const stats = { reads: 0, bytes: 0, maxSourceReadBytes: 0, writes: 0, writtenBytes: 0, signs: 0, advances: 0 };
   function stream(name) {
-    if (name === "source") return asset;
-    if (name === "output") return output.subarray(0, length);
+    if (name === "source") return input;
+    if (name === "output") return output;
     throw new Error(`unsupported stream: ${name}`);
   }
   try {
@@ -54,32 +89,25 @@ export async function build(adapter, asset, definition, certs, sign) {
       const step = session.advance();
       if (step.done) {
         const report = session.finish();
-        return { ...report, asset: output.slice(0, length), stats };
+        return { ...report, ...await output.finish(), stats };
       }
       if (!step.requests.length) throw new Error("session stalled without host requests");
       for (const request of step.requests) {
         switch (request.kind) {
           case "read": {
-            const bytes = stream(request.stream);
-            range(request.start, request.len, bytes.length);
+            const bytes = await stream(request.stream).read(request.start, request.len);
             stats.reads++;
             stats.bytes += request.len;
-            session.fulfill(request.id, "bytes", bytes.subarray(request.start, request.start + request.len));
+            if (request.stream === "source")
+              stats.maxSourceReadBytes = Math.max(stats.maxSourceReadBytes, request.len);
+            session.fulfill(request.id, "bytes", bytes);
             break;
           }
           case "length": session.fulfill(request.id, "length", stream(request.stream).length); break;
           case "write": {
             if (request.stream !== "output" || !(request.bytes instanceof Uint8Array))
               throw new Error("invalid output write");
-            range(request.offset, request.bytes.length, Number.MAX_SAFE_INTEGER);
-            const end = request.offset + request.bytes.length;
-            if (end > output.length) {
-              const next = new Uint8Array(Math.max(end, output.length * 2, 4096));
-              next.set(output);
-              output = next;
-            }
-            output.set(request.bytes, request.offset);
-            length = Math.max(length, end);
+            await output.write(request.offset, request.bytes);
             stats.writes++;
             stats.writtenBytes += request.bytes.length;
             session.fulfill(request.id, "written");

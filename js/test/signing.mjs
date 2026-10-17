@@ -80,6 +80,27 @@ export async function signingContract(createClient, fixture, pkcs8) {
     check(signing.calls === 1, "expected exactly one signer call");
     check(bytes.byteLength === 4, "source detached");
     await validate(client, result, "small");
+    for (const wrap of [
+      (bytes) => new Blob([bytes], { type: "image/jpeg" }),
+      (bytes) => new File([bytes], "source.png", { type: "image/png" }),
+    ]) {
+      for (const name of ["small", "large"]) {
+        const bytes = source(name);
+        const input = wrap(bytes);
+        bytes.fill(0);
+        const signing = signer(name);
+        const built = await within(client.sign(input, baseline.definition, signing));
+        check(signing.calls === 1, "Blob/File signer must run once");
+        await validate(client, built, name);
+        const byteResult = await within(client.sign(source(name), baseline.definition, signer(name)));
+        equal(built.stats, byteResult.stats, "Blob/File build requests differ");
+      }
+      await rejects(client.sign(wrap(source("small")), "{bad json", signer("small")),
+        /Definition|JSON|json/);
+      await rejects(client.sign(wrap(source("small")), baseline.definition,
+        { ...signer("small"), sign() { throw new Error("Blob signer failure") } }),
+        /Blob signer failure/);
+    }
 
     const entered = deferred();
     const release = deferred();
@@ -125,9 +146,9 @@ export async function signingContract(createClient, fixture, pkcs8) {
       const first = client.sign(source("small"), baseline.definition,
         signer("small", async () => { queueEntered.resolve(); await queueRelease.promise }));
       await within(queueEntered.promise);
-      const second = client.sign(source("large"), baseline.definition,
+      const second = client.sign(new Blob([source("large")]), baseline.definition,
         signer("large", async () => { secondCalls++ }));
-      const read = client.read(result.asset, options);
+      const read = client.read(new File([result.asset], "queued.jpg"), options);
       await new Promise((resolve) => setTimeout(resolve, 10));
       check(secondCalls === 0, "top-level operations were not serialized");
       queueRelease.resolve();
@@ -206,7 +227,7 @@ export async function signingContract(createClient, fixture, pkcs8) {
     return { samples, checks: ["trusted signed read-back/full report", "direct-host signer input/algorithm",
       "source/definition/cert snapshot", "caller-owned non-extractable WebCrypto key", "delayed callback/task progress",
       "sync throw/async reject/retry", "invalid signature reply", "invalid signature reads Invalid",
-      "invalid definition before signer",
+      "invalid definition before signer", "Blob/File small and large signing parity and failures",
       "queued mixed operations/request routing", "large signed output", "independent Worker while callback pending",
       "pending disposal/late success and rejection"] };
   } finally { await client.dispose() }

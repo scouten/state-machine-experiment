@@ -4,6 +4,8 @@ import { readFile } from "node:fs/promises";
 export async function fingerprints() {
   const paths = ["src/shared/client.mjs", "src/shared/service.mjs", "src/shared/drive.mjs",
     "src/browser/client.mjs", "src/browser/entry.mjs", "src/node/client.mjs", "src/node/entry.mjs", "src/node/adapter.mjs",
+    "src/node/source.mjs",
+    "src/node/output.mjs",
     "../contentauth-c2pa-wasm/src/lib.rs", "../contentauth-c2pa-wasm/src/build.rs",
     "../contentauth-c2pa-wasm/Cargo.toml", "../contentauth-c2pa-wasm/Cargo.lock",
     "test/contract.mjs", "test/signing.mjs", "benchmarks/boundary.mjs", "test/fixtures.mjs", "test/node.test.mjs",
@@ -13,6 +15,17 @@ export async function fingerprints() {
   return Object.fromEntries(await Promise.all(paths.map(async (path) => [
     path, createHash("sha256").update(await readFile(new URL(`../${path}`, import.meta.url))).digest("hex"),
   ])));
+}
+
+export async function blobFingerprints() {
+  const paths = ["benchmarks/blob-experiment.mjs", "benchmarks/blob-node.mjs",
+    "benchmarks/blob-web.mjs", "benchmarks/blob-browser.mjs", "benchmarks/sdk-benchmark.mjs",
+    "generated/benchmark.json", "generated/existing-sdk/index.js", "generated/existing-sdk/c2pa_bg.wasm",
+    ...["small", "medium", "large"].flatMap((size) =>
+      [`generated/blob-${size}-source.jpg`, `generated/blob-${size}.jpg`])];
+  return { ...await fingerprints(), ...Object.fromEntries(await Promise.all(paths.map(async (path) => [
+    path, createHash("sha256").update(await readFile(new URL(`../${path}`, import.meta.url))).digest("hex"),
+  ]))) };
 }
 
 export async function sdkFingerprints() {
