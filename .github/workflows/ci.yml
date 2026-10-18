@@ -438,6 +438,7 @@ jobs:
           gcovr --root . --object-directory contentauth-c2pa-cpp/build
           --filter 'contentauth-c2pa-cpp/include/'
           --filter 'contentauth-c2pa-cpp/cpp/src/'
+          --filter 'contentauth-c2pa-cpp/cpp/include/scope_exit\.hpp$'
           --gcov-ignore-parse-errors negative_hits.warn_once_per_file
           --exclude-throw-branches --exclude-unreachable-branches
           --lcov lcov.cpp.info --txt

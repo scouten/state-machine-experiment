@@ -13,6 +13,7 @@
 #if defined(__unix__) || defined(__APPLE__)
 #include <csignal>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -25,6 +26,27 @@
 
 using namespace c2pa::sm;
 using namespace support;
+
+TEST(validation_state_is_typed_and_independent_of_json_formatting) {
+    for (bool valid_signature : {false, true}) {
+        BuildSigner signer = valid_signature ? BuildSigner(fixture_sign) :
+            BuildSigner([](const auto &, const auto &) { return std::vector<uint8_t>(64); });
+        MemoryBuildHost builder(fixture_bytes(), std::move(signer));
+        build_and_sign(BuildSession(signing_settings()), builder);
+        for (bool trusted : {false, true}) {
+            MemoryHost host(builder.output(), kNow);
+            auto reader = read(Session("image/jpeg",
+                trusted ? std::optional<std::string>(signing_trust_settings()) : std::nullopt), host);
+            CHECK(reader.has_value());
+            const auto expected = !valid_signature ? ValidationState::Invalid :
+                trusted ? ValidationState::Trusted : ValidationState::Valid;
+            CHECK(reader->validation_state() == expected);
+            auto moved = std::move(*reader);
+            CHECK(moved.validation_state() == expected);
+            CHECK_THROWS_CODE(reader->validation_state(), ErrorCode::InvalidArgument);
+        }
+    }
+}
 
 TEST(build_session_is_move_only_and_rejects_invalid_settings) {
     static_assert(!std::is_copy_constructible_v<BuildSession>);
@@ -915,6 +937,9 @@ TEST(file_signing_publishes_only_success_and_cleans_temporaries) {
     }
     const auto report = build_and_sign_file(settings, C2PA_SM_FIXTURE, destination, fixture_sign);
     CHECK(!report.manifest.empty());
+    struct stat published{};
+    CHECK_EQ(::stat(destination.c_str(), &published), 0);
+    CHECK_EQ(published.st_mode & 0777, 0600);
     std::ifstream input(destination, std::ios::binary);
     const std::vector<uint8_t> bytes(std::istreambuf_iterator<char>(input), {});
     CHECK(trusted_signing_json(bytes).find("Trusted") != std::string::npos);
@@ -927,6 +952,8 @@ TEST(file_signing_publishes_only_success_and_cleans_temporaries) {
         CHECK_EQ(std::vector<uint8_t>(std::istreambuf_iterator<char>(preserved), {}), bytes);
     }
     CHECK(!build_and_sign_file(settings, in_place, in_place, fixture_sign).manifest.empty());
+    CHECK_EQ(::stat(in_place.c_str(), &published), 0);
+    CHECK_EQ(published.st_mode & 0777, 0600);
     {
         std::ifstream signed_input(in_place, std::ios::binary);
         const std::vector<uint8_t> signed_bytes(std::istreambuf_iterator<char>(signed_input), {});

@@ -11,6 +11,8 @@ namespace c2pa::sm {
 using BuildCompletion = std::function<void(BuildReply)>;
 
 /// Takes ownership of each request. start returns promptly and may complete inline.
+/// Invoke done once work no longer accesses borrowed host resources. Throwing
+/// from start means no outstanding work was accepted (or it already completed).
 class AsyncBuildHost {
 public:
     virtual ~AsyncBuildHost();
@@ -57,6 +59,9 @@ public:
     size_t in_flight() const;
     size_t max_in_flight() const;
     size_t started() const;
+    /// Waits for all started work's first completion to return, even after error.
+    /// Do not call from a completion or waker belonging to this operation.
+    void wait();
 private:
     struct State;
     std::unique_ptr<State> state_;
@@ -64,12 +69,14 @@ private:
 };
 
 /// Parks the caller while the host works; never polls or runs blocking host work itself.
+/// Drains accepted work before returning or throwing, so borrowed hosts can be released.
 SignReport build_parallel(BuildSession session, AsyncBuildHost &host);
 /// Owns a driver thread and host until completion. get propagates exceptions;
 /// destroying the last future waits for the driver, as required by std::async.
 std::future<SignReport> build_future(BuildSession session, std::shared_ptr<AsyncBuildHost> host);
 
-/// Serializes all work through this adapter, including mutable buffers/seekable streams.
+/// Serializes work FIFO through one queued drain, never parking pool workers
+/// waiting for other work on the same adapter.
 /// Use one adapter per host; no direct or other-adapter access while tasks are pending.
 /// Tasks retain adapter state, not this. Borrowed host/pool must outlive queued work;
 /// the shared overload retains the host. Pool destruction joins accepted tasks.

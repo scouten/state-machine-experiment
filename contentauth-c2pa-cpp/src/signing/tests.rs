@@ -291,7 +291,14 @@ fn signing_abi_round_trips_a_jpeg_through_the_existing_reader_as_trusted() {
             }
         }
     }
-    let json = reader.finish().unwrap().unwrap().json();
+    let reader = crate::C2paSmReader {
+        inner: reader.finish().unwrap().unwrap(),
+    };
+    assert_eq!(
+        unsafe { crate::c2pa_sm_reader_validation_state(&reader) },
+        crate::C2paSmValidationState::C2PA_SM_VALIDATION_TRUSTED
+    );
+    let json = reader.inner.json();
     assert!(json.contains("Trusted"), "{json}");
     assert!(json.contains("baseline.jpg"));
     assert!(json.contains("c2pa.actions.v2"));
@@ -299,6 +306,27 @@ fn signing_abi_round_trips_a_jpeg_through_the_existing_reader_as_trusted() {
 
 fn base64_certificate() -> String {
     base64::engine::general_purpose::STANDARD.encode(TEST_SIGNER_CERT)
+}
+
+#[test]
+fn invalid_hard_bindings_are_reported_without_parsing_json() {
+    let mut build = Build::new(BASELINE_DEFINITION);
+    let mut host = Host::default();
+    host.drive(&mut build).unwrap();
+    let index = host.output.len() - 3;
+    host.output[index] ^= 1;
+    let session = crate::tests::new_session("image/jpeg", None);
+    let (status, reader, error) = crate::tests::drive(session, &host.output);
+    assert_eq!(status, C2PA_SM_OK);
+    assert!(error.is_null());
+    assert!(!reader.is_null());
+    unsafe {
+        assert_eq!(
+            crate::c2pa_sm_reader_validation_state(reader),
+            crate::C2paSmValidationState::C2PA_SM_VALIDATION_INVALID
+        );
+        crate::c2pa_sm_reader_free(reader);
+    }
 }
 
 #[test]

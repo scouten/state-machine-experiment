@@ -112,6 +112,14 @@ target_compile_definitions(c2pa_sm_tests_cxx17 PRIVATE C2PA_SM_FIXTURE="${FIXTUR
 c2pa_sm_target_flags(c2pa_sm_tests_cxx17)
 add_test(NAME cxx17 COMMAND c2pa_sm_tests_cxx17)
 
+add_executable(c2pa_sm_tests_sign_async cpp/tests/tests_sign_async.cpp)
+target_link_libraries(c2pa_sm_tests_sign_async PRIVATE c2pa_sm_cpp OpenSSL::Crypto)
+target_include_directories(c2pa_sm_tests_sign_async PRIVATE cpp/include "${CMAKE_CURRENT_BINARY_DIR}")
+set_target_properties(c2pa_sm_tests_sign_async PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_definitions(c2pa_sm_tests_sign_async PRIVATE C2PA_SM_FIXTURE="${FIXTURE}")
+c2pa_sm_target_flags(c2pa_sm_tests_sign_async)
+add_test(NAME sign_async COMMAND c2pa_sm_tests_sign_async)
+
 add_executable(c2pa_sm_tests_cxx20 cpp/tests/tests_cxx20.cpp)
 target_link_libraries(c2pa_sm_tests_cxx20 PRIVATE c2pa_sm_coro OpenSSL::Crypto)
 target_include_directories(c2pa_sm_tests_cxx20 PRIVATE cpp/include "${CMAKE_CURRENT_BINARY_DIR}")

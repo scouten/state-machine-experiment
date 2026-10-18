@@ -198,7 +198,8 @@ private:
 };
 
 #if defined(__unix__) || defined(__APPLE__)
-/// POSIX file host: exclusive temporary output, unlinked unless published on success.
+/// POSIX file host: exclusive mode-0600 temporary, unlinked unless published on success.
+/// Published files retain mode 0600, not the source or destination permissions.
 class FileBuildHost : public SyncBuildHost {
 public:
     /// Opens source read-only and creates an unpredictable temporary beside destination.
@@ -223,6 +224,8 @@ private:
 };
 
 /// POSIX atomic replacement; any failure preserves an existing destination.
+/// Output is mode 0600. File contents are synced, but not the parent directory:
+/// replacement is atomic, not guaranteed durable across a system crash.
 SignReport build_and_sign_file(const BuildSettings &settings, const std::filesystem::path &source,
                                       const std::filesystem::path &destination, BuildSigner signer,
                                       BuildTimestamp timestamp = {});

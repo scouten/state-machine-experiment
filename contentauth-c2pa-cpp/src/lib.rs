@@ -118,6 +118,21 @@ pub const C2PA_SM_REPLY_OCSP: c_int = 3;
 /// asset read).
 pub const C2PA_SM_REPLY_FAILED: c_int = 4;
 
+/// Overall validation outcome, independent of JSON formatting.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(non_camel_case_types)]
+pub enum C2paSmValidationState {
+    /// No reader was supplied.
+    C2PA_SM_VALIDATION_UNAVAILABLE = -1,
+    /// Validation failed or did not complete.
+    C2PA_SM_VALIDATION_INVALID = 0,
+    /// Validation passed, but the signer is not trusted.
+    C2PA_SM_VALIDATION_VALID = 1,
+    /// Validation passed and the signer is trusted.
+    C2PA_SM_VALIDATION_TRUSTED = 2,
+}
+
 /// An error, returned by value through an out-parameter and freed with
 /// [`c2pa_sm_error_free`]. Holds no reference to the session that
 /// produced it, so it may outlive it and cross threads.
@@ -591,6 +606,26 @@ pub unsafe extern "C" fn c2pa_sm_reader_json(reader: *const C2paSmReader) -> *mu
     match unsafe { reader.as_ref() } {
         Some(reader) => CString::into_raw(c_string(&reader.inner.json())),
         None => ptr::null_mut(),
+    }
+}
+
+/// The overall validation outcome, or unavailable for a null reader.
+///
+/// # Safety
+///
+/// `reader` must be null or a live reader.
+#[no_mangle]
+pub unsafe extern "C" fn c2pa_sm_reader_validation_state(
+    reader: *const C2paSmReader,
+) -> C2paSmValidationState {
+    use contentauth_c2pa_node_compat::ValidationState;
+    use C2paSmValidationState::*;
+
+    match unsafe { reader.as_ref() }.map(|reader| reader.inner.validation_state()) {
+        Some(ValidationState::Valid) => C2PA_SM_VALIDATION_VALID,
+        Some(ValidationState::Trusted) => C2PA_SM_VALIDATION_TRUSTED,
+        Some(_) => C2PA_SM_VALIDATION_INVALID,
+        None => C2PA_SM_VALIDATION_UNAVAILABLE,
     }
 }
 

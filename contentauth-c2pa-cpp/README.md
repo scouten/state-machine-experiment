@@ -48,7 +48,8 @@ encrypted keys are rejected without prompting. The output is published
 atomically, then read back with the supplied certificate explicitly trusted,
 and its validation JSON is printed. The example exits zero only when the
 read-back validation state is `Trusted`; any other state reports a verification
-error and exits 2. Verification happens after publication, so a failed check
+error and exits 2. It checks the typed `Reader::validation_state()` accessor,
+not the JSON's indentation or text. Verification happens after publication, so a failed check
 does not remove the output. This demonstrates caller-selected trust,
 not independent proof that a supplied certificate is trustworthy. An optional
 last argument supplies Unix seconds for reproducible validation; otherwise the
@@ -190,7 +191,10 @@ executor).
 
 About seventeen small functions (header: `include/contentauth_c2pa_sm.h`,
 documentation: `src/lib.rs`): `session_new/free/advance/request/fulfill/finish`,
-`reader_json/active_label/is_embedded/free`, `error_code/message/name/free`.
+`reader_json/validation_state/active_label/is_embedded/free`, `error_code/message/name/free`.
+`Reader::validation_state()` returns `ValidationState::{Invalid, Valid, Trusted}`
+directly from the report, without parsing JSON. A moved-from reader rejects
+that query with `InvalidArgument`; the C accessor reports `UNAVAILABLE` for null.
 Rules: nothing blocks, spawns, locks or calls back; errors are values through
 an out-parameter; a session is `Send` but not `Sync`; panics become
 `C2PA_SM_ERR_PANIC` rather than unwinding into C++; every pointer in a
@@ -284,9 +288,21 @@ Phase 4 adds `c2pa_sm_sign_async.hpp`, compiled in `cpp/src/sign_async.cpp`.
 `Building` owns a single-driver session; `AsyncBuildHost::start` owns requests,
 and callbacks only post to `BuildMailbox`. `step` never waits; use its mailbox
 wait/waker or `build_parallel`. `build_future` owns its driver thread and host;
-dropping the future joins. Cancellation discards late replies, not host work.
+dropping the future joins. `Building::wait()` waits for started requests' first
+completion callbacks to quiesce, even after a build error. `build_parallel`
+and `build_future` drain those callbacks before returning or throwing, keeping
+borrowed hosts alive through accepted work. Never call `wait()` from that
+operation's completion callback or mailbox waker. A host that never completes
+a request can still block these drivers indefinitely.
+Cancellation discards late replies, not host work.
 `PooledBuildHost` serializes host operations, including signer/TSA callbacks,
-without holding a mutex during user code. See the header for lifetime boundaries.
+through one FIFO drain task per adapter, without parking other pool workers
+or holding a mutex during user code. See the header for lifetime boundaries.
+
+Compiled implementations share the internal C++17 `detail::make_scope_exit`
+helper in `cpp/include/scope_exit.hpp` for cleanup on normal exit or exception
+unwinding. Each guard owns a non-throwing callable, runs it once, and is neither
+copyable nor movable. The header is private, not part of the public binding API.
 
 ### Blocking C++ signing
 
@@ -332,10 +348,15 @@ signer, timestamp_transport)` uses `FileBuildHost`: `mkstemp` exclusively create
 an unpredictable sibling temporary, and `pread`/`pwrite` retain that descriptor
 without reopening its pathname. Writes retry interrupted or partial system
 calls. Only a completed build and successful `fsync` permit atomic `rename`.
+The published output deliberately retains `mkstemp`'s private mode **0600**,
+regardless of the source's mode, a replaced destination's mode, or the umask.
+Callers wanting broader access must explicitly change permissions after success.
 Failures, including rename failures, remove the temporary and preserve an
 existing destination. A destination symlink is replaced, not followed. As with
 ordinary atomic-replacement APIs, the destination directory must be controlled
-by the caller; this is not a directory-durability or hostile-directory promise.
+by the caller. The parent directory is not `fsync`ed: publication is atomic,
+but the rename is not guaranteed durable across a system crash. This is not
+a hostile-directory promise.
 The file helper is intentionally unavailable on non-POSIX platforms rather
 than offering a predictable or symlink-following temporary fallback. Use the
 portable stream host with a platform-owned safe publication strategy there.
@@ -350,7 +371,8 @@ signing headers depend on OpenSSL.
 The new ABI uses [cimpl](https://github.com/contentauth/cimpl) 0.4.1 tracked
 allocations, exclusive session checkout, shared report checkout, and typed
 consuming free operations. Null frees are no-ops; wrong, stale, and busy
-handles are rejected. The handwritten reader ABI is unchanged. The new
+handles are rejected. The reader ABI retains its existing ownership model and
+adds the typed validation-state accessor described above. The new
 functions retain the `c2pa_sm_*` namespace and the existing panic-catching,
 owned-error boundary. cimpl's fallible Rust helpers return errors directly;
 the bridge does not use its TLS last-error macros. This preserves per-call
@@ -464,22 +486,21 @@ Task<SignReport> sign(BuildSession session, AsyncBuildHost &host) {
   `.get()` blocks its caller; `co_await` and `spawn` suspend at host boundaries.
 * Replies resume on their delivery thread. Inline replies are drained without
   recursive resumption; atomic mailbox registration prevents lost wakeups.
-* Destroying a quiescent suspended task disarms shared wake state; callbacks
-  retain owned requests and replies, not a bare coroutine handle. The caller
-  must serialize destruction against execution and callback-driven resumption,
-  including a wakeup already selected for delivery. This is not concurrent
-  cancellation of a running `Task`. Hosts must outlive all started work,
-  including work remaining after task destruction. Pool ownership is unchanged.
+* Destroying a suspended `Task` cancels it and synchronizes with active
+  callback-driven resumption, including nested read/signing Tasks. Access to
+  the `Task` object itself must still be externally serialized. Foreign
+  coroutine owners must serialize destruction of their own frames with
+  resumption. Cancellation does not drain host I/O: hosts must outlive all
+  started work, including work remaining after task destruction.
 * Focused tests cover Trusted JPEG/ES256, owned reports, queued interleaving,
   reverse-order and inline replies, late callbacks, pooled thread migration,
   get/await/spawn, host exceptions, invalid replies and timestamp failure paths.
   The synthetic granted TSA response proves transport and embedding only,
   not cryptographic timestamp validity. Keys and real HTTP remain host-owned.
-* Acceptance passed the full five-entry CTest suite in coverage, ASan and TSan
-  builds. The coroutine source covers 31/31 executable lines and 38/70 branch
-  outcomes, including repeated immediate frame destruction after cross-thread
-  completion. This stress test does not deterministically force simultaneous
-  delivery during wakeup publication.
+* Regression tests race Task destruction with cross-thread replies, verify
+  parallel/future error paths drain accepted work, and check FIFO ordering
+  without starving unrelated pool tasks. The full nine-entry CTest suite
+  passes in normal, ASan and TSan builds.
 * Phase 5 added no new crypto or ABI.
 
 ### Phase 6 hardening and integration
@@ -499,7 +520,7 @@ runner syntax checks. The three signing implementation sources cover 435/442
 executable lines (98.42%) and 348/553 branch outcomes (62.93%); examples and
 test helpers are not included in those figures. Remote CI must still run before
 merge. Real private keys, HTTP and trust policy stay with the host. The coroutine
-destruction boundaries documented above remain unchanged.
+destruction boundaries are strengthened by the regression fixes documented above.
 
 Additional regression tests exercise throwing mailbox wakers, cancellation
 waking a blocked waiter and discarding late replies, and pooled hosts continuing

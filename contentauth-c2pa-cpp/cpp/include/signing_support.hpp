@@ -50,15 +50,18 @@ inline std::vector<uint8_t> fixture_sign(const std::string &algorithm, const std
     return raw;
 }
 
-inline std::string trusted_signing_json(const std::vector<uint8_t> &bytes) {
+inline std::string signing_trust_settings() {
     const auto certificate = signing_certificate();
     std::string base64(4 * ((certificate.size() + 2) / 3), '\0');
     EVP_EncodeBlock(reinterpret_cast<unsigned char *>(base64.data()), certificate.data(),
                     static_cast<int>(certificate.size()));
-    const std::string settings = "{\"trust\":{\"trust_anchors\":\"-----BEGIN CERTIFICATE-----\\n" +
+    return "{\"trust\":{\"trust_anchors\":\"-----BEGIN CERTIFICATE-----\\n" +
         base64 + "\\n-----END CERTIFICATE-----\"}}";
+}
+
+inline std::string trusted_signing_json(const std::vector<uint8_t> &bytes) {
     c2pa::sm::MemoryHost host(bytes, kNow);
-    return json_of(read(c2pa::sm::Session("image/jpeg", settings), host));
+    return json_of(read(c2pa::sm::Session("image/jpeg", signing_trust_settings()), host));
 }
 
 class ManualBuildHost : public c2pa::sm::AsyncBuildHost {

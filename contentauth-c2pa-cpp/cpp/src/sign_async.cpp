@@ -1,4 +1,5 @@
 #include "contentauth/c2pa_sm_sign_async.hpp"
+#include "scope_exit.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -92,12 +93,18 @@ void BuildMailbox::cancel() {
 }
 
 struct Building::State {
+    struct Work {
+        std::mutex mutex;
+        std::condition_variable ready;
+        size_t outstanding = 0;
+    };
     BuildSession session;
     AsyncBuildHost *host;
     std::shared_ptr<BuildMailbox> mailbox = std::make_shared<BuildMailbox>();
     std::unordered_set<uint64_t> pending;
     std::atomic_flag active = ATOMIC_FLAG_INIT;
     std::exception_ptr failure;
+    std::shared_ptr<Work> work = std::make_shared<Work>();
     size_t started = 0, maximum = 0;
     bool complete = false, finished = false;
 
@@ -142,9 +149,19 @@ bool Building::step() {
             ++current.started;
             current.maximum = std::max(current.maximum, current.pending.size());
             auto delivered = std::make_shared<std::atomic<bool>>(false);
-            BuildCompletion done = [mailbox = current.mailbox, delivered, id](BuildReply reply) {
-                if (!delivered->exchange(true)) mailbox->post(id, std::move(reply));
+            BuildCompletion done = [mailbox = current.mailbox, delivered, work = current.work, id](BuildReply reply) {
+                if (delivered->exchange(true)) return;
+                auto completion_guard = detail::make_scope_exit([work]() noexcept {
+                    std::lock_guard<std::mutex> lock(work->mutex);
+                    --work->outstanding;
+                    work->ready.notify_all();
+                });
+                mailbox->post(id, std::move(reply));
             };
+            {
+                std::lock_guard<std::mutex> lock(current.work->mutex);
+                ++current.work->outstanding;
+            }
             try { current.host->start(std::move(request), done); }
             catch (const std::exception &error) { done(Failed{error.what()}); }
             catch (...) { done(Failed{"unknown host error"}); }
@@ -175,9 +192,21 @@ size_t Building::max_in_flight() const { return state().maximum; }
 
 size_t Building::started() const { return state().started; }
 
+void Building::wait() {
+    auto work = state().work;
+    std::unique_lock<std::mutex> lock(work->mutex);
+    work->ready.wait(lock, [&] { return work->outstanding == 0; });
+}
+
 SignReport build_parallel(BuildSession session, AsyncBuildHost &host) {
     Building building(std::move(session), host);
-    while (!building.step()) building.mailbox().wait();
+    try {
+        while (!building.step()) building.mailbox().wait();
+    } catch (...) {
+        building.wait();
+        throw;
+    }
+    building.wait();
     return std::move(building).finish();
 }
 
@@ -192,8 +221,8 @@ struct PooledBuildHost::State {
     std::shared_ptr<SyncBuildHost> owner;
     SyncBuildHost *host;
     std::mutex mutex;
-    std::condition_variable available;
-    bool busy = false;
+    std::deque<std::pair<BuildRequest, BuildCompletion>> queue;
+    bool scheduled = false;
 
     explicit State(SyncBuildHost &input) : host(&input) {}
 
@@ -211,23 +240,46 @@ PooledBuildHost::PooledBuildHost(std::shared_ptr<SyncBuildHost> host, ThreadPool
 PooledBuildHost::~PooledBuildHost() = default;
 
 void PooledBuildHost::start(BuildRequest request, BuildCompletion done) {
-    pool_->post([state = state_, request = std::move(request), done = std::move(done)] {
+    {
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        state_->queue.emplace_back(std::move(request), std::move(done));
+        if (state_->scheduled) return;
+        state_->scheduled = true;
+    }
+    try {
+        pool_->post([state = state_] {
+            for (;;) {
+                std::pair<BuildRequest, BuildCompletion> next;
+                {
+                    std::lock_guard<std::mutex> lock(state->mutex);
+                    if (state->queue.empty()) {
+                        state->scheduled = false;
+                        return;
+                    }
+                    next = std::move(state->queue.front());
+                    state->queue.pop_front();
+                }
+                auto reply = answer(*state->host, next.first);
+                try { next.second(std::move(reply)); } catch (...) {}
+            }
+        });
+    } catch (...) {
+        // A rejected drain also owns requests enqueued by concurrent callers.
+        // Complete every one, rather than stranding them behind scheduled=true.
+        std::deque<std::pair<BuildRequest, BuildCompletion>> rejected;
         {
-            std::unique_lock<std::mutex> lock(state->mutex);
-            state->available.wait(lock, [&] { return !state->busy; });
-            state->busy = true;
+            std::lock_guard<std::mutex> lock(state_->mutex);
+            rejected.swap(state_->queue);
+            state_->scheduled = false;
         }
-        BuildReply reply = Failed{"unknown pooled host error"};
-        try { reply = answer(*state->host, request); }
-        catch (const std::exception &error) { reply = Failed{error.what()}; }
+        std::string message = "pool rejected build work";
+        try { throw; }
+        catch (const std::exception &error) { message = error.what(); }
         catch (...) {}
-        {
-            std::lock_guard<std::mutex> lock(state->mutex);
-            state->busy = false;
+        for (auto &entry : rejected) {
+            try { entry.second(Failed{message}); } catch (...) {}
         }
-        state->available.notify_one();
-        try { done(std::move(reply)); } catch (...) {}
-    });
+    }
 }
 
 }  // namespace c2pa::sm

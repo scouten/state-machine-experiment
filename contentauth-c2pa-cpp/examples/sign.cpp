@@ -89,8 +89,7 @@ int main(int argc, char **argv) {
         if (!reader) throw std::runtime_error("signed output has no manifest");
         const auto json = reader->json();
         std::printf("%s\n", json.c_str());
-        // Reader exposes validation through pretty-printed JSON; match the root field.
-        if (json.find("\n  \"validation_state\": \"Trusted\"") == std::string::npos)
+        if (reader->validation_state() != c2pa::sm::ValidationState::Trusted)
             throw std::runtime_error("signed output did not validate as Trusted");
         return 0;
     } catch (const std::exception &error) {

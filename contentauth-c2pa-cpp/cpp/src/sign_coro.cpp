@@ -4,56 +4,28 @@ namespace c2pa::sm {
 
 namespace {
 
-struct BuildWake {
-    std::mutex mutex;
-    std::coroutine_handle<> continuation;
-
-    void disarm();
-    void resume();
-};
-
-void BuildWake::disarm() {
-    std::lock_guard<std::mutex> lock(mutex);
-    continuation = {};
-}
-
-void BuildWake::resume() {
-    std::coroutine_handle<> next;
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        next = std::exchange(continuation, {});
-    }
-    if (next) next.resume();
-}
-
 class NextBuildReply {
 public:
     explicit NextBuildReply(BuildMailbox &mailbox);
     ~NextBuildReply();
     bool await_ready() const noexcept;
-    bool await_suspend(std::coroutine_handle<> continuation);
+    template <class Promise>
+    bool await_suspend(std::coroutine_handle<Promise> continuation) {
+        return mailbox_.set_waker(detail::coroutine_waker(continuation));
+    }
     void await_resume() const noexcept;
 
 private:
     BuildMailbox &mailbox_;
-    std::shared_ptr<BuildWake> wake_ = std::make_shared<BuildWake>();
 };
 
 NextBuildReply::NextBuildReply(BuildMailbox &mailbox) : mailbox_(mailbox) {}
 
 NextBuildReply::~NextBuildReply() {
-    wake_->disarm();
     mailbox_.clear_waker();
 }
 
 bool NextBuildReply::await_ready() const noexcept { return false; }
-
-bool NextBuildReply::await_suspend(std::coroutine_handle<> continuation) {
-    auto wake = wake_;
-    auto *mailbox = &mailbox_;
-    wake->continuation = continuation;
-    return mailbox->set_waker([wake = std::move(wake)] { wake->resume(); });
-}
 
 void NextBuildReply::await_resume() const noexcept {}
 

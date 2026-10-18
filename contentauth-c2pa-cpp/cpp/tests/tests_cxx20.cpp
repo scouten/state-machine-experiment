@@ -4,6 +4,7 @@
 // The coroutine driver, which needs C++20.
 
 #include <set>
+#include <deque>
 
 #include "contentauth/c2pa_sm_coro.hpp"
 #include "contentauth/c2pa_sm_sign.hpp"
@@ -409,6 +410,115 @@ TEST(coroutine_signing_timestamp_transport_fails_closed) {
     const auto report = co_build_and_sign(BuildSession(signing_settings(true)), synthetic_tsa).get();
     CHECK(called);
     CHECK(!report.manifest.empty());
+}
+
+namespace {
+
+class ThreadedBuildHost : public AsyncBuildHost {
+public:
+    std::promise<void> first_delivery;
+    ThreadedBuildHost() : worker_([this] { run(); }) {}
+    ~ThreadedBuildHost() override {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stopping_ = true;
+        }
+        ready_.notify_one();
+        worker_.join();
+    }
+    void start(BuildRequest request, BuildCompletion done) override {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            requests_.emplace_back(std::move(request), std::move(done));
+        }
+        ready_.notify_one();
+    }
+private:
+    void run() {
+        bool first = true;
+        for (;;) {
+            std::pair<BuildRequest, BuildCompletion> request;
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                ready_.wait(lock, [&] { return stopping_ || !requests_.empty(); });
+                if (requests_.empty()) return;
+                request = std::move(requests_.front());
+                requests_.pop_front();
+            }
+            auto reply = answer(backing_, request.first);
+            if (first) {
+                first = false;
+                first_delivery.set_value();
+            }
+            request.second(reply);
+            request.second(std::move(reply));
+        }
+    }
+    MemoryBuildHost backing_{fixture_bytes(), fixture_sign};
+    std::mutex mutex_;
+    std::condition_variable ready_;
+    std::deque<std::pair<BuildRequest, BuildCompletion>> requests_;
+    bool stopping_ = false;
+    std::thread worker_;
+};
+
+Task<SignReport> nested_cancel_build(AsyncBuildHost &host) {
+    co_return co_await co_build_and_sign(BuildSession(signing_settings()), host);
+}
+
+Task<SignReport> pause_after_build(AsyncBuildHost &host, std::promise<void> &entered,
+                                 std::shared_future<void> release) {
+    auto result = co_await nested_cancel_build(host);
+    entered.set_value();
+    release.wait();
+    co_return result;
+}
+
+}
+
+TEST(task_destruction_races_real_host_delivery_and_nested_symmetric_transfer) {
+    for (int iteration = 0; iteration < 200; ++iteration) {
+        ThreadedBuildHost host;
+        {
+            auto task = nested_cancel_build(host);
+            task.await_suspend(std::noop_coroutine()).resume();
+            host.first_delivery.get_future().get();
+            if (iteration % 2) std::this_thread::yield();
+        }
+    }
+}
+
+TEST(task_destruction_waits_for_a_resume_executing_in_an_awaiting_frame) {
+    ThreadedBuildHost host;
+    std::promise<void> entered, release;
+    auto task = pause_after_build(host, entered, release.get_future().share());
+    task.await_suspend(std::noop_coroutine()).resume();
+    entered.get_future().get();
+    std::promise<void> destroying;
+    auto destroyed = std::async(std::launch::async, [task = std::move(task), &destroying, &host]() mutable {
+        destroying.set_value();
+        // Destroy via move assignment while the host is executing the parent
+        // frame, not merely the mailbox awaiter in its nested child.
+        auto replacement = nested_cancel_build(host);
+        task = std::move(replacement);
+    });
+    destroying.get_future().get();
+    const bool waited = destroyed.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout;
+    release.set_value();
+    destroyed.get();
+    CHECK(waited);
+}
+
+TEST(read_task_destruction_uses_the_same_cross_thread_lifetime_gate) {
+    auto pool = make_simple_thread_pool(4);
+    MemoryHost backing = fixture_host();
+    PooledHost host(backing, *pool);
+    for (int iteration = 0; iteration < 200; ++iteration) {
+        auto task = co_read(Session("image/jpeg"), host);
+        task.await_suspend(std::noop_coroutine()).resume();
+        std::this_thread::yield();
+    }
+    pool.reset();
 }
 
 int main() { return check::run_all(); }

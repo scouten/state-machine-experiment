@@ -15,7 +15,7 @@
 //! `Reader` class.
 
 use contentauth_c2pa_file_reader::ReadReport;
-use contentauth_c2pa_js_compat::{Manifest, ManifestStore};
+use contentauth_c2pa_js_compat::{Manifest, ManifestStore, ValidationState};
 
 /// A validated manifest store, as c2pa-node's `Reader` reports one.
 ///
@@ -38,6 +38,11 @@ impl Reader {
     pub fn json(&self) -> String {
         serde_json::to_string_pretty(&ManifestStore::from_report(&self.report))
             .unwrap_or_else(|_| "{}".to_string())
+    }
+
+    /// Overall validation outcome, independent of JSON serialization.
+    pub fn validation_state(&self) -> ValidationState {
+        self.report.validation_state.into()
     }
 
     /// The active manifest's label, if any — c2pa-node's `activeLabel()`.

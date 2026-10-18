@@ -8,9 +8,9 @@ namespace c2pa::sm {
 
 /// Builds without blocking; replies resume the task on their delivery thread.
 /// Link c2pa_sm_coro (C++20). The host must outlive all started work.
-/// Destroying a suspended, quiescent task disarms its wakeup. Destruction must
-/// be externally serialized with active execution and callback-driven resume,
-/// including a wakeup already selected for delivery. Task::get is blocking.
+/// Destruction cancels suspended work and synchronizes with callback-driven
+/// resume (including nested Tasks). It does not wait for host I/O to finish:
+/// the host must still outlive its accepted requests. Task::get is blocking.
 Task<SignReport> co_build_and_sign(BuildSession session, AsyncBuildHost &host);
 
 }  // namespace c2pa::sm
