@@ -213,8 +213,11 @@ TEST(Core, build_mailbox_wait_blocks_until_a_reply_or_cancellation) {
         });
         started.get();
         EXPECT_TRUE(waiter.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout);
-        if (cancel) EXPECT_THROW_CODE(std::move(building).finish(), ErrorCode::InvalidArgument);
-        else mailbox.post(7, Length{9});
+        if (cancel) {
+            EXPECT_THROW_CODE(std::move(building).finish(), ErrorCode::InvalidArgument);
+        } else {
+            mailbox.post(7, Length{9});
+        }
         waiter.get();
         EXPECT_EQ(mailbox.drain().size(), cancel ? size_t{0} : size_t{1});
     }
@@ -245,7 +248,9 @@ public:
     void start(BuildRequest request, BuildCompletion done) override {
         if (failure == 1) throw std::runtime_error("start failed");
         if (failure == 2) throw 42;
-        if (operation) EXPECT_THROW_CODE(operation->step(), ErrorCode::InvalidArgument);
+        if (operation) {
+            EXPECT_THROW_CODE(operation->step(), ErrorCode::InvalidArgument);
+        }
         done(answer(backing, request));
         done(Failed{"duplicate ignored"});
         throw std::runtime_error("completion already won");
@@ -272,8 +277,11 @@ TEST(Core, build_futures_own_progress_and_deliver_standard_and_nonstandard_start
         auto host = std::make_shared<InlineBuildHost>();
         host->failure = failure;
         auto future = build_future(BuildSession(signing_settings()), host);
-        if (failure) EXPECT_THROW_CODE(future.get(), static_cast<ErrorCode>(C2PA_SM_ERR_BUILD));
-        else EXPECT_TRUE(!future.get().manifest.empty());
+        if (failure) {
+            EXPECT_THROW_CODE(future.get(), static_cast<ErrorCode>(C2PA_SM_ERR_BUILD));
+        } else {
+            EXPECT_TRUE(!future.get().manifest.empty());
+        }
     }
     EXPECT_THROW_CODE(build_future(BuildSession(signing_settings()), nullptr), ErrorCode::InvalidArgument);
 }

@@ -55,7 +55,7 @@ add_dependencies(c2pa_sm c2pa_sm_rust)
 
 # ---- flags for the C++ ------------------------------------------------------
 function(c2pa_sm_target_flags target)
-  target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Wdangling-else -Werror)
   if(C2PA_SM_COVERAGE)
     if(NOT "${ARGV1}" STREQUAL "NO_COVERAGE")
       target_compile_options(${target} PRIVATE --coverage -fprofile-update=atomic -O0 -g)

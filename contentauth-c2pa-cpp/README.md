@@ -220,7 +220,9 @@ the real library, so drift is a link or test failure.
   and runtime tests use C++20.
   CI runs the discovered tests in parallel and the whole GoogleTest executable
   in one process, plain with coverage (gcovr → Codecov, flag `cpp-binding`),
-  under AddressSanitizer and under ThreadSanitizer. ASan has already earned
+  under AddressSanitizer and under ThreadSanitizer. Project C++ targets explicitly
+  enable `-Wdangling-else` and treat warnings as errors on both macOS and Linux.
+  ASan has already earned
   its keep: it caught the C++ wrapper evaluating `check(f(&error), error)`
   in an unspecified order, which leaked every error and replaced its message
   with a placeholder.

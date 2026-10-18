@@ -345,8 +345,9 @@ TEST(Coroutines, coroutine_signing_get_can_free_frames_immediately_after_cross_t
         const auto report = co_build_and_sign(BuildSession(signing_settings()), host).get();
         EXPECT_TRUE(!report.manifest.empty());
         EXPECT_TRUE(!report.exclusions.empty());
-        if (iteration == 31)
+        if (iteration == 31) {
             EXPECT_TRUE(trusted_signing_json(backing->output()).find("Trusted") != std::string::npos);
+        }
     }
     pool.reset();
 }
