@@ -30,8 +30,11 @@ C++ drivers support reading and signing; the signing ABI and C++ APIs are
 described in [Signing contract](#signing-contract). Build with `./build.sh`, or
 build and run all C++ tests with `./test.sh`. Both scripts forward extra
 arguments to CMake's configure step, e.g. `./test.sh -DCMAKE_BUILD_TYPE=Release`
-(needs cargo, CMake ≥ 3.16, OpenSSL Crypto development headers and a C++17
-compiler; the coroutine pieces need C++20).
+(needs cargo, CMake ≥ 3.16, OpenSSL Crypto development headers and a C++20
+compiler for the tests and coroutine pieces; non-coroutine APIs and the compiled
+core retain their C++17 baseline). Tests need GoogleTest as described below.
+To build the library and examples without GoogleTest, use
+`./build.sh -DBUILD_TESTING=OFF`.
 
 ### Signing example
 
@@ -207,12 +210,49 @@ the real library, so drift is a link or test failure.
 * **Rust** (`cargo test -p contentauth-c2pa-cpp`): drives the ABI end to end
   from Rust, plus null/malformed arguments, misanswered requests, the OCSP
   request mapping (which no fixture here provokes), panics and `Send`/`Sync`.
-* **C++** (`ctest`): a dependency-free harness; C++17 and C++20 binaries.
-  CI runs them plain with coverage (gcovr → Codecov, flag `cpp-binding`),
+* **C++** (`ctest`): one C++20 GoogleTest executable, `c2pa_sm_tests`, covers
+  core APIs, thread pools, signing, and coroutines. Each test is discovered
+  individually by CTest, alongside the existing example tests. The normal build
+  also compiles and links `c2pa_sm_cxx17_check`, which checks the public
+  non-coroutine headers and representative API usage in explicitly enforced
+  C++17 mode, without GoogleTest. It is not a runtime test and is not instrumented
+  for coverage. The compiled core remains C++17; only the coroutine library
+  and runtime tests use C++20.
+  CI runs the discovered tests in parallel and the whole GoogleTest executable
+  in one process, plain with coverage (gcovr → Codecov, flag `cpp-binding`),
   under AddressSanitizer and under ThreadSanitizer. ASan has already earned
   its keep: it caught the C++ wrapper evaluating `check(f(&error), error)`
   in an unspecified order, which leaked every error and replaced its message
   with a placeholder.
+
+GoogleTest is a test-only dependency, never linked into the public libraries.
+By default CMake requires an installed GoogleTest >= 1.17 package; set
+`GTest_DIR` or `CMAKE_PREFIX_PATH` for an offline or custom installation.
+Alternatively, explicitly allow fetching GoogleTest 1.18.0, pinned by SHA-256:
+
+```sh
+./test.sh -DC2PA_SM_FETCH_GTEST=ON
+```
+
+The fetched source retains its upstream BSD-3-Clause license and is not installed
+with the binding. No GoogleTest download is attempted with `BUILD_TESTING=OFF`,
+or without the explicit fetch option. `test.sh` always enables testing, including
+when its build directory was previously configured with testing disabled.
+
+From this directory, run or filter tests with:
+
+```sh
+./build/c2pa_sm_tests
+./build/c2pa_sm_tests --gtest_filter='AsyncSigning.*:ThreadPool.*'
+ctest --test-dir build --output-on-failure --parallel 2
+ctest --test-dir build -R '^cpp\.Coroutines\.' --output-on-failure
+cmake --build build --target c2pa_sm_cxx17_check
+```
+
+Coverage includes only production headers and implementation sources, not
+GoogleTest, fixtures, the compatibility check, or test assertions. Migrating
+frameworks does not replace testing uncovered production paths or change the
+Codecov thresholds.
 
 ## Signing contract
 

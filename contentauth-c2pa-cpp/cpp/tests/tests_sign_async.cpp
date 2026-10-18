@@ -8,7 +8,7 @@
 using namespace c2pa::sm;
 using namespace support;
 
-TEST(scope_exit_runs_once_after_normal_exit_and_early_return) {
+TEST(AsyncSigning, scope_exit_runs_once_after_normal_exit_and_early_return) {
     int calls = 0;
     auto cleanup = [&calls]() noexcept { ++calls; };
     {
@@ -18,18 +18,18 @@ TEST(scope_exit_runs_once_after_normal_exit_and_early_return) {
         static_assert(!std::is_move_constructible_v<decltype(guard)>);
         static_assert(!std::is_move_assignable_v<decltype(guard)>);
         static_assert(std::is_nothrow_destructible_v<decltype(guard)>);
-        CHECK_EQ(calls, 0);
+        EXPECT_EQ(calls, 0);
     }
-    CHECK_EQ(calls, 1);
+    EXPECT_EQ(calls, 1);
     const auto run = [&] {
         auto guard = detail::make_scope_exit(cleanup);
         return 42;
     };
-    CHECK_EQ(run(), 42);
-    CHECK_EQ(calls, 2);
+    EXPECT_EQ(run(), 42);
+    EXPECT_EQ(calls, 2);
 }
 
-TEST(scope_exit_runs_during_exception_unwinding) {
+TEST(AsyncSigning, scope_exit_runs_during_exception_unwinding) {
     int calls = 0;
     bool caught = false;
     try {
@@ -37,13 +37,13 @@ TEST(scope_exit_runs_during_exception_unwinding) {
         throw std::runtime_error("scope-exit test");
     } catch (const std::runtime_error &) {
         caught = true;
-        CHECK_EQ(calls, 1);
+        EXPECT_EQ(calls, 1);
     }
-    CHECK(caught);
-    CHECK_EQ(calls, 1);
+    EXPECT_TRUE(caught);
+    EXPECT_EQ(calls, 1);
 }
 
-TEST(scope_exit_owns_move_only_callables_and_runs_in_reverse_scope_order) {
+TEST(AsyncSigning, scope_exit_owns_move_only_callables_and_runs_in_reverse_scope_order) {
     int sequence = 0;
     {
         auto first = detail::make_scope_exit(
@@ -54,14 +54,14 @@ TEST(scope_exit_owns_move_only_callables_and_runs_in_reverse_scope_order) {
             auto second = detail::make_scope_exit([&sequence]() noexcept {
                 sequence = sequence * 10 + 2;
             });
-            CHECK_EQ(sequence, 0);
+            EXPECT_EQ(sequence, 0);
         }
-        CHECK_EQ(sequence, 2);
+        EXPECT_EQ(sequence, 2);
     }
-    CHECK_EQ(sequence, 21);
+    EXPECT_EQ(sequence, 21);
 }
 
-TEST(pooled_build_fifo_uses_one_task_and_allows_reentrant_submission) {
+TEST(AsyncSigning, pooled_build_fifo_uses_one_task_and_allows_reentrant_submission) {
     struct ManualPool : ThreadPool {
         std::vector<std::function<void()>> tasks;
         void post(std::function<void()> task) override { tasks.push_back(std::move(task)); }
@@ -70,22 +70,22 @@ TEST(pooled_build_fifo_uses_one_task_and_allows_reentrant_submission) {
     PooledBuildHost host(backing, pool);
     std::vector<int> order;
     host.start(BuildLengthRequest{1, BuildStream::Source}, [&](BuildReply reply) {
-        CHECK_EQ(std::get<Length>(reply).value, uint64_t{3});
+        EXPECT_EQ(std::get<Length>(reply).value, uint64_t{3});
         order.push_back(1);
         host.start(BuildLengthRequest{3, BuildStream::Source}, [&](BuildReply) { order.push_back(3); });
         throw std::runtime_error("callback must not stop the drain");
     });
     host.start(BuildLengthRequest{2, BuildStream::Source}, [&](BuildReply) { order.push_back(2); });
-    CHECK_EQ(pool.tasks.size(), size_t{1});
+    EXPECT_EQ(pool.tasks.size(), size_t{1});
     pool.tasks.front()();
-    CHECK(order == std::vector<int>({1, 2, 3}));
+    EXPECT_TRUE(order == std::vector<int>({1, 2, 3}));
     host.start(BuildLengthRequest{4, BuildStream::Source}, [&](BuildReply) { order.push_back(4); });
-    CHECK_EQ(pool.tasks.size(), size_t{2});
+    EXPECT_EQ(pool.tasks.size(), size_t{2});
     pool.tasks.back()();
-    CHECK(order == std::vector<int>({1, 2, 3, 4}));
+    EXPECT_TRUE(order == std::vector<int>({1, 2, 3, 4}));
 }
 
-TEST(serialized_build_work_does_not_park_the_other_pool_worker) {
+TEST(AsyncSigning, serialized_build_work_does_not_park_the_other_pool_worker) {
     struct Blocked : MemoryBuildHost {
         std::promise<void> entered;
         std::shared_future<void> release;
@@ -114,11 +114,11 @@ TEST(serialized_build_work_does_not_park_the_other_pool_worker) {
     const bool ran = ready.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
     release.set_value();
     pool.reset();
-    CHECK(ran);
-    CHECK_EQ(completed.load(), 19);
+    EXPECT_TRUE(ran);
+    EXPECT_EQ(completed.load(), 19);
 }
 
-TEST(rejected_fifo_drain_completes_concurrent_submissions_and_can_retry) {
+TEST(AsyncSigning, rejected_fifo_drain_completes_concurrent_submissions_and_can_retry) {
     struct RejectOnce : ThreadPool {
         std::promise<void> entered;
         std::shared_future<void> release;
@@ -146,40 +146,40 @@ TEST(rejected_fifo_drain_completes_concurrent_submissions_and_can_retry) {
     host.start(BuildLengthRequest{2, BuildStream::Source}, done);
     release.set_value();
     first.join();
-    CHECK_EQ(failures.load(), 2);
+    EXPECT_EQ(failures.load(), 2);
     bool recovered = false;
     host.start(BuildLengthRequest{3, BuildStream::Source}, [&](BuildReply reply) {
         recovered = std::holds_alternative<Length>(reply);
     });
-    CHECK_EQ(pool.accepted.size(), size_t{1});
+    EXPECT_EQ(pool.accepted.size(), size_t{1});
     pool.accepted.front()();
-    CHECK(recovered);
+    EXPECT_TRUE(recovered);
 }
 
-TEST(build_wait_quiesces_a_callback_selected_before_terminal_error) {
+TEST(AsyncSigning, build_wait_quiesces_a_callback_selected_before_terminal_error) {
     ManualBuildHost host;
     Building building(BuildSession(signing_settings()), host);
-    CHECK(!building.step());
+    EXPECT_TRUE(!building.step());
     std::promise<void> entered, release;
     auto released = release.get_future().share();
-    CHECK(building.mailbox().set_waker([&] {
+    EXPECT_TRUE(building.mailbox().set_waker([&] {
         entered.set_value();
         released.wait();
     }));
     std::thread delivery([&] { host.deliver(); });
     entered.get_future().get();
     building.mailbox().post(UINT64_MAX, Written{});
-    CHECK_THROWS_CODE(building.step(), ErrorCode::InvalidArgument);
+    EXPECT_THROW_CODE(building.step(), ErrorCode::InvalidArgument);
     auto waiter = std::async(std::launch::async, [&] { building.wait(); });
     const bool blocked = waiter.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout;
     release.set_value();
     delivery.join();
     waiter.get();
-    CHECK(blocked);
-    CHECK_THROWS_CODE(building.step(), ErrorCode::InvalidArgument);
+    EXPECT_TRUE(blocked);
+    EXPECT_THROW_CODE(building.step(), ErrorCode::InvalidArgument);
 }
 
-TEST(parallel_and_future_builds_drain_a_failed_hash_window_before_releasing_the_host) {
+TEST(AsyncSigning, parallel_and_future_builds_drain_a_failed_hash_window_before_releasing_the_host) {
     struct FailedWindow : AsyncBuildHost {
         MemoryBuildHost backing;
         std::shared_future<void> release;
@@ -241,13 +241,11 @@ TEST(parallel_and_future_builds_drain_a_failed_hash_window_before_releasing_the_
             try { (void)result.get(); }
             catch (const Exception &) { failed = true; }
             host.reset();
-            CHECK(pending);
-            CHECK(blocked);
-            CHECK(alive);
-            CHECK(failed);
-            CHECK(retained.expired());
+            EXPECT_TRUE(pending);
+            EXPECT_TRUE(blocked);
+            EXPECT_TRUE(alive);
+            EXPECT_TRUE(failed);
+            EXPECT_TRUE(retained.expired());
         }
     }
 }
-
-int main() { return check::run_all(); }

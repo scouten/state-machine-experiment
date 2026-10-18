@@ -4,6 +4,8 @@
 #   cmake -S . -B build && cmake --build build && ctest --test-dir build
 #
 # Options:
+#   BUILD_TESTING=OFF    Build the library and examples without GoogleTest
+#   C2PA_SM_FETCH_GTEST=ON  Download pinned GoogleTest instead of requiring a package
 #   C2PA_SM_COVERAGE=ON   gcc/clang source coverage of the C++ (see CI)
 #   C2PA_SM_SANITIZE=...  "address" or "thread" (Rust side stays uninstrumented)
 cmake_minimum_required(VERSION 3.16)
@@ -18,6 +20,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
 option(C2PA_SM_COVERAGE "Instrument the C++ for coverage" OFF)
+option(C2PA_SM_FETCH_GTEST "Allow downloading pinned GoogleTest when no package is installed" OFF)
 set(C2PA_SM_SANITIZE "" CACHE STRING "Sanitizer for the C++ code: address or thread")
 
 find_package(Threads REQUIRED)
@@ -54,7 +57,9 @@ add_dependencies(c2pa_sm c2pa_sm_rust)
 function(c2pa_sm_target_flags target)
   target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror)
   if(C2PA_SM_COVERAGE)
-    target_compile_options(${target} PRIVATE --coverage -fprofile-update=atomic -O0 -g)
+    if(NOT "${ARGV1}" STREQUAL "NO_COVERAGE")
+      target_compile_options(${target} PRIVATE --coverage -fprofile-update=atomic -O0 -g)
+    endif()
     target_link_options(${target} PRIVATE --coverage)
   endif()
   if(C2PA_SM_SANITIZE)
@@ -85,7 +90,7 @@ set_target_properties(c2pa_sm_coro PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUI
 c2pa_sm_target_flags(c2pa_sm_coro)
 
 # ---- tests and examples -----------------------------------------------------
-enable_testing()
+include(CTest)
 set(FIXTURE "${WORKSPACE_ROOT}/contentauth-c2pa-reader/tests/fixtures/C.jpg")
 
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
@@ -102,36 +107,46 @@ inline constexpr char signing_cert_path[] = \"${WORKSPACE_ROOT}/contentauth-c2pa
 inline constexpr char signing_key_path[] = \"${WORKSPACE_ROOT}/contentauth-c2pa-builder/tests/fixtures/test-signer.key.pem\";
 ")
 
-# The core and the thread-based drivers must stay C++17.
-add_executable(c2pa_sm_tests_cxx17 cpp/tests/tests_cxx17.cpp)
-target_link_libraries(c2pa_sm_tests_cxx17 PRIVATE c2pa_sm_cpp OpenSSL::Crypto)
-target_include_directories(c2pa_sm_tests_cxx17 PRIVATE cpp/include "${CMAKE_CURRENT_BINARY_DIR}")
-target_compile_features(c2pa_sm_tests_cxx17 PRIVATE cxx_std_17)
-set_target_properties(c2pa_sm_tests_cxx17 PROPERTIES CXX_STANDARD 17 CXX_EXTENSIONS OFF)
-target_compile_definitions(c2pa_sm_tests_cxx17 PRIVATE C2PA_SM_FIXTURE="${FIXTURE}")
-c2pa_sm_target_flags(c2pa_sm_tests_cxx17)
-add_test(NAME cxx17 COMMAND c2pa_sm_tests_cxx17)
+if(BUILD_TESTING)
+  find_package(GTest 1.17 CONFIG QUIET)
+  if(NOT GTest_FOUND)
+    if(NOT C2PA_SM_FETCH_GTEST)
+      message(FATAL_ERROR
+        "GoogleTest >= 1.17 is required for tests. Set GTest_DIR or CMAKE_PREFIX_PATH "
+        "to an installed package, explicitly allow a download with "
+        "-DC2PA_SM_FETCH_GTEST=ON, or disable tests with -DBUILD_TESTING=OFF.")
+    endif()
+    include(FetchContent)
+    if(POLICY CMP0135)
+      cmake_policy(SET CMP0135 NEW)
+    endif()
+    set(BUILD_GMOCK OFF)
+    set(INSTALL_GTEST OFF)
+    FetchContent_Declare(googletest
+      URL https://github.com/google/googletest/archive/refs/tags/v1.18.0.tar.gz
+      URL_HASH SHA256=6e3191c1455468b3fc35a417fb565c1c5071aee1b7e7f85e30cf48a98d37d8b5)
+    FetchContent_MakeAvailable(googletest)
+  endif()
 
-add_executable(c2pa_sm_tests_sign_async cpp/tests/tests_sign_async.cpp)
-target_link_libraries(c2pa_sm_tests_sign_async PRIVATE c2pa_sm_cpp OpenSSL::Crypto)
-target_include_directories(c2pa_sm_tests_sign_async PRIVATE cpp/include "${CMAKE_CURRENT_BINARY_DIR}")
-set_target_properties(c2pa_sm_tests_sign_async PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
-target_compile_definitions(c2pa_sm_tests_sign_async PRIVATE C2PA_SM_FIXTURE="${FIXTURE}")
-c2pa_sm_target_flags(c2pa_sm_tests_sign_async)
-add_test(NAME sign_async COMMAND c2pa_sm_tests_sign_async)
+  add_executable(c2pa_sm_tests
+    cpp/tests/tests_cxx17.cpp
+    cpp/tests/tests_sign_async.cpp
+    cpp/tests/tests_pool.cpp
+    cpp/tests/tests_cxx20.cpp
+    cpp/tests/tests_assertions.cpp)
+  target_link_libraries(c2pa_sm_tests PRIVATE c2pa_sm_coro GTest::gtest_main OpenSSL::Crypto)
+  target_include_directories(c2pa_sm_tests PRIVATE cpp/include "${CMAKE_CURRENT_BINARY_DIR}")
+  set_target_properties(c2pa_sm_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+  target_compile_definitions(c2pa_sm_tests PRIVATE C2PA_SM_FIXTURE="${FIXTURE}")
+  c2pa_sm_target_flags(c2pa_sm_tests)
+  include(GoogleTest)
+  gtest_discover_tests(c2pa_sm_tests TEST_PREFIX "cpp." PROPERTIES TIMEOUT 120)
 
-add_executable(c2pa_sm_tests_cxx20 cpp/tests/tests_cxx20.cpp)
-target_link_libraries(c2pa_sm_tests_cxx20 PRIVATE c2pa_sm_coro OpenSSL::Crypto)
-target_include_directories(c2pa_sm_tests_cxx20 PRIVATE cpp/include "${CMAKE_CURRENT_BINARY_DIR}")
-set_target_properties(c2pa_sm_tests_cxx20 PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
-target_compile_definitions(c2pa_sm_tests_cxx20 PRIVATE C2PA_SM_FIXTURE="${FIXTURE}")
-c2pa_sm_target_flags(c2pa_sm_tests_cxx20)
-add_test(NAME cxx20 COMMAND c2pa_sm_tests_cxx20)
-
-add_executable(c2pa_sm_tests_pool cpp/tests/tests_pool.cpp)
-target_link_libraries(c2pa_sm_tests_pool PRIVATE c2pa_sm_cpp)
-set_target_properties(c2pa_sm_tests_pool PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
-c2pa_sm_target_flags(c2pa_sm_tests_pool)
-add_test(NAME pool COMMAND c2pa_sm_tests_pool)
+  add_executable(c2pa_sm_cxx17_check cpp/tests/compile_cxx17.cpp)
+  target_link_libraries(c2pa_sm_cxx17_check PRIVATE c2pa_sm_cpp)
+  set_target_properties(c2pa_sm_cxx17_check PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+  # Build/link only: never run or add unexecuted header counters to coverage.
+  c2pa_sm_target_flags(c2pa_sm_cxx17_check NO_COVERAGE)
+endif()
 
 add_subdirectory(examples)
