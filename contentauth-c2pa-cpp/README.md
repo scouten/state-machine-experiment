@@ -256,6 +256,14 @@ GoogleTest, fixtures, the compatibility check, or test assertions. Migrating
 frameworks does not replace testing uncovered production paths or change the
 Codecov thresholds.
 
+Linux tests use executable-only linker wrapping to inject POSIX read/write
+interruptions, short transfers, invalid metadata, and sync failures. Faults are
+thread-local and scoped; production libraries keep calling the real system
+calls. The coroutine death test checks the non-throwing `spawn` completion
+contract in a separate process and flushes coverage before its expected exit.
+Custom LLVM-instrumented builds can also define `C2PA_SM_LLVM_PROFILE` for the
+test runner to flush the child process's profile.
+
 ## Signing contract
 
 Phase 1 supplies C++17 value types in `include/contentauth/c2pa_sm_sign.hpp`.

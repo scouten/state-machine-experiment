@@ -5,6 +5,8 @@
 
 #include <set>
 #include <deque>
+#include <cstdlib>
+#include <exception>
 
 #include "contentauth/c2pa_sm_coro.hpp"
 #include "contentauth/c2pa_sm_sign.hpp"
@@ -12,6 +14,12 @@
 #include "contentauth/c2pa_sm_sign_coro.hpp"
 #include "support.hpp"
 #include "signing_support.hpp"
+
+#if defined(C2PA_SM_GCOV)
+extern "C" void __gcov_dump();
+#elif defined(C2PA_SM_LLVM_PROFILE)
+extern "C" int __llvm_profile_write_file();
+#endif
 
 using namespace c2pa::sm;
 using namespace support;
@@ -39,7 +47,73 @@ Task<std::optional<Reader>> bad_format(AsyncHost &host) {
     co_return co_await co_read(Session("image/png"), host);
 }
 
+Task<int> immediate_value() { co_return 42; }
+
+struct CaptureWaker {
+    std::function<void()> &waker;
+    bool await_ready() const noexcept { return false; }
+    void await_suspend(Task<int>::Handle handle) {
+        waker = detail::coroutine_waker(handle);
+    }
+    void await_resume() const noexcept {}
+};
+
+Task<int> capture_waker(std::function<void()> &waker, int &resumed) {
+    co_await CaptureWaker{waker};
+    ++resumed;
+    co_return 42;
+}
+
+[[noreturn]] void expected_termination() {
+    // Expected process death skips normal profile finalizers.
+#if defined(C2PA_SM_GCOV)
+    __gcov_dump();
+#elif defined(C2PA_SM_LLVM_PROFILE)
+    if (__llvm_profile_write_file() != 0) std::_Exit(87);
+#endif
+    std::_Exit(86);
+}
+
 }  // namespace
+
+TEST(CoroutineDeathTest, throwing_spawn_completion_terminates) {
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    EXPECT_EXIT({
+        std::set_terminate(expected_termination);
+        spawn(immediate_value(), [](Outcome<int>) {
+            throw std::runtime_error("spawn completion must not throw");
+        });
+    }, ::testing::ExitedWithCode(86), "");
+}
+
+TEST(Coroutines, task_move_assignment_preserves_results_and_accepts_self_move) {
+    auto task = immediate_value();
+    auto &alias = task;
+    task = std::move(alias);
+    EXPECT_EQ(std::move(task).get(), 42);
+    auto replacement = immediate_value();
+    task = std::move(replacement);
+    EXPECT_EQ(std::move(task).get(), 42);
+}
+
+TEST(Coroutines, saved_wakers_do_not_resume_destroyed_tasks) {
+    for (bool complete_first : {false, true}) {
+        std::function<void()> waker;
+        int resumed = 0;
+        {
+            auto task = capture_waker(waker, resumed);
+            task.await_suspend(std::noop_coroutine()).resume();
+            ASSERT_TRUE(waker);
+            EXPECT_EQ(resumed, 0);
+            if (complete_first) {
+                waker();
+                EXPECT_EQ(task.await_resume(), 42);
+            }
+        }
+        waker();
+        EXPECT_EQ(resumed, complete_first ? 1 : 0);
+    }
+}
 
 TEST(Coroutines, a_coroutine_reads_with_a_pool_and_resumes_on_a_pool_thread) {
     SlowHost slow(std::chrono::milliseconds(5));

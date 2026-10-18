@@ -141,7 +141,12 @@ TEST(AsyncSigning, rejected_fifo_drain_completes_concurrent_submissions_and_can_
     PooledBuildHost host(backing, pool);
     std::atomic<int> failures{0};
     auto done = [&](BuildReply reply) { if (std::holds_alternative<Failed>(reply)) ++failures; };
-    std::thread first([&] { host.start(BuildLengthRequest{1, BuildStream::Source}, done); });
+    std::thread first([&] {
+        EXPECT_NO_THROW(host.start(BuildLengthRequest{1, BuildStream::Source}, [&](BuildReply reply) {
+            done(std::move(reply));
+            throw std::runtime_error("rejected callback must not strand the remaining requests");
+        }));
+    });
     pool.entered.get_future().get();
     host.start(BuildLengthRequest{2, BuildStream::Source}, done);
     release.set_value();
