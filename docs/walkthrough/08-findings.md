@@ -51,6 +51,8 @@ about C2PA itself.
   from 51 MB to 34 MB. Most of the latter was invisible: the host loop's
   `outstanding_requests().to_vec()` (needed to release the session's
   borrow before `fulfill`) had been deep-copying every write.
+  The saving stops at an FFI boundary: the C ABI still copies bytes in
+  and out (see `contentauth-c2pa-c-api`'s README).
 
 ## Things that were *not* cheap
 
