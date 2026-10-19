@@ -205,6 +205,50 @@ jobs:
       - name: "`cargo check` with MSRV"
         run: cargo check --all-features --all-targets
 
+  fuzz:
+    name: Fuzz engine (short smoke run)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust toolchain (nightly, for libFuzzer)
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master@2026-06-30
+        with:
+          toolchain: nightly
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: contentauth-state-machine/fuzz
+
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@4684b8405694ae9dd42c9f39ba901a70ae83f4a3 # v2.82.9
+        with:
+          tool: cargo-fuzz
+
+      # Each target runs from its tracked seed corpus for a fixed time. The
+      # point is to keep the targets building and the model honest on every
+      # PR; deeper runs are done by hand (see the engine's README).
+      - name: Fuzz session_core
+        working-directory: contentauth-state-machine
+        run: cargo fuzz run session_core -- -max_total_time=60
+
+      - name: Fuzz fan_out_session
+        working-directory: contentauth-state-machine
+        run: cargo fuzz run fan_out_session -- -max_total_time=60
+
+      # The crashing input, base64-encoded so it can be copied out of the log.
+      - name: Print crash artifacts
+        if: failure()
+        working-directory: contentauth-state-machine/fuzz
+        run: |
+          for f in artifacts/*/*; do
+            echo "== $f"
+            base64 "$f"
+          done
+
   cargo-deny:
     name: License / vulnerability audit
     runs-on: ubuntu-latest

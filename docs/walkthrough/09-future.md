@@ -101,8 +101,12 @@ changes. Choose formats for *what they exercise*, as TIFF did:
   disagreements. This is the highest-value next step for deciding whether
   the validator is trustworthy.
 * **Track c2pa-rs releases** — the compat layer follows a moving target.
-* **Fuzzing** the parsers (JUMBF, COSE, TIFF graph walks) — they already
-  refuse hostile input by design, but nothing yet hammers that.
+* **Fuzzing** — done for the engine's session core (model-based
+  `proptest` suite plus `cargo-fuzz` targets; see the engine's
+  [README](../../contentauth-state-machine/README.md#testing-and-fuzzing)).
+  Still to do: the parsers (JUMBF, COSE, TIFF graph walks) — they already
+  refuse hostile input by design, but nothing yet hammers that. The
+  engine's harness shape (script in, reference model out) carries over.
 * **Benchmarks** against c2pa-rs for large assets (the Node numbers are
   encouraging but not comparative).
 
