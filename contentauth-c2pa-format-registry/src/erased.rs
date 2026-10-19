@@ -42,6 +42,7 @@ use contentauth_c2pa_format::{
 trait ErasedOp<Output>: Send {
     fn advance(&mut self) -> Result<Step, FormatError>;
     fn outstanding_requests(&self) -> &[HostRequest<IoRequest>];
+    fn phase(&self) -> String;
     fn fulfill(&mut self, id: RequestId, reply: IoReply) -> Result<(), FormatError>;
     fn finish_boxed(self: Box<Self>) -> Result<Output, FormatError>;
 }
@@ -53,6 +54,10 @@ impl<Output, S: FormatOp<Output>> ErasedOp<Output> for S {
 
     fn outstanding_requests(&self) -> &[HostRequest<IoRequest>] {
         Session::outstanding_requests(self)
+    }
+
+    fn phase(&self) -> String {
+        Session::phase(self)
     }
 
     fn fulfill(&mut self, id: RequestId, reply: IoReply) -> Result<(), FormatError> {
@@ -86,6 +91,10 @@ impl<Output> Session for BoxedOp<Output> {
 
     fn outstanding_requests(&self) -> &[HostRequest<IoRequest>] {
         self.0.outstanding_requests()
+    }
+
+    fn phase(&self) -> String {
+        self.0.phase()
     }
 
     fn fulfill(&mut self, id: RequestId, reply: IoReply) -> Result<(), FormatError> {

@@ -73,6 +73,12 @@ Key characteristics:
   is returned only once, so async hosts must copy its details and nested
   payloads before advancing again; the exclusion array is
   borrowed from a tracked exclusion-list handle.
+- **Diagnosable failures**: `c2pa_sm_read_phase` and `c2pa_sm_build_phase`
+  return a description of where a session is — or, once it has failed, the
+  phase it failed in (for example `"Building > AwaitingSignature"`) — as an
+  owned string for `c2pa_sm_string_free`. Errors reported after a failure
+  repeat that phase and the original cause. Meant for logs; the wording is
+  not a stable interface.
 - **Panic safety**: All `extern "C"` functions catch panics at the boundary
   and translate them into integer return codes and error messages.
 - **Concurrent access**: cimpl serializes handle borrows. A host should not

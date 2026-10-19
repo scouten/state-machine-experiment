@@ -122,10 +122,15 @@ impl MemoryHost {
 /// `APP11` segment from any other JUMBF) will need them to start like
 /// one; the handler's own tests know what that takes.
 pub mod conformance {
+    use contentauth_c2pa_primitives::HostError;
+    use contentauth_state_machine::{ProtocolError, Session, Step};
+
     use crate::{
+        error::FormatError,
         handler::FormatHandler,
         location::ManifestLocation,
         plan::EmbedPlan,
+        request::IoReply,
         test_util::{MemoryHost, STREAM},
     };
 
@@ -262,6 +267,56 @@ pub mod conformance {
         );
     }
 
+    /// A `locate` operation whose host fails its first request reports
+    /// that failure, and from then on remembers where and why it failed:
+    /// [`Session::phase`] names a phase, and every later call reports a
+    /// [`ProtocolError::SessionFailed`] naming that same phase and the
+    /// original error — so a host that only sees a later report can still
+    /// tell what went wrong.
+    pub fn a_failure_is_remembered_with_its_phase<H: FormatHandler>(handler: &H) {
+        let mut op = handler.locate(STREAM);
+
+        let original = loop {
+            match op.advance() {
+                Ok(Step::AwaitHost) => {}
+                Ok(step) => panic!("locate finished ({step:?}) with every request failing"),
+                Err(err) => break err,
+            }
+            let requests = op.outstanding_requests().to_vec();
+            assert!(
+                !requests.is_empty(),
+                "locate reported AwaitHost with nothing outstanding"
+            );
+            for request in requests {
+                op.fulfill(request.id, IoReply::Failed(HostError::new("unreadable")))
+                    .expect("fulfill refused a Failed reply");
+            }
+        };
+
+        let phase = op.phase();
+        assert!(!phase.is_empty(), "a failed operation reported no phase");
+
+        match op.advance() {
+            Err(FormatError::Protocol(ProtocolError::SessionFailed(failure))) => {
+                assert_eq!(
+                    failure.phase, phase,
+                    "SessionFailed names a different phase than Session::phase"
+                );
+                assert_eq!(
+                    failure.cause,
+                    original.to_string(),
+                    "SessionFailed does not carry the original error"
+                );
+            }
+            other => panic!("advancing a failed operation reported {other:?}"),
+        }
+        assert_eq!(op.phase(), phase, "a failed operation's phase changed");
+        assert!(matches!(
+            op.finish(),
+            Err(FormatError::Protocol(ProtocolError::SessionFailed(_)))
+        ));
+    }
+
     /// Runs every check in this module. `first` and `second` should
     /// differ in length as well as content, so a handler that sizes its
     /// framing from the store's length is exercised on a replacement that
@@ -276,6 +331,7 @@ pub mod conformance {
         embed_then_locate_round_trips(handler, unsigned_source, first);
         embed_then_locate_round_trips(handler, unsigned_source, second);
         re_embedding_replaces_rather_than_duplicates(handler, unsigned_source, first, second);
+        a_failure_is_remembered_with_its_phase(handler);
     }
 }
 

@@ -8,7 +8,7 @@ use std::{ffi::CString, ptr};
 
 use contentauth_c2pa_c_api::*;
 
-use crate::error::assert_error;
+use crate::error::{assert_error, take_phase};
 
 fn new_session() -> *mut C2paSmReadSession {
     let format = CString::new("jpeg").unwrap();
@@ -76,6 +76,9 @@ fn every_read_entry_point_rejects_a_null_session() {
         assert_eq!(rc, -1, "case {case}");
         assert_error(err, "NullParameter");
     }
+    let mut err = ptr::null_mut();
+    assert!(unsafe { c2pa_sm_read_phase(ptr::null_mut(), &mut err) }.is_null());
+    assert_error(err, "NullParameter");
 }
 
 #[test]
@@ -160,6 +163,10 @@ fn invalid_read_payloads_preserve_the_outstanding_request() {
         C2PA_SM_STEP_ERROR
     );
     assert_error(err, "session failed on an earlier call");
+    err = ptr::null_mut();
+    let phase = take_phase(unsafe { c2pa_sm_read_phase(session, &mut err) });
+    assert!(err.is_null());
+    assert!(!phase.is_empty() && phase != "Finished", "{phase}");
     let mut json = ptr::null_mut();
     let mut found = false;
     err = ptr::null_mut();
@@ -168,6 +175,11 @@ fn invalid_read_payloads_preserve_the_outstanding_request() {
         -1
     );
     assert_error(err, "session failed on an earlier call");
+    err = ptr::null_mut();
+    assert_eq!(
+        take_phase(unsafe { c2pa_sm_read_phase(session, &mut err) }),
+        "Finished"
+    );
     assert!(json.is_null());
     assert!(!found);
     unsafe { c2pa_sm_read_free(session) };

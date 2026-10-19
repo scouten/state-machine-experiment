@@ -191,7 +191,15 @@ fn a_host_that_cannot_read_the_asset_is_an_error_not_a_hang() {
             }
         }
     };
-    assert!(outcome.is_err() || session.finish().unwrap().is_none());
+    assert!(outcome.is_err());
+    // The session can say where it was when the host let it down.
+    assert_eq!(session.phase(), "Locating > Scanning > Length");
+}
+
+#[test]
+fn the_phase_says_where_a_fresh_session_starts() {
+    let session = NodeSession::new("image/jpeg", None).unwrap();
+    assert_eq!(session.phase(), "Locating > Scanning > Start");
 }
 
 #[test]

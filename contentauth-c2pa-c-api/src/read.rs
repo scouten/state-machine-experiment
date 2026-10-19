@@ -187,6 +187,16 @@ impl ReadSession {
         self.fulfill_reply(id, FileReadReply::Failed(HostError::new(msg)))
     }
 
+    /// Where the underlying session is — the phase it is waiting in, or
+    /// the one it failed in — for diagnostics only; `"Finished"` once
+    /// [`Self::finish`] has consumed it. See
+    /// [`contentauth_state_machine::Session::phase`].
+    pub fn phase(&self) -> String {
+        self.inner
+            .as_ref()
+            .map_or_else(|| "Finished".to_owned(), Session::phase)
+    }
+
     /// Finishes the read session, returning JSON and whether a manifest store was found.
     pub fn finish(&mut self) -> Result<(Option<String>, bool), Error> {
         if self.finished_report.is_some() {

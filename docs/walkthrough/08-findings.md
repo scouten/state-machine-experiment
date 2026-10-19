@@ -44,6 +44,10 @@ about C2PA itself.
 * Interleaving two reads on one thread.
 * Swapping the format handler under a session (`AnyFormat`) with no
   changes below the host.
+* Deterministic record and replay: a session's only inputs are replies,
+  so recording the host conversation (`Recorder`) captures everything a
+  failure depends on, and `replay` reproduces it without the asset's
+  original host, clock or network.
 
 ## Things that were *not* cheap
 

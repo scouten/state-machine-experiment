@@ -242,6 +242,11 @@ pub struct ReadSession {
     core: SessionCore<ReadRequest>,
     state: State,
 
+    /// The name of the state [`ReadSession::run`] is processing, kept
+    /// because `state` itself is [`State::Poisoned`] while that happens —
+    /// so an error exit can be blamed on the phase it occurred in.
+    active: &'static str,
+
     /// The decoded form of [`ReadSettings::trust_anchors`], decoded once at
     /// the start of the workflow.
     anchors: Vec<Anchor>,
@@ -303,6 +308,21 @@ enum State {
     /// without needing to distinguish "just poisoned" from "already
     /// reported".
     Poisoned,
+}
+
+impl State {
+    /// This state's name, for [`Session::phase`].
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Start => "Start",
+            Self::AwaitingManifestStore { .. } => "AwaitingManifestStore",
+            Self::AwaitingSigningTime { .. } => "AwaitingSigningTime",
+            Self::AwaitingOcspResponses { .. } => "AwaitingOcspResponses",
+            Self::AwaitingAssetLength { .. } => "AwaitingAssetLength",
+            Self::HashingAsset { .. } => "HashingAsset",
+            Self::Poisoned => "Poisoned",
+        }
+    }
 }
 
 /// Decodes one of the configured trust anchor lists.
@@ -449,6 +469,7 @@ impl ReadSession {
             settings,
             core: SessionCore::default(),
             state: State::Start,
+            active: State::Start.name(),
             anchors: vec![],
             timestamp_anchors: vec![],
             identity_anchors: vec![],
@@ -486,6 +507,7 @@ impl ReadSession {
             // Each handler reports `Ok(Some(step))` to return that step from
             // `run()`, or `Ok(None)` to let the loop go around again and
             // match on whatever successor state it installed.
+            self.active = self.state.name();
             let outcome = match replace(&mut self.state, State::Poisoned) {
                 State::Start => self.handle_start(),
 
@@ -514,7 +536,7 @@ impl ReadSession {
 
                 // Left poisoned by an earlier error; `self.core` was marked
                 // failed by `Session::advance` at the same time.
-                State::Poisoned => return Err(ProtocolError::SessionFailed.into()),
+                State::Poisoned => return Err(self.core.failed_error().into()),
             }?;
 
             if let Some(step) = outcome {
@@ -1303,7 +1325,8 @@ impl Session for ReadSession {
     /// If this returns an error, the session is spent: it cannot be advanced
     /// or fulfilled again, and [`Session::finish`] will refuse to hand over
     /// the half-built report. Every later call reports
-    /// [`ProtocolError::SessionFailed`].
+    /// [`ProtocolError::SessionFailed`], naming the phase that failed and
+    /// why.
     fn advance(&mut self) -> Result<Step, Error> {
         if self.core.is_complete() {
             return Ok(Step::Complete);
@@ -1312,7 +1335,7 @@ impl Session for ReadSession {
         match self.run() {
             Ok(step) => Ok(step),
             Err(err) => {
-                self.core.mark_failed();
+                self.core.mark_failed(self.active, &err);
                 Err(err)
             }
         }
@@ -1321,6 +1344,16 @@ impl Session for ReadSession {
     /// Returns the requests the host has not yet fulfilled.
     fn outstanding_requests(&self) -> &[HostRequest<ReadRequest>] {
         self.core.outstanding_requests()
+    }
+
+    fn phase(&self) -> String {
+        if let Some(failure) = self.core.failure() {
+            failure.phase.clone()
+        } else if self.core.is_complete() {
+            "Complete".into()
+        } else {
+            self.state.name().into()
+        }
     }
 
     /// Reports the outcome of one outstanding request.
@@ -1396,6 +1429,7 @@ mod tests {
     #[test]
     fn no_manifest_store_completes_with_report() {
         let mut session = ReadSession::new(ReadSettings::default());
+        assert_eq!(session.phase(), "Start");
 
         assert_eq!(session.advance().unwrap(), ReadStep::AwaitHost);
 
@@ -1409,11 +1443,13 @@ mod tests {
         ));
 
         let id = requests[0].id;
+        assert_eq!(session.phase(), "AwaitingManifestStore");
         session
             .fulfill(id, ReadHostReply::ManifestStore(None))
             .unwrap();
 
         assert_eq!(session.advance().unwrap(), ReadStep::Complete);
+        assert_eq!(session.phase(), "Complete");
 
         // Advancing a complete session is idempotent.
         assert_eq!(session.advance().unwrap(), ReadStep::Complete);
@@ -1594,7 +1630,7 @@ mod tests {
         assert!(session.outstanding_requests().is_empty());
         assert!(matches!(
             session.finish(),
-            Err(Error::Protocol(ProtocolError::SessionFailed))
+            Err(Error::Protocol(ProtocolError::SessionFailed(_)))
         ));
     }
 
@@ -2017,7 +2053,7 @@ mod tests {
 
         assert!(matches!(
             session.finish(),
-            Err(Error::Protocol(ProtocolError::SessionFailed))
+            Err(Error::Protocol(ProtocolError::SessionFailed(_)))
         ));
     }
 
@@ -2038,18 +2074,23 @@ mod tests {
 
         // The failure is remembered rather than forgotten: the session can
         // be neither advanced nor fulfilled, and it never claims to be
-        // complete.
-        assert!(matches!(
-            session.advance(),
-            Err(Error::Protocol(ProtocolError::SessionFailed))
-        ));
+        // complete. Each later report still says where and why it failed.
+        assert_eq!(session.phase(), "AwaitingManifestStore");
+        match session.advance() {
+            Err(Error::Protocol(ProtocolError::SessionFailed(failure))) => {
+                assert_eq!(failure.phase, "AwaitingManifestStore");
+                assert!(failure.cause.starts_with("malformed manifest store"));
+            }
+            other => panic!("expected SessionFailed, got {other:?}"),
+        }
+        assert_eq!(session.phase(), "AwaitingManifestStore");
         assert!(matches!(
             session.fulfill(id, ReadHostReply::ManifestStore(None)),
-            Err(Error::Protocol(ProtocolError::SessionFailed))
+            Err(Error::Protocol(ProtocolError::SessionFailed(_)))
         ));
         assert!(matches!(
             session.finish(),
-            Err(Error::Protocol(ProtocolError::SessionFailed))
+            Err(Error::Protocol(ProtocolError::SessionFailed(_)))
         ));
     }
 
@@ -2096,9 +2137,10 @@ mod tests {
         // By this point the store had been parsed and the report partly
         // built. Handing that over would report a manifest whose hard
         // binding was silently never checked.
+        assert_eq!(session.phase(), "HashingAsset");
         assert!(matches!(
             session.finish(),
-            Err(Error::Protocol(ProtocolError::SessionFailed))
+            Err(Error::Protocol(ProtocolError::SessionFailed(_)))
         ));
     }
 

@@ -9,7 +9,7 @@ use std::{ffi::CString, ptr};
 use contentauth_c2pa_c_api::*;
 use contentauth_c2pa_sign_baseline::{fixtures::TEST_SIGNER_CERT, BASELINE_DEFINITION};
 
-use crate::error::assert_error;
+use crate::error::{assert_error, take_phase};
 
 fn new_session() -> *mut C2paSmBuildSession {
     let format = CString::new("jpeg").unwrap();
@@ -69,6 +69,9 @@ fn constructor_rejects_missing_strings_and_certificate_arrays() {
         assert!(session.is_null());
         assert_error(err, "NullParameter");
     }
+    let mut err = ptr::null_mut();
+    assert!(unsafe { c2pa_sm_build_phase(ptr::null_mut(), &mut err) }.is_null());
+    assert_error(err, "NullParameter");
 }
 
 #[test]
@@ -256,6 +259,10 @@ fn invalid_build_payloads_preserve_the_outstanding_request() {
         C2PA_SM_STEP_ERROR
     );
     assert_error(err, "session failed on an earlier call");
+    err = ptr::null_mut();
+    let phase = take_phase(unsafe { c2pa_sm_build_phase(session, &mut err) });
+    assert!(err.is_null());
+    assert!(!phase.is_empty() && phase != "Finished", "{phase}");
     let mut manifest = ptr::null_mut();
     let mut len = 0;
     let mut exclusions = ptr::null_mut();
@@ -274,6 +281,11 @@ fn invalid_build_payloads_preserve_the_outstanding_request() {
         -1
     );
     assert_error(err, "session failed on an earlier call");
+    err = ptr::null_mut();
+    assert_eq!(
+        take_phase(unsafe { c2pa_sm_build_phase(session, &mut err) }),
+        "Finished"
+    );
     assert!(manifest.is_null());
     assert!(exclusions.is_null());
     assert_eq!(len, 0);

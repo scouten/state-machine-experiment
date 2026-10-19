@@ -339,6 +339,21 @@ const struct C2paSmExclusion *c2pa_sm_exclusions_data(struct C2paSmExclusionList
                                                       char **err_out);
 
 /**
+ * Describes where the build session is: the phase it is waiting in, or
+ * the one it failed in. Meant for logs and error reports, not for control
+ * flow — the wording is not a stable interface. Returns `"Finished"` once
+ * `c2pa_sm_build_finish` has been called.
+ *
+ * The caller owns the returned string and must free it with
+ * `c2pa_sm_string_free`. Returns null on error.
+ *
+ * # Safety
+ * `session` must be a live session. A non-null `err_out` must point to
+ * writable storage.
+ */
+char *c2pa_sm_build_phase(struct C2paSmBuildSession *session, char **err_out);
+
+/**
  * Frees a build session.
  *
  * # Safety
@@ -467,6 +482,21 @@ int32_t c2pa_sm_read_finish(struct C2paSmReadSession *session,
                             char **out_json,
                             bool *out_has_manifest,
                             char **err_out);
+
+/**
+ * Describes where the read session is: the phase it is waiting in, or
+ * the one it failed in. Meant for logs and error reports, not for control
+ * flow — the wording is not a stable interface. Returns `"Finished"` once
+ * `c2pa_sm_read_finish` has been called.
+ *
+ * The caller owns the returned string and must free it with
+ * `c2pa_sm_string_free`. Returns null on error.
+ *
+ * # Safety
+ * `session` must be a live session. A non-null `err_out` must point to
+ * writable storage.
+ */
+char *c2pa_sm_read_phase(struct C2paSmReadSession *session, char **err_out);
 
 /**
  * Frees a read session, including a partially driven or cancelled session.

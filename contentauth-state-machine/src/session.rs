@@ -13,8 +13,10 @@
 
 //! The session interaction contract, and a helper for implementing it.
 
+use std::fmt;
+
 use crate::{
-    error::ProtocolError,
+    error::{Failure, ProtocolError},
     request::{HostRequest, Request},
     tracker::RequestTracker,
     types::RequestId,
@@ -118,6 +120,21 @@ pub trait Session: Send {
     /// Returns the requests the host has not yet fulfilled.
     fn outstanding_requests(&self) -> &[HostRequest<Self::Request>];
 
+    /// Describes where in its workflow the session is, for diagnostics.
+    ///
+    /// The name of the session's current workflow phase — for example,
+    /// `AwaitingSigningTime`. A session that runs others inside it reports
+    /// its own phase followed by theirs, separated by `" > "` (for example,
+    /// `Reading > AwaitingOcspResponses`), so the most specific phase is
+    /// always last.
+    ///
+    /// Once the session has failed, this reports the phase it failed *in*,
+    /// not whatever internal placeholder it was left in — the same phase
+    /// [`ProtocolError::SessionFailed`] names. Meant for logs, error reports,
+    /// and transcripts (see [`Recorder`](crate::Recorder)); the wording is
+    /// not a stable interface and should not be matched on.
+    fn phase(&self) -> String;
+
     /// Reports the outcome of one outstanding request.
     ///
     /// Outcomes may be reported in any order and at any pace; call
@@ -142,11 +159,11 @@ pub trait Session: Send {
 /// `Complete` or `Failed` variants of its own — [`SessionCore`] is the single
 /// place that decides whether [`SessionCore::fulfill`] and
 /// [`SessionCore::finish_check`] should still succeed.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum Lifecycle {
     Running,
     Complete,
-    Failed,
+    Failed(Failure),
 }
 
 /// The bookkeeping every [`Session`] implementation needs, factored out so a
@@ -219,6 +236,9 @@ enum Lifecycle {
 ///     type Request = PingRequest;
 ///
 ///     fn advance(&mut self) -> Result<Step, PingError> {
+///         if self.core.is_failed() {
+///             return Err(self.core.failed_error().into());
+///         }
 ///         let request = match self.request {
 ///             Some(request) => request,
 ///             None => {
@@ -235,14 +255,26 @@ enum Lifecycle {
 ///                 Ok(Step::Complete)
 ///             }
 ///             Some(PingReply::Failed) => {
-///                 self.core.mark_failed();
-///                 Err(PingError::NoPong)
+///                 let err = PingError::NoPong;
+///                 self.core.mark_failed(self.phase(), &err);
+///                 Err(err)
 ///             }
 ///         }
 ///     }
 ///
 ///     fn outstanding_requests(&self) -> &[HostRequest<PingRequest>] {
 ///         self.core.outstanding_requests()
+///     }
+///
+///     fn phase(&self) -> String {
+///         if let Some(failure) = self.core.failure() {
+///             return failure.phase.clone();
+///         }
+///         match self.request {
+///             None => "Start".into(),
+///             Some(_) if self.core.is_complete() => "Complete".into(),
+///             Some(_) => "AwaitingPong".into(),
+///         }
 ///     }
 ///
 ///     fn fulfill(&mut self, id: RequestId, reply: PingReply) -> Result<(), PingError> {
@@ -303,9 +335,11 @@ impl<Req: Request> SessionCore<Req> {
     /// terminal state, before consulting the underlying
     /// [`RequestTracker`].
     pub fn fulfill(&mut self, id: RequestId, reply: Req::Reply) -> Result<(), ProtocolError> {
-        match self.lifecycle {
+        match &self.lifecycle {
             Lifecycle::Complete => return Err(ProtocolError::SessionComplete),
-            Lifecycle::Failed => return Err(ProtocolError::SessionFailed),
+            Lifecycle::Failed(failure) => {
+                return Err(ProtocolError::SessionFailed(failure.clone()))
+            }
             Lifecycle::Running => {}
         }
 
@@ -318,16 +352,44 @@ impl<Req: Request> SessionCore<Req> {
         self.lifecycle = Lifecycle::Complete;
     }
 
-    /// Marks the session failed. After this call, [`Self::fulfill`] and
-    /// [`Self::finish_check`] both fail with
-    /// [`ProtocolError::SessionFailed`].
+    /// Marks the session failed in `phase`, because of `cause`. After this
+    /// call, [`Self::fulfill`] and [`Self::finish_check`] both fail with
+    /// [`ProtocolError::SessionFailed`], which reports `phase` and `cause`.
     ///
     /// Call this from every error exit of a workflow's `advance` method — the
     /// same "poison on the way out" idiom [`core::mem::replace`] gives a
     /// workflow-phase enum applies here to the session's lifecycle, so a
-    /// half-built result is never mistaken for a finished one.
-    pub fn mark_failed(&mut self) {
-        self.lifecycle = Lifecycle::Failed;
+    /// half-built result is never mistaken for a finished one. Pass the
+    /// phase the session was in *before* it began the work that failed
+    /// (what [`Session::phase`] reported then), not the placeholder the
+    /// failure left behind, and the error being returned as `cause`.
+    ///
+    /// Only the first failure is remembered: a later call (for example, an
+    /// `advance` on a session already poisoned) does not overwrite where the
+    /// session originally went wrong.
+    pub fn mark_failed(&mut self, phase: impl Into<String>, cause: &dyn fmt::Display) {
+        if !matches!(self.lifecycle, Lifecycle::Failed(_)) {
+            self.lifecycle = Lifecycle::Failed(Failure::new(phase, cause));
+        }
+    }
+
+    /// Where and why the session failed, if it has.
+    pub fn failure(&self) -> Option<&Failure> {
+        match &self.lifecycle {
+            Lifecycle::Failed(failure) => Some(failure),
+            _ => None,
+        }
+    }
+
+    /// The [`ProtocolError::SessionFailed`] to report from a call made after
+    /// the session failed, naming where and why it did.
+    ///
+    /// For a session's own "already poisoned" exits (an `advance` that finds
+    /// its workflow phase left behind by an earlier failure, say). If the
+    /// session has somehow not been marked failed, the report says so only
+    /// generically rather than inventing a cause.
+    pub fn failed_error(&self) -> ProtocolError {
+        ProtocolError::SessionFailed(self.failure().cloned().unwrap_or_default())
     }
 
     /// Reports whether the session has reached [`Step::Complete`].
@@ -337,7 +399,7 @@ impl<Req: Request> SessionCore<Req> {
 
     /// Reports whether the session has failed.
     pub fn is_failed(&self) -> bool {
-        matches!(self.lifecycle, Lifecycle::Failed)
+        matches!(self.lifecycle, Lifecycle::Failed(_))
     }
 
     /// Checks whether a session may hand over its result.
@@ -345,9 +407,9 @@ impl<Req: Request> SessionCore<Req> {
     /// A concrete session's `finish` method should call this first and
     /// propagate any error before consuming `self` for its own result.
     pub fn finish_check(&self) -> Result<(), ProtocolError> {
-        match self.lifecycle {
+        match &self.lifecycle {
             Lifecycle::Complete => Ok(()),
-            Lifecycle::Failed => Err(ProtocolError::SessionFailed),
+            Lifecycle::Failed(failure) => Err(ProtocolError::SessionFailed(failure.clone())),
             Lifecycle::Running => Err(ProtocolError::SessionNotComplete),
         }
     }
@@ -362,5 +424,79 @@ impl<Req: Request> SessionCore<Req> {
     #[cfg(any(test, feature = "test-util"))]
     pub fn fulfill_unchecked(&mut self, id: RequestId, reply: Req::Reply) {
         self.tracker.fulfill_unchecked(id, reply);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::panic)]
+
+    use super::*;
+    use crate::test_session::{Ping, PingSession, Pong};
+
+    #[test]
+    fn the_first_failure_is_the_one_remembered() {
+        let mut core = SessionCore::<Ping>::default();
+        assert!(core.failure().is_none());
+
+        core.mark_failed("Reading", &"the first thing that went wrong");
+        core.mark_failed("Elsewhere", &"a consequence of it");
+
+        let failure = core.failure().unwrap();
+        assert_eq!(failure.phase, "Reading");
+        assert_eq!(failure.cause, "the first thing that went wrong");
+        assert!(core.is_failed());
+    }
+
+    #[test]
+    fn every_later_call_reports_the_failure() {
+        let mut core = SessionCore::<Ping>::default();
+        let id = core.issue(Ping::Ping(0));
+        core.mark_failed("AwaitingPong", &"boom");
+
+        let expected = ProtocolError::SessionFailed(Failure::new("AwaitingPong", &"boom"));
+        assert_eq!(core.failed_error(), expected);
+        assert_eq!(core.fulfill(id, Pong::Ok).unwrap_err(), expected);
+        assert_eq!(core.finish_check().unwrap_err(), expected);
+        assert_eq!(
+            expected.to_string(),
+            "session failed on an earlier call, in AwaitingPong: boom"
+        );
+    }
+
+    #[test]
+    fn failed_error_without_a_failure_reports_one_generically() {
+        let core = SessionCore::<Ping>::default();
+        assert_eq!(
+            core.failed_error(),
+            ProtocolError::SessionFailed(Failure::default())
+        );
+    }
+
+    #[test]
+    fn a_session_reports_its_phase_through_success_and_failure() {
+        let mut session = PingSession::new(1);
+        assert_eq!(session.phase(), "Start");
+        assert_eq!(session.advance().unwrap(), Step::AwaitHost);
+        assert_eq!(session.phase(), "AwaitingPong");
+        let id = session.outstanding_requests()[0].id;
+        session.fulfill(id, Pong::Ok).unwrap();
+        assert_eq!(session.advance().unwrap(), Step::Complete);
+        assert_eq!(session.phase(), "Complete");
+
+        let mut session = PingSession::new(1);
+        session.advance().unwrap();
+        let id = session.outstanding_requests()[0].id;
+        session.fulfill(id, Pong::Failed("lost")).unwrap();
+        let err = session.advance().unwrap_err();
+        assert_eq!(err.to_string(), "no pong: lost");
+        assert_eq!(session.phase(), "AwaitingPong");
+        match session.finish() {
+            Err(crate::test_session::PingError::Protocol(ProtocolError::SessionFailed(f))) => {
+                assert_eq!(f.cause, "no pong: lost");
+            }
+            other => panic!("expected SessionFailed, got {other:?}"),
+        }
     }
 }

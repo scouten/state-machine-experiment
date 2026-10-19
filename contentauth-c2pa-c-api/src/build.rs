@@ -244,6 +244,16 @@ impl BuildSession {
         self.fulfill_reply(id, FileBuilderReply::Failed(HostError::new(msg)))
     }
 
+    /// Where the underlying session is — the phase it is waiting in, or
+    /// the one it failed in — for diagnostics only; `"Finished"` once
+    /// [`Self::finish`] has consumed it. See
+    /// [`contentauth_state_machine::Session::phase`].
+    pub fn phase(&self) -> String {
+        self.inner
+            .as_ref()
+            .map_or_else(|| "Finished".to_owned(), Session::phase)
+    }
+
     /// Finishes the build session.
     pub fn finish(&mut self) -> Result<(Vec<u8>, Vec<C2paSmExclusion>), Error> {
         if self.finished_report.is_some() {

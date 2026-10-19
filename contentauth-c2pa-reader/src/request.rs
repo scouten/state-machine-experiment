@@ -132,7 +132,7 @@ impl Request for ReadRequest {
 }
 
 /// The host's report of the outcome of one host request.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum ReadHostReply {
     /// Answers [`ReadRequest::ManifestStore`]: the manifest store bytes, or
