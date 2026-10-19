@@ -187,6 +187,34 @@ fn malformed_assets_are_reported_by_both_operations() {
     ));
 }
 
+// Regression for the JPEG exploit in c2pa-rs PR #2610 (non-contiguous C2PA
+// APP11 segments): a foreign APP11 segment placed between two CAI
+// manifest-store continuation segments. c2pa-rs's exclusion measurement summed
+// same-EN APP11 lengths without the reader's contiguity check, so foreign bytes
+// landed inside the unhashed exclusion and a tampered asset still validated.
+// This handler has a single locate path that enforces packet adjacency, so the
+// non-contiguous run is refused outright — the store can't even be located, let
+// alone measured into an exclusion.
+#[test]
+fn a_foreign_app11_between_cai_segments_breaks_contiguity_and_is_refused() {
+    let manifest = store(100);
+    let mut jpeg = vec![0xff, 0xd8]; // SOI
+    jpeg.extend(app11([2, 0x11], 1, &manifest[..60]));
+    // A foreign APP11 (different box instance) wedged between the two CAI
+    // continuation segments, so they are no longer physically adjacent.
+    jpeg.extend(app11([0x99, 0x99], 1, b"foreign manifest store bytes"));
+    let mut second = manifest[..8].to_vec(); // repeats the superbox header
+    second.extend_from_slice(&manifest[60..]);
+    jpeg.extend(app11([2, 0x11], 2, &second));
+    jpeg.extend(segment(0xda, &[0; 6])); // SOS
+    jpeg.extend_from_slice(&[0xff, 0xd9]); // EOI
+
+    assert!(matches!(
+        MemoryHost::of(jpeg).run(JpegFormat.locate(STREAM)),
+        Err(FormatError::Malformed(m)) if m.contains("not adjacent")
+    ));
+}
+
 #[test]
 fn commit_refuses_a_store_that_does_not_fit_the_plan() {
     let (plan, _) = conformance::embed(&JpegFormat, &unsigned_jpeg(true, true), &store(100));

@@ -27,11 +27,13 @@ flowchart BT
     RSC["rs-compat<br/><i>c2pa-rs Reader shape</i>"]
     JSC["js-compat<br/><i>c2pa-wasm shape, async</i>"]
     NDC["node-compat<br/><i>sync NodeSession</i>"]
+    CPP["cpp<br/><i>reader + signing C ABI</i>"]
 
     SB["sign-baseline"]
     RSS["rs-compat-sign"]
     JSS["js-compat-sign"]
     NDS["node-compat-sign"]
+    CAPI["c2pa-c-api<br/><i>C ABI for FFI</i>"]
 
     RD --> SM & PR
     BD --> SM & PR
@@ -48,6 +50,8 @@ flowchart BT
     RSS --> SB & FB & JP
     JSS --> SB & FB & JSC
     NDS --> SB & FB & JSC
+    CPP --> NDC & NDS
+    CAPI --> FR & FB & RG & JSC & SB
 
     classDef engine fill:#dbeafe,stroke:#2563eb,color:#000
     classDef core fill:#dcfce7,stroke:#16a34a,color:#000
@@ -58,19 +62,22 @@ flowchart BT
     class RD,BD core
     class FM,JP,TF,RG fmt
     class FR,FB glue
-    class RSC,JSC,NDC,SB,RSS,JSS,NDS bind
+    class RSC,JSC,NDC,CPP,SB,RSS,JSS,NDS,CAPI bind
 ```
 
 (Edges to `primitives` and `state-machine` from most crates are omitted
 where they would only add noise; every session crate depends on both.)
+The C API's `read` feature enables its file-reader and JS-compat edges;
+`build` enables its file-builder and sign-baseline edges. Both are on by
+default, but a downstream client can select either workflow independently.
 
 ## Layers
 
 ```mermaid
 flowchart TB
-    subgraph L5["Bindings — c2pa-rs / c2pa-wasm / c2pa-node shaped APIs"]
+    subgraph L5["Bindings — c2pa-rs / c2pa-wasm / c2pa-node shaped APIs and C ABI"]
         direction LR
-        b1[rs-compat] ~~~ b2[js-compat] ~~~ b3[node-compat] ~~~ b4["*-compat-sign"]
+        b1[rs-compat] ~~~ b2[js-compat] ~~~ b3[node-compat] ~~~ b4["*-compat-sign"] ~~~ b5[c-api]
     end
     subgraph L4["Orchestration — compose a format with a session"]
         direction LR
@@ -106,11 +113,13 @@ flowchart TB
 | `…-format-registry` | Format (host side) | Detect by content / extension / MIME; type-erased `AnyFormat`. |
 | `…-file-reader` | Orchestration | `FileReadSession`: `locate` + `ReadSession`; plus a blocking `Read + Seek` host. |
 | `…-file-builder` | Orchestration | `FileBuilderSession`: `plan_embed`/`commit` + `BuilderSession`, never buffering the asset; plus blocking hosts. |
-| `…-rs-compat` | Binding | c2pa-rs `Context` + `Reader::with_file` slice; one of two crates with a network dependency (`reqwest` OCSP). |
+| `…-rs-compat` | Binding | c2pa-rs `Context` + `Reader::with_file` slice; default `http` feature enables `reqwest` OCSP, otherwise uses the local-only file host. |
 | `…-js-compat` | Binding | c2pa-wasm `WasmReader` slice; async host with `Blob`/`Platform` traits; `web` feature for `wasm-bindgen`. |
 | `…-node-compat` (+ `c2pa-node-compat-addon`) | Binding | Purely synchronous `NodeSession`; Node owns all async. Addon is a separate Neon workspace. |
+| `…-cpp` | Binding | C++17/20 reader drivers over `node-compat`; cimpl-tracked signing C ABI over `node-compat-sign`, with move-only C++17 `BuildSession`, blocking memory/stream/POSIX-file hosts and signer/TSA callbacks. C++17 signing adds `Building`/`BuildMailbox`, serialized pooled hosts and future/parallel drivers. The separate C++20 `c2pa_sm_coro` target supplies `co_build_and_sign`, reusing reader `Task`/`spawn`; the C++17 target is unchanged. A public-header ES256 signing example reads its output back, with all CTest examples included in the coverage/ASan/TSan matrix. |
 | `…-sign-baseline` | Binding | The baseline signing case (JSON definition → `BuilderSettings`) every write binding is held to. |
-| `…-rs/js/node-compat-sign` (+ `c2pa-node-sign-addon`) | Binding | The baseline case through each binding. `rs-compat-sign` is the other crate with a network dependency (`reqwest` for RFC 3161 timestamps). |
+| `…-rs/js/node-compat-sign` (+ `c2pa-node-sign-addon`) | Binding | The baseline case through each binding. `rs-compat-sign`'s default `http` feature enables `reqwest` for RFC 3161; without it, the signer supplies the transport. |
+| `…-c-api` | Binding | Thread-free, callback-free C ABI (`c2pa_sm_*`); independently selectable `read`/`build` features, cimpl-tracked handles and a cbindgen-generated header declaring both APIs. |
 | `c2pa-rs-compat-conformance` | Test | Separate workspace; differential tests against the real `c2pa` crate. |
 
 ## Rules of the road

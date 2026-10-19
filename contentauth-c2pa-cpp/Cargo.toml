@@ -22,3 +22,10 @@ crate-type = ["rlib", "staticlib", "cdylib"]
 # exposes. Despite the name it is host-agnostic: plain-data requests and
 # replies, no runtime, no Node types.
 contentauth-c2pa-node-compat = { path = "../contentauth-c2pa-node-compat" }
+contentauth-c2pa-node-compat-sign = { path = "../contentauth-c2pa-node-compat-sign" }
+cimpl = "=0.4.1"
+
+[dev-dependencies]
+contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline", features = ["fixtures"] }
+c2pa_raw_crypto = "0.1.2"
+base64 = "0.22"

@@ -153,8 +153,10 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   host that `with_file` drives `FileReadSession` through directly (rather
   than `contentauth-c2pa-file-reader`'s own convenience function) so it
   can answer a live OCSP check with a real HTTP request — deliberately the
-  only crate in this workspace with a network dependency; every other
-  read/validation behavior underneath it already existed.
+  read-side crate with a network dependency; every other
+  read/validation behavior underneath it already existed. Its default
+  `http` feature selects that transport; without it, the local-only file
+  host reports online OCSP as unavailable while stapled validation remains.
 - **`contentauth-c2pa-js-compat`** — the same experiment for the *other*
   public surface built on c2pa-rs: the Rust side of the C2PA web SDK,
   [c2pa-js](https://github.com/contentauth/c2pa-js)'s `c2pa-wasm`
@@ -212,7 +214,7 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   the one crate here allowed `unsafe`, being the FFI boundary; symbols are
   `c2pa_sm_*` to coexist with c2pa-c) wrapping `contentauth-c2pa-node-compat`'s
   flat `NodeSession`, plus C++ in `include/contentauth/` (header-only apart
-  from the compiled thread pools in `cpp/src/`):
+  from the compiled signing implementation and thread pools in `cpp/src/`):
   a C++17 core (`Session`, `Reader`, blocking `read()`), C++17 thread-based
   drivers (`Reading`/`Mailbox`, `read_parallel`, `read_future`,
   `PooledHost` over the `ThreadPool` interface, with a portable
@@ -248,7 +250,18 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   addon, outside the workspace with its own CI job (`node-sign-addon`),
   whose tests load the reader addon to read back what was signed. Ordinary
   member crates pass the Wasm checks above, except `-rs-compat-sign`, whose
-  default timestamp transport is a network dependency.
+  default timestamp transport is a network dependency. Its default `http`
+  feature can be disabled: timestamping then requires a signer transport
+  override and otherwise fails explicitly; untimestamped builds still work.
+- **`contentauth-c2pa-c-api`** — a thread-free, callback-free C ABI
+  (`c2pa_sm_read_*`, `c2pa_sm_build_*`) wrapping `FileReadSession` and
+  `FileBuilderSession`; it uses `cimpl` for tracked handles, pointer
+  validation, and allocation ownership, with cbindgen generating the C
+  header. Its handle registry serializes borrows, so a host must drive each
+  session from one task at a time. Default-enabled `read` and `build`
+  features independently select the exported workflows and their
+  subordinate crates. The header always declares both APIs; calling a
+  disabled API fails at link time.
 - **`c2pa-rs-compat-conformance`** — a differential test harness for the
   crate above, proving the same client code gets the same answer reading
   a file through the real `c2pa` crate as through
@@ -401,7 +414,8 @@ unmodified, enforced in CI over the whole workspace except
 are exempt: they deliberately own this workspace's only real network
 dependencies (the former's default `reqwest`-backed OCSP host, the latter's
 default `reqwest`-backed RFC 3161 timestamp transport), neither sans-I/O nor
-Wasm-portable:
+Wasm-portable in their default configurations. Their `http` features can
+be disabled to omit those transports:
 
 ```sh
 cargo check --all-features --target wasm32-unknown-unknown --workspace --exclude contentauth-c2pa-rs-compat --exclude contentauth-c2pa-rs-compat-sign

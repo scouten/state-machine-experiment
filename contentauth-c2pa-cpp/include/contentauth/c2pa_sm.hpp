@@ -201,6 +201,13 @@ inline uint64_t request_id(const Request &request) {
 
 /// @}
 
+/// @brief Overall manifest-store validation outcome.
+enum class ValidationState {
+    Invalid = C2PA_SM_VALIDATION_INVALID,
+    Valid = C2PA_SM_VALIDATION_VALID,
+    Trusted = C2PA_SM_VALIDATION_TRUSTED
+};
+
 /// @brief A finished read: the validated manifest store, queryable.
 ///
 /// Immutable, so every method is `const` and safe to call from any number
@@ -216,6 +223,14 @@ public:
 
     /// @brief The manifest store as c2pa-rs-shaped, pretty-printed JSON.
     std::string json() const { return detail::take_string(c2pa_sm_reader_json(raw_.get())); }
+
+    /// @brief Overall validation outcome, independent of JSON formatting.
+    ValidationState validation_state() const {
+        const auto state = c2pa_sm_reader_validation_state(raw_.get());
+        if (state == C2PA_SM_VALIDATION_UNAVAILABLE)
+            throw Exception(ErrorCode::InvalidArgument, "InvalidArgument", "reader was moved from");
+        return static_cast<ValidationState>(state);
+    }
 
     /// @brief The active manifest's label, if any.
     std::optional<std::string> active_label() const {
