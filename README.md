@@ -136,9 +136,9 @@ Bindings that expose a C API should be built on the
 hand-rolled C FFI. [`contentauth-c2pa-c-api`](contentauth-c2pa-c-api)
 uses cimpl for tracked handles, pointer validation, error conversion, and
 memory ownership; cbindgen generates its C header.
-The existing experimental [`contentauth-c2pa-cpp`](contentauth-c2pa-cpp)
-binding still uses its own hand-written C ABI over the neutral read bridge;
-it has not yet been migrated to the cimpl-backed API.
+The experimental [`contentauth-c2pa-cpp`](contentauth-c2pa-cpp) binding uses
+cimpl for its signing ABI and retains a hand-written reader ABI over the
+neutral read bridge. It is separate from `contentauth-c2pa-c-api`.
 
 ## Building
 

@@ -15,6 +15,7 @@ flowchart LR
         d4["Bindings: rs / wasm / node, read and sign<br/>C++ reader: C ABI + blocking / threaded / coroutine hosts"]
         d5["Differential tests vs c2pa-rs"]
         d6["Shared JS Worker read + baseline sign<br/>browser Wasm / Node Neon, async signer callbacks"]
+        d7["C++ read + sign; blocking / pool / future / coroutine<br/>atomic file signing + Trusted read-back example"]
     end
     subgraph next["Next"]
         direction TB
@@ -72,6 +73,13 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 
 ## 4. Bindings and hosts
 
+* **C++ host integrations:** production private-key providers and real TSA HTTP
+  transport remain host responsibilities, as do atomic publication on non-POSIX
+  systems and packaging (`install`/`find_package`, vcpkg, Conan). The baseline
+  JPEG/ES256 case already has blocking, async/pool/future and coroutine drivers,
+  atomic file failure tests and a runnable signing/read-back example included
+  in the coverage and sanitizer CI matrix. Concurrent destruction of a running
+  coroutine is not supported; its documented host-lifetime rules still apply.
 * **`Builder` surface parity** for the c2pa-rs shape beyond the baseline
   case; `from_stream` and other constructors.
 * **c2pa-node:** `fromManifestDataAndAsset`, `resourceToAsset`, signers,

@@ -38,7 +38,7 @@ flowchart BT
     PW["contentauth-c2pa-wasm<br/><i>standalone synchronous Wasm boundary</i>"]
     PN["c2pa-node-compat-addon<br/><i>existing Neon boundary</i>"]
     PNS["c2pa-node-sign-addon<br/><i>existing signing Neon boundary</i>"]
-    CPP["contentauth-c2pa-cpp<br/><i>C ABI + C++ reader hosts</i>"]
+    CPP["contentauth-c2pa-cpp<br/><i>reader + signing C ABI</i>"]
     PY["POSSIBLE: Python host + binding adapter<br/><i>not implemented or tested</i>"]
     CAPI["c2pa-c-api<br/><i>C ABI for FFI</i>"]
 
@@ -60,7 +60,7 @@ flowchart BT
     PW -.-> BR
     PN -.-> BR
     PNS -.-> BR
-    CPP -->|"read bridge"| BR
+    CPP -->|"read/build bridges"| BR
     PY -.->|"could drive same bridge protocol"| BR
     CAPI --> FR & FB & RG & JSC & SB
 
@@ -74,8 +74,8 @@ flowchart BT
     class RD,BD core
     class FM,JP,TF,RG fmt
     class FR,FB glue
-    class RSC,JSC,BR,SB,RSS,JSS,CAPI bind
-    class CPP,PY proposed
+    class RSC,JSC,BR,CPP,SB,RSS,JSS,CAPI bind
+    class PY proposed
 ```
 
 (Edges to `primitives` and `state-machine` from most crates are omitted
@@ -135,7 +135,7 @@ flowchart TB
 | `…-c-api` | Binding | Thread-free, callback-free C ABI (`c2pa_sm_*`); independently selectable `read`/`build` features, cimpl-tracked handles and a cbindgen-generated header declaring both APIs. |
 | `c2pa-rs-compat-conformance` | Test | Separate workspace; differential tests against the real `c2pa` crate. |
 | `contentauth-c2pa-wasm` + `js/` | Binding / preferred JS host | Standalone synchronous Wasm boundary and private JS package with shared host, browser and Node entry points. Offline JPEG read/baseline ES256 sign; caller-owned async callbacks. |
-| `contentauth-c2pa-cpp` | Binding | C ABI over the read bridge, with blocking, thread-pool and coroutine C++ hosts; does not depend on the JS driver. |
+| `contentauth-c2pa-cpp` | Binding | C++17/20 reader and signing drivers over the neutral read/build bridges; cimpl-tracked signing C ABI, blocking memory/stream/POSIX-file hosts, pooled/future/parallel drivers and C++20 coroutines. A public-header ES256 signing example reads its output back as Trusted. Does not depend on the JS driver. |
 
 The read/build bridges have been extracted and renamed, not copied. The
 preferred JavaScript direction is the [shared host](../../js/README.md); the
@@ -143,7 +143,7 @@ older Rust async browser hosts remain alternatives until their useful behavior
 is preserved by shared-host compatibility facades.
 
 The merged [C++ binding](../../contentauth-c2pa-cpp/README.md) now consumes the
-read bridge through its C ABI, independently of the JS host. Python remains
+read/build bridges through its C ABI, independently of the JS host. Python remains
 prospective. The [read wrapper](../../contentauth-c2pa-session-bridge/src/read/mod.rs)
 exposes numeric handles, byte vectors, strings and synchronous
 `advance`/`fulfill`/`finish` methods; its

@@ -428,11 +428,11 @@ jobs:
     runs-on: ubuntu-latest
 
     # `contentauth-c2pa-cpp` is a Rust static library behind a C ABI plus
-    # header-only C++ (C++17 core and thread-based drivers, C++20
-    # coroutines). Its Rust half is an ordinary workspace member, tested by
+    # C++17 readers, compiled signing/thread pools and C++20 coroutines.
+    # Its Rust half is an ordinary workspace member, tested by
     # the jobs above; this job builds the C++ half against it with CMake
     # and runs the C++ tests and examples three ways:
-    #   - plain, with coverage of the C++ headers (uploaded to Codecov);
+    #   - plain, with coverage of C++ headers and sources (uploaded to Codecov);
     #   - under AddressSanitizer (leaks, use-after-free on cancellation);
     #   - under ThreadSanitizer (the session handed between threads, and
     #     completions racing the driver).
@@ -461,9 +461,12 @@ jobs:
         with:
           workspaces: ". -> contentauth-c2pa-cpp/build/cargo"
 
+      - name: Install OpenSSL development package
+        run: sudo apt-get update && sudo apt-get install --yes libssl-dev
+
       - name: Configure
         working-directory: contentauth-c2pa-cpp
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug ${{ matrix.cmake_args }}
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON -DC2PA_SM_FETCH_GTEST=ON ${{ matrix.cmake_args }}
 
       - name: Build
         working-directory: contentauth-c2pa-cpp
@@ -473,7 +476,9 @@ jobs:
         working-directory: contentauth-c2pa-cpp
         env:
           TSAN_OPTIONS: halt_on_error=1
-        run: ctest --test-dir build --output-on-failure
+        run: |
+          ctest --test-dir build --output-on-failure --parallel 2
+          ./build/c2pa_sm_tests
 
       - name: Install gcovr
         if: matrix.name == 'coverage'
@@ -489,6 +494,7 @@ jobs:
           gcovr --root . --object-directory contentauth-c2pa-cpp/build
           --filter 'contentauth-c2pa-cpp/include/'
           --filter 'contentauth-c2pa-cpp/cpp/src/'
+          --filter 'contentauth-c2pa-cpp/cpp/include/scope_exit\.hpp$'
           --gcov-ignore-parse-errors negative_hits.warn_once_per_file
           --exclude-throw-branches --exclude-unreachable-branches
           --lcov lcov.cpp.info --txt
@@ -537,7 +543,7 @@ jobs:
 
       - name: Configure
         working-directory: contentauth-c2pa-cpp
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON -DC2PA_SM_FETCH_GTEST=ON
 
       - name: Build
         working-directory: contentauth-c2pa-cpp
@@ -545,4 +551,6 @@ jobs:
 
       - name: Test
         working-directory: contentauth-c2pa-cpp
-        run: ctest --test-dir build --output-on-failure
+        run: |
+          ctest --test-dir build --output-on-failure --parallel 2
+          ./build/c2pa_sm_tests

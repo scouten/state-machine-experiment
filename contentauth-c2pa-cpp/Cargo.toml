@@ -21,3 +21,9 @@ crate-type = ["rlib", "staticlib", "cdylib"]
 # The flat, synchronous `advance`/`fulfill`/`finish` session this ABI
 # exposes: plain-data requests and replies, no runtime or Node types.
 contentauth-c2pa-session-bridge = { path = "../contentauth-c2pa-session-bridge" }
+cimpl = "=0.4.1"
+
+[dev-dependencies]
+contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline", features = ["fixtures"] }
+c2pa_raw_crypto = "0.1.2"
+base64 = "0.22"
