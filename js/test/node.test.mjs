@@ -97,3 +97,49 @@ test("shared facade propagates startup/crash failure and disposes pending calls"
   await client.dispose();
   assert.ok(stopped > 0);
 });
+
+test("a worker pool matches one worker, spreads load, validates size and replaces dead workers", async () => {
+  const { ClientPool } = await import("../src/shared/pool.mjs");
+  const folder = new URL("../generated/", import.meta.url);
+  const fixture = JSON.parse(await readFile(new URL("fixtures.json", folder)));
+  const key = await crypto.subtle.importKey("pkcs8", await readFile(new URL("test-signer.pk8", folder)),
+    { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+  const signer = { alg: "es256", certs: fixture.signing.certs.map((cert) => new Uint8Array(cert)),
+    sign: async (bytes) => new Uint8Array(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, bytes)) };
+  const options = { settings: fixture.settings, now: fixture.now };
+  const small = new Uint8Array(await readFile(new URL("small.jpg", folder)));
+  for (const workers of [0, 1.5, 65, "2"]) assert.throws(() => createClient({ workers }), RangeError);
+
+  const single = createClient();
+  const pool = createClient({ workers: 3 });
+  try {
+    assert.equal(pool.workers, 3);
+    const baseline = await single.sign(small, fixture.signing.definition, signer);
+    const signed = await Promise.all(Array.from({ length: 6 }, () => pool.sign(small, fixture.signing.definition, signer)));
+    const expected = (await single.read(baseline.asset, options)).report;
+    const reads = await Promise.all(signed.map((result) => pool.read(result.asset, options)));
+    for (const { report } of reads) assert.equal(report.validation_state, expected.validation_state);
+  } finally { await single.dispose(); await pool.dispose() }
+
+  // Dispatch goes to the least-loaded client; a failed one is replaced.
+  const calls = [];
+  const clients = [];
+  const fake = () => {
+    const client = { failure: undefined, n: clients.length, dispose: async () => {},
+      read: (...args) => { calls.push(client.n); return new Promise((resolve) => { client.finish = resolve }) } };
+    clients.push(client);
+    return client;
+  };
+  const fakes = new ClientPool(fake, { workers: 2 });
+  const first = fakes.read(1);
+  const second = fakes.read(2);
+  assert.deepEqual(calls, [0, 1]);
+  clients[0].failure = new Error("Worker exited (1)");
+  const third = fakes.read(3);
+  assert.equal(clients.length, 3, "dead worker replaced");
+  assert.deepEqual(calls, [0, 1, 2]);
+  for (const client of clients) client.finish?.("ok");
+  await Promise.all([first, second, third]);
+  await fakes.dispose();
+  await assert.rejects(fakes.read(4), /disposed/);
+});

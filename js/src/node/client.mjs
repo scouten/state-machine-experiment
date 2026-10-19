@@ -1,9 +1,19 @@
 /** Node main-thread client: a shared {@link Client} over a `worker_threads` Worker. */
 import { Worker } from "node:worker_threads";
 import { Client } from "../shared/client.mjs";
+import { ClientPool } from "../shared/pool.mjs";
 
-/** Starts a Node Worker and returns a Client bound to it. Call `dispose()` when done. */
-export function createClient() {
+/**
+ * Starts `workers` Node Workers (default 1) behind a {@link ClientPool}.
+ * Call `dispose()` when done.
+ * @param {{workers?: number}} [options]
+ */
+export function createClient({ workers = 1 } = {}) {
+  return new ClientPool(createWorkerClient, { workers });
+}
+
+/** Starts one Node Worker and returns a {@link Client} bound to it. */
+function createWorkerClient() {
   const worker = new Worker(new URL("./entry.mjs", import.meta.url));
   let terminating;
   return new Client({

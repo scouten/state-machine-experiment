@@ -290,6 +290,19 @@ try {
 }
 ```
 
+### Parallelism
+
+`createClient({ workers: N })` (default 1, at most 64) starts N Workers behind
+one client with the same `read`/`sign`/`dispose` API. Sessions are not
+thread-safe and never leave the Worker that created them, so parallelism comes
+only from running separate calls on separate Workers; each call goes to the
+least-loaded Worker and stays there. Workers are generalists: the call, not the
+Worker, decides whether a read or build session starts. Signers stay on the
+caller's side. A Worker that dies fails only its own in-flight calls and is
+replaced on the next call. Indicative Node scaling (12 cores, 32 reads of a
+64 MiB JPEG): 1 Worker 1260 ms, 2: 682, 4: 378, 8: 245. Each Worker holds its
+own Wasm/addon state, so size the pool for memory as well as cores.
+
 Run the browser entry through an HTTP server; the acceptance runner supplies a
 loopback-only server. The proof clock is restricted to signed 32-bit Unix
 seconds by its small Wasm bridge; current dates and frozen fixture time fit.

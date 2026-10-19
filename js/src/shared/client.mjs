@@ -153,6 +153,8 @@ export class Client {
     this.#pending.clear();
     this.#termination = Promise.resolve(this.#port.terminate());
   }
+  /** The terminal error once the client has failed or been disposed, else `undefined`. */
+  get failure() { return this.#closed }
   /** Rejects outstanding calls, terminates the Worker and waits for it to stop. */
   async dispose() {
     this.#fail(new Error("Worker client disposed"));
