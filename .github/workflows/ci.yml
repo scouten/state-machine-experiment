@@ -231,13 +231,17 @@ jobs:
       # Each target runs from its tracked seed corpus for a fixed time. The
       # point is to keep the targets building and the model honest on every
       # PR; deeper runs are done by hand (see the engine's README).
+      #
+      # `--target` is explicit because the prebuilt `cargo-fuzz` binary is
+      # a musl build and would otherwise default to a musl target, which
+      # the sanitizers cannot link.
       - name: Fuzz session_core
         working-directory: contentauth-state-machine
-        run: cargo fuzz run session_core -- -max_total_time=60
+        run: cargo fuzz run --target x86_64-unknown-linux-gnu session_core -- -max_total_time=60
 
       - name: Fuzz fan_out_session
         working-directory: contentauth-state-machine
-        run: cargo fuzz run fan_out_session -- -max_total_time=60
+        run: cargo fuzz run --target x86_64-unknown-linux-gnu fan_out_session -- -max_total_time=60
 
       # The crashing input, base64-encoded so it can be copied out of the log.
       - name: Print crash artifacts

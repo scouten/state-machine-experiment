@@ -16,7 +16,7 @@
 //! These run on every `cargo test` with `proptest`'s structured, shrinking
 //! generators, and drive the same harnesses (`tests/support/model.rs`) that
 //! the coverage-guided `cargo-fuzz` targets in `fuzz/` drive with raw bytes.
-//! See `fuzz/README.md`.
+//! See the engine README's "Testing and fuzzing" section.
 
 #![allow(clippy::unwrap_used)]
 
@@ -168,4 +168,64 @@ fn seed_scripts() {
             SessionOp::Fulfill(Target::Issued(2), Reply::A),
         ],
     });
+}
+
+/// The tracked fuzz seeds are hand-encoded; this pins each one to the
+/// scenario its name promises, so a decoder change cannot silently turn a
+/// seed into something else.
+#[test]
+fn fuzz_seeds_decode_to_their_named_scenarios() {
+    use CoreOp::*;
+
+    let a = Target::Issued(0);
+
+    let seed = include_bytes!("../fuzz/corpus/session_core/issue-fulfill-finish");
+    let expected = vec![
+        Issue(Kind::A),
+        Fulfill(a, Reply::A),
+        MarkComplete,
+        FinishCheck,
+    ];
+    assert_eq!(decode_core(seed), expected);
+    run_core(&expected);
+
+    let seed = include_bytes!("../fuzz/corpus/session_core/mismatch-then-take");
+    let expected = vec![
+        Issue(Kind::A),
+        Fulfill(a, Reply::B),
+        Fulfill(a, Reply::A),
+        TakeReply(a),
+        TakeReply(a),
+    ];
+    assert_eq!(decode_core(seed), expected);
+    run_core(&expected);
+
+    let seed = include_bytes!("../fuzz/corpus/fan_out_session/fan-out-3");
+    let expected = SessionScript {
+        n: 3,
+        ops: vec![
+            SessionOp::Advance,
+            SessionOp::Fulfill(Target::Issued(0), Reply::A),
+            SessionOp::Fulfill(Target::Issued(1), Reply::B),
+            SessionOp::Fulfill(Target::Issued(2), Reply::A),
+            SessionOp::Advance,
+            SessionOp::Advance,
+        ],
+    };
+    assert_eq!(decode_session(seed), expected);
+    run_session(&expected);
+
+    let seed = include_bytes!("../fuzz/corpus/fan_out_session/fail-then-advance");
+    let expected = SessionScript {
+        n: 2,
+        ops: vec![
+            SessionOp::Advance,
+            SessionOp::Fulfill(Target::Issued(0), Reply::Failed),
+            SessionOp::Advance,
+            SessionOp::Advance,
+            SessionOp::Fulfill(Target::Issued(1), Reply::B),
+        ],
+    };
+    assert_eq!(decode_session(seed), expected);
+    run_session(&expected);
 }

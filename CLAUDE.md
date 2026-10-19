@@ -11,7 +11,7 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   a request/reply vocabulary trait, request tracking, a protocol-error
   vocabulary, and the `advance` / `fulfill` / `finish` interaction
   contract. Its session core is held to model-based `proptest` tests and
-  `cargo-fuzz` targets (`fuzz/`, outside the workspace; see its README);
+  `cargo-fuzz` targets (`fuzz/`, outside the workspace; see the engine's README, "Testing and fuzzing");
   a change to `SessionCore`/`RequestTracker` must keep
   `cargo test -p contentauth-state-machine` passing and should be
   fuzzed briefly. See [`src/session.rs`](contentauth-state-machine/src/session.rs)

@@ -95,6 +95,15 @@ skip = [
     #   the compiled library.
     { crate = "core-foundation" },
     { crate = "getrandom" },
+
+    # `proptest` (a dev-dependency of `contentauth-state-machine`, for its
+    # model-based tests) is on the `rand` 0.10 generation, while the
+    # RustCrypto signature crates above still use `rand` 0.8 (and with it
+    # `rand_core` 0.6). The duplicate exists only in test builds; nothing
+    # of `proptest` reaches a compiled library. It clears when RustCrypto
+    # moves up a `rand` generation.
+    { crate = "rand" },
+    { crate = "rand_core" },
 ]
 
 [licenses]
