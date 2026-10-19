@@ -274,10 +274,22 @@ test("reader trust, identity and OCSP surface", async () => {
   assert.ok(!identityCodes(forgedRead.report).includes("cawg.x509.signature.validated"));
   record("cawg.sign", "identity", "CAWG identity assertion from JS", "rust-bridge", "pass",
     "signer.identities signs each cawg.identity assertion with its own key and algorithm; the bridge carries the label on the sign request");
-  assert.deepEqual(Object.keys(identityRead.report).sort(),
-    ["active_manifest", "manifests", "validation_state", "validation_status"]);
-  record("cawg.read", "identity", "CAWG identity results from a JS read", "rust-bridge", "gap-rust",
-    "an identity-bearing asset reads Trusted, but the c2pa-js-shaped report has no identity section: the reader's own identity results are not serialized by the bridge");
+  const active = identityRead.report.manifests[identityRead.report.active_manifest];
+  assert.equal(active.identity_assertions.length, 1);
+  const [found] = active.identity_assertions;
+  assert.equal(found.label, "cawg.identity");
+  assert.equal(found.credential, "x509.cose");
+  assert.equal(found.sig_type, "cawg.x509.cose");
+  assert.deepEqual(found.roles, ["cawg.creator"]);
+  assert.ok(found.signer, "the verified signer subject is reported");
+  assert.equal(found.valid, true);
+  assert.ok(found.validation_status.some((status) => status.code === "cawg.x509.signature.validated"),
+    JSON.stringify(found.validation_status));
+  // An asset without identities carries no identity section at all.
+  const plain = trusted.report.manifests[trusted.report.active_manifest];
+  assert.equal(plain.identity_assertions, undefined);
+  record("cawg.read", "identity", "CAWG identity results from a JS read", "rust-bridge", "pass",
+    "each manifest reports identity_assertions: label, sig_type, credential kind, verified signer, roles, referenced assertions, per-assertion statuses and a valid flag");
 });
 
 // A CA and a leaf it issued, the leaf naming an OCSP responder: the reader only

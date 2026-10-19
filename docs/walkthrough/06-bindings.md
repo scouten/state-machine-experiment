@@ -43,7 +43,7 @@ read as requested slices inside the Worker rather than eagerly converted to
 whole-asset byte arrays. File names and MIME hints do not select a handler or override the signing
 definition; callers name the format (JPEG or TIFF/DNG through the registry).
 The bridge also derives the RSA-PSS signature length from the signer
-certificate and accepts CAWG identity signers. Output remains buffered. A
+certificate and accepts CAWG identity signers. Read reports add an `identity_assertions` list per manifest (an extension to the c2pa-js shape) with each identity's signer, roles and statuses. Output remains buffered. A
 [File/Blob experiment](../../js/experiments/2026-10-16-file-blob-memory.md)
 measures latency and sampled process RSS, with limited memory coverage rather
 than a universal peak-memory claim.
