@@ -43,19 +43,20 @@ export function serve(port, adapter, openSource = source, openOutput = () => mem
         try {
           if (message.method === "build") output = await openOutput(message.destination);
           result = message.method === "read"
-            ? await read(adapter, input, message.settings, message.now)
+            ? await read(adapter, input, message.settings, message.now, message.format)
             : await build(adapter, input, message.definition, message.certs, (request) =>
               new Promise((resolve, reject) => {
                 if (callbacks.has(message.id)) throw new Error("signer callback already pending");
                 callbacks.set(message.id, { requestId: request.id, resolve, reject });
                 try {
                   port.post({ protocol, method: "sign", id: message.id,
-                    requestId: request.id, alg: request.alg, data: request.data });
+                    requestId: request.id, alg: request.alg, data: request.data, identity: request.identity });
                 } catch (error) {
                   callbacks.delete(message.id);
                   reject(error);
                 }
-              }), output, message.alg);
+              }), output, message.alg, undefined,
+              { format: message.format, identities: message.identities });
         } finally {
           try { await output?.close() }
           finally { await input.close() }

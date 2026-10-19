@@ -16,9 +16,10 @@
 use std::collections::HashMap;
 
 use contentauth_c2pa_file_builder::{
-    FileBuilderReply, FileBuilderRequest, FileBuilderSession, SignPurpose,
+    FileBuilderReply, FileBuilderRequest, FileBuilderSession, IdentityCredential, IdentitySettings,
+    SignPurpose,
 };
-use contentauth_c2pa_format_jpeg::JpegFormat;
+use contentauth_c2pa_format_registry::AnyFormat;
 use contentauth_c2pa_primitives::{
     tsa::{timestamp_request, timestamp_token},
     HostError, SigningAlg,
@@ -32,7 +33,7 @@ mod error;
 
 pub use error::Error;
 
-type Engine = FileBuilderSession<JpegFormat>;
+type Engine = FileBuilderSession<AnyFormat>;
 
 /// Which of the two assets a request concerns.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -112,6 +113,10 @@ pub enum PendingRequest {
         alg: &'static str,
         /// The bytes to sign.
         data: Vec<u8>,
+        /// The label of the CAWG identity assertion being signed
+        /// (`cawg.identity`, `cawg.identity__1`, ...), whose key — not the
+        /// claim's — the host must use; `None` for the claim signature.
+        identity: Option<String>,
     },
 
     /// `POST` `request` to the time-stamp authority at `url`, with
@@ -218,11 +223,26 @@ pub struct BuildSessionBridge {
     reported: HashMap<RequestId, u64>,
 }
 
+/// A CAWG identity assertion to add, signed by the host with a key of its
+/// own (`cawg.x509.cose`).
+#[derive(Clone, Debug)]
+pub struct IdentitySigner {
+    /// The algorithm, as for the claim: `"es256"`, `"ps256"`, ...
+    pub alg: String,
+    /// DER certificate chain, signer first.
+    pub certs: Vec<Vec<u8>>,
+    /// Roles the actor claims; empty for none.
+    pub roles: Vec<String>,
+    /// Labels of the assertions vouched for, or `None` for all.
+    pub referenced_assertions: Option<Vec<String>>,
+}
+
 impl BuildSessionBridge {
     /// Starts signing an asset of type `format` (a MIME type or bare
     /// extension) per `definition_json` (see [`Definition`]), with
     /// algorithm `alg` (`"es256"`, ...) and the DER certificate chain
-    /// `certs`, signer's own first.
+    /// `certs`, signer's own first, plus one CAWG identity assertion per
+    /// entry of `identities`.
     ///
     /// Fails before any request is made.
     pub fn new(
@@ -230,15 +250,43 @@ impl BuildSessionBridge {
         format: &str,
         alg: &str,
         certs: Vec<Vec<u8>>,
+        identities: Vec<IdentitySigner>,
     ) -> Result<Self, Error> {
-        for_format(format)?;
+        let handler = for_format(format)?;
         let alg = parse_alg(alg)?;
         let definition = Definition::from_json(definition_json)?;
         let tsa_url = definition.tsa_url.clone();
-        let settings = definition.into_settings(alg, certs)?;
+        let rsa_len = match alg {
+            SigningAlg::Ps256 | SigningAlg::Ps384 | SigningAlg::Ps512 => {
+                Some(rsa_signature_len(certs.first())?)
+            }
+            _ => None,
+        };
+        let mut settings = definition.into_settings(alg, certs)?;
+        settings.rsa_signature_len = rsa_len;
+        for identity in identities {
+            let alg = parse_alg(&identity.alg)?;
+            let rsa_signature_len = match alg {
+                SigningAlg::Ps256 | SigningAlg::Ps384 | SigningAlg::Ps512 => {
+                    Some(rsa_signature_len(identity.certs.first())?)
+                }
+                _ => None,
+            };
+            let mut entry = IdentitySettings::x509(alg, identity.certs);
+            if let IdentityCredential::X509Cose {
+                rsa_signature_len: len,
+                ..
+            } = &mut entry.credential
+            {
+                *len = rsa_signature_len;
+            }
+            entry.roles = identity.roles;
+            entry.referenced_assertions = identity.referenced_assertions;
+            settings.identities.push(entry);
+        }
 
         Ok(Self {
-            inner: FileBuilderSession::new(JpegFormat, settings),
+            inner: FileBuilderSession::new(handler, settings),
             tsa_url,
             handles: HashMap::new(),
             next_handle: 0,
@@ -308,6 +356,32 @@ impl BuildSessionBridge {
 
 /// Parses a signing algorithm name, case-insensitively, as c2pa-rs's JSON
 /// spells it (`"es256"`).
+/// An RSA signature is as long as the signer's modulus, so the length the
+/// engine must reserve follows from the leaf certificate's public key.
+fn rsa_signature_len(leaf: Option<&Vec<u8>>) -> Result<usize, C2paError> {
+    use der::{asn1::UintRef, Decode, Reader, SliceReader};
+    use x509_cert::Certificate;
+
+    let bad = |why: &str| C2paError::BadParam(format!("RSA signer certificate: {why}"));
+    let leaf = leaf.ok_or_else(|| bad("no certificate"))?;
+    let cert = Certificate::from_der(leaf).map_err(|e| bad(&e.to_string()))?;
+    let key = cert
+        .tbs_certificate
+        .subject_public_key_info
+        .subject_public_key
+        .as_bytes()
+        .ok_or_else(|| bad("unaligned public key"))?;
+    SliceReader::new(key)
+        .and_then(|mut r| {
+            r.sequence(|seq| {
+                let modulus = UintRef::decode(seq)?;
+                let _exponent = UintRef::decode(seq)?;
+                Ok(modulus.as_bytes().len())
+            })
+        })
+        .map_err(|e| bad(&e.to_string()))
+}
+
 fn parse_alg(alg: &str) -> Result<SigningAlg, C2paError> {
     Ok(match alg.to_ascii_lowercase().as_str() {
         "es256" => SigningAlg::Es256,
@@ -374,10 +448,19 @@ fn describe(
             id: handle,
             alg: alg_name(*alg)?,
             data: data.clone(),
+            identity: None,
         },
-        // No `BuildSettings` this wrapper accepts names an identity
-        // assertion, so none can be asked for; refused rather than
-        // answered with the claim's key if one ever were.
+        FileBuilderRequest::Sign {
+            purpose: SignPurpose::Identity { label },
+            alg,
+            data,
+        } => PendingRequest::Sign {
+            id: handle,
+            alg: alg_name(*alg)?,
+            data: data.clone(),
+            identity: Some(label.clone()),
+        },
+        // Refused rather than answered with the claim's key.
         FileBuilderRequest::Sign { purpose, .. } => {
             return Err(Error::Unsupported(format!("signing for {purpose:?}")))
         }
@@ -421,7 +504,14 @@ mod tests {
     use super::*;
 
     fn session() -> BuildSessionBridge {
-        BuildSessionBridge::new(BASELINE_DEFINITION, "image/jpeg", "es256", vec![vec![1]]).unwrap()
+        BuildSessionBridge::new(
+            BASELINE_DEFINITION,
+            "image/jpeg",
+            "es256",
+            vec![vec![1]],
+            Vec::new(),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -477,10 +567,11 @@ mod tests {
             PendingRequest::Sign {
                 id: 4,
                 alg: "ps384",
-                data: vec![3]
+                data: vec![3],
+                identity: None,
             }
         );
-        assert!(matches!(
+        assert_eq!(
             describe(
                 5,
                 &FileBuilderRequest::Sign {
@@ -491,9 +582,15 @@ mod tests {
                     data: vec![3]
                 },
                 None
-            ),
-            Err(Error::Unsupported(_))
-        ));
+            )
+            .unwrap(),
+            PendingRequest::Sign {
+                id: 5,
+                alg: "es256",
+                data: vec![3],
+                identity: Some("cawg.identity".to_string()),
+            }
+        );
     }
 
     fn timestamp_engine_request() -> FileBuilderRequest {
@@ -552,12 +649,14 @@ mod tests {
             "\"title\"",
             "\"tsa_url\": \"https://tsa.example/\", \"title\"",
         );
-        let session = BuildSessionBridge::new(&json, "image/jpeg", "es256", vec![vec![1]]).unwrap();
+        let session =
+            BuildSessionBridge::new(&json, "image/jpeg", "es256", vec![vec![1]], Vec::new())
+                .unwrap();
         assert_eq!(session.tsa_url.as_deref(), Some("https://tsa.example/"));
 
         let bad = BASELINE_DEFINITION.replace("\"title\"", "\"tsa_url\": \"ftp://x/\", \"title\"");
         assert!(matches!(
-            BuildSessionBridge::new(&bad, "image/jpeg", "es256", vec![]),
+            BuildSessionBridge::new(&bad, "image/jpeg", "es256", vec![], Vec::new()),
             Err(Error::Definition(_))
         ));
     }
@@ -603,7 +702,7 @@ mod tests {
     #[test]
     fn arguments_are_checked_before_any_request() {
         let new = |json: &str, format: &str, alg: &str| {
-            BuildSessionBridge::new(json, format, alg, vec![])
+            BuildSessionBridge::new(json, format, alg, vec![], Vec::new())
                 .err()
                 .unwrap()
         };
@@ -681,6 +780,7 @@ mod tests {
                 id: 10,
                 alg: "es256",
                 data: vec![],
+                identity: None,
             },
             PendingRequest::Timestamp {
                 id: 11,

@@ -13,9 +13,9 @@ serve({
   post: (message) => self.postMessage(message),
   onMessage: (callback) => { self.onmessage = (event) => callback(event.data) },
 }, {
-  /** Read session; the Wasm glue handles JPEG only, so the format is fixed. */
-  create(settings) {
-    const session = new ReadSession("image/jpeg", settings);
+  /** Read session for an asset of `format` (MIME type or extension). */
+  create(settings, format) {
+    const session = new ReadSession(format, settings);
     return {
       advance: () => JSON.parse(session.advance()),
       fulfill(id, kind, value) {
@@ -29,14 +29,14 @@ serve({
     };
   },
   /**
-   * Build session (ES256 JPEG only). `boundary` accumulates time spent
-   * crossing the Wasm boundary (advance, JSON parse, payload copy-out) for
-   * the transport experiments; it is returned with the report.
+   * Build session. `boundary` accumulates time spent crossing the Wasm
+   * boundary (advance, JSON parse, payload copy-out) for the transport
+   * experiments; it is returned with the report.
    */
-  createBuild(definition, certs, alg = "es256") {
-    // The Wasm constructor fixes the algorithm; fail precisely rather than let the session disagree.
-    if (alg !== "es256") throw new Error(`the Wasm binding is es256-only; ${alg} is not exposed`);
-    const session = new BuildSession(definition, JSON.stringify(certs.map((cert) => Array.from(cert))));
+  createBuild(definition, certs, alg, format, identities) {
+    const bytes = (list) => list.map((cert) => Array.from(cert));
+    const session = new BuildSession(definition, format, alg, JSON.stringify(bytes(certs)),
+      JSON.stringify(identities.map((identity) => ({ ...identity, certs: bytes(identity.certs) }))));
     const boundary = { transport: binary ? "binary" : "json", wasmAdvanceMs: 0, parseMs: 0,
       payloadMs: 0, metadataChars: 0, writePayloadBytes: 0, writes: 0 };
     return {

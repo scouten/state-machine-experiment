@@ -10,9 +10,9 @@ const native = createRequire(import.meta.url)("../../../c2pa-node-compat-addon/i
 const signing = createRequire(import.meta.url)("../../../c2pa-node-sign-addon/index.node");
 /** Session factory (`create`, `createBuild`) the shared Worker service drives. */
 export const adapter = {
-  /** Read session. The addon only knows JPEG. */
-  create(settings) {
-    let session = native.sessionNew("image/jpeg", settings);
+  /** Read session for an asset of `format` (MIME type or extension). */
+  create(settings, format) {
+    let session = native.sessionNew(format, settings);
     return {
       advance: () => native.sessionAdvance(session),
       fulfill: (id, kind, value) => native.sessionFulfill(session, id, kind,
@@ -21,9 +21,14 @@ export const adapter = {
       close() { session = undefined }, // Native errors release the handle through isolate GC.
     };
   },
-  /** Build session for a JPEG, signing with `alg`. */
-  createBuild(definition, certs, alg = "es256") {
-    let session = signing.buildNew(definition, "image/jpeg", alg, certs.map((cert) => Buffer.from(cert)));
+  /**
+   * Build session. Rust derives the RSA-PSS signature length from the leaf
+   * certificate; `identities` add CAWG identity assertions.
+   */
+  createBuild(definition, certs, alg, format, identities) {
+    const buffers = (list) => list.map((cert) => Buffer.from(cert));
+    let session = signing.buildNew(definition, format, alg, buffers(certs),
+      identities.map((identity) => ({ ...identity, certs: buffers(identity.certs) })));
     return {
       advance: () => signing.buildAdvance(session),
       fulfill: (id, kind, value) => signing.buildFulfill(session, id, kind,

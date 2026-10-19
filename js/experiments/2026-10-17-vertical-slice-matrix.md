@@ -32,27 +32,29 @@ CA + leaf chain with an AIA OCSP URL.
 | Capability | Result | Class | Evidence |
 |---|---|---|---|
 | Sign ES256 / ES384 / ES512 / Ed25519 (Node) | pass | — | read back `Trusted` |
-| Sign PS256 / PS384 / PS512 | fail | rust | bridge `BuildSessionBridge::new` has no RSA signature-length parameter; Rust demands `rsa_signature_len` |
-| Wasm signing algorithm choice | ES256 only | glue | `BuildSession(definition, certs)` hard-codes `"es256"`, `"image/jpeg"` |
+| Sign PS256 / PS384 / PS512 | pass | — | *(closed in the bridge)* the signature length is derived from the leaf certificate's RSA modulus |
+| Wasm signing algorithm / format / identities | pass | — | *(closed in the glue)* `BuildSession(definition, format, alg, certs, identities)`; construction verified in Node, browser contracts rerun |
 | Timestamps, Node | pass | — | fake TSA saw the POST; token in manifest |
 | Timestamps, Wasm | fail | glue | `advance` rejects Timestamp; no reply method |
 | Timestamp URL/transport override | missing | js | the older standalone Neon host allowed it; Worker uses `fetch` only |
 | Custom trust anchors | pass | — | `Trusted` with anchor, `Valid` without |
-| TIFF read/sign (Neon, Wasm) | `UnsupportedType` | rust | bridge `for_format` knows only JPEG |
-| Format detection in Node host | none | js | non-JPEG bytes reach the JPEG handler |
+| TIFF read/sign (Neon, Wasm) | pass | — | *(closed in the bridge)* `for_format` resolves through the standard format registry (JPEG, TIFF/BigTIFF/DNG); a TIFF signed from JS reads back `Trusted` |
+| Format detection in Node host | caller-named only | js | `format` option selects a handler (default JPEG); no content detection |
 | Live OCSP read, Node | fail | js | "unsupported host request: ocsp"; needs an SSRF policy (older addon has `ocspPolicy`) |
 | Live OCSP read, Wasm | fail | glue | `ReadSession.advance` errors "outside this offline proof" |
-| CAWG identity signing | fail | rust | `Definition` is `deny_unknown_fields`; `SignPurpose` not on the wire; bridge never sets `identities` |
-| CAWG identity reading | unverified | rust | no identity-bearing asset can be produced from JS |
+| CAWG identity signing | pass | — | *(closed in the bridge)* `signer.identities` with their own key and algorithm; the sign request carries the assertion label |
+| CAWG identity reading | fail | rust | an identity-bearing asset reads `Trusted`, but the c2pa-js-shaped report has no identity section |
 
 ## Findings
 
 1. Roughly half of the apparent gaps were JS-only and are now closed; the
    algorithm guard was the largest single one.
-2. The remaining blockers sit in the neutral bridge (TIFF, RSA length,
-   identities) — the bridge exposes a baseline slice of what the Rust crates
-   already do. Closing them needs a bridge change, not JS work.
-3. Wasm lags Neon in three places (algorithm, timestamp, OCSP), all glue.
+2. The bridge exposed only a baseline slice of what the Rust crates already
+   do. TIFF, RSA-PSS and CAWG identity signing are now closed there (the
+   bridge takes formats from the registry, derives the RSA length from the
+   leaf certificate, and accepts identity signers). Only identity *results*
+   in the read report remain.
+3. Wasm lags Neon in two places (timestamp, OCSP), both glue.
 4. JS-side follow-ups: OCSP policy, TSA override, content-based format
    detection, and mapping facade `ps256`/`timeAuthorityUrl` (still rejected on
    purpose).
