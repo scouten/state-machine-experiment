@@ -1,3 +1,8 @@
+/**
+ * Browser Worker entry point: wraps the Wasm `ReadSession`/`BuildSession`
+ * in the adapter shape `serve()` expects (see shared/service.mjs).
+ * Loaded as a module Worker by browser/client.mjs.
+ */
 import init, { ReadSession, BuildSession } from "../../generated/contentauth_c2pa_wasm.js";
 import { serve } from "../shared/service.mjs";
 
@@ -8,6 +13,7 @@ serve({
   post: (message) => self.postMessage(message),
   onMessage: (callback) => { self.onmessage = (event) => callback(event.data) },
 }, {
+  /** Read session; the Wasm glue handles JPEG only, so the format is fixed. */
   create(settings) {
     const session = new ReadSession("image/jpeg", settings);
     return {
@@ -22,6 +28,11 @@ serve({
       close: () => session.free(),
     };
   },
+  /**
+   * Build session (ES256 JPEG only). `boundary` accumulates time spent
+   * crossing the Wasm boundary (advance, JSON parse, payload copy-out) for
+   * the transport experiments; it is returned with the report.
+   */
   createBuild(definition, certs) {
     const session = new BuildSession(definition, JSON.stringify(certs.map((cert) => Array.from(cert))));
     const boundary = { transport: binary ? "binary" : "json", wasmAdvanceMs: 0, parseMs: 0,
@@ -37,6 +48,8 @@ serve({
         boundary.parseMs += performance.now() - started;
         started = performance.now();
         for (const request of step.requests ?? []) {
+          // Binary transport: write bytes stay in Wasm memory and are copied
+          // out once by `payload`; JSON transport inlines them as number arrays.
           if (request.kind === "write") {
             request.bytes = binary ? session.payload(request.payload) : new Uint8Array(request.bytes);
             delete request.payload;

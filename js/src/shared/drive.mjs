@@ -1,9 +1,34 @@
+/**
+ * Shared host loops that drive the synchronous Rust sessions.
+ *
+ * A session never performs I/O: it parks on `advance()` with a list of
+ * requests, and these loops answer them (reads, lengths, writes, signatures)
+ * then call `fulfill`. The same code runs in the Node Worker and the browser
+ * Worker; only the `adapter` (Neon vs Wasm) differs.
+ */
+
+/**
+ * Validates a byte range against an asset length: rejects non-integers,
+ * negatives, overflow and ranges past the end, so a session's request can
+ * never read outside the asset.
+ * @throws {Error} `invalid asset range`
+ */
 function range(start, len, length) {
   if (!Number.isSafeInteger(start) || !Number.isSafeInteger(len) ||
       !Number.isSafeInteger(start + len) || start < 0 || len < 0 || start + len > length)
     throw new Error("invalid asset range");
 }
 
+/**
+ * Runs a read/validation session to completion. Requests in one step are
+ * independent, so they are answered concurrently.
+ * @param {{create(settings?: string): object}} adapter Session factory (Neon or Wasm).
+ * @param {Uint8Array} asset
+ * @param {string|undefined} settings JSON reader settings.
+ * @param {number} now Unix seconds supplied as the session's clock.
+ * @returns {Promise<{report: object|null, stats: object}>} Parsed report
+ *   (`null` when the asset has no manifest store) and request counters.
+ */
 export async function read(adapter, asset, settings, now) {
   const session = adapter.create(settings);
   const stats = { reads: 0, bytes: 0, maxReadBytes: 0, advances: 0 };
@@ -38,11 +63,25 @@ export async function read(adapter, asset, settings, now) {
   } finally { session.close() }
 }
 
+/**
+ * Runs a build-and-sign session to completion. Requests are answered
+ * sequentially: the builder's two passes depend on earlier writes. Source and
+ * output are addressed by stream name; the output grows in memory.
+ * @param {{createBuild(definition: string, certs: Uint8Array[]): object}} adapter
+ * @param {Uint8Array} asset Asset to sign.
+ * @param {string} definition JSON manifest definition.
+ * @param {Uint8Array[]} certs DER certificate chain, leaf first.
+ * @param {(request: {id: number, alg: string, data: Uint8Array}) => Promise<Uint8Array>} sign
+ *   Produces a raw ES256 signature over `request.data`.
+ * @returns {Promise<object>} Builder report plus the signed `asset` and `stats`.
+ */
 export async function build(adapter, asset, definition, certs, sign) {
   const session = adapter.createBuild(definition, certs);
   let output = new Uint8Array(0);
+  /** Logical output length; `output` may be larger (geometric growth). */
   let length = 0;
   const stats = { reads: 0, bytes: 0, writes: 0, writtenBytes: 0, signs: 0, advances: 0 };
+  /** Maps a request's stream name to its backing bytes. */
   function stream(name) {
     if (name === "source") return asset;
     if (name === "output") return output.subarray(0, length);
@@ -54,7 +93,7 @@ export async function build(adapter, asset, definition, certs, sign) {
       const step = session.advance();
       if (step.done) {
         const report = session.finish();
-        return { ...report, asset: output.slice(0, length), stats };
+        return { ...report, asset: output.slice(0, length), stats }; // trimmed copy: no stale tail
       }
       if (!step.requests.length) throw new Error("session stalled without host requests");
       for (const request of step.requests) {
@@ -86,6 +125,7 @@ export async function build(adapter, asset, definition, certs, sign) {
             break;
           }
           case "sign": {
+            // The session fixed its algorithm; this proof host signs ES256 only.
             if (request.alg !== "es256") throw new Error(`unsupported signing algorithm: ${request.alg}`);
             stats.signs++;
             const signature = await sign(request);

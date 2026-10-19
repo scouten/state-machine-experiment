@@ -1,5 +1,10 @@
+/** Browser-side client: spawns the module Worker (entry.mjs) and wraps it in a shared Client. */
 import { Client } from "../shared/client.mjs";
 
+/**
+ * @param {{transport?: "binary"|"json"}} [options] `json` is only a control
+ *   for the boundary-cost experiment; `binary` is the default.
+ */
 export function createClient({ transport = "binary" } = {}) {
   if (transport !== "binary" && transport !== "json") throw new Error("invalid proof transport");
   const url = new URL("./entry.mjs", import.meta.url);

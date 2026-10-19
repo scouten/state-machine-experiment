@@ -1,10 +1,23 @@
+/**
+ * Worker-side service: executes `read`/`build` commands from a {@link Client}.
+ *
+ * Operations run one at a time (FIFO) since a Worker owns one session at a
+ * time, but signer replies bypass that queue. Errors from an operation are
+ * serialized back to the caller; protocol violations throw and are fatal.
+ */
 import { read, build } from "./drive.mjs";
 import { protocol, failure, remoteError } from "./client.mjs";
 
 export { protocol, failure };
 
+/**
+ * Starts serving on `port` and announces readiness.
+ * @param {import("./client.mjs").Port} port
+ * @param {object} adapter Session factory (`create`, `createBuild`) for this environment.
+ */
 export function serve(port, adapter) {
   let queue = Promise.resolve();
+  /** Outstanding signer callbacks by command id (at most one per command). */
   const callbacks = new Map();
   port.onMessage((message) => {
     if (message.protocol !== protocol) throw new Error("invalid Worker protocol");
