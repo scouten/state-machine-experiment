@@ -21,10 +21,11 @@
 
 #![allow(clippy::unwrap_used)]
 
+use std::{io::Cursor, sync::Mutex};
+#[cfg(feature = "http")]
 use std::{
-    io::{Cursor, Read, Write},
+    io::{Read, Write},
     net::TcpListener,
-    sync::Mutex,
     thread,
 };
 
@@ -202,6 +203,7 @@ fn a_refusing_authority_fails_the_build() {
 
 /// A one-shot HTTP server: answers the first request with `reply`, and
 /// returns what it received (headers and body).
+#[cfg(feature = "http")]
 fn serve_once(status: &'static str, reply: Vec<u8>) -> (String, thread::JoinHandle<Vec<u8>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/tsa", listener.local_addr().unwrap());
@@ -258,6 +260,7 @@ impl Signer for HttpSigner {
 }
 
 #[test]
+#[cfg(feature = "http")]
 fn the_default_transport_posts_the_request_over_http() {
     let (url, server) = serve_once("200 OK", response(0));
     let builder = definition_with_tsa_url(&url);
@@ -276,6 +279,7 @@ fn the_default_transport_posts_the_request_over_http() {
 }
 
 #[test]
+#[cfg(feature = "http")]
 fn an_unreachable_authority_fails_the_build_rather_than_going_untimestamped() {
     // Bind then drop, so nothing is listening on the port.
     let url = {
@@ -290,6 +294,7 @@ fn an_unreachable_authority_fails_the_build_rather_than_going_untimestamped() {
 }
 
 #[test]
+#[cfg(feature = "http")]
 fn an_authority_answering_with_an_http_error_fails_the_build() {
     let (url, server) = serve_once("503 Service Unavailable", b"busy".to_vec());
     let builder = definition_with_tsa_url(&url);
@@ -301,6 +306,7 @@ fn an_authority_answering_with_an_http_error_fails_the_build() {
 }
 
 #[test]
+#[cfg(feature = "http")]
 fn an_implausibly_large_response_fails_the_build() {
     let (url, server) = serve_once("200 OK", vec![0x30; 1024 * 1024 + 1]);
     let builder = definition_with_tsa_url(&url);
@@ -309,6 +315,24 @@ fn an_implausibly_large_response_fails_the_build() {
 
     server.join().unwrap();
     assert!(err.to_string().contains("implausibly large"), "{err}");
+}
+
+#[test]
+#[cfg(not(feature = "http"))]
+fn no_http_transport_fails_a_requested_timestamp_explicitly() {
+    let builder = definition_with_tsa_url("https://tsa.example/");
+    let err = sign_to_memory(&builder, &HttpSigner).unwrap_err();
+    assert!(
+        err.to_string().contains("requires the http feature"),
+        "{err}"
+    );
+}
+
+#[test]
+#[cfg(not(feature = "http"))]
+fn no_http_transport_still_signs_without_timestamping() {
+    let builder = Builder::from_json(BASELINE_DEFINITION).unwrap();
+    assert!(!sign_to_memory(&builder, &HttpSigner).unwrap().is_empty());
 }
 
 #[test]

@@ -48,8 +48,9 @@
 //! * Timestamping is on when the definition has `tsa_url` or the signer
 //!   reports [`Signer::time_authority_url`]. The request is sent by
 //!   [`Signer::send_timestamp_request`], whose default is a blocking HTTP
-//!   `POST` — which makes this crate, like `contentauth-c2pa-rs-compat`,
-//!   one with a network dependency (and so not Wasm-portable).
+//!   `POST` when the default `http` feature is enabled. Without `http`,
+//!   override that method with a host transport; otherwise a timestamp
+//!   request fails explicitly. Builds without timestamping are unchanged.
 //! * Only JPEG.
 
 #![deny(clippy::expect_used)]
@@ -61,6 +62,7 @@
 mod builder;
 mod error;
 mod signer;
+#[cfg(feature = "http")]
 mod tsa;
 
 pub use builder::Builder;

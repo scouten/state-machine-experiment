@@ -73,6 +73,15 @@ silently replaced by the narrower Worker implementation: they support file and
 custom sources, OCSP, timestamp transport and transactional file output.
 Retiring their loops or the Rust async hosts requires preservation tests for
 those capabilities. No full c2pa-js facade migration is claimed here.
+Platform adapters and transports are optional within the bindings. Both
+Rust compatibility crates default to `http` (OCSP on the read side,
+RFC 3161 on the signing side); `default-features = false` omits their HTTP
+clients. The reader then uses the local-only file host and reports online
+OCSP as unavailable, while the signer requires a transport override for
+requested timestamps or fails explicitly. The JS read/sign crates already
+select browser exports with the non-default `web` feature. Node's Rust
+bindings have no built-in transport: the addon host owns filesystem and
+network operations.
 
 Honest differences, found by building these:
 

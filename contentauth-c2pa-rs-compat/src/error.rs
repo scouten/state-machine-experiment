@@ -88,6 +88,7 @@ pub enum Error {
     /// configuration (nothing it sets can fail to build) — kept as a real
     /// error rather than a panic since nothing rules out a future
     /// TLS/proxy configuration knob doing so.
+    #[cfg(feature = "http")]
     #[error(transparent)]
     Http(#[from] reqwest::Error),
 }

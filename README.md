@@ -133,9 +133,12 @@ Apache-2.0 terms covering the rest of this repository.
 
 Bindings that expose a C API should be built on the
 [`cimpl`](https://github.com/contentauth/cimpl) crate rather than a
-hand-rolled C FFI for new interfaces. The existing experimental
-[`contentauth-c2pa-cpp`](contentauth-c2pa-cpp) binding currently uses a
-hand-written C ABI; it has not yet been migrated to `cimpl`.
+hand-rolled C FFI. [`contentauth-c2pa-c-api`](contentauth-c2pa-c-api)
+uses cimpl for tracked handles, pointer validation, error conversion, and
+memory ownership; cbindgen generates its C header.
+The existing experimental [`contentauth-c2pa-cpp`](contentauth-c2pa-cpp)
+binding still uses its own hand-written C ABI over the neutral read bridge;
+it has not yet been migrated to the cimpl-backed API.
 
 ## Building
 

@@ -25,6 +25,17 @@ a blocking HTTP `POST` (`application/timestamp-query`) — so this crate, like
 Wasm checks. Override the method to reach an authority another way. An
 authority that refuses or cannot be reached fails the build.
 
+The blocking HTTP client is selected by the default-enabled `http`
+feature. Set `default-features = false` to omit it while retaining the
+entire `Builder`/`Signer` API. Untimestamped builds work unchanged; for
+timestamps, override `Signer::send_timestamp_request` with the host's
+transport. Without an override, a requested timestamp fails with an
+explicit missing-transport error rather than silently omitting it.
+
+```sh
+cargo test -p contentauth-c2pa-rs-compat-sign --no-default-features
+```
+
 Tests (`tests/baseline.rs`) sign the baseline JPEG and read it back through
 `contentauth-c2pa-rs-compat`'s `Reader::from_context(..).with_file(..)`:
 `Trusted`, label, title, instance id, and the `c2pa.actions.v2` /
