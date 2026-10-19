@@ -1,10 +1,11 @@
 import { Reader, Builder, CallbackSigner, Context } from "../../../c2pa-js/packages/c2pa-node/dist/index.js";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { createClient } from "../src/node/client.mjs";
 import { benchmark, validateReport } from "./sdk-benchmark.mjs";
 import { sdkFingerprints } from "../test/evidence.mjs";
 
 const folder = new URL("../generated/", import.meta.url);
+await mkdir(new URL("../results/", import.meta.url), { recursive: true });
 const fixture = JSON.parse(await readFile(new URL("fixtures.json", folder)));
 const key = await crypto.subtle.importKey("pkcs8", await readFile(new URL("test-signer.pk8", folder)),
   { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);

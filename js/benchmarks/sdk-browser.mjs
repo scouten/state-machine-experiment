@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { resolve, sep } from "node:path";
 import { chromium, firefox, webkit } from "playwright";
 import { sdkFingerprints } from "../test/evidence.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
+await mkdir(new URL("../results/", import.meta.url), { recursive: true });
 const server = createServer(async (request, response) => {
   try {
     const name = decodeURIComponent(new URL(request.url, "http://localhost").pathname);
