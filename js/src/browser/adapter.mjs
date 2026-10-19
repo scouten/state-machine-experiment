@@ -5,12 +5,16 @@
  */
 
 /**
- * @param {{ReadSession: Function, BuildSession: Function}} wasm Initialized module.
+ * @param {{ReadSession: Function, BuildSession: Function, detectFormat: Function, detectWindow: Function}} wasm Initialized module.
  * @param {{binary?: boolean}} [options] `binary: false` keeps the JSON write
  *   control used by the boundary experiment.
  */
-export function createWasmAdapter({ ReadSession, BuildSession }, { binary = true } = {}) {
+export function createWasmAdapter({ ReadSession, BuildSession, detectFormat, detectWindow }, { binary = true } = {}) {
   return {
+    /** Bytes of an asset's head that `detect` wants. */
+    detectWindow: () => detectWindow(),
+    /** Format (MIME type) Rust recognizes from `header`; throws if none. */
+    detect: (header) => detectFormat(header),
     /** Read session for an asset of `format` (MIME type or extension). */
     create(settings, format) {
       const session = new ReadSession(format, settings);

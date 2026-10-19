@@ -50,9 +50,38 @@ pub fn for_format(format: &str) -> Result<AnyFormat, C2paError> {
         .ok_or(C2paError::UnsupportedType)
 }
 
+/// How many leading bytes of an asset [`detect`] may look at.
+pub fn detect_window() -> u64 {
+    Registry::standard().window()
+}
+
+/// The MIME type of the format whose byte signature `header` (the asset's
+/// leading bytes, at most [`detect_window`] of them) carries. The result
+/// is accepted by [`for_format`].
+pub fn detect(header: &[u8]) -> Result<&'static str, C2paError> {
+    Registry::standard()
+        .detect(header)
+        .and_then(|format| format.descriptor().mime_types.first().copied())
+        .ok_or(C2paError::UnsupportedType)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn content_selects_the_format_regardless_of_name() {
+        assert!(matches!(
+            detect(&[0xff, 0xd8, 0xff, 0xe0, 0, 0]),
+            Ok("image/jpeg")
+        ));
+        assert!(matches!(detect(b"II*\0\x08\0\0\0"), Ok("image/tiff")));
+        for header in [&b"\x89PNG\r\n\x1a\n"[..], b"", b"plain text"] {
+            assert!(matches!(detect(header), Err(C2paError::UnsupportedType)));
+        }
+        assert!(detect_window() >= 4);
+        assert!(for_format(detect(b"MM\0*\0\0\0\x08").unwrap_or("")).is_ok());
+    }
 
     #[test]
     fn jpeg_is_recognized_as_a_mime_type_or_an_extension_regardless_of_case() {

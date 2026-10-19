@@ -36,20 +36,33 @@ export function source(asset) {
 }
 
 /**
- * Runs a read/validation session to completion. Requests in one step are
- * independent, so they are answered concurrently.
+ * The asset type to open a session with: the caller's, else whatever Rust
+ * recognizes from the asset's leading bytes (the host only supplies them).
+ * @param {{detect(header: Uint8Array): string, detectWindow(): number}} adapter
+ * @param {Source} input
+ * @param {string} [format] Caller-named type (MIME type or extension).
+ */
+async function resolveFormat(adapter, input, format) {
+  if (format) return format;
+  const header = await input.read(0, Math.min(adapter.detectWindow(), input.length));
+  return adapter.detect(header);
+}
+
+/**
+ * Runs a read/validation session to completion.
+ * Requests in one step are independent, so they are answered concurrently.
  * @param {{create(settings?: string): object}} adapter Session factory (Neon or Wasm).
  * @param {Uint8Array|Blob|object} input Asset bytes, Blob or host source
  * @param {string|undefined} settings JSON reader settings.
  * @param {number} now Unix seconds supplied as the session's clock.
- * @param {string} [format] Asset type (MIME type or extension).
+ * @param {string} [format] Asset type (MIME type or extension); detected from content when omitted.
  * @param {{allowPrivateHosts?: boolean}} [ocspPolicy] See {@link postOcsp}. A
  *   refused or failed OCSP fetch is reported to the engine, which fails open.
  * @returns {Promise<{report: object|null, stats: object}>} Parsed report
  *   (`null` when the asset has no manifest store) and request counters.
  */
-export async function read(adapter, input, settings, now, format = "image/jpeg", ocspPolicy = {}) {
-  const session = adapter.create(settings, format);
+export async function read(adapter, input, settings, now, format, ocspPolicy = {}) {
+  const session = adapter.create(settings, await resolveFormat(adapter, input, format));
   const stats = { reads: 0, bytes: 0, maxReadBytes: 0, advances: 0 };
   try {
     for (;;) {
@@ -241,14 +254,15 @@ export function identityIndex(label) {
  * @param {Algorithm} [alg] Must match what the session asks for.
  * @param {Function} [timestamp] Answers timestamp requests.
  * @param {{format?: string, identities?: {alg: Algorithm, certs: Uint8Array[], roles?: string[], referencedAssertions?: string[]}[]}} [extra]
- *   Asset type (MIME type or extension; default JPEG) and CAWG identities to add.
+ *   Asset type (MIME type or extension; detected from content when omitted) and CAWG identities to add.
  * @param {(request: {url: string, request: Uint8Array}) => Promise<Uint8Array>} [timestamp]
  *   Answers timestamp requests; a failure fails the build (never silently unstamped).
  * @returns {Promise<object>} Builder report plus `output.finish()` fields and `stats`.
  */
 export async function build(adapter, input, definition, certs, sign, output = memoryOutput(),
-  alg = "es256", timestamp = postTimestamp, { format = "image/jpeg", identities = [] } = {}) {
-  const session = adapter.createBuild(definition, certs, alg, format, identities);
+  alg = "es256", timestamp = postTimestamp, { format, identities = [] } = {}) {
+  const session = adapter.createBuild(definition, certs, alg,
+    await resolveFormat(adapter, input, format), identities);
   const stats = { reads: 0, bytes: 0, maxSourceReadBytes: 0, writes: 0, writtenBytes: 0, signs: 0, advances: 0 };
   function stream(name) {
     if (name === "source") return input;

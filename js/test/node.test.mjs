@@ -130,7 +130,7 @@ test("Worker service closes sources before success/error replies", async () => {
         post(message) { if (!message.ready) { assert.equal(closed, 1); reply(message) } },
       }, { create: () => session, createBuild: () => session },
       async () => ({ length: 0, close: async () => { closed++ } }));
-      receive({ protocol, id: 1, method });
+      receive({ protocol, id: 1, method, format: "image/jpeg" });
       const result = await completed;
       assert.equal(result.ok, !fails);
       if (fails) assert.equal(result.error.message, "session failure");
@@ -384,7 +384,7 @@ test("Blob host reads only requested slices and closes sessions on source errors
       };
     },
   };
-  const result = await read(adapter, source(blob), undefined, 0);
+  const result = await read(adapter, source(blob), undefined, 0, "image/jpeg");
   assert.deepEqual(requested, [[123, 123 + 65536]]);
   assert.deepEqual(replies[0], [1, "length", blob.size]);
   assert.equal(replies[1][2].length, 65536);
@@ -397,7 +397,7 @@ test("Blob host reads only requested slices and closes sessions on source errors
       return new Blob([]);
     };
     const input = mode === "range" ? new Blob([]) : blob;
-    await assert.rejects(read(adapter, source(input), undefined, 0),
+    await assert.rejects(read(adapter, source(input), undefined, 0, "image/jpeg"),
       mode === "failure" ? /source unavailable/ : mode === "short" ? /short asset read/ : /invalid asset range/);
   }
   assert.equal(closed, 4);
