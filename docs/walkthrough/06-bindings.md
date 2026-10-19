@@ -1,4 +1,4 @@
-# 6. Bindings: one engine, three asynchrony models
+# 6. Bindings: one engine, four asynchrony models
 
 Each compat crate reproduces a *slice* of a real public surface — same
 method names, same error strings, same JSON — and differs only in **where
@@ -10,10 +10,13 @@ flowchart TB
     E --> R["rs-compat<br/>blocking host"]
     E --> J["js-compat<br/>async host"]
     E --> N["node-compat<br/>no host in Rust at all"]
+    E --> C["c-api + c2pa-swift-compat<br/>Swift async/await host"]
     R --> R1["Reader::from_context(ctx).with_file(path)"]
     J --> J1["Reader::from_blob(fmt, blob, ctx, platform).await"]
     N --> N1["NodeSession.advance / fulfill / finish"]
     N1 --> N2["JS loop in index.mjs<br/>(fs, fetch, event loop)"]
+    C --> C1["c2pa_sm_* C ABI"]
+    C1 --> C2["Swift Reader / Builder<br/>(URLSession, CryptoKit, Swift 6 Tasks)"]
 ```
 
 | Binding | Mirrors | Async lives in | Notable |
@@ -21,6 +24,7 @@ flowchart TB
 | `rs-compat` | c2pa-rs `Context`, `Reader`, `Manifest` | Nowhere — blocking | One of two network dependencies (with `rs-compat-sign`): `reqwest` answers `Ocsp`. Owns format *policy* (`src/format.rs`). |
 | `js-compat` | c2pa-wasm `WasmReader` | One `async fn` driving the session (`src/drive.rs`) | `Blob` ≈ `Blob.size` + `slice().arrayBuffer()`; `Platform` supplies clock/OCSP, which c2pa-rs gets implicitly. `web` feature adds a `#[wasm_bindgen]` `WasmReader`. |
 | `node-compat` | c2pa-node `Reader` | Node itself | Rust has no runtime, threads, locks, or `async`. 4 synchronous exports (~150 lines of Neon). |
+| `c-api` + `c2pa-swift-compat` | c2pa-swift `Reader`, `Builder`, `Stream` | Swift cooperative concurrency | Zero Rust threads created; cimpl-tracked C handles; cbindgen-generated header; preserves caller Mach QoS; no semaphore waits; native `URLSession` and `CryptoKit`. |
 
 ## Where the c2pa-rs shapes break down
 
@@ -71,6 +75,7 @@ flowchart LR
     SB --> RS["rs-compat-sign<br/>blocking Builder + Signer trait<br/>(reqwest TSA default)"]
     SB --> JS["js-compat-sign<br/>async Builder + AsyncSigner<br/>(JS Promise / WebCrypto)"]
     SB --> ND["node-compat-sign + addon<br/>NodeBuildSession<br/>(Node signs, owns files)"]
+    D --> SW["c2pa-swift-compat<br/>Builder + AsyncSigner<br/>(CryptoKit / Secure Enclave)"]
 ```
 
 * The signer is where the models diverge most: a blocking trait, an

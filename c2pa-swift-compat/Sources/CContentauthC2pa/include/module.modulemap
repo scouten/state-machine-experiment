@@ -1,0 +1,4 @@
+module CContentauthC2pa {
+    header "contentauth_c2pa_c_api.h"
+    export *
+}

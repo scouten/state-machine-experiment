@@ -32,7 +32,9 @@ flowchart BT
     RSS["rs-compat-sign"]
     JSS["js-compat-sign"]
     NDS["node-compat-sign"]
+
     CAPI["c2pa-c-api<br/><i>C ABI for FFI</i>"]
+    SWIFT["c2pa-swift-compat<br/><i>pure Swift async</i>"]
 
     RD --> SM & PR
     BD --> SM & PR
@@ -50,6 +52,7 @@ flowchart BT
     JSS --> SB & FB & JSC
     NDS --> SB & FB & JSC
     CAPI --> FR & FB & RG & JSC & SB
+    SWIFT --> CAPI
 
     classDef engine fill:#dbeafe,stroke:#2563eb,color:#000
     classDef core fill:#dcfce7,stroke:#16a34a,color:#000
@@ -60,7 +63,7 @@ flowchart BT
     class RD,BD core
     class FM,JP,TF,RG fmt
     class FR,FB glue
-    class RSC,JSC,NDC,SB,RSS,JSS,NDS,CAPI bind
+    class RSC,JSC,NDC,SB,RSS,JSS,NDS,CAPI,SWIFT bind
 ```
 
 (Edges to `primitives` and `state-machine` from most crates are omitted
@@ -73,9 +76,9 @@ default, but a downstream client can select either workflow independently.
 
 ```mermaid
 flowchart TB
-    subgraph L5["Bindings — c2pa-rs / c2pa-wasm / c2pa-node shaped APIs and C ABI"]
+    subgraph L5["Bindings — c2pa-rs / c2pa-wasm / c2pa-node / c2pa-swift shaped APIs"]
         direction LR
-        b1[rs-compat] ~~~ b2[js-compat] ~~~ b3[node-compat] ~~~ b4["*-compat-sign"] ~~~ b5[c-api]
+        b1[rs-compat] ~~~ b2[js-compat] ~~~ b3[node-compat] ~~~ b4["*-compat-sign"] ~~~ b5[c-api / swift-compat]
     end
     subgraph L4["Orchestration — compose a format with a session"]
         direction LR
@@ -117,6 +120,7 @@ flowchart TB
 | `…-sign-baseline` | Binding | The baseline signing case (JSON definition → `BuilderSettings`) every write binding is held to. |
 | `…-rs/js/node-compat-sign` (+ `c2pa-node-sign-addon`) | Binding | The baseline case through each binding. `rs-compat-sign`'s default `http` feature enables `reqwest` for RFC 3161; without it, the signer supplies the transport. |
 | `…-c-api` | Binding | Thread-free, callback-free C ABI (`c2pa_sm_*`); independently selectable `read`/`build` features, cimpl-tracked handles and a cbindgen-generated header declaring both APIs. |
+| `c2pa-swift-compat` | Binding | Pure Swift 6 async package for iOS/macOS on the C API; zero Rust threads, no priority inversion, cooperative concurrency. |
 | `c2pa-rs-compat-conformance` | Test | Separate workspace; differential tests against the real `c2pa` crate. |
 
 ## Rules of the road
