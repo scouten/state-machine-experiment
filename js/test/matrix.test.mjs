@@ -16,7 +16,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after, before } from "node:test";
 import { createClient } from "../src/node/client.mjs";
-import { postTimestamp } from "../src/shared/drive.mjs";
+import { createWasmAdapter } from "../src/browser/adapter.mjs";
+import { build as driveBuild, isNonPublicHost, postTimestamp, read as driveRead, source as byteSource } from "../src/shared/drive.mjs";
 
 const rows = [];
 const record = (id, area, capability, layer, status, evidence) =>
@@ -36,6 +37,7 @@ const baseline = {
 
 let folder;
 let client;
+let wasmAdapter;
 const keys = new Map();
 
 // Leaf certificates shaped like the repository's test signer: non-CA, critical
@@ -86,6 +88,9 @@ before(async () => {
   folder = await mkdtemp(join(tmpdir(), "c2pa-matrix-"));
   for (const [alg, spec] of Object.entries(algorithms)) keys.set(alg, makeKey(alg, spec.key));
   client = createClient();
+  const wasm = await import("../generated/contentauth_c2pa_wasm.js");
+  await wasm.default({ module_or_path: await readFile(new URL("../generated/contentauth_c2pa_wasm_bg.wasm", import.meta.url)) });
+  wasmAdapter = createWasmAdapter(wasm);
 });
 after(async () => {
   await client.dispose();
@@ -223,8 +228,19 @@ test("RFC 3161 timestamps through the Worker host", async () => {
     signerFor("es256")), /tsa_url|http/i);
   record("tsa.failure.node", "timestamps", "failed timestamp fails the build, leaves no output", "node-host", "pass",
     "refusal, HTTP 500, malformed body and non-http URL all reject with no output or temp file left");
-  record("tsa.sign.wasm", "timestamps", "timestamp through Wasm", "wasm-glue", "gap-glue",
-    "BuildSession.advance maps Timestamp to \"unsupported build host request\"; there is no timestamp reply method");
+  // The same shared build loop, over the Wasm adapter instead of Neon.
+  const wasmAuthority = await authority(() => [200, tsResponse(0)]);
+  try {
+    const signer = signerFor("es256");
+    const result = await driveBuild(wasmAdapter, byteSource(new Uint8Array(readFileSync(jpegSource))),
+      JSON.stringify({ ...baseline, tsa_url: wasmAuthority.url }), signer.certs,
+      async (request) => signer.sign(request.data));
+    assert.equal(wasmAuthority.seen.length, 1);
+    assert.equal(wasmAuthority.seen[0].type, "application/timestamp-query");
+    assert.ok(Buffer.from(result.manifest).includes(TOKEN), "token embedded in the manifest store");
+    record("tsa.sign.wasm", "timestamps", "timestamp through Wasm", "wasm-glue", "pass",
+      "BuildSession exposes the Timestamp request and timestamp_response; the shared host answers it");
+  } finally { await wasmAuthority.close() }
   record("tsa.override", "timestamps", "caller-supplied sendTimestampRequest / timeAuthorityUrl", "js", "gap-js",
     "The Worker POSTs with fetch only; the earlier standalone Neon host let the signer override transport and URL");
 });
@@ -294,7 +310,7 @@ test("reader trust, identity and OCSP surface", async () => {
 
 // A CA and a leaf it issued, the leaf naming an OCSP responder: the reader only
 // asks for revocation when a chain gives it an issuer to build the request against.
-function makeChain() {
+function makeChain(responderPort = 9) {
   const run = (...args) => execFileSync("openssl", args, { stdio: "pipe" });
   const file = (name) => join(folder, `chain-${name}`);
   run("req", "-x509", "-nodes", "-days", "3650", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
@@ -306,7 +322,7 @@ function makeChain() {
     await writeFile(file("leaf.ext"), [
       "basicConstraints=critical,CA:FALSE", "keyUsage=critical,digitalSignature,nonRepudiation",
       "extendedKeyUsage=critical,emailProtection", "subjectKeyIdentifier=hash", "authorityKeyIdentifier=keyid",
-      "authorityInfoAccess=OCSP;URI:http://127.0.0.1:9/ocsp", ""].join("\n"));
+      `authorityInfoAccess=OCSP;URI:http://127.0.0.1:${responderPort}/ocsp`, ""].join("\n"));
     run("x509", "-req", "-in", file("leaf.csr"), "-CA", file("ca.pem"), "-CAkey", file("ca.key"), "-CAcreateserial",
       "-days", "3650", "-extfile", file("leaf.ext"), "-out", file("leaf.pem"));
     const der = (name) => new X509Certificate(readFileSync(file(name))).raw;
@@ -315,19 +331,53 @@ function makeChain() {
   });
 }
 
-test("OCSP requests reach the host but the shared host has no answer", async () => {
-  const chain = await makeChain();
-  const signer = { alg: "es256", certs: [new Uint8Array(chain.leaf), new Uint8Array(chain.ca)],
-    async sign(data) { return new Uint8Array(cryptoSign("sha256", Buffer.from(data), { key: chain.privateKey, dsaEncoding: "ieee-p1363" })) } };
-  const signed = await client.sign({ path: jpegSource }, baseline, signer);
-  const trust = { anchors: [{ trust_kind: "manifest", trust_anchors: chain.caPem }] };
-  const off = await client.read(signed.asset, { settings: { trust, verify: { ocsp_fetch: false } }, now: nowSeconds() });
-  assert.equal(off.report.validation_state, "Trusted");
-  const outcome = await client.read(signed.asset, { settings: { trust, verify: { ocsp_fetch: true } }, now: nowSeconds() })
-    .then((value) => `read completed: ${value.report.validation_state}`, (error) => `${error.name}: ${error.message}`);
-  record("ocsp.read.node", "reader", "live OCSP (ocsp_fetch on) through the Worker host", "js",
-    /unsupported host request: ocsp/.test(outcome) ? "gap-js" : "unexpected", outcome);
-  assert.match(outcome, /unsupported host request: ocsp/);
-  record("ocsp.read.wasm", "reader", "live OCSP through Wasm", "wasm-glue", "gap-glue",
-    "ReadSession.advance returns the error \"OCSP is outside this offline proof\"");
+test("live OCSP through the Worker host and Wasm, with the private-host policy", async () => {
+  const seen = [];
+  const responder = createServer((request, response) => {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("end", () => {
+      seen.push({ type: request.headers["content-type"], body: Buffer.concat(chunks) });
+      response.writeHead(200, { "content-type": "application/ocsp-response" });
+      response.end(Buffer.from([0x30, 0x03, 0x0a, 0x01, 0x02])); // OCSPResponse: tryLater
+    });
+  });
+  await new Promise((resolve) => responder.listen(0, "127.0.0.1", resolve));
+  try {
+    const chain = await makeChain(responder.address().port);
+    const signer = { alg: "es256", certs: [new Uint8Array(chain.leaf), new Uint8Array(chain.ca)],
+      async sign(data) { return new Uint8Array(cryptoSign("sha256", Buffer.from(data), { key: chain.privateKey, dsaEncoding: "ieee-p1363" })) } };
+    const signed = await client.sign({ path: jpegSource }, baseline, signer);
+    const trust = { anchors: [{ trust_kind: "manifest", trust_anchors: chain.caPem }] };
+    const on = { trust, verify: { ocsp_fetch: true } };
+    const off = await client.read(signed.asset, { settings: { trust, verify: { ocsp_fetch: false } }, now: nowSeconds() });
+    assert.equal(off.report.validation_state, "Trusted");
+    assert.equal(seen.length, 0);
+
+    // The responder URL comes from the certificate: loopback is refused by default,
+    // and the engine fails open when the host cannot answer.
+    const refused = await client.read(signed.asset, { settings: on, now: nowSeconds() });
+    assert.equal(seen.length, 0, "a loopback responder is not contacted by default");
+    assert.equal(refused.stats.ocsp, 1);
+    assert.equal(refused.report.validation_state, "Trusted");
+
+    const allowed = await client.read(signed.asset, { settings: on, now: nowSeconds(), ocspPolicy: { allowPrivateHosts: true } });
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].type, "application/ocsp-request");
+    assert.ok(seen[0].body.length > 0);
+    record("ocsp.read.node", "reader", "live OCSP (ocsp_fetch on) through the Worker host", "node-host", "pass",
+      `request POSTed as application/ocsp-request; default policy refuses private hosts; state ${allowed.report.validation_state}`);
+
+    const wasmRead = await driveRead(wasmAdapter, byteSource(new Uint8Array(signed.asset)),
+      JSON.stringify(on), nowSeconds(), "image/jpeg", { allowPrivateHosts: true });
+    assert.equal(seen.length, 2);
+    assert.equal(wasmRead.report.validation_state, allowed.report.validation_state);
+    record("ocsp.read.wasm", "reader", "live OCSP through Wasm", "wasm-glue", "pass",
+      "ReadSession exposes the Ocsp request, ocsp() and failed() replies; same shared host loop and policy");
+  } finally { await new Promise((resolve) => responder.close(resolve)) }
+  for (const host of ["localhost", "127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254",
+    "[::1]", "[fe80::1]", "[fd00::1]", "[::ffff:7f00:1]"]) assert.ok(isNonPublicHost(host), host);
+  for (const host of ["example.com", "93.184.216.34", "172.32.0.1", "[2606:4700::1111]"])
+    assert.ok(!isNonPublicHost(host), host);
 });
+

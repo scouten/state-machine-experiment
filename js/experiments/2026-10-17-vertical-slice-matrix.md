@@ -35,13 +35,13 @@ CA + leaf chain with an AIA OCSP URL.
 | Sign PS256 / PS384 / PS512 | pass | — | *(closed in the bridge)* the signature length is derived from the leaf certificate's RSA modulus |
 | Wasm signing algorithm / format / identities | pass | — | *(closed in the glue)* `BuildSession(definition, format, alg, certs, identities)`; construction verified in Node, browser contracts rerun |
 | Timestamps, Node | pass | — | fake TSA saw the POST; token in manifest |
-| Timestamps, Wasm | fail | glue | `advance` rejects Timestamp; no reply method |
+| Timestamps, Wasm | pass | — | *(closed in the glue)* `BuildSession` surfaces `Timestamp`, `timestamp_response()`/`failed()` reply; the shared build loop drives it against a fake TSA |
 | Timestamp URL/transport override | missing | js | the older standalone Neon host allowed it; Worker uses `fetch` only |
 | Custom trust anchors | pass | — | `Trusted` with anchor, `Valid` without |
 | TIFF read/sign (Neon, Wasm) | pass | — | *(closed in the bridge)* `for_format` resolves through the standard format registry (JPEG, TIFF/BigTIFF/DNG); a TIFF signed from JS reads back `Trusted` |
 | Format detection in Node host | caller-named only | js | `format` option selects a handler (default JPEG); no content detection |
-| Live OCSP read, Node | fail | js | "unsupported host request: ocsp"; needs an SSRF policy (older addon has `ocspPolicy`) |
-| Live OCSP read, Wasm | fail | glue | `ReadSession.advance` errors "outside this offline proof" |
+| Live OCSP read, Node | pass | — | *(closed in the shared host)* `fetch` POST `application/ocsp-request`; literal private/loopback hosts refused unless `ocspPolicy.allowPrivateHosts`; failures fail open |
+| Live OCSP read, Wasm | pass | — | *(closed in the glue)* `ReadSession` surfaces `Ocsp`, `ocsp()`/`failed()` replies; same shared loop and policy |
 | CAWG identity signing | pass | — | *(closed in the bridge)* `signer.identities` with their own key and algorithm; the sign request carries the assertion label |
 | CAWG identity reading | pass | — | *(closed in the bridge report)* each manifest carries `identity_assertions` (label, `sig_type`, credential kind, verified signer, roles, referenced assertions, its own statuses, `valid`); absent when there are none |
 
@@ -54,8 +54,10 @@ CA + leaf chain with an AIA OCSP URL.
    bridge takes formats from the registry, derives the RSA length from the
    leaf certificate, and accepts identity signers). Only identity *results*
    in the read report remained; those are now reported too, as an extension field the c2pa-js schema lacks.
-3. Wasm lags Neon in two places (timestamp, OCSP), both glue.
-4. JS-side follow-ups: OCSP policy, TSA override, content-based format
+3. Wasm now matches Neon for timestamps and OCSP (request/reply glue, plus a
+   shared Worker-side OCSP host with a private-host policy). DNS names that
+   resolve to private addresses are not caught by that policy.
+4. JS-side follow-ups: TSA override, content-based format
    detection, and mapping facade `ps256`/`timeAuthorityUrl` (still rejected on
    purpose).
 

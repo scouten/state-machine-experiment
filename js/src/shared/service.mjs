@@ -43,7 +43,8 @@ export function serve(port, adapter, openSource = source, openOutput = () => mem
         try {
           if (message.method === "build") output = await openOutput(message.destination);
           result = message.method === "read"
-            ? await read(adapter, input, message.settings, message.now, message.format)
+            ? await read(adapter, input, message.settings, message.now, message.format,
+              message.ocspPolicy)
             : await build(adapter, input, message.definition, message.certs, (request) =>
               new Promise((resolve, reject) => {
                 if (callbacks.has(message.id)) throw new Error("signer callback already pending");

@@ -160,7 +160,9 @@ flowchart LR
   not a `CallbackSigner` special case.
 * `instance_id` and `label` are required in the definition: the engine has
   no RNG, so the host mints them.
-* An optional `tsa_url` opts into an RFC 3161 timestamp in the existing hosts;
-  the shared Worker host still rejects unsupported timestamp requests explicitly.
+* An optional `tsa_url` opts into an RFC 3161 timestamp in every host; the shared
+  Worker host answers it with `fetch` on both Node and Wasm. It likewise
+  answers live OCSP, refusing literal private/loopback responder hosts by
+  default (the URL is untrusted input) unless the caller opts in.
 
 **Next:** [Proof and CI →](07-proof-and-ci.md)
