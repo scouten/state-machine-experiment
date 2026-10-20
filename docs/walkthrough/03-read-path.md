@@ -65,9 +65,27 @@ flowchart TD
   failure is scoped to its own assertion and never lowers the store's state.
 * **v1 and v2 claims** decode into the same `Claim`; v2 required-field
   and self-redaction checks are enforced.
-* **Reader projections** retain assertion-store order and decode CBOR
-  payloads. The report marks v2 `created_assertions`; unsupported assertion
-  encodings remain visible by label without a decoded payload.
+* **Reader projections** retain assertion-store order and decode CBOR and JSON
+  payloads separately. JSON keeps its own value types (including unsigned
+  integers) and is not reinterpreted as a supported CBOR assertion. The report
+  marks v2 `created_assertions`; malformed and unsupported assertion encodings
+  remain visible by label without a decoded payload. Shared JS/Node reporting
+  includes JSON assertion `data` and `kind: "Json"` and presents legacy
+  `c2pa.actions` as `c2pa.actions.v2`, without rewriting signed labels or
+  hashed-URI validation URLs.
+  Disabling claim-signer trust verification does not trust a timestamp authority:
+  timestamp cryptography and validity still run, and only configured TSA anchors
+  establish `timeStamp.trusted` or allow a token to supply trusted signing time.
+  Adobe's legacy `timeStamp.trusted` diagnostic for an unanchored timestamp with
+  trust verification disabled is deliberately not synthesized.
+  Multiple hard-binding exclusions (including TIFF's separate count and store
+  ranges) also produce the informational
+  `assertion.dataHash.additionalExclusionsPresent` observation; they are still
+  hashed and validated exactly as before.
+  The compatibility settings parser names explicitly supplied legacy signing
+  PEM bundles `manifest_system_anchors` or `manifest_user_anchors`; successful
+  chain validation, not the presence of PEM settings alone, supplies this
+  provenance to `validation_results.trustListUri`.
 
 Not yet checked: ingredient manifest links/hashes/history/redaction rules, TIFF/extended-XMP
 remote pointers and `assertion.notRedacted`. Standard JPEG XMP discovery belongs

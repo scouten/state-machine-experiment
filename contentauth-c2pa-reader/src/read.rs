@@ -392,6 +392,14 @@ fn plan_hard_binding(
         },
     };
 
+    if data_hash.exclusions.len() > 1 {
+        statuses.push(ValidationStatus::for_url(
+            status_code::ASSERTION_DATAHASH_ADDITIONAL_EXCLUSIONS,
+            &url,
+            "extra data hash exclusions found",
+        ));
+    }
+
     Some(PendingBinding {
         algorithm,
         expected: data_hash.hash.clone(),
@@ -1870,6 +1878,44 @@ mod tests {
             Some(status_code::ASSERTION_DATAHASH_MISMATCH)
         );
         assert_eq!(report.validation_state, Some(ValidationState::Invalid));
+    }
+
+    #[test]
+    fn multiple_hard_binding_exclusions_are_informational_not_a_failure() {
+        let asset = vec![7u8; 100];
+        for exclusions in [
+            vec![],
+            vec![(10, 2)],
+            vec![(10, 2), (20, 4)],
+            vec![(10, 2), (20, 4), (30, 8)],
+        ] {
+            let report = read_with_asset(
+                store_bound_to(&exclusions, expected_digest(&asset, &exclusions)),
+                asset.clone(),
+            )
+            .unwrap();
+            let findings: Vec<_> = report
+                .statuses
+                .iter()
+                .filter(|status| {
+                    status.code == status_code::ASSERTION_DATAHASH_ADDITIONAL_EXCLUSIONS
+                })
+                .collect();
+            assert_eq!(findings.len(), usize::from(exclusions.len() > 1));
+            for finding in findings {
+                assert_eq!(
+                    finding.url.as_deref(),
+                    Some("self#jumbf=/c2pa/urn:uuid:bound/c2pa.assertions/c2pa.hash.data")
+                );
+                assert_eq!(
+                    finding.explanation.as_deref(),
+                    Some("extra data hash exclusions found")
+                );
+                assert!(!finding.is_failure());
+                assert!(!finding.is_unchecked());
+            }
+            assert_eq!(report.validation_state, Some(ValidationState::Valid));
+        }
     }
 
     #[test]

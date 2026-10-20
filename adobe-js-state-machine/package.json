@@ -1,0 +1,32 @@
+{
+  "name": "adobe-js-state-machine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only Adobe-shaped Node and browser facade over the Rust state-machine SDK",
+  "exports": {
+    "./node": "./src/node.ts",
+    "./web": "./src/web.ts"
+  },
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "test:browser": "vitest run"
+  },
+  "dependencies": {
+    "@contentauth/c2pa-types": "0.7.5",
+    "c2pa-js-state-machine": "file:../c2pa-js-state-machine",
+    "c2pa-node-compat-addon": "file:../c2pa-node-compat-addon"
+  },
+  "devDependencies": {
+    "@contentauth/c2pa-web": "0.15.3",
+    "@types/node": "24.3.0",
+    "@vitest/browser": "3.2.4",
+    "playwright": "1.60.0",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "vite": "6.3.6",
+    "vitest": "3.2.4"
+  }
+}

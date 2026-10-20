@@ -233,6 +233,50 @@ fn a_context_built_from_this_workspaces_own_settings_is_accepted_too() {
 }
 
 #[test]
+fn explicit_legacy_pem_provenance_is_reported_only_when_it_establishes_trust(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (_, asset) = build_and_embed(C_JPG);
+    for (field, uri) in [
+        ("trust_anchors", "manifest_system_anchors"),
+        ("user_anchors", "manifest_user_anchors"),
+    ] {
+        for verify_trust in [true, false] {
+            let settings = serde_json::json!({
+                "trust": {field: pem_of(TEST_SIGNER_CERT)},
+                "verify": {"verify_trust": verify_trust, "ocsp_fetch": false},
+            })
+            .to_string();
+            let reader = block_on(Reader::from_blob(
+                "jpeg",
+                &asset,
+                Some(&settings),
+                &FixedClock,
+            ))?;
+            let json = serde_json::to_value(reader.manifest_store())?;
+            let results = &json["validation_results"];
+            if verify_trust {
+                assert_eq!(json["validation_state"], "Trusted");
+                assert_eq!(results["trustListUri"], uri);
+                let trusted = results["activeManifest"]["success"]
+                    .as_array()
+                    .ok_or("missing successes")?
+                    .iter()
+                    .find(|status| status["code"] == "signingCredential.trusted")
+                    .ok_or("missing trusted signing credential")?;
+                assert_eq!(
+                    trusted["explanation"],
+                    format!("signing certificate trusted, found in [{uri}] trust anchors")
+                );
+            } else {
+                assert_eq!(json["validation_state"], "Valid");
+                assert!(results.get("trustListUri").is_none());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn a_real_c2pa_rs_signed_fixture_reports_its_claim_generator() {
     let reader = block_on(Reader::from_blob("jpeg", C_JPG, None, &FixedClock))
         .expect("C.jpg carries a real c2pa-rs-signed manifest");
@@ -242,6 +286,113 @@ fn a_real_c2pa_rs_signed_fixture_reports_its_claim_generator() {
         active.claim_generator.as_deref(),
         Some("make_test_images/0.33.1 c2pa-rs/0.33.1")
     );
+}
+
+#[test]
+fn real_fixture_projects_json_and_actions_without_inventing_timestamp_trust(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let reader = block_on(Reader::from_blob(
+        "jpeg",
+        C_JPG,
+        Some(r#"{"verify":{"verify_trust":false,"ocsp_fetch":false}}"#),
+        &FixedClock,
+    ))?;
+    let store = reader.manifest_store();
+    let label = store
+        .active_manifest
+        .as_ref()
+        .ok_or("missing active label")?;
+    let json = serde_json::to_value(&store)?;
+    assert_eq!(
+        json["manifests"][label]["assertions"],
+        serde_json::json!([
+            {
+                "label": "stds.schema-org.CreativeWork",
+                "data": {
+                    "@context": "http://schema.org/",
+                    "@type": "CreativeWork",
+                    "author": [{"name": "John Doe", "@type": "Person"}]
+                },
+                "kind": "Json"
+            },
+            {
+                "label": "c2pa.actions.v2",
+                "data": {
+                    "actions": [{
+                        "action": "c2pa.created",
+                        "softwareAgent": "Make Test Images 0.33.1",
+                        "parameters": {"name": "gradient"},
+                        "digitalSourceType": "http://cv.iptc.org/newscodes/digitalsourcetype/algorithmicMedia"
+                    }]
+                }
+            }
+        ])
+    );
+    let results = &json["validation_results"]["activeManifest"];
+    assert!(results["success"]
+        .as_array()
+        .ok_or("missing successes")?
+        .iter()
+        .any(|status| status["code"] == "timeStamp.validated"));
+    assert!(results["informational"]
+        .as_array()
+        .ok_or("missing informational statuses")?
+        .iter()
+        .any(|status| status["code"] == "timeStamp.untrusted"));
+    for bucket in ["success", "informational", "failure"] {
+        assert!(!results[bucket]
+            .as_array()
+            .ok_or("missing status bucket")?
+            .iter()
+            .any(|status| status["code"] == "timeStamp.trusted"));
+    }
+    // A display label must not rewrite the assertion's signed hashed URI.
+    assert!(results["success"]
+        .as_array()
+        .ok_or("missing successes")?
+        .iter()
+        .any(|status| status["code"] == "assertion.hashedURI.match"
+            && status["url"]
+                .as_str()
+                .is_some_and(|url| url.ends_with("/c2pa.actions"))));
+    Ok(())
+}
+
+#[test]
+fn real_fixture_requires_explicit_tsa_anchors_even_when_signer_trust_is_disabled(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let settings = serde_json::json!({
+        "verify": {"verify_trust": false, "ocsp_fetch": false},
+        "trust": {
+            "anchors": [{
+                "trust_kind": "tsa",
+                "trust_anchors": pem_of(include_bytes!(
+                    "../../contentauth-c2pa-reader/tests/fixtures/digicert-trusted-root-g4.der"
+                ))
+            }]
+        }
+    })
+    .to_string();
+    let reader = block_on(Reader::from_blob(
+        "jpeg",
+        C_JPG,
+        Some(&settings),
+        &FixedClock,
+    ))?;
+    let store = serde_json::to_value(reader.manifest_store())?;
+    let results = &store["validation_results"]["activeManifest"];
+    assert!(results["success"]
+        .as_array()
+        .ok_or("missing successes")?
+        .iter()
+        .any(|status| status["code"] == "timeStamp.trusted"));
+    assert!(!results["informational"]
+        .as_array()
+        .ok_or("missing informational statuses")?
+        .iter()
+        .any(|status| status["code"] == "timeStamp.untrusted"));
+    assert_eq!(store["validation_state"], "Valid");
+    Ok(())
 }
 
 #[test]

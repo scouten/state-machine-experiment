@@ -35,6 +35,8 @@ flowchart BT
     NDS["node-compat-sign"]
     WEB["c2pa-web-bindings<br/><i>combined browser cdylib</i>"]
     JSP["c2pa-js-state-machine<br/><i>inline + module Worker / private package proof</i>"]
+    ADP["adobe-js-state-machine<br/><i>read-only Adobe-shaped facade</i>"]
+    NDA["c2pa-node-compat-addon<br/><i>JavaScript I/O host + Neon</i>"]
     ORC["pinned c2pa-js<br/><i>legacy test oracle</i>"]
 
     RD --> SM & PR
@@ -54,7 +56,10 @@ flowchart BT
     NDS --> SB & FB & JSC & RG
     WEB --> JSC & JSS
     JSP --> WEB
+    ADP --> JSP & NDA
+    NDA --> NDC
     JSP -.-> ORC
+    ADP -.-> ORC
 
     classDef engine fill:#dbeafe,stroke:#2563eb,color:#000
     classDef core fill:#dcfce7,stroke:#16a34a,color:#000
@@ -121,6 +126,7 @@ flowchart TB
 | `…-web-bindings` | Binding | Combined browser `cdylib` delegating to the existing JS read/sign adapters; target-only browser dependencies. |
 | `c2pa-rs-compat-conformance` | Test | Separate workspace; differential tests against the real `c2pa` crate. |
 | `c2pa-js-state-machine` (JS package) | Binding / Test | Inline/module-Worker JPEG/TIFF read/sign facade, embedded-resource extraction, exact active-manifest and single-manifest trusted/untrusted store/parsed JSON reporting, resource-free ingredient metadata/reviews and unknown-provenance deltas, explicit claim-trust policy and independent CAWG anchor switches, reader-factory settings defaults, caller-resolved/memoized Contexts with concurrent isolation (private Worker protocol v2), opt-in bounded remote/OCSP hosts, caller-owned signing/timestamps, private compiled ESM/types/Wasm packaging, pinned legacy oracle, and three-browser runtime/installed-consumer/performance proof; full SDK parity remains future work. |
+| `adobe-js-state-machine` (JS package) | Binding / Test | Read-only Adobe-shaped facade over the existing Node addon and inline/module-Worker browser SDK. Seven JPEG/TIFF/unsigned inputs and nineteen fixture/policy cases compare reports/resources with captured Adobe Reader baselines and a live pinned browser oracle in three browsers: eighteen exact matches and one explicit stricter TSA-policy diagnostic difference. Explicit disabled/untrusted/trusted offline PEM policies; AI helpers, trust downloads and service/signing APIs remain out of scope. |
 
 ## Rules of the road
 

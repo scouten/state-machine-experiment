@@ -94,6 +94,12 @@ pub mod status_code {
     /// The hard binding assertion could not be interpreted.
     pub const ASSERTION_DATAHASH_MALFORMED: &str = "assertion.dataHash.malformed";
 
+    /// The hard binding declares more than one excluded range.
+    ///
+    /// Informational only: formats such as TIFF require separate ranges.
+    pub const ASSERTION_DATAHASH_ADDITIONAL_EXCLUSIONS: &str =
+        "assertion.dataHash.additionalExclusionsPresent";
+
     /// A v2 claim lacks a field the specification requires of it
     /// (`instanceID`, `signature`, `created_assertions`,
     /// `claim_generator_info`, or the latter's `name`).
