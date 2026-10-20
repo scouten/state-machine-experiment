@@ -10,6 +10,8 @@ use wasm_bindgen::prelude::*;
 
 mod build;
 
+/// Converts a bridge error into a JS `Error` whose `name` carries the
+/// c2pa-wasm-compatible error string the host maps on.
 fn error(err: Error) -> JsValue {
     let value = js_sys::Error::new(&err.to_string());
     value.set_name(&err.js_message());
