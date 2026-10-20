@@ -15,7 +15,7 @@
 
 use core::mem::replace;
 
-use contentauth_c2pa_primitives::{ByteRange, SigningAlg, StreamId};
+use contentauth_c2pa_primitives::{ByteRange, Bytes, SigningAlg, StreamId};
 pub use contentauth_state_machine::Step as BuilderStep;
 use contentauth_state_machine::{
     HostRequest, ProtocolError, RequestId, Session, SessionCore, Step,
@@ -322,7 +322,7 @@ enum State {
     },
     AwaitingCommit {
         request: RequestId,
-        manifest: Vec<u8>,
+        manifest: Bytes,
         exclusions: Vec<ByteRange>,
     },
 
@@ -504,7 +504,9 @@ impl BuilderSession {
         };
 
         let manifest = ManifestBuilder::build_placeholder(&inputs)?;
-        let placeholder = manifest.placeholder_bytes().to_vec();
+        // The one copy on this path: the session keeps patching its own
+        // buffer after this, so the host's must be separate.
+        let placeholder = Bytes::copy_from_slice(manifest.placeholder_bytes());
 
         let request = self.core.issue(BuilderRequest::ReservePlaceholder {
             stream: Self::PRIMARY_STREAM,
@@ -856,7 +858,7 @@ impl BuilderSession {
         signature: &[u8],
         timestamp_token: Option<&[u8]>,
     ) -> Result<(), Error> {
-        let final_bytes = manifest.finish(signature, timestamp_token)?;
+        let final_bytes = Bytes::from(manifest.finish(signature, timestamp_token)?);
 
         let request = self.core.issue(BuilderRequest::CommitManifest {
             stream: Self::PRIMARY_STREAM,
@@ -876,7 +878,7 @@ impl BuilderSession {
     fn handle_awaiting_commit(
         &mut self,
         request: RequestId,
-        manifest: Vec<u8>,
+        manifest: Bytes,
         exclusions: Vec<ByteRange>,
     ) -> Result<Option<Step>, Error> {
         match self.core.take_reply(request) {
@@ -974,8 +976,9 @@ impl Session for BuilderSession {
 #[non_exhaustive]
 pub struct BuilderReport {
     /// The final, signed C2PA manifest store bytes — identical to what was
-    /// patched into the asset via `BuilderRequest::CommitManifest`.
-    pub manifest: Vec<u8>,
+    /// patched into the asset via `BuilderRequest::CommitManifest`, and
+    /// the same buffer: shared, not copied.
+    pub manifest: Bytes,
 
     /// The hard binding's exclusions, as the host reported them via
     /// `BuilderHostReply::PlaceholderReserved`: the container structure
@@ -1030,7 +1033,7 @@ mod tests {
                     BuilderRequest::AssetBytes { range, .. } => {
                         let start = range.start as usize;
                         BuilderHostReply::AssetBytes(
-                            asset[start..start + range.len as usize].to_vec(),
+                            asset[start..start + range.len as usize].to_vec().into(),
                         )
                     }
                     BuilderRequest::Sign { purpose, .. } => {
@@ -1073,5 +1076,53 @@ mod tests {
             session.state,
             State::AwaitingIdentitySignature { index: 0, .. }
         ));
+    }
+
+    /// The manifest the host is asked to commit and the one the report
+    /// hands back are one buffer, not two copies.
+    #[test]
+    fn the_committed_manifest_and_the_reported_one_share_a_buffer() {
+        let mut session = BuilderSession::new(BuilderSettings::new(
+            "xmp:iid:1",
+            "urn:uuid:1",
+            GeneratorInfo::new("test", "1"),
+            SigningAlg::Es256,
+            vec![CERT.to_vec()],
+        ));
+        let mut asset = vec![0u8; 4000];
+        let mut committed = None;
+
+        while session.advance().unwrap() == Step::AwaitHost {
+            for request in session.outstanding_requests().to_vec() {
+                let reply = match &request.kind {
+                    BuilderRequest::ReservePlaceholder { placeholder, .. } => {
+                        asset.splice(100..100, placeholder.iter().copied());
+                        BuilderHostReply::PlaceholderReserved(vec![ByteRange {
+                            start: 100,
+                            len: placeholder.len() as u64,
+                        }])
+                    }
+                    BuilderRequest::AssetLength { .. } => {
+                        BuilderHostReply::AssetLength(asset.len() as u64)
+                    }
+                    BuilderRequest::AssetBytes { range, .. } => {
+                        let start = range.start as usize;
+                        BuilderHostReply::AssetBytes(Bytes::copy_from_slice(
+                            &asset[start..start + range.len as usize],
+                        ))
+                    }
+                    BuilderRequest::Sign { .. } => BuilderHostReply::Signature(vec![0u8; 64]),
+                    BuilderRequest::CommitManifest { manifest, .. } => {
+                        committed = Some(manifest.clone());
+                        BuilderHostReply::ManifestCommitted
+                    }
+                    other => panic!("unexpected request {other:?}"),
+                };
+                session.fulfill(request.id, reply).unwrap();
+            }
+        }
+
+        let report = session.finish().unwrap();
+        assert_eq!(report.manifest.as_ptr(), committed.unwrap().as_ptr());
     }
 }

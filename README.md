@@ -74,9 +74,9 @@ where it could go next — written in Markdown with Mermaid diagrams.
   of the crates above, for a caller that wants c2pa-rs's existing surface
   rather than this workspace's `Session` contract.
 * [`contentauth-c2pa-cpp`](contentauth-c2pa-cpp) — an exploration of a C++
-  binding: a C ABI over the sans-I/O reader session plus header-only C++
-  (blocking, thread-pool and C++20 coroutine drivers), written to show what
-  the session model can express — parallel and multiplexed reads, errors as
+  binding: a C ABI over the neutral read/build bridges plus C++ blocking,
+  thread-pool and C++20 coroutine drivers, written to show what the session
+  model can express — parallel and multiplexed reads and signing, errors as
   values, cancellation by destruction — that a callback-based API cannot.
   See its [README](contentauth-c2pa-cpp/README.md).
 * [`contentauth-c2pa-js-compat`](contentauth-c2pa-js-compat) — the same
@@ -93,9 +93,6 @@ where it could go next — written in Markdown with Mermaid diagrams.
   neutral synchronous `ReadSessionBridge` and `BuildSessionBridge`, extracted
   from the former Node-named crates. Owns explicit SDK compatibility vocabulary
   shared with the alternative async host.
-* [`contentauth-c2pa-cpp`](contentauth-c2pa-cpp) — an experimental C ABI
-  consumer of the read bridge, with blocking, thread-pool and coroutine C++ hosts.
-
 Outside the workspace (see its own README for why):
 
 * [`contentauth-c2pa-wasm`](contentauth-c2pa-wasm) — synchronous wasm-bindgen

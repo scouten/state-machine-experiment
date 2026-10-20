@@ -19,6 +19,12 @@ reimplement on its own:
   algorithm-ID mapping (RFC 9053), and their paired hash algorithm.
 - `HostError` — the "the host couldn't do it" wrapper every sans-I/O
   session's reply vocabulary needs.
+- `Bytes` — re-exported from the [`bytes`](https://docs.rs/bytes) crate: the
+  buffer type every vocabulary carries bulk payloads in (asset chunks,
+  manifest stores, placeholders, writes). Cloning or slicing one is a
+  refcount bump rather than a copy, so a host holding an asset in memory
+  answers a read with a slice of it, and a host loop that clones its
+  outstanding requests to release the session's borrow copies nothing.
 - `cbor::sig_structure` — the COSE `Sig_structure` (RFC 9052) a claim
   signature covers, hand-encoded for determinism. The reader reconstructs
   these bytes to verify a signature; a builder constructs the identical

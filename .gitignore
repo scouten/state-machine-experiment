@@ -5,6 +5,7 @@ Cargo.lock
 
 **/CMakeFiles/**
 build/
+!/contentauth-c2pa-session-bridge/src/build/
 **/cargo/**
 .vscode/
 

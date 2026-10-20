@@ -40,8 +40,10 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   (`BuilderSession` in [`src/builder.rs`](contentauth-c2pa-builder/src/builder.rs);
   see its [README.md](contentauth-c2pa-builder/README.md)).
 - **`contentauth-c2pa-primitives`** — the narrow slice of vocabulary
-  (`StreamId`, `ByteRange`, hash and signing algorithms, `HostError`) and
-  deterministic encoders the reader and builder genuinely share.
+  (`StreamId`, `ByteRange`, hash and signing algorithms, `HostError`, and
+  `Bytes` — the refcounted buffer every vocabulary carries bulk payloads
+  in, so hosts slice and clone rather than copy) and deterministic encoders
+  the reader and builder genuinely share.
 - **`contentauth-c2pa-format`** — the contract between those sessions
   and container formats: the `FormatHandler` trait (`descriptor`,
   `locate`, `plan_embed`, `commit`), the plain-data `FormatDescriptor`
@@ -196,7 +198,8 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
 - **`contentauth-c2pa-wasm`** — synchronous wasm-bindgen adapters over the
   session bridge, for a JavaScript host to drive (browser Workers over Wasm;
   Node Workers use the existing Neon addons). It has its own workspace and
-  pins wasm-bindgen to its CLI schema; the root CI checks its formatting only.
+  pins wasm-bindgen to its CLI schema; CI checks its formatting, Clippy,
+  native request-encoding tests, and `wasm32-unknown-unknown` compilation.
   The older `js-compat`/`js-compat-sign` Rust async hosts remain alternatives.
   Retain their tests and the broader addon file/OCSP/timestamp behavior.
 - **`c2pa-node-compat-addon`** — the Neon `cdylib` (four synchronous
@@ -210,7 +213,8 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   static library behind a small C ABI (`src/lib.rs`, `include/contentauth_c2pa_sm.h`;
   the one crate here allowed `unsafe`, being the FFI boundary; symbols are
   `c2pa_sm_*` to coexist with c2pa-c) wrapping `contentauth-c2pa-session-bridge`'s
-  flat `read::ReadSessionBridge`, plus C++ in `include/contentauth/` (header-only apart
+  flat `read::ReadSessionBridge` and `build::BuildSessionBridge`, plus C++ in
+  `include/contentauth/` (header-only apart
   from the compiled signing implementation and thread pools in `cpp/src/`):
   a C++17 core (`Session`, `Reader`, blocking `read()`), C++17 thread-based
   drivers (`Reading`/`Mailbox`, `read_parallel`, `read_future`,
@@ -219,8 +223,9 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   C++20 coroutines (`co_read`, `spawn`).
   Errors are values, not thread-local, so a session can move between
   threads. Built with CMake (`cpp/`, `CMakeLists.txt`); its README holds the
-  review of c2pa-cpp's API and the rationale for every departure. Read side
-  only. CI's `cpp-binding` job runs the C++ tests with coverage and under
+  review of c2pa-cpp's API and the rationale for every departure. Reading and
+  signing both have blocking, pooled/future and coroutine drivers, with atomic
+  file signing on POSIX. CI's `cpp-binding` job runs the C++ tests with coverage and under
   ASan/TSan; a C++ edit must be checked with
   `cmake -S contentauth-c2pa-cpp -B contentauth-c2pa-cpp/build && cmake --build contentauth-c2pa-cpp/build && ctest --test-dir contentauth-c2pa-cpp/build`.
 - **`contentauth-c2pa-sign-baseline`** — the *baseline signing case*

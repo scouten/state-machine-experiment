@@ -2,8 +2,9 @@
 
 use std::{ffi::c_char, os::raw::c_int};
 
-use contentauth_c2pa_session_bridge::build::{
-    BuildSessionBridge, Error, PendingRequest, Reply, Step, Stream,
+use contentauth_c2pa_session_bridge::{
+    build::{BuildSessionBridge, Error, PendingRequest, Reply, Step, Stream},
+    Bytes,
 };
 
 use super::{clear, guard, utf8, C2paError, C2paSmError, Failure};
@@ -164,7 +165,7 @@ pub struct C2paSmExclusion {
 
 /// A cimpl-tracked, immutable report, independent of the consumed session.
 pub struct C2paSmSignReport {
-    manifest: Vec<u8>,
+    manifest: Bytes,
     exclusions: Vec<C2paSmExclusion>,
 }
 

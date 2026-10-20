@@ -94,7 +94,11 @@ impl Host {
 
             BuilderRequest::AssetBytes { range, .. } => {
                 let start = range.start as usize;
-                BuilderHostReply::AssetBytes(self.asset[start..start + range.len as usize].to_vec())
+                BuilderHostReply::AssetBytes(
+                    self.asset[start..start + range.len as usize]
+                        .to_vec()
+                        .into(),
+                )
             }
 
             BuilderRequest::Sign {
@@ -179,12 +183,16 @@ fn read_back(host: &Host, trust_identity: bool) -> ReadReport {
         for request in session.outstanding_requests().to_vec() {
             let reply = match request.kind {
                 ReadRequest::ManifestStore { .. } => ReadHostReply::ManifestStore(Some(
-                    asset[start as usize..(start + len) as usize].to_vec(),
+                    asset[start as usize..(start + len) as usize]
+                        .to_vec()
+                        .into(),
                 )),
                 ReadRequest::CurrentDateTime => ReadHostReply::CurrentDateTime(1_800_000_000),
                 ReadRequest::AssetLength { .. } => ReadHostReply::AssetLength(asset.len() as u64),
                 ReadRequest::AssetBytes { range, .. } => ReadHostReply::AssetBytes(
-                    asset[range.start as usize..(range.start + range.len) as usize].to_vec(),
+                    asset[range.start as usize..(range.start + range.len) as usize]
+                        .to_vec()
+                        .into(),
                 ),
                 other => panic!("unexpected request: {other:?}"),
             };

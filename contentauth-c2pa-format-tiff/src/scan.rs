@@ -28,7 +28,8 @@ use core::mem::{replace, take};
 use std::collections::HashSet;
 
 use contentauth_c2pa_format::{
-    take_bytes, take_length, ByteRange, FormatError, IoRequest, ProtocolError, RequestId, StreamId,
+    take_bytes, take_length, ByteRange, Bytes, FormatError, IoRequest, ProtocolError, RequestId,
+    StreamId,
 };
 use contentauth_state_machine::SessionCore;
 
@@ -88,7 +89,7 @@ pub(crate) struct Layout {
     pub(crate) c2pa: Option<C2paEntry>,
 
     /// The store's bytes, if the scan was asked to read them.
-    pub(crate) manifest: Option<Vec<u8>>,
+    pub(crate) manifest: Option<Bytes>,
 }
 
 impl Layout {
@@ -448,7 +449,7 @@ impl Scanner {
         })
     }
 
-    fn layout(&mut self, manifest: Option<Vec<u8>>) -> Result<Layout, FormatError> {
+    fn layout(&mut self, manifest: Option<Bytes>) -> Result<Layout, FormatError> {
         let header = self.header.ok_or(ProtocolError::SessionFailed)?;
         Ok(Layout {
             header,

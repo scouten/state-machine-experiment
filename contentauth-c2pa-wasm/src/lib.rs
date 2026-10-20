@@ -65,8 +65,8 @@ impl ReadSession {
     }
 
     /// Copies the exact bytes requested by a pending read into the session.
-    pub fn bytes(&mut self, id: u32, bytes: &[u8]) -> Result<(), JsValue> {
-        self.reply(id, Reply::Bytes(bytes.to_vec()))
+    pub fn bytes(&mut self, id: u32, bytes: Vec<u8>) -> Result<(), JsValue> {
+        self.reply(id, Reply::Bytes(bytes))
     }
 
     /// Answers a length request, rejecting values JavaScript cannot represent.

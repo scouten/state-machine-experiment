@@ -8,7 +8,9 @@
 
 use std::cell::RefCell;
 
-use contentauth_c2pa_session_bridge::build::{Error, BuildSessionBridge, PendingRequest, Reply, Step};
+use contentauth_c2pa_session_bridge::build::{
+    BuildSessionBridge, Error, PendingRequest, Reply, Step,
+};
 use neon::{prelude::*, types::buffer::TypedArray};
 
 /// A session handle JS holds. `RefCell` because Neon hands out `&self`;

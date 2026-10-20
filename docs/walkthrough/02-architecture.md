@@ -8,7 +8,7 @@ and the reader, builder and format handlers know nothing about each other.**
 
 Arrows point from a crate to what it depends on. Dashed edges include the
 standalone Wasm and Neon bindings.
-The C++ reader binding is another implemented bridge consumer. The outlined
+The C++ reader/signing binding is another implemented bridge consumer. The outlined
 Python node and its dotted edge indicate prospective reuse only.
 
 ```mermaid

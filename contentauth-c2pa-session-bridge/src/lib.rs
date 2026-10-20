@@ -26,3 +26,4 @@ pub mod read;
 pub use compat::{
     C2paError, Context, Error, Manifest, ManifestStore, ValidationState, ValidationStatus,
 };
+pub use contentauth_c2pa_primitives::Bytes;
