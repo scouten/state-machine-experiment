@@ -21,13 +21,13 @@ export const adapter = {
       close() { session = undefined }, // Native errors release the handle through isolate GC.
     };
   },
-  /** Build session (ES256 JPEG only in this slice). */
-  createBuild(definition, certs) {
-    let session = signing.buildNew(definition, "image/jpeg", "es256", certs.map((cert) => Buffer.from(cert)));
+  /** Build session for a JPEG, signing with `alg`. */
+  createBuild(definition, certs, alg = "es256") {
+    let session = signing.buildNew(definition, "image/jpeg", alg, certs.map((cert) => Buffer.from(cert)));
     return {
       advance: () => signing.buildAdvance(session),
       fulfill: (id, kind, value) => signing.buildFulfill(session, id, kind,
-        kind === "bytes" || kind === "signature" ? Buffer.from(value) : value),
+        kind === "bytes" || kind === "signature" || kind === "timestampResponse" ? Buffer.from(value) : value),
       finish: () => signing.buildFinish(session),
       close() { session = undefined },
     };

@@ -1,3 +1,5 @@
+import { algorithms, checkSignature } from "./drive.mjs";
+
 /**
  * Main-thread side of the Worker protocol, shared by Node and browsers.
  *
@@ -108,8 +110,8 @@ export class Client {
    */
   async sign(asset, definition, signer, destination) {
     if (this.#closed) throw this.#closed;
-    if (signer?.alg !== "es256" || typeof signer.sign !== "function")
-      throw new TypeError("proof signer must supply es256 and sign(data)");
+    if (!algorithms.has(signer?.alg) || typeof signer.sign !== "function")
+      throw new TypeError(`proof signer must supply sign(data) and one of: ${[...algorithms].join(", ")}`);
     if (!Array.isArray(signer.certs) || !signer.certs.every((cert) => cert instanceof Uint8Array))
       throw new TypeError("signer certs must be Uint8Array[]");
     const snapshot = this.#snapshot(asset);
@@ -119,7 +121,7 @@ export class Client {
     const sign = signer.sign.bind(signer);
     await this.#ready;
     if (this.#closed) throw this.#closed;
-    return this.#call({ method: "build", asset: snapshot, definition: json, certs, destination: output }, sign);
+    return this.#call({ method: "build", asset: snapshot, definition: json, certs, destination: output, alg: signer.alg }, sign);
   }
   /** Posts a command and registers its pending entry; `sign` is the optional signer callback. */
   #call(command, sign) {
@@ -132,7 +134,7 @@ export class Client {
   }
   /** Runs the caller's signer for a Worker `sign` message and posts the `signReply`. */
   async #sign(message, pending) {
-    if (!pending.sign || pending.signing || message.alg !== "es256" ||
+    if (!pending.sign || pending.signing || !algorithms.has(message.alg) ||
         !(message.data instanceof Uint8Array) || !Number.isSafeInteger(message.requestId) ||
         message.requestId < 0) {
       this.#fail(new Error("invalid Worker signer request"));
@@ -142,8 +144,7 @@ export class Client {
     let reply;
     try {
       const value = await pending.sign(message.data);
-      if (!(value instanceof Uint8Array) || value.length !== 64)
-        throw new TypeError("es256 signer must return 64 raw signature bytes");
+      checkSignature(message.alg, value);
       reply = { ok: true, value: new Uint8Array(value) };
     } catch (error) {
       reply = { ok: false, error: failure(error) };

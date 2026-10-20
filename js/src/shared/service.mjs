@@ -55,7 +55,7 @@ export function serve(port, adapter, openSource = source, openOutput = () => mem
                   callbacks.delete(message.id);
                   reject(error);
                 }
-              }), output);
+              }), output, message.alg);
         } finally {
           try { await output?.close() }
           finally { await input.close() }

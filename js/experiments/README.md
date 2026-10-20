@@ -19,6 +19,7 @@ than appending another unrelated experiment to the historical findings file.
 | [SDK-to-SDK performance](2026-10-16-sdk-performance.md) | How do actual public read/sign calls compare with the existing SDKs? |
 | [Binary versus JSON transport](2026-10-16-binary-transport.md) | How much browser build cost comes from JSON bulk-byte serialization? |
 | [Action-validation parity](2026-10-16-validation-parity.md) | Why does the Rust reader accept an action that c2pa-rs rejects? |
+| [Vertical-slice capability matrix](2026-10-17-vertical-slice-matrix.md) | Which Rust capabilities are reachable from JS, and which layer closes each gap? |
 
 Historical observations were migrated without rerunning experiments. Each
 report distinguishes the original evidence from subsequent implementation
