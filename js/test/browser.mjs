@@ -1,3 +1,6 @@
+// Runs the shared read/signing contracts and the boundary comparison in
+// Chromium, Firefox and WebKit against a loopback-only static server, loading
+// the real Wasm build. Run via `npm run test:browser`.
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { readFile, mkdir, writeFile } from "node:fs/promises";

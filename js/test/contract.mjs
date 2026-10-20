@@ -1,3 +1,5 @@
+// Read contract shared by the Node and browser runners: both environments
+// must produce identical reports and request counters for the same fixtures.
 function check(value, message) { if (!value) throw new Error(message) }
 function equal(actual, expected, message) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error(message);

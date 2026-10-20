@@ -1,3 +1,5 @@
+// Browser write-payload comparison: JSON byte arrays versus binary payloads
+// across the Wasm boundary. Imported by test/browser.mjs.
 function check(value, message) { if (!value) throw new Error(message) }
 function equal(actual, expected, message) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error(message);

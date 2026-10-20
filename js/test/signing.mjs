@@ -1,3 +1,5 @@
+// Signing contract shared by the Node and browser runners: caller-owned async
+// signer callbacks, failures, queueing, disposal races and read-back.
 function check(value, message) { if (!value) throw new Error(message) }
 function equal(actual, expected, message) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error(message);

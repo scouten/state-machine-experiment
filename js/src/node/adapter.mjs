@@ -8,6 +8,7 @@ import { createRequire } from "node:module";
 
 const native = createRequire(import.meta.url)("../../../c2pa-node-compat-addon/index.node");
 const signing = createRequire(import.meta.url)("../../../c2pa-node-sign-addon/index.node");
+/** Session factory (`create`, `createBuild`) the shared Worker service drives. */
 export const adapter = {
   /** Read session. The addon only knows JPEG. */
   create(settings) {

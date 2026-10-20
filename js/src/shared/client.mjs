@@ -31,6 +31,11 @@ export function remoteError(value) {
   return error;
 }
 
+/**
+ * Main-thread handle for one Worker. Methods queue commands to the Worker's
+ * `serve()` loop and resolve with its replies; any protocol violation or
+ * Worker error fails every outstanding call and the client.
+ */
 export class Client {
   #port;
   /** Calls awaiting replies by id. Id 0 is the Worker's `ready` handshake. */

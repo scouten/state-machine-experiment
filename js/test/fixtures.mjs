@@ -1,3 +1,6 @@
+// Generates the ignored `generated/` fixtures (signed JPEGs plus the signing
+// definition) with the existing Neon addons, using only the repository's
+// TEST ONLY credentials. Run via `npm run fixtures`.
 import assert from "node:assert/strict";
 import { createHash, createPrivateKey, sign, X509Certificate } from "node:crypto";
 import { mkdir, readFile, writeFile, unlink } from "node:fs/promises";

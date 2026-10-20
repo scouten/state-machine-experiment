@@ -7,7 +7,7 @@ and the reader, builder and format handlers know nothing about each other.**
 ## Dependency graph
 
 Arrows point from a crate to what it depends on. Dashed edges include the
-standalone Wasm and Neon bindings.
+standalone JavaScript package bindings.
 The C++ reader binding is another implemented bridge consumer. The outlined
 Python node and its dotted edge indicate prospective reuse only.
 
@@ -34,6 +34,7 @@ flowchart BT
     SB["sign-baseline"]
     RSS["rs-compat-sign"]
     JSS["js-compat-sign"]
+    HOST["js/src/shared<br/><i>one JS host in both Workers</i>"]
     PW["contentauth-c2pa-wasm<br/><i>standalone synchronous Wasm boundary</i>"]
     PN["c2pa-node-compat-addon<br/><i>existing Neon boundary</i>"]
     PNS["c2pa-node-sign-addon<br/><i>existing signing Neon boundary</i>"]
@@ -55,6 +56,7 @@ flowchart BT
     SB --> BD
     RSS --> SB & FB & JP
     JSS --> SB & FB & JSC
+    HOST -.-> PW & PN & PNS
     PW -.-> BR
     PN -.-> BR
     PNS -.-> BR
@@ -132,12 +134,13 @@ flowchart TB
 | `c2pa-node-compat-addon`, `c2pa-node-sign-addon` | Binding | Separate Neon workspaces over the neutral read/build bridges. Existing JavaScript facades retain broader file/OCSP/timestamp behavior. |
 | `…-c-api` | Binding | Thread-free, callback-free C ABI (`c2pa_sm_*`); independently selectable `read`/`build` features, cimpl-tracked handles and a cbindgen-generated header declaring both APIs. |
 | `c2pa-rs-compat-conformance` | Test | Separate workspace; differential tests against the real `c2pa` crate. |
-| `contentauth-c2pa-wasm` | Binding | Standalone synchronous wasm-bindgen boundary over the session bridge, for a JavaScript host to drive. |
+| `contentauth-c2pa-wasm` + `js/` | Binding / preferred JS host | Standalone synchronous Wasm boundary and private JS package with shared host, browser and Node entry points. Offline JPEG read/baseline ES256 sign; caller-owned async callbacks. |
 | `contentauth-c2pa-cpp` | Binding | C++17/20 reader and signing drivers over the neutral read/build bridges; cimpl-tracked signing C ABI, blocking memory/stream/POSIX-file hosts, pooled/future/parallel drivers and C++20 coroutines. A public-header ES256 signing example reads its output back as Trusted. Does not depend on the JS driver. |
 
 The read/build bridges have been extracted and renamed, not copied. The
+preferred JavaScript direction is the [shared host](../../js/README.md); the
 older Rust async browser hosts remain alternatives until their useful behavior
-is preserved elsewhere.
+is preserved by shared-host compatibility facades.
 
 The merged [C++ binding](../../contentauth-c2pa-cpp/README.md) now consumes the
 read/build bridges through its C ABI, independently of the JS host. Python remains
@@ -151,7 +154,7 @@ the same host-driven pattern. C++ supplies a C ABI adapter;
 Python could supply an extension-module adapter. Both must
 translate Rust types/errors and define session and buffer ownership. The Rust
 enums are not directly a stable foreign ABI, and neither consumer needs to use
-a JavaScript driver or Workers. The current wrappers still reuse
+the shared JavaScript driver or Workers. The current wrappers still reuse
 JavaScript-oriented compatibility settings/results in Rust, now owned by the
 explicit `compat` module. They are not generic engine requirements.
 

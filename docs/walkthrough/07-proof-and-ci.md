@@ -35,6 +35,10 @@ tests, Clippy (`-Dwarnings`), nightly rustfmt, rustdoc (warnings denied),
 Wasm checks, MSRV (1.96.0), `cargo-deny`; plus separate jobs for the
 `c2pa-rs-compat-conformance` differential tests (`compat-conformance`, run
 on every PR) and the two Neon addons (`node-addon`, `node-sign-addon`).
+The `javascript-host` job builds the standalone synchronous Wasm binding and
+both Neon addons, then runs the shared Node and Chromium/Firefox/WebKit read and
+signing contracts. It requires real bindings and installed browsers: no skips
+or mock-only substitute.
 The C++ binding jobs exercise the Rust C ABI plus C++17, C++20 and pool
 drivers on Linux and macOS. The Linux matrix covers C++ coverage, AddressSanitizer
 and ThreadSanitizer; macOS also exercises the Apple thread pool.
@@ -48,6 +52,7 @@ flowchart LR
     PR --> D[cargo-deny]
     PR --> C["compat-conformance<br/>(differential tests vs c2pa-rs)"]
     PR --> N["node-addon,<br/>node-sign-addon"]
+    PR --> JS["javascript-host<br/>real Wasm + Neon<br/>Node + 3 browsers"]
     PR --> CPP["cpp-binding / cpp-binding-macos<br/>C ABI + C++ drivers<br/>coverage / ASan / TSan"]
 ```
 
@@ -55,7 +60,7 @@ The Wasm checks are a design assertion: **the engine and everything over it
 builds for Wasm unmodified**. Exempt: `rs-compat` and `rs-compat-sign`,
 which deliberately own the workspace's only network dependencies. The `web`
 modules of the alternative Rust async hosts are only *compiled*, not run.
-The synchronous Wasm binding is built (not run) for wasm32 in CI; the older
-`web` modules are not run either.
+Browser CI runs the preferred synchronous Wasm bridge with its JavaScript host,
+not those older `web` modules.
 
 **Next:** [Findings →](08-findings.md)
