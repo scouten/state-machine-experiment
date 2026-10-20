@@ -592,30 +592,38 @@ impl Serialize for IngredientMetadata<'_> {
 }
 
 /// One assertion in the manifest store.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ManifestAssertion {
     /// Assertion label.
     pub label: String,
 
     /// True when the claim created this assertion.
-    #[serde(skip_serializing_if = "is_false")]
     pub created: bool,
 
     /// Decoded payload, or the legacy signer report for a verified identity.
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "serialize_cbor_value"
-    )]
     pub data: Option<c2pa_cbor::Value>,
+
+    /// JSON assertion data, serialized as `data` with the legacy `Json` kind.
+    /// Kept separate so CBOR byte strings retain their existing projection.
+    pub json_data: Option<serde_json::Value>,
 }
 
-fn serialize_cbor_value<S: Serializer>(
-    value: &Option<c2pa_cbor::Value>,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    match value {
-        Some(value) => JsonCbor(value).serialize(serializer),
-        None => serializer.serialize_none(),
+impl Serialize for ManifestAssertion {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("label", &self.label)?;
+        if self.created {
+            map.serialize_entry("created", &true)?;
+        }
+        if let Some(data) = &self.json_data {
+            map.serialize_entry("data", data)?;
+            map.serialize_entry("kind", "Json")?;
+        } else if let Some(data) = &self.data {
+            map.serialize_entry("data", &JsonCbor(data))?;
+        }
+        map.end()
     }
 }
 
@@ -660,10 +668,6 @@ impl Serialize for JsonCbor<'_> {
             Value::Tag(_, value) => JsonCbor(value).serialize(serializer),
         }
     }
-}
-
-fn is_false(value: &bool) -> bool {
-    !value
 }
 
 /// Overall validation outcome for a manifest store, as c2pa-rs's
@@ -983,6 +987,7 @@ fn is_informational_bucket(status: &contentauth_c2pa_reader::ValidationStatus) -
             status.code.as_str(),
             status_code::SIGNING_CREDENTIAL_OCSP_SKIPPED
                 | status_code::INGREDIENT_PROVENANCE_UNKNOWN
+                | status_code::ASSERTION_DATAHASH_ADDITIONAL_EXCLUSIONS
                 | status_code::SIGNING_CREDENTIAL_OCSP_INACCESSIBLE
                 | status_code::SIGNING_CREDENTIAL_OCSP_UNKNOWN
                 | status_code::TIMESTAMP_UNTRUSTED
@@ -1067,8 +1072,12 @@ impl Manifest {
                             .any(|resource| resource.label == assertion.label)
                 })
                 .map(|assertion| ManifestAssertion {
-                    label: assertion.label.clone(),
+                    label: match assertion.label.as_str() {
+                        "c2pa.actions" => "c2pa.actions.v2".into(),
+                        _ => assertion.label.clone(),
+                    },
                     created: assertion.created,
+                    json_data: assertion.json_data.clone(),
                     data: manifest
                         .identity_assertions
                         .iter()
@@ -1758,6 +1767,7 @@ mod tests {
         manifest.assertions.push(ManifestAssertion {
             label: "test.numeric".into(),
             created: true,
+            json_data: None,
             data: Some(Value::Map(BTreeMap::from([
                 (Value::Text("bytes".into()), Value::Bytes(vec![1, 2, 3])),
                 (
@@ -2067,6 +2077,7 @@ mod tests {
                 label: "c2pa.hash.data".to_string(),
                 created: false,
                 data: None,
+                json_data: None,
             }],
         };
 
@@ -2088,6 +2099,7 @@ mod tests {
         let assertion = ManifestAssertion {
             label: "cawg.identity".to_string(),
             created: false,
+            json_data: None,
             data: Some(c2pa_cbor::Value::Bytes(vec![1, 2, 255])),
         };
 
@@ -2096,10 +2108,36 @@ mod tests {
     }
 
     #[test]
+    fn json_assertions_preserve_json_types_and_unsigned_numbers(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let data = serde_json::json!({
+            "mixed": [null, true, -1, 1.25, "text", {"nested": []}],
+            "large": u64::MAX,
+        });
+        let assertion = ManifestAssertion {
+            label: "example.json".into(),
+            created: true,
+            data: None,
+            json_data: Some(data.clone()),
+        };
+        assert_eq!(
+            serde_json::to_value(assertion)?,
+            serde_json::json!({
+                "label": "example.json",
+                "created": true,
+                "data": data,
+                "kind": "Json",
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
     fn assertion_cbor_with_non_text_map_keys_fails_serialization() {
         let assertion = ManifestAssertion {
             label: "custom.assertion".to_string(),
             created: false,
+            json_data: None,
             data: Some(c2pa_cbor::Value::Map(BTreeMap::from([(
                 c2pa_cbor::Value::Integer(1),
                 c2pa_cbor::Value::Null,

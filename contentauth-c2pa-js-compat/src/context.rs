@@ -51,9 +51,10 @@
 //!
 //! The older `trust.trust_anchors` and `trust.user_anchors` strings, which
 //! c2pa-rs 0.91 deprecated (and plans to remove in 0.92), are still
-//! understood, exactly as c2pa-rs still does: it folds each into
-//! `anchors` as a `manifest` list, so they feed
-//! [`ReadSettings::trust_anchors`] only. `ocsp_fetch` maps to
+//! understood, exactly as c2pa-rs still does: they become named manifest
+//! lists, `manifest_system_anchors` and `manifest_user_anchors`, respectively.
+//! Their provenance is reported only if an anchor actually establishes trust.
+//! `ocsp_fetch` maps to
 //! [`ReadSettings::check_ocsp`], and — this being a compatibility layer —
 //! takes c2pa-rs's own default of `false` when absent, not this
 //! workspace's engine default of `true`: the same `contextJson` (or none
@@ -133,12 +134,26 @@ impl Context {
         let bad =
             |key: &str, err: String| C2paError::BadParam(format!("settings JSON: {key}: {err}"));
 
-        for (key, pem) in [
-            ("trust.trust_anchors", doc.trust.trust_anchors),
-            ("trust.user_anchors", doc.trust.user_anchors),
+        for (key, pem, uri) in [
+            (
+                "trust.trust_anchors",
+                doc.trust.trust_anchors,
+                "manifest_system_anchors",
+            ),
+            (
+                "trust.user_anchors",
+                doc.trust.user_anchors,
+                "manifest_user_anchors",
+            ),
         ] {
             if let Some(pem) = pem {
-                signing_anchors.extend(pem_certificates(&pem).map_err(|err| bad(key, err))?);
+                let anchors = pem_certificates(&pem).map_err(|err| bad(key, err))?;
+                if !anchors.is_empty() {
+                    signing_lists.push(TrustList {
+                        uri: uri.into(),
+                        anchors,
+                    });
+                }
             }
         }
 
@@ -365,9 +380,19 @@ mod tests {
         .to_string();
 
         let context = Context::from_json(&json).expect("parses");
+        assert!(context.settings().trust_anchors.is_empty());
         assert_eq!(
-            context.settings().trust_anchors,
-            vec![DER.to_vec(), other.to_vec()]
+            context.settings().trust_lists,
+            vec![
+                TrustList {
+                    uri: "manifest_system_anchors".into(),
+                    anchors: vec![DER.to_vec()],
+                },
+                TrustList {
+                    uri: "manifest_user_anchors".into(),
+                    anchors: vec![other.to_vec()],
+                },
+            ]
         );
         assert!(context.settings().timestamp_trust_anchors.is_empty());
     }

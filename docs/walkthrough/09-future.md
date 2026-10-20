@@ -21,6 +21,7 @@ flowchart LR
         d10["M3 slices: bounded browser OCSP<br/>TIFF/BigTIFF browser read/sign"]
         d11["M3 slice: explicit module Worker<br/>callbacks, cleanup, network, CSP proof"]
         d12["M3 feature slices: resources / reports / trust<br/>ingredient metadata / Context parity, 17/249 upstream"]
+        d13["Adobe-shaped read corpus: Node + browser<br/>JPEG/TIFF reports, resources, explicit trust"]
     end
     subgraph next["Next"]
         direction TB
@@ -79,6 +80,15 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 
 See the [JS migration implementation and proof plan](../js-migration-plan.md)
 for the staged browser/Node parity work and compatibility-shim rollout.
+
+* **Adobe-shaped facade:** the [read corpus](../../adobe-js-state-machine/README.md)
+  covers seven JPEG/TIFF/unsigned inputs and nineteen fixture/policy cases through
+  Node and inline/module-Worker browser hosts, with explicit disabled/untrusted/trusted
+  policies, complete-report equality and exact thumbnail bytes.
+  Eighteen cases match exactly; the older timestamped case explicitly retains
+  stricter TSA-trust diagnostics instead of synthesizing legacy trust.
+  Default/online trust policy, AI/model helpers, per-read settings, a wider field corpus,
+  signing and service APIs remain future slices; this is not full SDK parity.
 
 * **`Builder` surface parity** for the c2pa-rs shape beyond the baseline
   case; `from_stream` and other constructors.

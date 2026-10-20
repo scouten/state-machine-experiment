@@ -26,6 +26,11 @@ For the browser migration experiment, see
 read/sign prototype with real Wasm, a pinned c2pa-js oracle, and proofs in
 Chromium, Firefox, and WebKit. It is not yet a full replacement SDK.
 
+For the next wrapper layer, see
+[`adobe-js-state-machine`](adobe-js-state-machine/README.md): a read-only
+Adobe-shaped Node/browser facade with a JPEG/TIFF read corpus, explicit trust
+policies, complete-report and resource parity. This is not full SDK migration.
+
 New here? [`docs/walkthrough`](docs/walkthrough/README.md) is a guided tour —
 how this differs from c2pa-rs and its bindings, the architecture, and
 where it could go next — written in Markdown with Mermaid diagrams.

@@ -45,6 +45,8 @@ c2pa_cbor = "0.77.4"
 # The `Visitor`/`MapAccess` traits `identity/cbor.rs` uses to walk a map
 # with `c2pa_cbor`'s own decoder. Already in the tree through `c2pa_cbor`.
 serde = "1"
+# JSON assertion payloads remain JSON rather than being coerced through CBOR.
+serde_json = "1"
 # Zero-copy JUMBF parser. This crate only reads, so only the parser half of
 # the crate is used.
 jumbf = "0.7.0"

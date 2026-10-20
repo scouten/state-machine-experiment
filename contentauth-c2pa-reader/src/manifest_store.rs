@@ -93,9 +93,9 @@ pub struct Manifest {
     /// hash — is a validation concern, not a reading one.
     pub assertion_labels: Vec<String>,
 
-    /// Decoded CBOR assertion payloads, in assertion-store order.
+    /// Assertion payloads, in assertion-store order.
     ///
-    /// Assertions using another encoding or malformed CBOR remain visible
+    /// Assertions using an unsupported encoding or malformed data remain visible
     /// in [`Self::assertion_labels`] but have no decoded value here.
     pub assertions: Vec<Assertion>,
 
@@ -134,7 +134,7 @@ pub struct Manifest {
     pub identity_assertions: Vec<IdentityAssertion>,
 }
 
-/// One assertion whose CBOR payload was decoded.
+/// One assertion in the assertion store.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct Assertion {
@@ -146,6 +146,10 @@ pub struct Assertion {
 
     /// Decoded CBOR payload.
     pub data: Option<c2pa_cbor::Value>,
+
+    /// Decoded JSON payload, kept separate from CBOR to preserve JSON numbers
+    /// and avoid interpreting JSON as a supported CBOR assertion.
+    pub json_data: Option<serde_json::Value>,
 }
 
 impl Assertion {
@@ -437,10 +441,13 @@ fn read_manifest(
                     });
                     let data = content(assertion, CBOR)
                         .and_then(|bytes| c2pa_cbor::from_slice(bytes).ok());
+                    let json_data = content(assertion, BoxType(*b"json"))
+                        .and_then(|bytes| serde_json::from_slice(bytes).ok());
                     Some(Assertion {
                         label,
                         created,
                         data,
+                        json_data,
                     })
                 })
                 .collect()
@@ -634,9 +641,66 @@ mod tests {
                 label: label.into(),
                 created: false,
                 data: None,
+                json_data: None,
             };
             assert_eq!(assertion.ingredient_version(), version, "{label}");
         }
+    }
+
+    #[test]
+    fn json_assertions_preserve_types_and_do_not_become_cbor_assertions() {
+        let payload = serde_json::json!({
+            "mixed": [null, true, -1, 1.25, "text", {"nested": []}],
+            "large": u64::MAX,
+        });
+        let assertion = superbox(
+            type_uuid(*b"json"),
+            "example.json",
+            &[boxed(b"json", &serde_json::to_vec(&payload).unwrap())],
+        );
+        let claim =
+            claim_box_with_assertions("json.jpg", vec![hashed_uri("example.json", &assertion)]);
+        let bytes = manifest_store(&[manifest_with_claim("urn:uuid:json", &[assertion], claim)]);
+        let parsed = parse(&bytes).unwrap();
+        let assertion = &parsed.manifests[0].assertions[0];
+        assert_eq!(assertion.json_data.as_ref(), Some(&payload));
+        assert!(assertion.data.is_none());
+        assert!(parsed
+            .statuses
+            .iter()
+            .any(|status| status.code == status_code::ASSERTION_HASHEDURI_MATCH));
+
+        let mut tampered = bytes;
+        let offset = tampered
+            .windows(b"nested".len())
+            .position(|bytes| bytes == b"nested")
+            .unwrap();
+        tampered[offset] = b'N';
+        let parsed = parse(&tampered).unwrap();
+        assert!(parsed.manifests[0].assertions[0].json_data.is_some());
+        assert!(parsed
+            .statuses
+            .iter()
+            .any(|status| status.code == status_code::ASSERTION_HASHEDURI_MISMATCH));
+    }
+
+    #[test]
+    fn malformed_json_assertions_keep_their_labels_without_a_payload() {
+        let assertion = superbox(
+            type_uuid(*b"json"),
+            "example.invalid-json",
+            &[boxed(b"json", b"{")],
+        );
+        let bytes = manifest_store(&[manifest_with_claim(
+            "urn:uuid:json",
+            &[assertion],
+            claim_box("json.jpg"),
+        )]);
+        let parsed = parse(&bytes).unwrap();
+        let assertion = &parsed.manifests[0].assertions[0];
+        assert_eq!(assertion.label, "example.invalid-json");
+        assert!(assertion.json_data.is_none());
+        assert!(assertion.data.is_none());
     }
 
     #[test]
