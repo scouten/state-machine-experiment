@@ -101,21 +101,79 @@ export function memoryOutput() {
   };
 }
 
+export const algorithms = new Set(["es256", "es384", "es512", "ps256", "ps384", "ps512", "ed25519"]);
+const rawSignatureLength = { es256: 64, es384: 96, es512: 132, ed25519: 64 };
+
+// RSA-PSS signature length depends on the key, so only fixed-width algorithms are checked.
+export function checkSignature(alg, value) {
+  const expected = rawSignatureLength[alg];
+  if (!(value instanceof Uint8Array) || (expected !== undefined && value.length !== expected))
+    throw new TypeError(expected === undefined ? `${alg} signer must return signature bytes`
+      : `${alg} signer must return ${expected} raw signature bytes`);
+  if (value.length === 0) throw new TypeError(`${alg} signer returned no bytes`);
+}
+
+const timestampLimit = 1024 * 1024;
+
+const timestampDeadlineMs = 30_000;
+
+// Worker-side default for a timestamp request; the host only ever POSTs. One
+// deadline covers connecting and reading the body, and the body is cancelled as
+// soon as it exceeds the size limit, so a faulty authority can neither stall
+// the Worker's queue nor exhaust its memory.
+export async function postTimestamp({ url, request }, deadlineMs = timestampDeadlineMs) {
+  const target = new URL(url);
+  if (target.protocol !== "http:" && target.protocol !== "https:")
+    throw new Error("timestamp authority URL must be http or https");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), deadlineMs);
+  try {
+    const response = await fetch(target, { method: "POST", redirect: "error", signal: controller.signal,
+      headers: { "content-type": "application/timestamp-query" }, body: request });
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new Error(`the timestamp authority answered ${response.status}`);
+    }
+    const chunks = [];
+    let length = 0;
+    for await (const chunk of response.body ?? []) {
+      length += chunk.length;
+      if (length > timestampLimit) {
+        controller.abort();
+        throw new Error("the timestamp response is implausibly large");
+      }
+      chunks.push(chunk);
+    }
+    const body = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.length }
+    return body;
+  } catch (error) {
+    if (controller.signal.aborted && !/implausibly/.test(error.message))
+      throw new Error(`the timestamp authority did not answer within ${deadlineMs} ms`);
+    throw error;
+  } finally { clearTimeout(timer) }
+}
+
 /**
  * Runs a build-and-sign session to completion. Requests are answered
  * sequentially: the builder's two passes depend on earlier writes. Source and
  * output are addressed by stream name; the output defaults to memory.
- * @param {{createBuild(definition: string, certs: Uint8Array[]): object}} adapter
+ * @param {{createBuild(definition: string, certs: Uint8Array[], alg: string): object}} adapter
  * @param {Uint8Array|Blob|object} input Asset to sign.
  * @param {string} definition JSON manifest definition.
  * @param {Uint8Array[]} certs DER certificate chain, leaf first.
  * @param {(request: {id: number, alg: string, data: Uint8Array}) => Promise<Uint8Array>} sign
- *   Produces a raw ES256 signature over `request.data`.
+ *   Produces the raw signature over `request.data` for `alg`.
  * @param {object} [output] Output sink; defaults to {@link memoryOutput}.
+ * @param {string} [alg] Signing algorithm; one of {@link algorithms}.
+ * @param {(request: {url: string, request: Uint8Array}) => Promise<Uint8Array>} [timestamp]
+ *   Answers a timestamp request; defaults to {@link postTimestamp}.
  * @returns {Promise<object>} Builder report plus the signed `asset` and `stats`.
  */
-export async function build(adapter, input, definition, certs, sign, output = memoryOutput()) {
-  const session = adapter.createBuild(definition, certs);
+export async function build(adapter, input, definition, certs, sign, output = memoryOutput(),
+  alg = "es256", timestamp = postTimestamp) {
+  const session = adapter.createBuild(definition, certs, alg);
   const stats = { reads: 0, bytes: 0, maxSourceReadBytes: 0, writes: 0, writtenBytes: 0, signs: 0, advances: 0 };
   function stream(name) {
     if (name === "source") return input;
@@ -153,11 +211,15 @@ export async function build(adapter, input, definition, certs, sign, output = me
             break;
           }
           case "sign": {
-            // The session fixed its algorithm; this proof host signs ES256 only.
-            if (request.alg !== "es256") throw new Error(`unsupported signing algorithm: ${request.alg}`);
+            if (request.alg !== alg) throw new Error(`session asked for ${request.alg}, signer is ${alg}`);
             stats.signs++;
             const signature = await sign(request);
             session.fulfill(request.id, "signature", signature);
+            break;
+          }
+          case "timestamp": {
+            stats.timestamps = (stats.timestamps ?? 0) + 1;
+            session.fulfill(request.id, "timestampResponse", await timestamp(request));
             break;
           }
           default: throw new Error(`unsupported host request: ${request.kind}`);

@@ -71,6 +71,7 @@ jobs:
         working-directory: js
         run: |
           npm test
+          npm run test:matrix
           npm run test:browser
 
   tests:

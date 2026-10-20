@@ -24,6 +24,10 @@ flowchart TB
   `rs-compat` and compares. Both directions for TIFF — c2pa-rs-signed read
   here, and signed here read by c2pa-rs. This is what exposed the
   exclusions bug.
+* **Capability matrix.** `js/test/matrix.test.mjs` probes each capability
+  the Rust workspace implements through the JavaScript entry points and pins
+  today's outcome, so a gap cannot open or close silently. See the
+  [JS README](../../js/README.md#capability-matrix).
 * **Corpus runner.** `compare_corpus` walks a directory (e.g. a checkout of
   c2pa-org's `public-testfiles`) and reports every disagreement. It has not
   yet been pointed at a large corpus — see [future](09-future.md).

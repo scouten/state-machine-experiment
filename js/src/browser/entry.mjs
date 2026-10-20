@@ -33,7 +33,9 @@ serve({
    * crossing the Wasm boundary (advance, JSON parse, payload copy-out) for
    * the transport experiments; it is returned with the report.
    */
-  createBuild(definition, certs) {
+  createBuild(definition, certs, alg = "es256") {
+    // The Wasm constructor fixes the algorithm; fail precisely rather than let the session disagree.
+    if (alg !== "es256") throw new Error(`the Wasm binding is es256-only; ${alg} is not exposed`);
     const session = new BuildSession(definition, JSON.stringify(certs.map((cert) => Array.from(cert))));
     const boundary = { transport: binary ? "binary" : "json", wasmAdvanceMs: 0, parseMs: 0,
       payloadMs: 0, metadataChars: 0, writePayloadBytes: 0, writes: 0 };
@@ -66,6 +68,7 @@ serve({
         else if (kind === "length") session.length(id, value);
         else if (kind === "written") session.written(id);
         else if (kind === "signature") session.signature(id, value);
+        else if (kind === "timestampResponse") throw new Error("the Wasm binding does not expose timestamp replies");
         else throw new Error(`unsupported build reply: ${kind}`);
       },
       finish() {

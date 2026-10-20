@@ -385,6 +385,7 @@ npm run build:bindings
 npm run fixtures
 npm test
 npm run test:browser
+npm run test:matrix   # capability matrix, see below
 ```
 
 The independent Neon and Wasm workspaces are not built by root `cargo test`.
@@ -396,6 +397,16 @@ It also records the direct signer's exact COSE input/algorithm and exclusion
 ranges, and exports the repository's public TEST ONLY key in PKCS#8 form for the
 application-side WebCrypto test signer. Never substitute production credentials
 in these generated fixtures.
+
+### Capability matrix
+
+`npm run test:matrix` ([`test/matrix.test.mjs`](test/matrix.test.mjs)) probes
+every capability the Rust workspace implements through the Node and browser
+entry points. Each probe asserts today's observed outcome, so the suite fails
+when a gap opens or closes without its report
+([`experiments/2026-10-17-vertical-slice-matrix.md`](experiments/2026-10-17-vertical-slice-matrix.md))
+being updated. Gaps are classified by what closes them: JavaScript host code,
+the Neon/Wasm glue, or the Rust bridge.
 
 ### SDK-to-SDK benchmark
 
