@@ -62,6 +62,9 @@ builds for Wasm unmodified**. Exempt: `rs-compat` and `rs-compat-sign`,
 which deliberately own the workspace's only network dependencies. The `web`
 modules of the alternative Rust async hosts are only *compiled*, not run.
 Browser CI runs the preferred synchronous Wasm bridge with its JavaScript host,
-not those older `web` modules.
+not those older `web` modules. Its standalone locked Wasm workspace also has
+native request-encoding tests, Clippy and formatting checks, but those checks
+do not run in a browser. The SDK-to-SDK benchmark is a local command requiring
+an existing sibling SDK build, not a dependency of PR CI.
 
 **Next:** [Findings →](08-findings.md)

@@ -21,7 +21,7 @@ use contentauth_c2pa_file_builder::{
 use contentauth_c2pa_format_jpeg::JpegFormat;
 use contentauth_c2pa_primitives::{
     tsa::{timestamp_request, timestamp_token},
-    HostError, SigningAlg,
+    Bytes, HostError, SigningAlg,
 };
 use contentauth_c2pa_sign_baseline::Definition;
 use contentauth_state_machine::{RequestId, Session};
@@ -99,8 +99,8 @@ pub enum PendingRequest {
         stream: Stream,
         /// Offset to write at.
         offset: u64,
-        /// The bytes.
-        bytes: Vec<u8>,
+        /// Shared immutable bytes, cloned without copying the payload.
+        bytes: Bytes,
     },
 
     /// Sign `data` (a COSE `Sig_structure`) with `alg` and answer with
@@ -182,7 +182,7 @@ pub enum Step {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SignReport {
     /// The manifest store's bytes, as embedded.
-    pub manifest: Vec<u8>,
+    pub manifest: Bytes,
     /// The hard binding's exclusions, ascending: the container structure
     /// carrying the manifest, framing included, and anything else the
     /// format's specification excludes (TIFF excludes a length field apart
@@ -404,7 +404,7 @@ fn engine_reply(reply: Reply) -> Result<FileBuilderReply, Error> {
             Ok(token) => FileBuilderReply::Timestamp(token),
             Err(err) => FileBuilderReply::Failed(err),
         },
-        Reply::Bytes(bytes) => FileBuilderReply::Bytes(bytes),
+        Reply::Bytes(bytes) => FileBuilderReply::Bytes(bytes.into()),
         Reply::Length(len) => FileBuilderReply::Length(len),
         Reply::Written => FileBuilderReply::Written,
         Reply::Signature(bytes) => FileBuilderReply::Signature(bytes),
@@ -451,7 +451,7 @@ mod tests {
                 &FileBuilderRequest::Write {
                     stream: out,
                     offset: 9,
-                    bytes: vec![1, 2]
+                    bytes: vec![1, 2].into()
                 },
                 None
             )
@@ -460,7 +460,7 @@ mod tests {
                 id: 3,
                 stream: Stream::Output,
                 offset: 9,
-                bytes: vec![1, 2]
+                bytes: vec![1, 2].into()
             }
         );
         assert_eq!(
@@ -494,6 +494,35 @@ mod tests {
             ),
             Err(Error::Unsupported(_))
         ));
+    }
+
+    #[test]
+    fn write_requests_share_the_engines_buffer_even_when_cloned() {
+        let bytes = Bytes::from(vec![0x42; 128 * 1024]);
+        let request = FileBuilderRequest::Write {
+            stream: Engine::OUTPUT_STREAM,
+            offset: 9,
+            bytes: bytes.clone(),
+        };
+        let pending = describe(3, &request, None).unwrap();
+        for request in [&pending, &pending.clone()] {
+            let PendingRequest::Write { bytes: shared, .. } = request else {
+                panic!("expected a write");
+            };
+            assert_eq!(shared.as_ptr(), bytes.as_ptr());
+            assert_eq!(shared.len(), bytes.len());
+        }
+    }
+
+    #[test]
+    fn asset_read_replies_transfer_the_hosts_allocation_to_the_engine() {
+        let bytes = vec![0x42; 128 * 1024];
+        let ptr = bytes.as_ptr();
+        let FileBuilderReply::Bytes(shared) = engine_reply(Reply::Bytes(bytes)).unwrap() else {
+            panic!("expected bytes");
+        };
+        assert_eq!(shared.as_ptr(), ptr);
+        assert_eq!(shared.len(), 128 * 1024);
     }
 
     fn timestamp_engine_request() -> FileBuilderRequest {
@@ -565,7 +594,7 @@ mod tests {
     #[test]
     fn replies_map_to_the_engines_kind() {
         assert!(
-            matches!(engine_reply(Reply::Bytes(vec![1])).unwrap(), FileBuilderReply::Bytes(b) if b == [1])
+            matches!(engine_reply(Reply::Bytes(vec![1])).unwrap(), FileBuilderReply::Bytes(b) if b[..] == [1])
         );
         assert!(matches!(
             engine_reply(Reply::Length(3)).unwrap(),
@@ -675,7 +704,7 @@ mod tests {
                 id: 9,
                 stream: s,
                 offset: 0,
-                bytes: vec![],
+                bytes: Bytes::new(),
             },
             PendingRequest::Sign {
                 id: 10,

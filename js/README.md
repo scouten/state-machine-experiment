@@ -67,6 +67,11 @@ read bridge, and its [signing boundary](../contentauth-c2pa-wasm/src/build.rs)
 consumes the build bridge. Both remain synchronous; neither duplicates C2PA
 logic or adds a Rust async runtime.
 
+The bridge preserves the engine's shared `Bytes` for bulk writes and completed
+build manifests instead of copying them into vectors. Wasm's binary write path
+retains each shared buffer until the host consumes it; copying into
+JavaScript-owned memory still happens at the language boundary.
+
 Wasm serializes request metadata as JSON but passes bulk build write payloads
 as binary byte arrays through wasm-bindgen. Each payload is consumed once
 before the next advance; byte storage remains owned/copied, not an unsafe view
@@ -123,9 +128,10 @@ compatibility facades separate from the reusable session protocol; existing
 Rust hosts can already use the underlying typed sessions directly.
 
 The JavaScript experiments prove the two JS consumers. The subsequently merged
-[C++ reader binding](../contentauth-c2pa-cpp/) also drives the neutral read bridge
-through its own C ABI and hosts, not this JS package. Python and a universal ABI
-remain unimplemented; no further abstraction is required for those possibilities.
+[C++ binding](../contentauth-c2pa-cpp/) also drives the neutral read and build
+bridges through its own C ABI and hosts, not this JS package. Python and a
+universal ABI remain unimplemented; no further abstraction is required for
+those possibilities.
 
 The following is the current ownership model. The dotted Python path is a
 possible, unproven additional consumer.
@@ -135,7 +141,7 @@ flowchart TB
     JS["Shared JS host<br/>browser and Node Workers"]
     Wasm["Browser binding<br/>wasm-bindgen"]
     Neon["Node binding<br/>Neon"]
-    CPP["C++ reader hosts + C ABI adapter<br/>contentauth-c2pa-cpp"]
+    CPP["C++ read/signing hosts + C ABI adapter<br/>contentauth-c2pa-cpp"]
     Python["Possible Python host + extension adapter<br/>not implemented or tested"]
     Bridge["ReadSessionBridge + BuildSessionBridge<br/>contentauth-c2pa-session-bridge<br/>plain-data requests / replies"]
     File["FileReadSession / FileBuilderSession<br/>typed Rust sessions"]
@@ -369,7 +375,7 @@ measurement:
 The local comparison reduced median large-build caller duration by about
 6.7–8.5 times in all browsers; binary is retained as the default. Small builds
 were too short/timer-quantized for strong performance claims. See
-[paired measurements and caveats](findings.md#binary-versus-json-write-payload-comparison).
+[paired measurements and caveats](findings.md#supporting-transport-experiment-binary-versus-json).
 
 ### Performance interpretation
 

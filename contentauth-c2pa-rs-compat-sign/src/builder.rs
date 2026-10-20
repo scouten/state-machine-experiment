@@ -70,7 +70,7 @@ impl Builder {
             Some(&mut |alg, digest| timestamp(signer, tsa_url.as_deref(), alg, digest)),
             None,
         )?;
-        Ok(report.manifest)
+        Ok(report.manifest.into())
     }
 
     /// Signs the file at `source`, publishing the result at `dest`
@@ -104,7 +104,7 @@ impl Builder {
             Some(&mut |alg, digest| timestamp(signer, tsa_url.as_deref(), alg, digest)),
             None,
         )?;
-        Ok(manifest)
+        Ok(manifest.into())
     }
 
     /// The engine's settings, and the time-stamp authority's URL if the

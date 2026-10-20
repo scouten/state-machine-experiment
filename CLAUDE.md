@@ -201,7 +201,8 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   are proven; whole-asset copies, limited validation and unsupported network/
   timestamp requests remain explicit. The Wasm crate has its own workspace and
   pins wasm-bindgen to its CLI schema. CI builds actual bindings and runs Node
-  and Chromium/Firefox/WebKit contracts.
+  and Chromium/Firefox/WebKit contracts. The local SDK comparison exercises
+  public read/sign APIs against a sibling c2pa-js build; it is not part of CI.
   The older `js-compat`/`js-compat-sign` Rust async hosts remain alternatives,
   not dependencies of the shared JS host. Retain their tests and the broader
   addon file/OCSP/timestamp behavior until compatibility facades preserve it.
@@ -216,17 +217,19 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   static library behind a small C ABI (`src/lib.rs`, `include/contentauth_c2pa_sm.h`;
   the one crate here allowed `unsafe`, being the FFI boundary; symbols are
   `c2pa_sm_*` to coexist with c2pa-c) wrapping `contentauth-c2pa-session-bridge`'s
-  flat `read::ReadSessionBridge`, plus C++ in `include/contentauth/` (header-only apart
-  from the compiled signing implementation and thread pools in `cpp/src/`):
-  a C++17 core (`Session`, `Reader`, blocking `read()`), C++17 thread-based
+  flat `read::ReadSessionBridge` and `build::BuildSessionBridge`, plus C++ in
+  `include/contentauth/` (header-only apart from the compiled signing
+  implementation and thread pools in `cpp/src/`): a C++17 core (`Session`,
+  `Reader`, `BuildSession`, blocking read/signing hosts), C++17 thread-based
   drivers (`Reading`/`Mailbox`, `read_parallel`, `read_future`,
   `PooledHost` over the `ThreadPool` interface, with a portable
   `make_simple_thread_pool` and an Apple GCD `make_apple_thread_pool`) and
   C++20 coroutines (`co_read`, `spawn`).
   Errors are values, not thread-local, so a session can move between
   threads. Built with CMake (`cpp/`, `CMakeLists.txt`); its README holds the
-  review of c2pa-cpp's API and the rationale for every departure. Read side
-  only. CI's `cpp-binding` job runs the C++ tests with coverage and under
+  review of c2pa-cpp's API and the rationale for every departure. Reading and
+  signing both have blocking, pooled/future and coroutine drivers, with atomic
+  file signing on POSIX. CI's `cpp-binding` job runs the C++ tests with coverage and under
   ASan/TSan; a C++ edit must be checked with
   `cmake -S contentauth-c2pa-cpp -B contentauth-c2pa-cpp/build && cmake --build contentauth-c2pa-cpp/build && ctest --test-dir contentauth-c2pa-cpp/build`.
 - **`contentauth-c2pa-sign-baseline`** — the *baseline signing case*

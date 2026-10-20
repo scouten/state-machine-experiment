@@ -98,7 +98,7 @@ pub use contentauth_c2pa_builder::{
     IdentitySettings, SignPurpose, SigningAlg, TimestampSettings,
 };
 pub use contentauth_c2pa_format::FormatHandler;
-pub use contentauth_c2pa_primitives::HostError;
+pub use contentauth_c2pa_primitives::{Bytes, HostError};
 pub use error::Error;
 pub use session::{FileBuilderReply, FileBuilderReport, FileBuilderRequest, FileBuilderSession};
 
