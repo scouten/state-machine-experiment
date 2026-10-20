@@ -28,17 +28,13 @@ web = [
 ]
 
 [dependencies]
+contentauth-c2pa-session-bridge = { path = "../contentauth-c2pa-session-bridge" }
 # The sans-I/O session this crate's async host drives (`src/drive.rs`),
 # and its `FileReadRequest`/`FileReadReply` vocabulary.
 contentauth-c2pa-file-reader = { path = "../contentauth-c2pa-file-reader" }
 
-# `ReadReport`, `Manifest`, `ValidationState` — the read-side result types
-# `src/manifest_store.rs` re-serializes into c2pa-wasm's JSON shapes.
+# Read-side workflow types used by the async host and its public API.
 contentauth-c2pa-reader = { path = "../contentauth-c2pa-reader" }
-
-# The only `FormatHandler` wired up today; see `src/format.rs` for where a
-# second one would plug in.
-contentauth-c2pa-format-jpeg = { path = "../contentauth-c2pa-format-jpeg" }
 
 # `ByteRange` and `HostError`: the vocabulary this crate's `Blob` and
 # `Platform` traits speak, shared with every other host in this workspace.
@@ -48,16 +44,11 @@ contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
 # `FileReadSession` through.
 contentauth-state-machine = { path = "../contentauth-state-machine" }
 
-# Decodes the PEM-armored trust anchors a c2pa-rs-style settings JSON
-# carries (`src/context.rs`); the same `base64` line already in the tree
-# via `contentauth-c2pa-rs-compat`'s `reqwest`.
-base64 = "0.22"
 # `Reader::from_blob`'s `context_json` argument is c2pa-rs's own settings
 # JSON; `Reader::json`/`manifest_store` reproduce c2pa-wasm's JSON-string
 # and serializable-object contracts.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-thiserror = "2.0.20"
 
 # See the `web` feature above. Declared for the browser target only, so
 # `cargo check --target wasm32-wasip2` and every native build never see
@@ -70,6 +61,8 @@ wasm-bindgen-futures = { version = "0.4", optional = true }
 web-sys = { version = "0.3", features = ["Blob"], optional = true }
 
 [dev-dependencies]
+base64 = "0.22"
+contentauth-c2pa-format-jpeg = { path = "../contentauth-c2pa-format-jpeg" }
 # Builds and signs a manifest to embed in this crate's own round-trip test
 # fixture, exactly as the sibling crates' own tests do.
 contentauth-c2pa-builder = { path = "../contentauth-c2pa-builder" }

@@ -11,7 +11,7 @@
 // specific language governing permissions and limitations under
 // each license.
 
-//! [`NodeBuildSession`]: the synchronous surface Node drives.
+//! [`BuildSessionBridge`]: the synchronous surface a language host drives.
 
 use std::collections::HashMap;
 
@@ -19,7 +19,6 @@ use contentauth_c2pa_file_builder::{
     FileBuilderReply, FileBuilderRequest, FileBuilderSession, SignPurpose,
 };
 use contentauth_c2pa_format_jpeg::JpegFormat;
-use contentauth_c2pa_js_compat::{for_format, C2paError};
 use contentauth_c2pa_primitives::{
     tsa::{timestamp_request, timestamp_token},
     HostError, SigningAlg,
@@ -27,7 +26,11 @@ use contentauth_c2pa_primitives::{
 use contentauth_c2pa_sign_baseline::Definition;
 use contentauth_state_machine::{RequestId, Session};
 
-use crate::Error;
+use crate::compat::{for_format, C2paError};
+
+mod error;
+
+pub use error::Error;
 
 type Engine = FileBuilderSession<JpegFormat>;
 
@@ -62,14 +65,14 @@ impl Stream {
 
 /// One thing the session needs its host to do, as plain data.
 ///
-/// `id` is what to quote back to [`NodeBuildSession::fulfill`].
+/// `id` is what to quote back to [`BuildSessionBridge::fulfill`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum PendingRequest {
     /// Read exactly `len` bytes of `stream` starting at `start`.
     /// Answer with [`Reply::Bytes`].
     Read {
-        /// The handle to pass to [`NodeBuildSession::fulfill`].
+        /// The handle to pass to [`BuildSessionBridge::fulfill`].
         id: u64,
         /// Which asset.
         stream: Stream,
@@ -81,7 +84,7 @@ pub enum PendingRequest {
 
     /// Report the total length of `stream`. Answer with [`Reply::Length`].
     Length {
-        /// The handle to pass to [`NodeBuildSession::fulfill`].
+        /// The handle to pass to [`BuildSessionBridge::fulfill`].
         id: u64,
         /// Which asset.
         stream: Stream,
@@ -90,7 +93,7 @@ pub enum PendingRequest {
     /// Write `bytes` at `offset` of `stream` (always the output today).
     /// Answer with [`Reply::Written`] once a later read would see them.
     Write {
-        /// The handle to pass to [`NodeBuildSession::fulfill`].
+        /// The handle to pass to [`BuildSessionBridge::fulfill`].
         id: u64,
         /// Which asset.
         stream: Stream,
@@ -103,7 +106,7 @@ pub enum PendingRequest {
     /// Sign `data` (a COSE `Sig_structure`) with `alg` and answer with
     /// [`Reply::Signature`]: for ECDSA the raw fixed-width `r || s`, not DER.
     Sign {
-        /// The handle to pass to [`NodeBuildSession::fulfill`].
+        /// The handle to pass to [`BuildSessionBridge::fulfill`].
         id: u64,
         /// The algorithm, lower-case: `"es256"`, `"ps256"`, `"ed25519"`...
         alg: &'static str,
@@ -120,7 +123,7 @@ pub enum PendingRequest {
     /// no RFC 3161 knowledge — only an HTTP client. `url` is the
     /// definition's `tsa_url`.
     Timestamp {
-        /// The handle to pass to [`NodeBuildSession::fulfill`].
+        /// The handle to pass to [`BuildSessionBridge::fulfill`].
         id: u64,
         /// The authority's URL (`http` or `https`).
         url: String,
@@ -130,7 +133,7 @@ pub enum PendingRequest {
 }
 
 impl PendingRequest {
-    /// The handle to pass to [`NodeBuildSession::fulfill`].
+    /// The handle to pass to [`BuildSessionBridge::fulfill`].
     pub fn id(&self) -> u64 {
         match self {
             Self::Read { id, .. }
@@ -162,7 +165,7 @@ pub enum Reply {
     Failed(String),
 }
 
-/// What [`NodeBuildSession::advance`] reports.
+/// What [`BuildSessionBridge::advance`] reports.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Step {
     /// Not finished. The vector holds the requests that are *new* since
@@ -170,7 +173,7 @@ pub enum Step {
     /// requests already reported.
     Pending(Vec<PendingRequest>),
 
-    /// Finished; call [`NodeBuildSession::finish`].
+    /// Finished; call [`BuildSessionBridge::finish`].
     Complete,
 }
 
@@ -200,7 +203,7 @@ pub struct Exclusion {
 ///
 /// A thin, FFI-shaped wrapper over [`FileBuilderSession`]: it never
 /// blocks, never spawns, holds no lock, and never sees a key.
-pub struct NodeBuildSession {
+pub struct BuildSessionBridge {
     inner: Engine,
 
     /// The definition's `tsa_url`: where a timestamp request goes.
@@ -215,7 +218,7 @@ pub struct NodeBuildSession {
     reported: HashMap<RequestId, u64>,
 }
 
-impl NodeBuildSession {
+impl BuildSessionBridge {
     /// Starts signing an asset of type `format` (a MIME type or bare
     /// extension) per `definition_json` (see [`Definition`]), with
     /// algorithm `alg` (`"es256"`, ...) and the DER certificate chain
@@ -417,8 +420,8 @@ mod tests {
 
     use super::*;
 
-    fn session() -> NodeBuildSession {
-        NodeBuildSession::new(BASELINE_DEFINITION, "image/jpeg", "es256", vec![vec![1]]).unwrap()
+    fn session() -> BuildSessionBridge {
+        BuildSessionBridge::new(BASELINE_DEFINITION, "image/jpeg", "es256", vec![vec![1]]).unwrap()
     }
 
     #[test]
@@ -549,12 +552,12 @@ mod tests {
             "\"title\"",
             "\"tsa_url\": \"https://tsa.example/\", \"title\"",
         );
-        let session = NodeBuildSession::new(&json, "image/jpeg", "es256", vec![vec![1]]).unwrap();
+        let session = BuildSessionBridge::new(&json, "image/jpeg", "es256", vec![vec![1]]).unwrap();
         assert_eq!(session.tsa_url.as_deref(), Some("https://tsa.example/"));
 
         let bad = BASELINE_DEFINITION.replace("\"title\"", "\"tsa_url\": \"ftp://x/\", \"title\"");
         assert!(matches!(
-            NodeBuildSession::new(&bad, "image/jpeg", "es256", vec![]),
+            BuildSessionBridge::new(&bad, "image/jpeg", "es256", vec![]),
             Err(Error::Definition(_))
         ));
     }
@@ -600,7 +603,7 @@ mod tests {
     #[test]
     fn arguments_are_checked_before_any_request() {
         let new = |json: &str, format: &str, alg: &str| {
-            NodeBuildSession::new(json, format, alg, vec![])
+            BuildSessionBridge::new(json, format, alg, vec![])
                 .err()
                 .unwrap()
         };

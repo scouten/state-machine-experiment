@@ -11,7 +11,7 @@
 // specific language governing permissions and limitations under
 // each license.
 
-//! `NodeSession` driven by a plain synchronous loop — no runtime, no
+//! `ReadSessionBridge` driven by a plain synchronous loop — no runtime, no
 //! threads, no futures anywhere in this file — and checked against what
 //! the async host in `contentauth-c2pa-js-compat` makes of the same bytes:
 //! same engine, a different (here: trivial) host.
@@ -26,10 +26,10 @@ use std::{
 };
 
 use contentauth_c2pa_js_compat::Platform;
-use contentauth_c2pa_node_compat::{
-    C2paError, Error, NodeSession, PendingRequest, Reader, Reply, Step,
-};
 use contentauth_c2pa_primitives::HostError;
+use contentauth_c2pa_session_bridge::read::{
+    C2paError, Error, PendingRequest, ReadSessionBridge, Reader, Reply, Step,
+};
 
 const C_JPG: &[u8] = include_bytes!("../../contentauth-c2pa-reader/tests/fixtures/C.jpg");
 const NOW: i64 = 1_800_000_000;
@@ -54,7 +54,7 @@ fn answer(asset: &[u8], request: &PendingRequest) -> Reply {
 /// The whole conversation, synchronously. Returns the reader and how many
 /// requests of each kind the engine made.
 fn read(asset: &[u8], format: &str) -> Result<(Option<Reader>, Counts), Error> {
-    let mut session = NodeSession::new(format, None)?;
+    let mut session = ReadSessionBridge::new(format, None)?;
     let mut counts = Counts::default();
     loop {
         match session.advance()? {
@@ -141,7 +141,7 @@ fn several_requests_are_handed_up_at_once_for_the_host_to_overlap() {
 
 #[test]
 fn each_request_is_reported_once_and_replies_may_arrive_in_any_order() {
-    let mut session = NodeSession::new("image/jpeg", None).unwrap();
+    let mut session = ReadSessionBridge::new("image/jpeg", None).unwrap();
     let mut seen = std::collections::HashSet::new();
 
     loop {
@@ -179,7 +179,7 @@ fn an_asset_without_a_manifest_store_finishes_with_no_reader() {
 
 #[test]
 fn a_host_that_cannot_read_the_asset_is_an_error_not_a_hang() {
-    let mut session = NodeSession::new("image/jpeg", None).unwrap();
+    let mut session = ReadSessionBridge::new("image/jpeg", None).unwrap();
     let outcome = loop {
         match session.advance() {
             Err(err) => break Err(err),
@@ -196,7 +196,7 @@ fn a_host_that_cannot_read_the_asset_is_an_error_not_a_hang() {
 
 #[test]
 fn protocol_misuse_is_reported_not_trusted() {
-    let mut session = NodeSession::new("image/jpeg", None).unwrap();
+    let mut session = ReadSessionBridge::new("image/jpeg", None).unwrap();
     assert!(session.fulfill(99, Reply::Length(1)).is_err());
 
     let Step::Pending(requests) = session.advance().unwrap() else {
@@ -216,11 +216,11 @@ fn protocol_misuse_is_reported_not_trusted() {
 #[test]
 fn bad_format_and_bad_settings_fail_before_any_request() {
     assert!(matches!(
-        NodeSession::new("image/png", None),
+        ReadSessionBridge::new("image/png", None),
         Err(Error::C2pa(C2paError::UnsupportedType))
     ));
     assert!(matches!(
-        NodeSession::new("image/jpeg", Some("{not json")),
+        ReadSessionBridge::new("image/jpeg", Some("{not json")),
         Err(Error::C2pa(C2paError::BadParam(_)))
     ));
 }

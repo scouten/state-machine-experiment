@@ -15,7 +15,8 @@
 //! `Reader` class.
 
 use contentauth_c2pa_file_reader::ReadReport;
-use contentauth_c2pa_js_compat::{Manifest, ManifestStore, ValidationState};
+
+use crate::compat::{Manifest, ManifestStore, ValidationState};
 
 /// A validated manifest store, as c2pa-node's `Reader` reports one.
 ///

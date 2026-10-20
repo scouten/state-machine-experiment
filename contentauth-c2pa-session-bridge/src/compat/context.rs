@@ -58,7 +58,7 @@
 //! takes c2pa-rs's own default of `false` when absent, not this
 //! workspace's engine default of `true`: the same `contextJson` (or none
 //! at all) must mean the same thing here as it does to c2pa-wasm, and an
-//! online [`Platform`](crate::Platform) must not start making
+//! online host must not start making
 //! certificate-directed network requests a caller never opted into. A
 //! caller who wants the engine's own default reaches it explicitly, with
 //! `"ocsp_fetch": true` or [`Context::from_settings`].
@@ -88,9 +88,9 @@ use base64::Engine as _;
 use contentauth_c2pa_file_reader::{ReadSettings, TrustList};
 use serde::Deserialize;
 
-use crate::error::C2paError;
+use super::error::C2paError;
 
-/// The settings a [`crate::Reader`] reads under.
+/// The settings a [`crate::read::Reader`] reads under.
 ///
 /// Built from c2pa-wasm's `contextJson` by [`Self::from_json`], or
 /// directly from a [`ReadSettings`] by [`Self::from_settings`] for a

@@ -11,7 +11,7 @@
 // specific language governing permissions and limitations under
 // each license.
 
-//! Errors from [`crate::Reader`], shaped to reproduce c2pa-wasm's
+//! Errors from [`crate::read::Reader`], shaped to reproduce c2pa-wasm's
 //! error-string contract.
 //!
 //! c2pa-wasm cannot hand JavaScript a Rust error; what crosses the
@@ -26,7 +26,7 @@
 //! reaches, with the same variant names — so the derived `Debug` output,
 //! and with it [`Error::js_message`], comes out the same.
 
-/// Errors surfaced by [`crate::Reader`]; the counterpart of c2pa-wasm's
+/// Errors surfaced by [`crate::read::Reader`]; the counterpart of c2pa-wasm's
 /// `WasmError`.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -64,7 +64,7 @@ pub enum C2paError {
     ///
     /// c2pa-rs's `Error::UnsupportedType`, which it resolves from a registry
     /// of handlers keyed by MIME type; this crate has exactly one handler,
-    /// so the check is a plain string match (see `src/format.rs`).
+    /// so the check is a plain string match (see [`super::format`]).
     #[error("type is unsupported")]
     UnsupportedType,
 

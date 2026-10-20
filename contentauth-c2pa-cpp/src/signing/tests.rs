@@ -265,7 +265,7 @@ fn signing_abi_round_trips_a_jpeg_through_the_existing_reader_as_trusted() {
         base64_certificate()
     );
     let settings = format!(r#"{{"trust":{{"trust_anchors":{pem:?}}}}}"#);
-    let mut reader = crate::NodeSession::new("image/jpeg", Some(&settings)).unwrap();
+    let mut reader = crate::ReadSessionBridge::new("image/jpeg", Some(&settings)).unwrap();
     loop {
         match reader.advance().unwrap() {
             crate::Step::Complete => break,

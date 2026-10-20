@@ -11,13 +11,13 @@
 // specific language governing permissions and limitations under
 // each license.
 
-//! Errors from [`crate::NodeBuildSession`], shaped like the reader's: what
+//! Errors from [`crate::build::BuildSessionBridge`], shaped like the reader's: what
 //! crosses into JavaScript is [`Error::js_message`], a c2pa-rs-style
 //! `Debug` string such as `C2pa(UnsupportedType)`.
 
-use contentauth_c2pa_js_compat::C2paError;
+use crate::compat::C2paError;
 
-/// Errors surfaced by [`crate::NodeBuildSession`].
+/// Errors surfaced by [`crate::build::BuildSessionBridge`].
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
@@ -31,7 +31,7 @@ pub enum Error {
     Definition(#[from] contentauth_c2pa_sign_baseline::Error),
 
     /// Building or signing failed (including a host reply of
-    /// [`crate::Reply::Failed`] — e.g. the signer rejected).
+    /// [`crate::build::Reply::Failed`] — e.g. the signer rejected).
     #[error(transparent)]
     Build(#[from] contentauth_c2pa_file_builder::Error),
 

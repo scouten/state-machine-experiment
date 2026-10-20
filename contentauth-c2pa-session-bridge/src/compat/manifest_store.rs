@@ -11,9 +11,9 @@
 // specific language governing permissions and limitations under
 // each license.
 
-//! The objects [`crate::Reader::manifest_store`] and
-//! [`crate::Reader::active_manifest`] return, and the JSON
-//! [`crate::Reader::json`] produces.
+//! The objects compatibility reader accessors and
+//! active-manifest accessors return, and the JSON
+//! [`crate::read::Reader::json`] produces.
 //!
 //! c2pa-wasm returns these as plain JavaScript objects — c2pa-rs's
 //! `Reader` and `Manifest` serialized through `serde_wasm_bindgen` — whose
@@ -29,8 +29,8 @@
 //! produces, so the two compatibility layers agree with each other.
 //!
 //! Every type here owns its data and implements [`serde::Serialize`], so
-//! a binding can hand it straight to `serde_wasm_bindgen` (as the `web`
-//! feature's `WasmReader` does) or `serde_json` (as [`crate::Reader::json`]
+//! a binding can hand it straight to `serde_wasm_bindgen` (as the alternative
+//! async host's `WasmReader` does) or `serde_json` (as [`crate::read::Reader::json`]
 //! does).
 
 use std::collections::BTreeMap;
@@ -200,7 +200,7 @@ impl ManifestStore {
     /// Reports `report` in c2pa-rs's manifest-store shape.
     ///
     /// Public so that a sibling compatibility layer over another c2pa-rs
-    /// surface (`contentauth-c2pa-node-compat`) can reuse the one
+    /// surface (`contentauth-c2pa-session-bridge`) can reuse the one
     /// reporting of the engine's result rather than copy it.
     pub fn from_report(report: &ReadReport) -> Self {
         Self {

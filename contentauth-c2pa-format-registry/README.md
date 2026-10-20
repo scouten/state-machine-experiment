@@ -84,8 +84,8 @@ function* locate(stream) {
 
 Python generators, Kotlin sequences, C# iterators, and Swift/Rust `async`
 fit the same mould. A language without them writes the explicit
-`advance`/`fulfill`/`finish` machine `contentauth-c2pa-node-compat`'s
-`NodeSession` already exposes.
+`advance`/`fulfill`/`finish` machine `contentauth-c2pa-session-bridge`'s
+`ReadSessionBridge` already exposes.
 
 **The adapter is one `DynFormatHandler`.** For each target there is one
 Rust type that implements it by driving the foreign operation:
