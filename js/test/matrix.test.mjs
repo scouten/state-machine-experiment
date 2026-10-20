@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after, before } from "node:test";
 import { createClient } from "../src/node/client.mjs";
+import { postTimestamp } from "../src/shared/drive.mjs";
 
 const rows = [];
 const record = (id, area, capability, layer, status, evidence) =>
@@ -167,6 +168,35 @@ async function authority(respond) {
   return { seen, url: `http://127.0.0.1:${server.address().port}/tsa`,
     close: () => new Promise((resolve) => server.close(resolve)) };
 }
+
+test("timestamp transport bounds the response size and time", async () => {
+  const stalled = createServer((request, response) => {
+    request.resume();
+    response.writeHead(200);
+    response.write(Buffer.from([1]));
+  });
+  const huge = createServer((request, response) => {
+    request.resume();
+    response.writeHead(200);
+    const chunk = Buffer.alloc(256 * 1024);
+    const pump = () => { while (!response.destroyed && response.write(chunk)); };
+    response.on("drain", pump);
+    pump();
+  });
+  const urlOf = async (server) => {
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    return `http://127.0.0.1:${server.address().port}/`;
+  };
+  try {
+    const request = new Uint8Array([1]);
+    await assert.rejects(postTimestamp({ url: await urlOf(stalled), request }, 200), /did not answer within 200 ms/);
+    await assert.rejects(postTimestamp({ url: await urlOf(huge), request }), /implausibly large/);
+  } finally {
+    stalled.closeAllConnections();
+    huge.closeAllConnections();
+    await Promise.all([stalled, huge].map((server) => new Promise((resolve) => server.close(resolve))));
+  }
+});
 
 test("RFC 3161 timestamps through the Worker host", async () => {
   const good = await authority(() => [200, tsResponse(0)]);

@@ -115,17 +115,44 @@ export function checkSignature(alg, value) {
 
 const timestampLimit = 1024 * 1024;
 
-// Worker-side default for a timestamp request; the host only ever POSTs.
-export async function postTimestamp({ url, request }) {
+const timestampDeadlineMs = 30_000;
+
+// Worker-side default for a timestamp request; the host only ever POSTs. One
+// deadline covers connecting and reading the body, and the body is cancelled as
+// soon as it exceeds the size limit, so a faulty authority can neither stall
+// the Worker's queue nor exhaust its memory.
+export async function postTimestamp({ url, request }, deadlineMs = timestampDeadlineMs) {
   const target = new URL(url);
   if (target.protocol !== "http:" && target.protocol !== "https:")
     throw new Error("timestamp authority URL must be http or https");
-  const response = await fetch(target, { method: "POST", redirect: "error",
-    headers: { "content-type": "application/timestamp-query" }, body: request });
-  if (!response.ok) throw new Error(`the timestamp authority answered ${response.status}`);
-  const body = new Uint8Array(await response.arrayBuffer());
-  if (body.length > timestampLimit) throw new Error("the timestamp response is implausibly large");
-  return body;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), deadlineMs);
+  try {
+    const response = await fetch(target, { method: "POST", redirect: "error", signal: controller.signal,
+      headers: { "content-type": "application/timestamp-query" }, body: request });
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new Error(`the timestamp authority answered ${response.status}`);
+    }
+    const chunks = [];
+    let length = 0;
+    for await (const chunk of response.body ?? []) {
+      length += chunk.length;
+      if (length > timestampLimit) {
+        controller.abort();
+        throw new Error("the timestamp response is implausibly large");
+      }
+      chunks.push(chunk);
+    }
+    const body = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.length }
+    return body;
+  } catch (error) {
+    if (controller.signal.aborted && !/implausibly/.test(error.message))
+      throw new Error(`the timestamp authority did not answer within ${deadlineMs} ms`);
+    throw error;
+  } finally { clearTimeout(timer) }
 }
 
 /**
