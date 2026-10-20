@@ -12,7 +12,8 @@ SDK or a legacy API migration. Reading exercises validation, settings and
 reporting; signing exercises source/output I/O requests and an asynchronous
 caller-owned signer across the Worker boundary. Both use existing Rust domain
 functionality, with shared JavaScript transport, isolation and lifecycle logic.
-Signing is limited to the existing JPEG/ES256 baseline, without timestamps.
+Signing covers JPEG and TIFF, every signing algorithm, CAWG identities and
+RFC 3161 timestamps, on both Node and browser Wasm.
 
 This package originated as a proof on branch `ale/shared-worker-poc`, based on
 `main` at `97fac9b`. Its implementation, fixtures, generated artifacts and
@@ -263,7 +264,11 @@ See the [compatibility experiment](experiments/2026-10-16-node-compat-facade.md)
 - No periodic task yields are inserted. A busy Worker can delay its own control
   messages; the application remains on a separate event loop. Responsive
   cancellation/progress or concurrent shared-Worker execution is not promised.
-- OCSP, timestamps and unrecognized host requests fail explicitly. Core
+- Unrecognized host requests fail explicitly. OCSP and RFC 3161 requests are
+  answered by the Worker with `fetch` (http/https, no redirects, 1 MiB cap);
+  OCSP responder URLs come from the certificate, so literal loopback/private
+  hosts are refused unless `read(..., {ocspPolicy: {allowPrivateHosts: true}})`.
+  A refused or failed OCSP fetch fails open in the engine. Core
   validation and manifest generation remain Rust-owned.
 
 ### Signer callbacks and queueing

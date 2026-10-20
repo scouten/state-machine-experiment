@@ -49,11 +49,12 @@ impl ReadSession {
                             PendingRequest::CurrentDateTime { id } => {
                                 json!({ "id": id, "kind": "time" })
                             }
-                            PendingRequest::Ocsp { .. } => {
-                                return Err(JsValue::from_str(
-                                    "OCSP is outside this offline proof",
-                                ));
-                            }
+                            PendingRequest::Ocsp {
+                                id,
+                                url,
+                                request_der,
+                            } => json!({ "id": id, "kind": "ocsp", "url": url,
+                                "requestDer": request_der }),
                             _ => return Err(JsValue::from_str("unsupported host request")),
                         })
                     })
@@ -84,6 +85,17 @@ impl ReadSession {
     /// Answers the host clock request with Unix seconds.
     pub fn time(&mut self, id: u32, value: i32) -> Result<(), JsValue> {
         self.reply(id, Reply::Time(i64::from(value)))
+    }
+
+    /// Answers an OCSP request with the responder's response body.
+    pub fn ocsp(&mut self, id: u32, bytes: &[u8]) -> Result<(), JsValue> {
+        self.reply(id, Reply::Ocsp(bytes.to_vec()))
+    }
+
+    /// Reports that the host could not answer a request; the engine decides
+    /// what that means (OCSP is fail-open).
+    pub fn failed(&mut self, id: u32, message: &str) -> Result<(), JsValue> {
+        self.reply(id, Reply::Failed(message.to_string()))
     }
 
     /// Consumes the completed session and returns report JSON or no store.

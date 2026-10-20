@@ -42,10 +42,13 @@ export function source(asset) {
  * @param {Uint8Array|Blob|object} input Asset bytes, Blob or host source
  * @param {string|undefined} settings JSON reader settings.
  * @param {number} now Unix seconds supplied as the session's clock.
+ * @param {string} [format] Asset type (MIME type or extension).
+ * @param {{allowPrivateHosts?: boolean}} [ocspPolicy] See {@link postOcsp}. A
+ *   refused or failed OCSP fetch is reported to the engine, which fails open.
  * @returns {Promise<{report: object|null, stats: object}>} Parsed report
  *   (`null` when the asset has no manifest store) and request counters.
  */
-export async function read(adapter, input, settings, now, format = "image/jpeg") {
+export async function read(adapter, input, settings, now, format = "image/jpeg", ocspPolicy = {}) {
   const session = adapter.create(settings, format);
   const stats = { reads: 0, bytes: 0, maxReadBytes: 0, advances: 0 };
   try {
@@ -71,6 +74,12 @@ export async function read(adapter, input, settings, now, format = "image/jpeg")
           }
           case "length": session.fulfill(request.id, "length", input.length); break;
           case "time": session.fulfill(request.id, "time", now); break;
+          case "ocsp": {
+            stats.ocsp = (stats.ocsp ?? 0) + 1;
+            try { session.fulfill(request.id, "ocsp", await postOcsp(request, ocspPolicy)) }
+            catch (error) { session.fulfill(request.id, "failed", String(error?.message ?? error)) }
+            break;
+          }
           default: throw new Error(`unsupported host request: ${request.kind}`);
         }
       }));
@@ -153,6 +162,58 @@ export async function postTimestamp({ url, request }, deadlineMs = timestampDead
       throw new Error(`the timestamp authority did not answer within ${deadlineMs} ms`);
     throw error;
   } finally { clearTimeout(timer) }
+}
+
+/**
+ * Whether `hostname` (as `URL.hostname` spells it) is a literal loopback,
+ * private, link-local or otherwise non-public address, or `localhost`.
+ * Names that merely resolve to such addresses are not detected.
+ * @param {string} hostname
+ */
+export function isNonPublicHost(hostname) {
+  const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  const v4 = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(host);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
+      || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
+  }
+  if (host.includes(":")) {
+    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(host);
+    if (mapped) return isNonPublicHost(mapped[1]);
+    // `URL` normalizes a mapped IPv4 address to hex groups (::ffff:7f00:1).
+    const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(host);
+    if (hex) {
+      const high = parseInt(hex[1], 16), low = parseInt(hex[2], 16);
+      return isNonPublicHost(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
+    }
+    return host === "::" || host === "::1" || /^f[cd]/.test(host) || /^fe[89ab]/.test(host);
+  }
+  return false;
+}
+
+/**
+ * Default OCSP transport: POSTs the Rust-built `OCSPRequest` and returns the
+ * response body. The responder URL comes from the signer's certificate, so it
+ * is untrusted input: only http(s), no redirects, a 1 MiB cap, and non-public
+ * literal hosts are refused unless the caller opts in with `allowPrivateHosts`.
+ * @param {{url: string, requestDer: Uint8Array}} request
+ * @param {{allowPrivateHosts?: boolean}} [policy]
+ * @returns {Promise<Uint8Array>}
+ */
+export async function postOcsp({ url, requestDer }, { allowPrivateHosts = false } = {}) {
+  const target = new URL(url);
+  if (target.protocol !== "http:" && target.protocol !== "https:")
+    throw new Error("OCSP responder URL must be http or https");
+  if (!allowPrivateHosts && isNonPublicHost(target.hostname))
+    throw new Error("OCSP responder host is not public");
+  const response = await fetch(target, { method: "POST", redirect: "error",
+    headers: { "content-type": "application/ocsp-request" }, body: requestDer });
+  if (!response.ok) throw new Error(`the OCSP responder answered ${response.status}`);
+  const body = new Uint8Array(await response.arrayBuffer());
+  if (body.length > timestampLimit) throw new Error("the OCSP response is implausibly large");
+  return body;
 }
 
 /**

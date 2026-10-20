@@ -106,6 +106,9 @@ impl BuildSession {
                             PendingRequest::Sign { id, alg, data, identity } => {
                                 json!({ "id": id, "kind": "sign", "alg": alg, "data": data, "identity": identity })
                             }
+                            PendingRequest::Timestamp { id, url, request } => {
+                                json!({ "id": id, "kind": "timestamp", "url": url, "request": request })
+                            }
                             _ => return Err(JsValue::from_str("unsupported build host request")),
                         })
                     })
@@ -149,6 +152,16 @@ impl BuildSession {
     /// Supplies the caller-produced raw signature.
     pub fn signature(&mut self, id: u32, bytes: &[u8]) -> Result<(), JsValue> {
         self.reply(id, Reply::Signature(bytes.to_vec()))
+    }
+
+    /// Supplies the timestamp authority's response body, unread.
+    pub fn timestamp_response(&mut self, id: u32, bytes: &[u8]) -> Result<(), JsValue> {
+        self.reply(id, Reply::TimestampResponse(bytes.to_vec()))
+    }
+
+    /// Reports that the host could not do what a request asked; the build fails.
+    pub fn failed(&mut self, id: u32, message: &str) -> Result<(), JsValue> {
+        self.reply(id, Reply::Failed(message.to_string()))
     }
 
     /// Consumes the session and returns manifest bytes and exclusion ranges.

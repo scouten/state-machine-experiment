@@ -104,12 +104,13 @@ export class Client {
   /**
    * Reads and validates an asset.
    * @param {Uint8Array|Blob} asset Captured synchronously, before any await.
-   * @param {{settings?: object, now?: number, format?: string}} [options] `format` is the
+   * @param {{settings?: object, now?: number, format?: string, ocspPolicy?: {allowPrivateHosts?: boolean}}} [options]
+   *   `ocspPolicy` governs live OCSP (see `postOcsp`; private hosts are refused by default). `format` is the
    *   asset's MIME type or extension (default JPEG). `now` is Unix seconds
    *   (signed 32-bit) used as the validation clock; defaults to the current time.
    * @returns {Promise<{report: object|null, stats: object, workerMs: number}>}
    */
-  async read(asset, { settings, now = Math.floor(Date.now() / 1000), format } = {}) {
+  async read(asset, { settings, now = Math.floor(Date.now() / 1000), format, ocspPolicy } = {}) {
     if (this.#closed) throw this.#closed;
     if (!Number.isInteger(now) || now < -2147483648 || now > 2147483647)
       throw new TypeError("proof clock must be signed 32-bit Unix seconds");
@@ -118,7 +119,8 @@ export class Client {
     const json = settings === undefined ? undefined : JSON.stringify(settings);
     await this.#ready;
     if (this.#closed) throw this.#closed;
-    return this.#call({ method: "read", asset: snapshot, settings: json, now, format });
+    return this.#call({ method: "read", asset: snapshot, settings: json, now, format,
+      ocspPolicy: ocspPolicy && { allowPrivateHosts: ocspPolicy.allowPrivateHosts === true } });
   }
   /**
    * Signs an asset with a manifest built from `definition`.
