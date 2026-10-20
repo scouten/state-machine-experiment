@@ -24,7 +24,8 @@ experiment grows.
 For the preferred cross-platform JavaScript host, see
 [`js`](js/README.md): the same JavaScript facade, Worker
 protocol and session driver over browser Wasm and Node Neon, with actual
-end-to-end read/signing tests and caller-owned async signer callbacks. Its supported slice is offline JPEG reading and baseline
+end-to-end read/signing tests, caller-owned async signer callbacks and
+SDK-to-SDK benchmarks. Its supported slice is offline JPEG reading and baseline
 ES256 signing, not full c2pa-js parity. It adds no Rust domain features and uses
 no Tokio runtime. The older Rust async browser hosts and the broader addon
 JavaScript drivers remain available; their capabilities have not been removed.
@@ -81,11 +82,10 @@ where it could go next — written in Markdown with Mermaid diagrams.
   (reading a manifest store from a file and reporting it as JSON) on top
   of the crates above, for a caller that wants c2pa-rs's existing surface
   rather than this workspace's `Session` contract.
-* [`contentauth-c2pa-cpp`](contentauth-c2pa-cpp) — an exploration of a C++
-  binding: a C ABI over the neutral read/build bridges plus C++ blocking,
-  thread-pool and C++20 coroutine drivers, written to show what the session
-  model can express — parallel and multiplexed reads and signing, errors as
-  values, cancellation by destruction — that a callback-based API cannot.
+* [`contentauth-c2pa-cpp`](contentauth-c2pa-cpp) — an experimental C++
+  binding: a C ABI over the sans-I/O read/build bridges plus C++17/20
+  blocking, pooled/future, parallel and coroutine drivers. Reading and
+  signing are implemented, including atomic POSIX file signing.
   See its [README](contentauth-c2pa-cpp/README.md).
 * [`contentauth-c2pa-js-compat`](contentauth-c2pa-js-compat) — the same
   experiment for the Rust side of the C2PA web SDK, [c2pa-js]'s

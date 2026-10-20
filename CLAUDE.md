@@ -40,10 +40,8 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   (`BuilderSession` in [`src/builder.rs`](contentauth-c2pa-builder/src/builder.rs);
   see its [README.md](contentauth-c2pa-builder/README.md)).
 - **`contentauth-c2pa-primitives`** — the narrow slice of vocabulary
-  (`StreamId`, `ByteRange`, hash and signing algorithms, `HostError`, and
-  `Bytes` — the refcounted buffer every vocabulary carries bulk payloads
-  in, so hosts slice and clone rather than copy) and deterministic encoders
-  the reader and builder genuinely share.
+  (`StreamId`, `ByteRange`, hash and signing algorithms, `HostError`) and
+  deterministic encoders the reader and builder genuinely share.
 - **`contentauth-c2pa-format`** — the contract between those sessions
   and container formats: the `FormatHandler` trait (`descriptor`,
   `locate`, `plan_embed`, `commit`), the plain-data `FormatDescriptor`
@@ -202,9 +200,9 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   Offline JPEG reading and baseline ES256 signing with caller-owned async keys
   are proven; whole-asset copies, limited validation and unsupported network/
   timestamp requests remain explicit. The Wasm crate has its own workspace and
-  pins wasm-bindgen to its CLI schema; CI checks formatting, Clippy, native
-  request-encoding tests, and `wasm32-unknown-unknown` compilation, while the
-  browser host runs Node and Chromium/Firefox/WebKit contracts.
+  pins wasm-bindgen to its CLI schema. CI builds actual bindings and runs Node
+  and Chromium/Firefox/WebKit contracts. The local SDK comparison exercises
+  public read/sign APIs against a sibling c2pa-js build; it is not part of CI.
   The older `js-compat`/`js-compat-sign` Rust async hosts remain alternatives,
   not dependencies of the shared JS host. Retain their tests and the broader
   addon file/OCSP/timestamp behavior until compatibility facades preserve it.
@@ -220,9 +218,9 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   the one crate here allowed `unsafe`, being the FFI boundary; symbols are
   `c2pa_sm_*` to coexist with c2pa-c) wrapping `contentauth-c2pa-session-bridge`'s
   flat `read::ReadSessionBridge` and `build::BuildSessionBridge`, plus C++ in
-  `include/contentauth/` (header-only apart
-  from the compiled signing implementation and thread pools in `cpp/src/`):
-  a C++17 core (`Session`, `Reader`, blocking `read()`), C++17 thread-based
+  `include/contentauth/` (header-only apart from the compiled signing
+  implementation and thread pools in `cpp/src/`): a C++17 core (`Session`,
+  `Reader`, `BuildSession`, blocking read/signing hosts), C++17 thread-based
   drivers (`Reading`/`Mailbox`, `read_parallel`, `read_future`,
   `PooledHost` over the `ThreadPool` interface, with a portable
   `make_simple_thread_pool` and an Apple GCD `make_apple_thread_pool`) and

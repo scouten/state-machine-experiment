@@ -15,8 +15,8 @@ functionality, with shared JavaScript transport, isolation and lifecycle logic.
 Signing is limited to the existing JPEG/ES256 baseline, without timestamps.
 
 This package originated as a proof on branch `ale/shared-worker-poc`, based on
-`main` at `97fac9b`. Its implementation, fixtures and generated artifacts now live in this
-package; the standalone Wasm binding is in the
+`main` at `97fac9b`. Its implementation, fixtures, generated artifacts and
+findings now live in this package; the standalone Wasm binding is in the
 repository-level `contentauth-c2pa-wasm` crate. No migration-branch changes or
 domain features were copied.
 
@@ -66,6 +66,11 @@ standalone [Wasm binding](../contentauth-c2pa-wasm/src/lib.rs) consumes the
 read bridge, and its [signing boundary](../contentauth-c2pa-wasm/src/build.rs)
 consumes the build bridge. Both remain synchronous; neither duplicates C2PA
 logic or adds a Rust async runtime.
+
+The bridge preserves the engine's shared `Bytes` for bulk writes and completed
+build manifests instead of copying them into vectors. Wasm's binary write path
+retains each shared buffer until the host consumes it; copying into
+JavaScript-owned memory still happens at the language boundary.
 
 Wasm serializes request metadata as JSON but passes bulk build write payloads
 as binary byte arrays through wasm-bindgen. Each payload is consumed once
@@ -123,9 +128,10 @@ compatibility facades separate from the reusable session protocol; existing
 Rust hosts can already use the underlying typed sessions directly.
 
 The JavaScript experiments prove the two JS consumers. The subsequently merged
-[C++ reader binding](../contentauth-c2pa-cpp/) also drives the neutral read bridge
-through its own C ABI and hosts, not this JS package. Python and a universal ABI
-remain unimplemented; no further abstraction is required for those possibilities.
+[C++ binding](../contentauth-c2pa-cpp/) also drives the neutral read and build
+bridges through its own C ABI and hosts, not this JS package. Python and a
+universal ABI remain unimplemented; no further abstraction is required for
+those possibilities.
 
 The following is the current ownership model. The dotted Python path is a
 possible, unproven additional consumer.
@@ -135,7 +141,7 @@ flowchart TB
     JS["Shared JS host<br/>browser and Node Workers"]
     Wasm["Browser binding<br/>wasm-bindgen"]
     Neon["Node binding<br/>Neon"]
-    CPP["C++ reader hosts + C ABI adapter<br/>contentauth-c2pa-cpp"]
+    CPP["C++ read/signing hosts + C ABI adapter<br/>contentauth-c2pa-cpp"]
     Python["Possible Python host + extension adapter<br/>not implemented or tested"]
     Bridge["ReadSessionBridge + BuildSessionBridge<br/>contentauth-c2pa-session-bridge<br/>plain-data requests / replies"]
     File["FileReadSession / FileBuilderSession<br/>typed Rust sessions"]
@@ -238,6 +244,29 @@ It also records the direct signer's exact COSE input/algorithm and exclusion
 ranges, and exports the repository's public TEST ONLY key in PKCS#8 form for the
 application-side WebCrypto test signer. Never substitute production credentials
 in these generated fixtures.
+
+### SDK-to-SDK benchmark
+
+After the builds and fixture generation above, `npm run benchmark:sdk` compares
+public read/sign calls against an **already built** sibling `../c2pa-js` checkout
+(relative to the repository root). It needs that checkout's installed Vite,
+Node distribution/native addon, utilities distribution, and Wasm package.
+The benchmark does not install or rebuild those dependencies. It bundles the
+existing web facade and inline Worker into this proof's ignored generated
+directory, preserving the SDK checkout and its existing build directories.
+
+The command runs Node and all three browsers sequentially. Each SDK gets two
+warmups and six alternating-order measured samples per size/operation.
+Every sign output is validated by both readers outside signing time, and both
+readers must reject tampering. Benchmark fixtures use the SDK's real unsigned
+thumbnail plus a zero-padded 64 MiB variant and a conformant created-action
+definition; they are separate from the original architecture-contract fixtures.
+Only repository TEST ONLY credentials are used.
+
+Results and provenance persist in ignored `results/sdk-*.json`; see
+[SDK performance findings](findings.md#sdk-to-sdk-performance-comparison) for
+medians, ranges, validation differences and ownership/build caveats. This is
+a local warm baseline, not full compatibility or production performance proof.
 
 An application uses the same calls with a different platform entry:
 
@@ -345,13 +374,15 @@ measurement:
 
 The local comparison reduced median large-build caller duration by about
 6.7–8.5 times in all browsers; binary is retained as the default. Small builds
-were too short/timer-quantized for strong performance claims.
+were too short/timer-quantized for strong performance claims. See
+[paired measurements and caveats](findings.md#supporting-transport-experiment-binary-versus-json).
 
 ### Performance interpretation
 
 Ignored `results/{node,chromium,firefox,webkit}.json` records three warm measured
 reads and three builds, task progress, caller/Worker duration and input/binary/source
-fingerprints, plus the paired boundary comparison described above.
+fingerprints, plus the paired boundary comparison described above. The
+checked-in [findings](findings.md) summarize a local run.
 Timing is **not** a pass threshold. The only scheduling assertion is that
 application tasks actually run before the read completes.
 

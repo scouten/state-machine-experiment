@@ -38,7 +38,8 @@ on every PR) and the two Neon addons (`node-addon`, `node-sign-addon`).
 The `javascript-host` job builds the standalone synchronous Wasm binding and
 both Neon addons, then runs the shared Node and Chromium/Firefox/WebKit read and
 signing contracts. It requires real bindings and installed browsers: no skips
-or mock-only substitute.
+or mock-only substitute. The SDK-to-SDK benchmark is a local command requiring
+an existing sibling SDK build, not a dependency of PR CI.
 The C++ binding jobs exercise the Rust C ABI plus C++17, C++20 and pool
 drivers on Linux and macOS. The Linux matrix covers C++ coverage, AddressSanitizer
 and ThreadSanitizer; macOS also exercises the Apple thread pool.
@@ -60,10 +61,10 @@ The Wasm checks are a design assertion: **the engine and everything over it
 builds for Wasm unmodified**. Exempt: `rs-compat` and `rs-compat-sign`,
 which deliberately own the workspace's only network dependencies. The `web`
 modules of the alternative Rust async hosts are only *compiled*, not run.
-The standalone synchronous Wasm binding has its own locked wasm32 build check,
-native request-encoding tests (including shared binary payload ownership), Clippy
-and formatting checks. Browser CI exercises the preferred synchronous Wasm
-bridge with its JavaScript host, not the older `web` modules; the standalone
-binding's own checks do not run it in a browser.
+Browser CI runs the preferred synchronous Wasm bridge with its JavaScript host,
+not those older `web` modules. Its standalone locked Wasm workspace also has
+native request-encoding tests, Clippy and formatting checks, but those checks
+do not run in a browser. The SDK-to-SDK benchmark is a local command requiring
+an existing sibling SDK build, not a dependency of PR CI.
 
 **Next:** [Findings →](08-findings.md)

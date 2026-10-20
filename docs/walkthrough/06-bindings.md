@@ -14,7 +14,7 @@ flowchart TB
     J --> J1["Reader::from_blob(fmt, blob, ctx, platform).await"]
     N --> N1["Portable read bridge<br/>advance / fulfill / finish"]
     N1 --> N2["JS loop in index.mjs<br/>(fs, fetch, event loop)"]
-    N1 --> CPP["C ABI + C++ read/sign hosts<br/>blocking / thread-pool / coroutine"]
+    N1 --> CPP["C ABI + C++ read/signing hosts<br/>blocking / thread-pool / coroutine"]
     N1 --> W["Shared JS host<br/>same facade and protocol"]
     W --> WB["Browser Worker<br/>synchronous Wasm binding"]
     W --> WN["Node Worker<br/>synchronous Neon binding"]
@@ -29,7 +29,7 @@ the separate async `js-compat` host.
 | `rs-compat` | c2pa-rs `Context`, `Reader`, `Manifest` | Nowhere — blocking | One of two network dependencies (with `rs-compat-sign`): `reqwest` answers `Ocsp`. Owns format *policy* (`src/format.rs`). |
 | `js-compat` | c2pa-wasm `WasmReader` | One `async fn` driving the session (`src/drive.rs`) | `Blob` ≈ `Blob.size` + `slice().arrayBuffer()`; `Platform` supplies clock/OCSP, which c2pa-rs gets implicitly. `web` feature adds a `#[wasm_bindgen]` `WasmReader`. |
 | `session-bridge` + Wasm/Neon | Host-driven read/build, with explicit SDK compatibility policy | Shared JavaScript host in browser/Node Workers; broader existing addon hosts also retained | Rust has no runtime, threads, locks or `async`. |
-| `session-bridge` + `cpp` | Host-driven read/sign through a C ABI | C++ blocking, thread-pool or coroutine driver | Independent non-JS consumer of both bridges; supports atomic POSIX file signing. |
+| `session-bridge` + `cpp` | Host-driven read/build through a C ABI | C++ blocking, thread-pool or coroutine driver | Independent non-JS consumer of both bridges; reading and signing are implemented. |
 
 ## Where the c2pa-rs shapes break down
 
@@ -49,6 +49,11 @@ trusted read-back run in Node and all three browsers. Whole-input/output
 buffering and abrupt termination remain explicit limits; disposing a Worker
 cannot cancel a caller-owned signer.
 The browser boundary now uses binary bulk write payloads with JSON metadata.
+The [SDK-to-SDK benchmark](../../js/findings.md#sdk-to-sdk-performance-comparison)
+is the performance baseline: real public read/sign calls in Node and all three
+browsers, with cross-validation and explicit ownership/validation differences.
+The shared host is slower on large Node operations; browser results are competitive
+on this narrow baseline, not evidence of full SDK parity.
 Both the binary transport and the retained JSON experiment control pass the same contracts;
 paired large-build measurements isolate a major avoidable boundary cost
 without changing the shared host or Rust builder. This is still copying,
@@ -61,11 +66,12 @@ selection and errors previously owned by `js-compat`; the latter reexports
 those types and retains its original async behavior. Wasm and Neon import the
 neutral bridge directly. The underlying engine/domain logic is not duplicated.
 The bridge preserves the engine's shared `Bytes` for bulk writes and completed
-build manifests rather than copying them into vectors. Wasm's binary write path
-retains those shared buffers until the host consumes them; the final copy into
-JavaScript-owned memory still belongs to the language boundary, not the engine.
+build manifests instead of copying them into vectors. Wasm's binary write path
+retains each shared buffer until the host consumes it; copying into
+JavaScript-owned memory still happens at the language boundary.
 The package layout is `js/src/{shared,browser,node}`, with contracts under
-`js/test` and transport measurements under `js/benchmarks`.
+`js/test` and transport/SDK measurements under `js/benchmarks`.
+
 The old addon JavaScript drivers remain intentional alternative hosts, not
 silently replaced by the narrower Worker implementation: they support file and
 custom sources, OCSP, timestamp transport and transactional file output.
@@ -121,7 +127,6 @@ flowchart LR
     ND --> OLD["Existing Neon addon host<br/>files / timestamps retained"]
     ND --> WP["Shared JavaScript Worker host<br/>same build bridge via Neon / Wasm"]
     WP --> CB["Caller-owned async signer<br/>COSE bytes out, signature back<br/>key outside Worker and Rust"]
-    ND --> CPP["C ABI + C++ signing hosts<br/>blocking / thread-pool / coroutine"]
 ```
 
 * The signer is where the models diverge most: a blocking trait, an
