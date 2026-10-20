@@ -60,7 +60,10 @@ The Wasm checks are a design assertion: **the engine and everything over it
 builds for Wasm unmodified**. Exempt: `rs-compat` and `rs-compat-sign`,
 which deliberately own the workspace's only network dependencies. The `web`
 modules of the alternative Rust async hosts are only *compiled*, not run.
-Browser CI runs the preferred synchronous Wasm bridge with its JavaScript host,
-not those older `web` modules.
+The standalone synchronous Wasm binding has its own locked wasm32 build check,
+native request-encoding tests (including shared binary payload ownership), Clippy
+and formatting checks. Browser CI exercises the preferred synchronous Wasm
+bridge with its JavaScript host, not the older `web` modules; the standalone
+binding's own checks do not run it in a browser.
 
 **Next:** [Findings →](08-findings.md)

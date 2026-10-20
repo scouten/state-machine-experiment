@@ -100,7 +100,9 @@ impl Host {
             }
 
             BuilderRequest::AssetBytes { range, .. } => BuilderHostReply::AssetBytes(
-                self.asset[range.start as usize..][..range.len as usize].to_vec(),
+                self.asset[range.start as usize..][..range.len as usize]
+                    .to_vec()
+                    .into(),
             ),
 
             BuilderRequest::Sign { alg, data, .. } => {
@@ -174,7 +176,9 @@ fn read_back(asset: &[u8]) -> ReadReport {
                 ReadRequest::CurrentDateTime => ReadHostReply::CurrentDateTime(1_800_000_000),
                 ReadRequest::AssetLength { .. } => ReadHostReply::AssetLength(asset.len() as u64),
                 ReadRequest::AssetBytes { range, .. } => ReadHostReply::AssetBytes(
-                    asset[range.start as usize..][..range.len as usize].to_vec(),
+                    asset[range.start as usize..][..range.len as usize]
+                        .to_vec()
+                        .into(),
                 ),
                 other => panic!("unexpected request: {other:?}"),
             };

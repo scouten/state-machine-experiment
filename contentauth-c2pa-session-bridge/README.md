@@ -18,9 +18,15 @@ bytes cross the binding; the bridge does not perform I/O, spawn, await or hold
 private keys. Errors, request ordering and one-time request reporting are
 unchanged. Read/build request vocabularies remain separate modules.
 
+Bulk write payloads and completed build manifests retain the engine's shared
+immutable `Bytes` storage. Describing or cloning a write request does not copy its
+buffer. Hosts can borrow a byte slice for their language boundary; a host-owned
+`Vec<u8>` read reply moves into the engine's `Bytes` without copying. This is not
+an end-to-end zero-copy ABI: Neon/Wasm still copy into JavaScript-owned buffers.
+
 Compatibility policy remains explicit: JPEG selection, settings JSON, baseline
 definition conversion and reports are not generic engine concepts.
-The [C++ reader binding](../contentauth-c2pa-cpp/) also consumes the read bridge
+The [C++ binding](../contentauth-c2pa-cpp/) also consumes both bridges
 through a C ABI with its own ownership adapter. Python and other bindings remain
 prospective. Rust enums are not a stable cross-language ABI.
 

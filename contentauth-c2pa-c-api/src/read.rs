@@ -18,7 +18,7 @@ use std::{collections::HashMap, ffi::CString};
 use contentauth_c2pa_file_reader::{FileReadReply, FileReadRequest, FileReadSession, ReadReport};
 use contentauth_c2pa_format_registry::AnyFormat;
 use contentauth_c2pa_js_compat::{Context, ManifestStore};
-use contentauth_c2pa_primitives::HostError;
+use contentauth_c2pa_primitives::{Bytes, HostError};
 use contentauth_state_machine::{RequestId, Session};
 
 use crate::{error::Error, format::resolve_format, C2PA_SM_STEP_COMPLETE, C2PA_SM_STEP_PENDING};
@@ -164,7 +164,7 @@ impl ReadSession {
 
     /// Fulfills a read request with bytes.
     pub fn fulfill_bytes(&mut self, id: u64, bytes: &[u8]) -> Result<(), Error> {
-        self.fulfill_reply(id, FileReadReply::Bytes(bytes.to_vec()))
+        self.fulfill_reply(id, FileReadReply::Bytes(Bytes::copy_from_slice(bytes)))
     }
 
     /// Fulfills a length request with asset length.

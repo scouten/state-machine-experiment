@@ -754,7 +754,7 @@ fn all_request_views_map_fields_and_streams_without_borrowing_temporary_values()
             id: 4,
             stream: Stream::Output,
             offset: 60,
-            bytes: vec![1, 2],
+            bytes: vec![1, 2].into(),
         },
         PendingRequest::Sign {
             id: 5,

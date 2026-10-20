@@ -82,7 +82,9 @@ fn sign<H: FormatHandler>(handler: &H, source: &[u8]) -> Vec<u8> {
                     BuilderHostReply::AssetLength(asset.len() as u64)
                 }
                 BuilderRequest::AssetBytes { range, .. } => BuilderHostReply::AssetBytes(
-                    asset[range.start as usize..][..range.len as usize].to_vec(),
+                    asset[range.start as usize..][..range.len as usize]
+                        .to_vec()
+                        .into(),
                 ),
                 BuilderRequest::Sign { data, .. } => {
                     let signer = c2pa_raw_crypto::signer_from_private_key(

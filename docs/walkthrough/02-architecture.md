@@ -7,8 +7,8 @@ and the reader, builder and format handlers know nothing about each other.**
 ## Dependency graph
 
 Arrows point from a crate to what it depends on. Dashed edges include the
-standalone JavaScript package bindings.
-The C++ reader binding is another implemented bridge consumer. The outlined
+standalone Wasm and Neon bindings, plus the standalone JavaScript package.
+The C++ reader/signing binding is another implemented bridge consumer. The outlined
 Python node and its dotted edge indicate prospective reuse only.
 
 ```mermaid

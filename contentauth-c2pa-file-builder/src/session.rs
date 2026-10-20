@@ -43,7 +43,9 @@ use contentauth_c2pa_builder::{
     BuilderHostReply, BuilderRequest, BuilderSession, BuilderSettings, SignPurpose,
 };
 use contentauth_c2pa_format::{Edit, EmbedPlan, FormatHandler, IoReply, IoRequest};
-use contentauth_c2pa_primitives::{ByteRange, HashAlgorithm, HostError, SigningAlg, StreamId};
+use contentauth_c2pa_primitives::{
+    ByteRange, Bytes, HashAlgorithm, HostError, SigningAlg, StreamId,
+};
 use contentauth_state_machine::{
     HostRequest, ProtocolError, Request, RequestId, Session, SessionCore, Step,
 };
@@ -111,7 +113,7 @@ pub enum FileBuilderRequest {
         offset: u64,
 
         /// The bytes to write there.
-        bytes: Vec<u8>,
+        bytes: Bytes,
     },
 
     /// Sign `data` — a COSE `Sig_structure` — with `alg`. Reply with
@@ -176,7 +178,7 @@ impl Request for FileBuilderRequest {
 #[non_exhaustive]
 pub enum FileBuilderReply {
     /// Answers [`FileBuilderRequest::Read`]: the requested bytes.
-    Bytes(Vec<u8>),
+    Bytes(Bytes),
 
     /// Answers [`FileBuilderRequest::Length`]: the stream's total length
     /// in bytes.
@@ -209,7 +211,7 @@ pub struct FileBuilderReport {
     /// The final, signed C2PA manifest store bytes alone — identical to
     /// the bytes written into the plan's placeholder slots, inside
     /// [`Self::exclusions`], of the output.
-    pub manifest: Vec<u8>,
+    pub manifest: Bytes,
 
     /// The hard binding's exclusions: the container structure carrying the
     /// manifest, framing included, and anything else the format's
@@ -228,7 +230,7 @@ enum WriteTask {
     },
 
     /// Write `bytes`, already known, at `output_offset`.
-    WriteBytes { output_offset: u64, bytes: Vec<u8> },
+    WriteBytes { output_offset: u64, bytes: Bytes },
 }
 
 /// A request this session has issued to its own host on a [`Sub::Writing`]
@@ -267,7 +269,7 @@ enum Sub<H: FormatHandler> {
     /// scoped to this one sub-operation instead.
     Planning {
         op: H::PlanEmbed,
-        placeholder: Vec<u8>,
+        placeholder: Bytes,
         request: RequestId,
         pending: HashMap<RequestId, RequestId>,
     },
@@ -281,7 +283,7 @@ enum Sub<H: FormatHandler> {
     /// [`EmbedPlan::check`] needs.
     Validating {
         plan: EmbedPlan,
-        placeholder: Vec<u8>,
+        placeholder: Bytes,
         request: RequestId,
         length_request: RequestId,
     },
@@ -729,7 +731,7 @@ enum PlanningStep<H: FormatHandler> {
     /// has checked the plan's edits actually hold together.
     Done {
         plan: EmbedPlan,
-        placeholder: Vec<u8>,
+        placeholder: Bytes,
         request: RequestId,
     },
 }
@@ -740,7 +742,7 @@ enum PlanningStep<H: FormatHandler> {
 fn step_planning<H: FormatHandler>(
     core: &mut SessionCore<FileBuilderRequest>,
     mut op: H::PlanEmbed,
-    placeholder: Vec<u8>,
+    placeholder: Bytes,
     request: RequestId,
     mut pending: HashMap<RequestId, RequestId>,
 ) -> Result<PlanningStep<H>, Error> {
@@ -830,7 +832,7 @@ enum ValidatingStep<H: FormatHandler> {
 fn step_validating<H: FormatHandler>(
     core: &mut SessionCore<FileBuilderRequest>,
     plan: EmbedPlan,
-    placeholder: Vec<u8>,
+    placeholder: Bytes,
     request: RequestId,
     length_request: RequestId,
 ) -> Result<ValidatingStep<H>, Error> {
@@ -977,7 +979,7 @@ const COPY_CHUNK_LEN: u64 = 1 << 20;
 /// Lays out `edits` — a freshly planned embedding — as a sequence of
 /// writes to the output, filling every [`Edit::Placeholder`] slot from
 /// `placeholder`. Edits producing no bytes are skipped.
-fn tasks_for_edits(edits: &[Edit], placeholder: &[u8]) -> Result<VecDeque<WriteTask>, Error> {
+fn tasks_for_edits(edits: &[Edit], placeholder: &Bytes) -> Result<VecDeque<WriteTask>, Error> {
     let mut tasks = VecDeque::new();
     let mut offset = 0u64;
 
@@ -990,7 +992,7 @@ fn tasks_for_edits(edits: &[Edit], placeholder: &[u8]) -> Result<VecDeque<WriteT
 
                 Edit::Emit(bytes) => tasks.push_back(WriteTask::WriteBytes {
                     output_offset: offset,
-                    bytes: bytes.clone(),
+                    bytes: Bytes::copy_from_slice(bytes),
                 }),
 
                 Edit::Placeholder(range) => {
@@ -999,7 +1001,7 @@ fn tasks_for_edits(edits: &[Edit], placeholder: &[u8]) -> Result<VecDeque<WriteT
                     ))?;
                     tasks.push_back(WriteTask::WriteBytes {
                         output_offset: offset,
-                        bytes: bytes.to_vec(),
+                        bytes,
                     });
                 }
 
@@ -1042,11 +1044,14 @@ fn push_copy_chunks(tasks: &mut VecDeque<WriteTask>, output_offset: u64, source_
 /// past the end rather than panicking — the only defense a plan or
 /// manifest this session did not itself produce gets before it is used to
 /// index into a buffer.
-fn slice(bytes: &[u8], range: ByteRange) -> Option<&[u8]> {
+///
+/// The slice shares `bytes`' buffer: filling a placeholder slot copies
+/// nothing.
+fn slice(bytes: &Bytes, range: ByteRange) -> Option<Bytes> {
     let end = range.start.checked_add(range.len)?;
     let start = usize::try_from(range.start).ok()?;
     let end = usize::try_from(end).ok()?;
-    bytes.get(start..end)
+    (start <= end && end <= bytes.len()).then(|| bytes.slice(start..end))
 }
 
 /// Lays out the writes a manifest commit needs: `handler.commit`'s
@@ -1057,7 +1062,7 @@ fn slice(bytes: &[u8], range: ByteRange) -> Option<&[u8]> {
 fn tasks_for_commit<H: FormatHandler>(
     handler: &H,
     plan: &EmbedPlan,
-    manifest: &[u8],
+    manifest: &Bytes,
 ) -> Result<VecDeque<WriteTask>, Error> {
     if manifest.len() as u64 != plan.manifest_len {
         return Err(Error::Invariant(
@@ -1080,7 +1085,7 @@ fn tasks_for_commit<H: FormatHandler>(
                 ))?;
                 tasks.push_back(WriteTask::WriteBytes {
                     output_offset: offset,
-                    bytes: bytes.to_vec(),
+                    bytes,
                 });
             }
         }
@@ -1103,7 +1108,7 @@ fn tasks_for_commit<H: FormatHandler>(
 
         tasks.push_back(WriteTask::WriteBytes {
             output_offset: patch.offset,
-            bytes: patch.bytes,
+            bytes: patch.bytes.into(),
         });
     }
 
@@ -1177,7 +1182,7 @@ fn take_bytes(
     core: &mut SessionCore<FileBuilderRequest>,
     id: RequestId,
     range: ByteRange,
-) -> Result<Option<Vec<u8>>, Error> {
+) -> Result<Option<Bytes>, Error> {
     match core.take_reply(id) {
         None => Ok(None),
         Some(FileBuilderReply::Bytes(bytes)) => {
@@ -1249,7 +1254,7 @@ mod tests {
             FileBuilderRequest::Write {
                 stream: stream(),
                 offset: 0,
-                bytes: vec![1, 2, 3],
+                bytes: vec![1, 2, 3].into(),
             },
             FileBuilderRequest::Sign {
                 purpose: SignPurpose::Claim,
@@ -1265,7 +1270,7 @@ mod tests {
 
     fn all_replies() -> Vec<(FileBuilderReply, &'static str)> {
         vec![
-            (FileBuilderReply::Bytes(vec![1]), "Bytes"),
+            (FileBuilderReply::Bytes(vec![1].into()), "Bytes"),
             (FileBuilderReply::Length(4), "Length"),
             (FileBuilderReply::Written, "Written"),
             (FileBuilderReply::Signature(vec![0; 64]), "Signature"),
@@ -1295,8 +1300,8 @@ mod tests {
     #[test]
     fn replies_translate_to_builder_host_replies() {
         assert!(matches!(
-            to_builder_host_reply(FileBuilderReply::Bytes(vec![1])),
-            BuilderHostReply::AssetBytes(bytes) if bytes == [1]
+            to_builder_host_reply(FileBuilderReply::Bytes(vec![1].into())),
+            BuilderHostReply::AssetBytes(bytes) if bytes[..] == [1]
         ));
         assert!(matches!(
             to_builder_host_reply(FileBuilderReply::Signature(vec![1])),
@@ -1327,8 +1332,8 @@ mod tests {
     #[test]
     fn replies_translate_to_io_replies() {
         assert!(matches!(
-            to_io_reply(FileBuilderReply::Bytes(vec![1])),
-            IoReply::Bytes(bytes) if bytes == [1]
+            to_io_reply(FileBuilderReply::Bytes(vec![1].into())),
+            IoReply::Bytes(bytes) if bytes[..] == [1]
         ));
         assert!(matches!(
             to_io_reply(FileBuilderReply::Length(4)),
@@ -1362,7 +1367,7 @@ mod tests {
             Edit::Placeholder(ByteRange { start: 0, len: 0 }),
             Edit::Placeholder(ByteRange { start: 0, len: 3 }),
         ];
-        let placeholder = vec![1, 2, 3];
+        let placeholder = Bytes::from(vec![1, 2, 3]);
 
         let tasks = tasks_for_edits(&edits, &placeholder).unwrap();
         assert_eq!(tasks.len(), 3);
@@ -1375,11 +1380,17 @@ mod tests {
         ));
         assert!(matches!(
             &tasks[1],
-            WriteTask::WriteBytes { output_offset: 10, bytes } if *bytes == [0xaa; 4]
+            WriteTask::WriteBytes { output_offset: 10, bytes } if bytes[..] == [0xaa; 4]
         ));
         assert!(matches!(
             &tasks[2],
-            WriteTask::WriteBytes { output_offset: 14, bytes } if *bytes == [1, 2, 3]
+            WriteTask::WriteBytes { output_offset: 14, bytes } if bytes[..] == [1, 2, 3]
+        ));
+
+        // The slot shares the placeholder's buffer rather than copying it.
+        assert!(matches!(
+            &tasks[2],
+            WriteTask::WriteBytes { bytes, .. } if bytes.as_ptr() == placeholder.as_ptr()
         ));
     }
 
@@ -1387,7 +1398,7 @@ mod tests {
     fn tasks_for_edits_rejects_a_placeholder_slot_past_the_placeholder_bytes() {
         let edits = vec![Edit::Placeholder(ByteRange { start: 0, len: 5 })];
         assert!(matches!(
-            tasks_for_edits(&edits, &[1, 2]),
+            tasks_for_edits(&edits, &Bytes::from(vec![1, 2])),
             Err(Error::Invariant(_))
         ));
     }
@@ -1403,7 +1414,7 @@ mod tests {
             len: COPY_CHUNK_LEN * 2 + 1,
         })];
 
-        let tasks = tasks_for_edits(&edits, &[]).unwrap();
+        let tasks = tasks_for_edits(&edits, &Bytes::new()).unwrap();
         assert_eq!(tasks.len(), 3);
 
         let mut expected_output_offset = 0;
@@ -1422,10 +1433,10 @@ mod tests {
 
     #[test]
     fn slice_rejects_a_range_past_the_end_or_that_overflows() {
-        let bytes = [1u8, 2, 3, 4];
+        let bytes = Bytes::from(vec![1u8, 2, 3, 4]);
         assert_eq!(
             slice(&bytes, ByteRange { start: 1, len: 2 }),
-            Some(&bytes[1..3])
+            Some(bytes.slice(1..3))
         );
         assert_eq!(slice(&bytes, ByteRange { start: 3, len: 2 }), None);
         assert_eq!(
@@ -1459,7 +1470,7 @@ mod tests {
             None,
         );
         assert!(matches!(
-            tasks_for_commit(&JpegFormat, &plan, &[1, 2, 3]),
+            tasks_for_commit(&JpegFormat, &plan, &Bytes::from(vec![1, 2, 3])),
             Err(Error::Invariant(_))
         ));
     }
@@ -1512,7 +1523,7 @@ mod tests {
             vec![ByteRange { start: 4, len: 5 }],
             None,
         );
-        let manifest = [1u8, 2, 3, 4, 5];
+        let manifest = Bytes::from(vec![1u8, 2, 3, 4, 5]);
 
         // The stub is a JPEG in every other respect.
         let stub = Patching(Vec::new());
@@ -1525,7 +1536,7 @@ mod tests {
         let tasks = tasks_for_commit(&inside, &plan, &manifest).unwrap();
         assert!(matches!(
             tasks.back(),
-            Some(WriteTask::WriteBytes { output_offset: 5, bytes }) if bytes == &[9]
+            Some(WriteTask::WriteBytes { output_offset: 5, bytes }) if bytes[..] == [9]
         ));
 
         let outside = Patching(vec![contentauth_c2pa_format::Patch::new(0, vec![9])]);
@@ -1565,7 +1576,7 @@ mod tests {
         // `JpegFormat::commit` never returns a patch — see its own docs —
         // so this also proves an empty patch list leaves the placeholder
         // rewrite as the only task.
-        let tasks = tasks_for_commit(&JpegFormat, &plan, &manifest).unwrap();
+        let tasks = tasks_for_commit(&JpegFormat, &plan, &Bytes::from(manifest.clone())).unwrap();
         assert_eq!(tasks.len(), 1);
         assert!(matches!(
             &tasks[0],
@@ -1698,7 +1709,7 @@ mod tests {
         });
         let tasks: VecDeque<WriteTask> = VecDeque::from([WriteTask::WriteBytes {
             output_offset: 0,
-            bytes: vec![1, 2, 3],
+            bytes: vec![1, 2, 3].into(),
         }]);
 
         let step = step_writing::<JpegFormat>(
@@ -1765,7 +1776,7 @@ mod tests {
         );
 
         let result =
-            step_validating::<JpegFormat>(&mut core, plan, vec![], request, length_request);
+            step_validating::<JpegFormat>(&mut core, plan, vec![].into(), request, length_request);
         assert!(matches!(result, Err(Error::Format(_))));
     }
 
@@ -1781,8 +1792,9 @@ mod tests {
 
         let plan = EmbedPlan::new(vec![], 0, vec![ByteRange { start: 0, len: 0 }], None);
 
-        let step = step_validating::<JpegFormat>(&mut core, plan, vec![], request, length_request)
-            .unwrap();
+        let step =
+            step_validating::<JpegFormat>(&mut core, plan, vec![].into(), request, length_request)
+                .unwrap();
         assert!(matches!(
             step,
             ValidatingStep::AwaitHost(Sub::Validating { .. })
@@ -1803,7 +1815,7 @@ mod tests {
         });
         assert!(take_bytes(&mut core, id, range).unwrap().is_none());
 
-        core.fulfill(id, FileBuilderReply::Bytes(vec![0; 2]))
+        core.fulfill(id, FileBuilderReply::Bytes(vec![0; 2].into()))
             .unwrap();
         assert!(matches!(
             take_bytes(&mut core, id, range),
@@ -1825,9 +1837,12 @@ mod tests {
             stream: stream(),
             range,
         });
-        core.fulfill(id, FileBuilderReply::Bytes(vec![7; 3]))
+        core.fulfill(id, FileBuilderReply::Bytes(vec![7; 3].into()))
             .unwrap();
-        assert_eq!(take_bytes(&mut core, id, range).unwrap(), Some(vec![7; 3]));
+        assert_eq!(
+            take_bytes(&mut core, id, range).unwrap(),
+            Some(vec![7; 3]).map(Into::into)
+        );
     }
 
     /// Mirrors `take_bytes_reports_outstanding_wrong_length_and_failure`
@@ -1839,7 +1854,7 @@ mod tests {
         let id = core.issue(FileBuilderRequest::Write {
             stream: stream(),
             offset: 0,
-            bytes: vec![1],
+            bytes: vec![1].into(),
         });
         assert!(take_write_ack(&mut core, id).unwrap().is_none());
         core.fulfill(id, FileBuilderReply::Written).unwrap();
@@ -1848,7 +1863,7 @@ mod tests {
         let id = core.issue(FileBuilderRequest::Write {
             stream: stream(),
             offset: 0,
-            bytes: vec![1],
+            bytes: vec![1].into(),
         });
         core.fulfill(id, FileBuilderReply::Failed(HostError::new("no disk")))
             .unwrap();
