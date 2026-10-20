@@ -125,10 +125,10 @@ consequential to persist than an incomplete read report.
 |---|---|---|
 | `ReservePlaceholder { stream, placeholder }` | the byte range of the container structure now carrying it, framing included | Host embeds a complete, zero-filled-where-pending manifest store into the asset (typically via a [`contentauth-c2pa-format`](../contentauth-c2pa-format) handler). |
 | `AssetLength { stream }` | total length in bytes | Needed to know what lies after the reserved placeholder. |
-| `AssetBytes { stream, range }` | bytes | Streams the asset (now containing the placeholder) into this crate's hashing, to compute the hard binding. |
+| `AssetBytes { stream, range }` | `Bytes` | Streams the asset (now containing the placeholder) into this crate's hashing, to compute the hard binding. Hosts can return shared slices of in-memory or mapped assets without copying. |
 | `Sign { purpose, alg, data }` | raw signature bytes | Signs a COSE `Sig_structure`; mirrors `c2pa_raw_crypto::RawSigner::sign`. `purpose` says whose key: the claim's, or the identity assertion with the given label. |
 | `Timestamp { digest, hash_alg }` | a bare `TimeStampToken` | Obtains an RFC 3161 countersignature; the host owns the TSA round trip. |
-| `CommitManifest { stream, range, manifest }` | acknowledgement | Replaces the reserved placeholder with the final manifest bytes — guaranteed byte-identical in length. |
+| `CommitManifest { stream, exclusions, manifest }` | acknowledgement | Replaces the reserved placeholder with the final manifest bytes — guaranteed byte-identical in length. `manifest` is a shared `Bytes` buffer, also returned in `BuilderReport`. |
 
 ## Building
 

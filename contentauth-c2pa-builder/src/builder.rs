@@ -13,7 +13,7 @@
 
 //! The build/sign workflow: [`BuilderSession`].
 
-use contentauth_c2pa_primitives::{ByteRange, SigningAlg, StreamId};
+use contentauth_c2pa_primitives::{ByteRange, Bytes, SigningAlg, StreamId};
 pub use contentauth_state_machine::Step as BuilderStep;
 use contentauth_state_machine::{
     Host, HostRequest, ProtocolError, RequestId, Session, Step, Workflow,
@@ -300,11 +300,12 @@ async fn build(
     let stream = BuilderSession::PRIMARY_STREAM;
     let mut manifest = assemble_placeholder(&settings)?;
 
+    // The session keeps patching its buffer, so the host needs its own copy.
     let exclusions = ask(
         &host,
         BuilderRequest::ReservePlaceholder {
             stream,
-            placeholder: manifest.placeholder_bytes().to_vec(),
+            placeholder: Bytes::copy_from_slice(manifest.placeholder_bytes()),
         },
         "PlaceholderReserved",
         |reply| match reply {
@@ -398,7 +399,7 @@ async fn build(
         None => None,
     };
 
-    let final_bytes = manifest.finish(&claim_signature, timestamp_token.as_deref())?;
+    let final_bytes = Bytes::from(manifest.finish(&claim_signature, timestamp_token.as_deref())?);
 
     ask(
         &host,
@@ -577,8 +578,9 @@ impl Session for BuilderSession {
 #[non_exhaustive]
 pub struct BuilderReport {
     /// The final, signed C2PA manifest store bytes — identical to what was
-    /// patched into the asset via `BuilderRequest::CommitManifest`.
-    pub manifest: Vec<u8>,
+    /// patched into the asset via `BuilderRequest::CommitManifest`, and
+    /// shared with that request rather than copied.
+    pub manifest: Bytes,
 
     /// The hard binding's exclusions, as the host reported them via
     /// `BuilderHostReply::PlaceholderReserved`: the container structure
@@ -633,7 +635,7 @@ mod tests {
                     BuilderRequest::AssetBytes { range, .. } => {
                         let start = range.start as usize;
                         BuilderHostReply::AssetBytes(
-                            asset[start..start + range.len as usize].to_vec(),
+                            asset[start..start + range.len as usize].to_vec().into(),
                         )
                     }
                     BuilderRequest::Sign { purpose, .. } => {
@@ -729,7 +731,7 @@ mod tests {
                     BuilderRequest::AssetBytes { range, .. } => {
                         let start = range.start as usize;
                         BuilderHostReply::AssetBytes(
-                            asset[start..start + range.len as usize].to_vec(),
+                            asset[start..start + range.len as usize].to_vec().into(),
                         )
                     }
                     BuilderRequest::Sign { .. } => BuilderHostReply::Signature(vec![0u8; 64]),

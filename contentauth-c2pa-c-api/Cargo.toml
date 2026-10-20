@@ -1,0 +1,70 @@
+[package]
+name = "contentauth-c2pa-c-api"
+version = "0.1.0"
+description = "cimpl-backed C ABI for sans-I/O C2PA reading and signing, leaving all I/O and scheduling to the host"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["c2pa", "content-credentials", "c-api", "sans-io", "swift"]
+categories = ["api-bindings"]
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[[test]]
+name = "read"
+required-features = ["read"]
+
+[[test]]
+name = "build"
+required-features = ["build"]
+
+[[test]]
+name = "roundtrip"
+required-features = ["read", "build"]
+
+[features]
+default = ["read", "build"]
+read = [
+    "dep:contentauth-c2pa-file-reader",
+    "dep:contentauth-c2pa-format-registry",
+    "dep:contentauth-c2pa-js-compat",
+    "dep:contentauth-c2pa-primitives",
+    "dep:contentauth-state-machine",
+    "dep:serde_json",
+]
+build = [
+    "dep:contentauth-c2pa-file-builder",
+    "dep:contentauth-c2pa-format-registry",
+    "dep:contentauth-c2pa-primitives",
+    "dep:contentauth-c2pa-sign-baseline",
+    "dep:contentauth-state-machine",
+]
+
+[dependencies]
+cimpl = "0.4.1"
+contentauth-c2pa-file-builder = { path = "../contentauth-c2pa-file-builder", optional = true }
+contentauth-c2pa-file-reader = { path = "../contentauth-c2pa-file-reader", optional = true }
+contentauth-c2pa-format-registry = { path = "../contentauth-c2pa-format-registry", optional = true }
+contentauth-c2pa-js-compat = { path = "../contentauth-c2pa-js-compat", optional = true }
+contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives", optional = true }
+contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline", optional = true }
+contentauth-state-machine = { path = "../contentauth-state-machine", optional = true }
+serde_json = { version = "1", optional = true }
+thiserror = "2.0.21"
+
+[build-dependencies]
+cbindgen = "0.27"
+
+[dev-dependencies]
+base64 = "0.22"
+c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
+    "rust_native_crypto",
+] }
+contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline", features = [
+    "fixtures",
+] }

@@ -11,7 +11,7 @@
 #include <mutex>
 #include <thread>
 
-#include "check.hpp"
+#include "assertions.hpp"
 #include "contentauth/c2pa_sm_async.hpp"
 #include "contentauth/simple_thread_pool.hpp"
 

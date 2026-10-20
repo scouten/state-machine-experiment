@@ -275,7 +275,7 @@ mod tests {
                 let start = range.start as usize;
                 let bytes = asset[start..start + range.len as usize].to_vec();
                 session
-                    .fulfill(id, BuilderHostReply::AssetBytes(bytes))
+                    .fulfill(id, BuilderHostReply::AssetBytes(bytes.into()))
                     .unwrap();
                 session.advance().unwrap();
             }
@@ -327,7 +327,7 @@ mod tests {
         // window stays full and nothing new is issued.
         let last = session.outstanding_requests()[2].id;
         session
-            .fulfill(last, BuilderHostReply::AssetBytes(vec![0u8; 100]))
+            .fulfill(last, BuilderHostReply::AssetBytes(vec![0u8; 100].into()))
             .unwrap();
         assert_eq!(session.advance().unwrap(), Step::AwaitHost);
 
@@ -361,7 +361,7 @@ mod tests {
             let start = range.start as usize;
             let bytes = asset[start..start + range.len as usize].to_vec();
             session
-                .fulfill(request.id, BuilderHostReply::AssetBytes(bytes))
+                .fulfill(request.id, BuilderHostReply::AssetBytes(bytes.into()))
                 .unwrap();
         }
 
@@ -382,7 +382,7 @@ mod tests {
 
         // One byte short: tolerating this would shift every later byte.
         session
-            .fulfill(id, BuilderHostReply::AssetBytes(vec![0u8; 99]))
+            .fulfill(id, BuilderHostReply::AssetBytes(vec![0u8; 99].into()))
             .unwrap();
 
         assert!(matches!(

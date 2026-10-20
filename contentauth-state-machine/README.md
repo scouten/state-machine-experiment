@@ -44,6 +44,21 @@ whatever outcomes have arrived and make further progress.
    may be reported in any order.
 4. On `Complete`: consume the session with `finish` to obtain its result.
 
+### Threading
+
+A session is **not re-entrant**, and the Rust code provides **no locks**
+around it. Any host that employs a thread model must ensure the session's
+methods are never called simultaneously from multiple threads (nor
+re-entered from within a call in progress on the same session). Crashes or
+unpredictable behavior are likely if this constraint is violated. Calls on
+*different* sessions may safely run at the same time; only calls on the
+*same* session must not. A session may also move to another thread between
+calls. In safe Rust the
+borrow checker does much of this for you (`advance` and `fulfill` take
+`&mut self`, `finish` takes `self`), but hosts that share a session through
+interior mutability or reach it through a raw-handle binding must enforce
+it themselves.
+
 See the `Session` trait and `SessionCore` in [`src/session.rs`](src/session.rs)
 for the concrete API.
 
@@ -88,6 +103,15 @@ does, through `outstanding_requests`, rather than by matching on a phase
 enum — and it must await only `PendingReply`s (or futures built from them).
 Awaiting anything else would never be woken; `advance` reports that as
 `ProtocolError::WorkflowStalled` instead of hanging.
+
+Synchronous hosts can use `session.respond(|request| answer(request))?`
+after each `AwaitHost`. This borrows each request, obtains its owned reply,
+and calls `fulfill` before servicing the next request: no request clones
+or intermediate reply batch are needed. It stops on the first protocol
+error, leaves earlier replies delivered, and does not call `advance`.
+Host-operation failures are carried in the vocabulary's reply type.
+Async hosts and hosts that service only a subset or choose another order
+continue to use `outstanding_requests` / `fulfill` directly.
 
 ## Building
 

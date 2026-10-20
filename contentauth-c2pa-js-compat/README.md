@@ -5,6 +5,13 @@ reader API — the Rust side of the C2PA web SDK — reproduced on top of this
 workspace's sans-I/O read engine, with the asynchrony that API promises
 living *here*, at the interface-specific layer, and nowhere below it.
 
+**Status:** retained alternative Rust-owned async host. The preferred shared
+JavaScript implementation is now in [`js/`](../js/), driving neutral
+[`session bridges`](../contentauth-c2pa-session-bridge/) through synchronous
+Wasm/Neon bindings. This crate keeps its async API and tests, and reexports
+the compatibility vocabulary now owned by the bridge's `compat` module.
+It is not called by the shared JS driver's session loop.
+
 ## Why this crate exists
 
 [`contentauth-c2pa-rs-compat`](../contentauth-c2pa-rs-compat) asked how
@@ -116,7 +123,7 @@ produce, including the exact `C2pa(JumbfNotFound)` string.
   with two `Blob`s.
 * **`resourceToBytes`, `crJson`** — depend on resource and thumbnail data
   the engine does not decode yet.
-* **Formats other than JPEG** — `src/format.rs` is the seam, exactly as
+* **Formats other than JPEG** — the bridge's `compat::format` is the seam, exactly as
   in `contentauth-c2pa-rs-compat`.
 * **The full `@contentauth/c2pa-types` `ManifestStore`** — ingredients,
   decoded assertion values, thumbnails. `ManifestStore` carries the

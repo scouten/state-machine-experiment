@@ -43,9 +43,36 @@
 
 namespace c2pa::sm {
 
+namespace detail {
+
+// Nested Tasks share an execution gate: a reply can transfer into an awaiting
+// frame, so guarding only the directly resumed frame would not be sufficient.
+struct CoroutineLifetime {
+    std::shared_ptr<std::recursive_mutex> gate = std::make_shared<std::recursive_mutex>();
+    bool alive = true;
+};
+
+template <class Promise>
+std::function<void()> coroutine_waker(std::coroutine_handle<Promise> handle) {
+    if constexpr (requires { handle.promise().lifetime; }) {
+        auto lifetime = handle.promise().lifetime;
+        return [lifetime = std::move(lifetime), handle] {
+            std::lock_guard<std::recursive_mutex> lock(*lifetime->gate);
+            if (lifetime->alive) handle.resume();
+        };
+    } else {
+        // Foreign coroutine owners must serialize destruction themselves.
+        return [handle] { handle.resume(); };
+    }
+}
+
+}  // namespace detail
+
 /// @brief A lazy coroutine result: starts when awaited (or `get()` called).
 ///
 /// Awaiting resumes the awaiter on whatever thread completed the task.
+/// Destruction cancels a suspended task and waits for a callback-driven resume
+/// already executing. Task objects themselves still require serialized access.
 template <class T>
 class Task {
 public:
@@ -55,6 +82,8 @@ public:
     struct promise_type {
         std::variant<std::monostate, T, std::exception_ptr> result;
         std::coroutine_handle<> continuation;
+        std::shared_ptr<detail::CoroutineLifetime> lifetime =
+            std::make_shared<detail::CoroutineLifetime>();
 
         // Used only by get(): signalled when the task completes with no
         // coroutine awaiting it. Held by shared pointer, *not* inline in the
@@ -94,11 +123,13 @@ public:
         void unhandled_exception() { result.template emplace<2>(std::current_exception()); }
     };
 
-    Task(Task &&other) noexcept : handle_(std::exchange(other.handle_, {})) {}
+    Task(Task &&other) noexcept
+        : handle_(std::exchange(other.handle_, {})), lifetime_(std::move(other.lifetime_)) {}
     Task &operator=(Task &&other) noexcept {
         if (this != &other) {
             destroy();
             handle_ = std::exchange(other.handle_, {});
+            lifetime_ = std::move(other.lifetime_);
         }
         return *this;
     }
@@ -107,7 +138,11 @@ public:
     ~Task() { destroy(); }
 
     bool await_ready() const noexcept { return false; }
-    std::coroutine_handle<> await_suspend(std::coroutine_handle<> awaiter) noexcept {
+    template <class Promise>
+    std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> awaiter) noexcept {
+        if constexpr (requires { awaiter.promise().lifetime; }) {
+            lifetime_->gate = awaiter.promise().lifetime->gate;
+        }
         handle_.promise().continuation = awaiter;
         return handle_;
     }
@@ -120,16 +155,20 @@ public:
         // on another thread, the frame (and its promise) may not be touched
         // except through what we hold.
         std::shared_ptr<typename promise_type::Sync> sync = handle_.promise().sync;
-        handle_.resume();
+        {
+            std::lock_guard<std::recursive_mutex> lock(*lifetime_->gate);
+            handle_.resume();
+        }
         {
             std::unique_lock<std::mutex> lock(sync->mutex);
             sync->cv.wait(lock, [&sync] { return sync->finished; });
         }
+        std::lock_guard<std::recursive_mutex> lock(*lifetime_->gate);
         return take();
     }
 
 private:
-    explicit Task(Handle h) : handle_(h) {}
+    explicit Task(Handle h) : handle_(h), lifetime_(h.promise().lifetime) {}
 
     T take() {
         auto &result = handle_.promise().result;
@@ -141,12 +180,18 @@ private:
 
     void destroy() {
         if (handle_) {
+            // Keep the gate alive even if nested destruction releases the
+            // promise's final reference while a callback is returning.
+            auto lifetime = lifetime_;
+            std::lock_guard<std::recursive_mutex> lock(*lifetime->gate);
+            lifetime->alive = false;
             handle_.destroy();
             handle_ = {};
         }
     }
 
     Handle handle_;
+    std::shared_ptr<detail::CoroutineLifetime> lifetime_;
 };
 
 /// @brief What a `spawn`ed task produced: its value, or what it threw.
@@ -196,9 +241,10 @@ void spawn(Task<T> task, F on_done) {
 struct NextReply {
     Mailbox &mailbox;
     bool await_ready() const noexcept { return false; }
-    bool await_suspend(std::coroutine_handle<> h) {
+    template <class Promise>
+    bool await_suspend(std::coroutine_handle<Promise> h) {
         // false (resume at once) if a reply already arrived
-        return mailbox.set_waker([h] { h.resume(); });
+        return mailbox.set_waker(detail::coroutine_waker(h));
     }
     void await_resume() const noexcept {}
     // Destroying a suspended coroutine destroys this awaiter: make sure no
@@ -210,9 +256,9 @@ struct NextReply {
 ///
 /// `host` must outlive the task. Destroying a suspended task cancels the
 /// read: requests the host has started run on, and their completions land
-/// harmlessly in the mailbox. (Do not destroy a task *while* another thread
-/// is resuming it — as with any coroutine, that race is the caller's to
-/// exclude, e.g. by cancelling from the thread that resumes it.)
+/// harmlessly in the mailbox. Destruction synchronizes with callback-driven
+/// resumption, including nested Tasks. A non-Task coroutine awaiting this Task
+/// must externally serialize destruction of its own frame with resumption.
 inline Task<std::optional<Reader>> co_read(Session session, AsyncHost &host) {
     Reading reading(std::move(session), host);
     while (!reading.step()) {

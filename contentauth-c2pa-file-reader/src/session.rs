@@ -28,7 +28,7 @@
 use std::collections::HashMap;
 
 use contentauth_c2pa_format::{FormatHandler, IoReply, IoRequest};
-use contentauth_c2pa_primitives::{ByteRange, HostError, StreamId};
+use contentauth_c2pa_primitives::{ByteRange, Bytes, HostError, StreamId};
 use contentauth_c2pa_reader::{
     ReadHostReply, ReadReport, ReadRequest, ReadSession, ReadSettings, ReadStep,
 };
@@ -116,7 +116,7 @@ impl Request for FileReadRequest {
 #[non_exhaustive]
 pub enum FileReadReply {
     /// Answers [`FileReadRequest::Read`]: the requested bytes.
-    Bytes(Vec<u8>),
+    Bytes(Bytes),
 
     /// Answers [`FileReadRequest::Length`]: the stream's total length in
     /// bytes.
@@ -146,7 +146,7 @@ enum Phase<H: FormatHandler> {
         /// The embedded manifest store `Locating` found, if any — answers
         /// [`ReadRequest::ManifestStore`] without ever surfacing it to this
         /// session's own host.
-        manifest_store: Option<Vec<u8>>,
+        manifest_store: Option<Bytes>,
         session: Box<ReadSession>,
     },
 
@@ -528,7 +528,7 @@ mod tests {
 
     fn all_replies() -> Vec<(FileReadReply, &'static str)> {
         vec![
-            (FileReadReply::Bytes(vec![1]), "Bytes"),
+            (FileReadReply::Bytes(vec![1].into()), "Bytes"),
             (FileReadReply::Length(4), "Length"),
             (
                 FileReadReply::CurrentDateTime(1_700_000_000),
@@ -606,8 +606,8 @@ mod tests {
     #[test]
     fn replies_translate_to_io_replies() {
         assert!(matches!(
-            to_io_reply(FileReadReply::Bytes(vec![1])),
-            IoReply::Bytes(bytes) if bytes == [1]
+            to_io_reply(FileReadReply::Bytes(vec![1].into())),
+            IoReply::Bytes(bytes) if bytes[..] == [1]
         ));
         assert!(matches!(
             to_io_reply(FileReadReply::Length(4)),
@@ -639,8 +639,8 @@ mod tests {
     #[test]
     fn replies_translate_to_read_host_replies() {
         assert!(matches!(
-            to_read_host_reply(FileReadReply::Bytes(vec![1])),
-            ReadHostReply::AssetBytes(bytes) if bytes == [1]
+            to_read_host_reply(FileReadReply::Bytes(vec![1].into())),
+            ReadHostReply::AssetBytes(bytes) if bytes[..] == [1]
         ));
         assert!(matches!(
             to_read_host_reply(FileReadReply::Length(4)),

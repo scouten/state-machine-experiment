@@ -19,6 +19,11 @@ crate-type = ["rlib", "staticlib", "cdylib"]
 
 [dependencies]
 # The flat, synchronous `advance`/`fulfill`/`finish` session this ABI
-# exposes. Despite the name it is host-agnostic: plain-data requests and
-# replies, no runtime, no Node types.
-contentauth-c2pa-node-compat = { path = "../contentauth-c2pa-node-compat" }
+# exposes: plain-data requests and replies, no runtime or Node types.
+contentauth-c2pa-session-bridge = { path = "../contentauth-c2pa-session-bridge" }
+cimpl = "=0.4.1"
+
+[dev-dependencies]
+contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline", features = ["fixtures"] }
+c2pa_raw_crypto = "0.1.2"
+base64 = "0.22"

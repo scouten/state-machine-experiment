@@ -64,17 +64,14 @@ pub(crate) fn read<H: FormatHandler, R: Read + Seek>(
             return session.finish();
         }
 
-        for request in session.outstanding_requests().to_vec() {
-            let reply = answer(&mut source, &request.kind);
-            session.fulfill(request.id, reply)?;
-        }
+        session.respond(|request| answer(&mut source, request))?;
     }
 }
 
 fn answer<R: Read + Seek>(source: &mut R, request: &FileReadRequest) -> FileReadReply {
     match request {
         FileReadRequest::Read { range, .. } => match read_range(source, *range) {
-            Ok(bytes) => FileReadReply::Bytes(bytes),
+            Ok(bytes) => FileReadReply::Bytes(bytes.into()),
             Err(err) => FileReadReply::Failed(read_failed(*range, &err)),
         },
 

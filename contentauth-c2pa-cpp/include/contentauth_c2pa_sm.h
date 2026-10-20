@@ -39,6 +39,13 @@ typedef struct C2paSmSession C2paSmSession; /* a read in progress */
 typedef struct C2paSmReader C2paSmReader;   /* a finished read, immutable */
 typedef struct C2paSmError C2paSmError;     /* an error, by value */
 
+typedef enum C2paSmValidationState {
+    C2PA_SM_VALIDATION_UNAVAILABLE = -1,
+    C2PA_SM_VALIDATION_INVALID = 0,
+    C2PA_SM_VALIDATION_VALID = 1,
+    C2PA_SM_VALIDATION_TRUSTED = 2
+} C2paSmValidationState;
+
 enum {
     C2PA_SM_OK = 0,
     C2PA_SM_ERR_INVALID_ARGUMENT = 1,
@@ -102,6 +109,7 @@ int c2pa_sm_session_finish(C2paSmSession *session, C2paSmReader **out_reader,
 
 void c2pa_sm_reader_free(C2paSmReader *reader);
 char *c2pa_sm_reader_json(const C2paSmReader *reader);         /* free with string_free */
+C2paSmValidationState c2pa_sm_reader_validation_state(const C2paSmReader *reader); /* UNAVAILABLE if NULL */
 char *c2pa_sm_reader_active_label(const C2paSmReader *reader); /* NULL if none */
 bool c2pa_sm_reader_is_embedded(const C2paSmReader *reader);
 void c2pa_sm_string_free(char *s);

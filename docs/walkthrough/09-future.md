@@ -12,9 +12,10 @@ flowchart LR
         d1["Read + validate: integrity, signature,<br/>trust, RFC 3161, OCSP, v1+v2 claims"]
         d2["Write: v2 claim, data hash, any signing alg,<br/>timestamp"]
         d3["Formats: JPEG, TIFF/BigTIFF/DNG, registry"]
-        d4["Bindings: rs / wasm / node, read and sign"]
+        d4["Bindings: rs / wasm / node, read and sign<br/>C++ reader: C ABI + blocking / threaded / coroutine hosts"]
         d5["Differential tests vs c2pa-rs"]
         d6["Engine: async-fn workflows, no runtime<br/>(builder ported)"]
+        d7["C++ read + sign; blocking / pool / future / coroutine<br/>atomic file signing + Trusted read-back example"]
     end
     subgraph next["Next"]
         direction TB
@@ -72,14 +73,25 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 
 ## 4. Bindings and hosts
 
+* **C++ host integrations:** production private-key providers and real TSA HTTP
+  transport remain host responsibilities, as do atomic publication on non-POSIX
+  systems and packaging (`install`/`find_package`, vcpkg, Conan). The baseline
+  JPEG/ES256 case already has blocking, async/pool/future and coroutine drivers,
+  atomic file failure tests and a runnable signing/read-back example included
+  in the coverage and sanitizer CI matrix. Concurrent destruction of a running
+  coroutine is not supported; its documented host-lifetime rules still apply.
 * **`Builder` surface parity** for the c2pa-rs shape beyond the baseline
   case; `from_stream` and other constructors.
 * **c2pa-node:** `fromManifestDataAndAsset`, `resourceToAsset`, signers,
   CAWG identity assertions (the X.509 type is done on the core read and
   write paths; this is the bindings), Trustmark.
-* **Browser:** a `fetch`-backed OCSP `Platform`; actually *running* the
-  `web` modules (there's no browser in CI today); a Worker-hosted session
-  for hashing off the main thread.
+* **JS hosts over the bridge:** `contentauth-c2pa-session-bridge` now holds the
+  neutral read/build bridges and compatibility vocabulary; the Wasm and Neon
+  bindings are consumers. Next, migrate the older host capabilities behind
+  compatibility facades with preservation tests before removing their
+  separate loops.
+* **Browser:** a `fetch`-backed OCSP `Platform`; the existing async `web`
+  modules still have no browser CI coverage.
 * **Other host languages** — Python, Swift, Kotlin, .NET: the Node binding
   shows the minimal shape (a handful of synchronous functions plus a host
   loop). Each is a good test of whether the flattened `PendingRequest`/
