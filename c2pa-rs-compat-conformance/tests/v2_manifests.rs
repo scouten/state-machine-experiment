@@ -232,3 +232,73 @@ fn a_manifest_the_workspace_builder_wrote_is_a_valid_v2_claim_to_c2pa_rs() {
         "{successes:?}"
     );
 }
+
+/// Characterizes a known gap, not acceptable parity: remove this divergence
+/// expectation when the reader gains action semantic validation.
+#[test]
+fn known_gap_created_action_without_source_type_is_only_rejected_by_c2pa_rs() {
+    let baseline = contentauth_c2pa_sign_baseline::BASELINE_DEFINITION;
+    let missing_source_type = baseline.replace(
+        ",\n            \"digitalSourceType\": \"http://cv.iptc.org/newscodes/digitalsourcetype/digitalCapture\"",
+        "",
+    );
+    assert_ne!(
+        missing_source_type, baseline,
+        "the negative case must differ"
+    );
+
+    for (name, definition, malformed) in [
+        ("valid_action", baseline, false),
+        ("missing_source_type", missing_source_type.as_str(), true),
+    ] {
+        let mut signed = Cursor::new(Vec::new());
+        contentauth_c2pa_rs_compat_sign::Builder::from_json(definition)
+            .expect("both definitions are accepted by the workspace builder")
+            .sign(
+                &WorkspaceSigner,
+                "image/jpeg",
+                Cursor::new(unsigned_jpeg()),
+                &mut signed,
+            )
+            .expect("both cases are freshly signed, not byte-tampered");
+        let path = write_temp(&format!("action_parity_{name}.jpg"), &signed.into_inner());
+
+        let ours = Reader::from_context(Context::new())
+            .with_file(&path)
+            .expect("the workspace reader reads both cases");
+        assert_eq!(ours.validation_state(), ValidationState::Valid, "{name}");
+        let json = ours.json();
+        assert!(!json.contains("assertion.action.malformed"), "{json}");
+        for code in [
+            "claimSignature.validated",
+            "assertion.dataHash.match",
+            "assertion.hashedURI.match",
+        ] {
+            assert!(json.contains(code), "{name}: {json}");
+        }
+
+        let real = c2pa::Reader::from_context(c2pa::Context::new())
+            .with_file(&path)
+            .expect("c2pa-rs returns validation findings for both cases");
+        let results = real
+            .validation_results()
+            .and_then(|results| results.active_manifest())
+            .expect("c2pa-rs validated the active manifest");
+        let mut failures: Vec<&str> = results.failure().iter().map(|s| s.code()).collect();
+        failures.sort_unstable();
+        let expected = if malformed {
+            vec!["assertion.action.malformed", "signingCredential.untrusted"]
+        } else {
+            vec!["signingCredential.untrusted"]
+        };
+        assert_eq!(failures, expected, "{name}: {}", real.json());
+        let successes: Vec<&str> = results.success().iter().map(|s| s.code()).collect();
+        for code in [
+            "claimSignature.validated",
+            "assertion.dataHash.match",
+            "assertion.hashedURI.match",
+        ] {
+            assert!(successes.contains(&code), "{name}: {successes:?}");
+        }
+    }
+}
