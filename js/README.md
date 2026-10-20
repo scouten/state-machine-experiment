@@ -225,7 +225,7 @@ See the [compatibility experiment](experiments/2026-10-16-node-compat-facade.md)
   without a whole-input `arrayBuffer()` conversion. The Worker fulfills each
   source request with `slice(start, end).arrayBuffer()`.
   File names and MIME hints do not select a handler or set the output title:
-  callers name the format (`{format}` on `read` and `sign`; JPEG by default, TIFF/DNG also supported), and signing metadata comes from the definition.
+  callers may name the format (`{format}` on `read` and `sign`); when omitted, Rust detects JPEG/TIFF/DNG from the asset's leading bytes, which the host merely supplies, and signing metadata comes from the definition.
   Node 24.18 rejects direct `fs.openAsBlob()` inputs as non-cloneable; derived
   file-backed wrappers may expose a Node runtime bug. See the
   [experiment report](experiments/2026-10-16-file-blob-memory.md).

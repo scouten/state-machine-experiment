@@ -10,6 +10,10 @@ const native = createRequire(import.meta.url)("../../../c2pa-node-compat-addon/i
 const signing = createRequire(import.meta.url)("../../../c2pa-node-sign-addon/index.node");
 /** Session factory (`create`, `createBuild`) the shared Worker service drives. */
 export const adapter = {
+  /** Bytes of an asset's head that {@link adapter.detect} wants. */
+  detectWindow: () => native.detectWindow(),
+  /** Format (MIME type) Rust recognizes from `header`; throws if none. */
+  detect: (header) => native.detectFormat(Buffer.from(header.buffer, header.byteOffset, header.byteLength)),
   /** Read session for an asset of `format` (MIME type or extension). */
   create(settings, format) {
     let session = native.sessionNew(format, settings);

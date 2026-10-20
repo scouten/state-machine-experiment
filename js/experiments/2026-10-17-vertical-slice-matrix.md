@@ -39,7 +39,7 @@ CA + leaf chain with an AIA OCSP URL.
 | Timestamp URL/transport override | missing | js | the older standalone Neon host allowed it; Worker uses `fetch` only |
 | Custom trust anchors | pass | — | `Trusted` with anchor, `Valid` without |
 | TIFF read/sign (Neon, Wasm) | pass | — | *(closed in the bridge)* `for_format` resolves through the standard format registry (JPEG, TIFF/BigTIFF/DNG); a TIFF signed from JS reads back `Trusted` |
-| Format detection in Node host | caller-named only | js | `format` option selects a handler (default JPEG); no content detection |
+| Format detection by content | pass | — | *(closed in the bridge)* the Rust registry picks the handler from leading bytes (`detect_format`, `detect_window`, exported by Neon and Wasm); the shared host only supplies them when `format` is omitted; unrecognized bytes fail `UnsupportedType` |
 | Live OCSP read, Node | pass | — | *(closed in the shared host)* `fetch` POST `application/ocsp-request`; literal private/loopback hosts refused unless `ocspPolicy.allowPrivateHosts`; failures fail open |
 | Live OCSP read, Wasm | pass | — | *(closed in the glue)* `ReadSession` surfaces `Ocsp`, `ocsp()`/`failed()` replies; same shared loop and policy |
 | CAWG identity signing | pass | — | *(closed in the bridge)* `signer.identities` with their own key and algorithm; the sign request carries the assertion label |
@@ -57,8 +57,7 @@ CA + leaf chain with an AIA OCSP URL.
 3. Wasm now matches Neon for timestamps and OCSP (request/reply glue, plus a
    shared Worker-side OCSP host with a private-host policy). DNS names that
    resolve to private addresses are not caught by that policy.
-4. JS-side follow-ups: TSA override, content-based format
-   detection, and mapping facade `ps256`/`timeAuthorityUrl` (still rejected on
+4. JS-side follow-ups: TSA override and mapping facade `ps256`/`timeAuthorityUrl` (still rejected on
    purpose).
 
 ## Caveats

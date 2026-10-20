@@ -3,7 +3,8 @@
 #![deny(unsafe_code, missing_docs, clippy::unwrap_used, clippy::expect_used)]
 
 use contentauth_c2pa_session_bridge::read::{
-    Error, PendingRequest, ReadSessionBridge, Reply, Step,
+    Error, PendingRequest, ReadSessionBridge, Reply, Step, detect_format as detect,
+    detect_window as window,
 };
 use serde_json::json;
 use wasm_bindgen::prelude::*;
@@ -16,6 +17,18 @@ fn error(err: Error) -> JsValue {
     let value = js_sys::Error::new(&err.to_string());
     value.set_name(&err.js_message());
     value.into()
+}
+
+/// How many leading bytes of an asset `detectFormat` wants.
+#[wasm_bindgen(js_name = detectWindow)]
+pub fn detect_window() -> f64 {
+    window() as f64
+}
+
+/// The `format` (MIME type) for an asset's leading bytes, chosen by content.
+#[wasm_bindgen(js_name = detectFormat)]
+pub fn detect_format(header: &[u8]) -> Result<String, JsValue> {
+    detect(header).map_err(error)
 }
 
 /// A reader session owned exclusively by one browser Worker.

@@ -12,7 +12,9 @@
 
 use std::cell::RefCell;
 
-use contentauth_c2pa_session_bridge::read::{Error, ReadSessionBridge, PendingRequest, Reply, Step};
+use contentauth_c2pa_session_bridge::read::{
+    detect_format, detect_window, Error, PendingRequest, ReadSessionBridge, Reply, Step,
+};
 use neon::{prelude::*, types::buffer::TypedArray};
 
 /// A session handle JS holds. `RefCell` because Neon hands out `&self`;
@@ -159,8 +161,27 @@ fn session_finish(mut cx: FunctionContext) -> JsResult<JsValue> {
     }
 }
 
+/// How many leading bytes `detectFormat` wants.
+fn detect_window_js(mut cx: FunctionContext) -> JsResult<JsNumber> {
+    Ok(cx.number(detect_window() as f64))
+}
+
+/// The MIME type for an asset's leading bytes, chosen by content alone.
+fn detect_format_js(mut cx: FunctionContext) -> JsResult<JsString> {
+    let header = cx.argument::<JsBuffer>(0)?;
+    match detect_format(header.as_slice(&cx)) {
+        Ok(format) => Ok(cx.string(format)),
+        Err(err) => {
+            let js = js_error(&mut cx, &err)?;
+            cx.throw(js)
+        }
+    }
+}
+
 #[neon::main]
 fn main(mut cx: ModuleContext) -> NeonResult<()> {
+    cx.export_function("detectWindow", detect_window_js)?;
+    cx.export_function("detectFormat", detect_format_js)?;
     cx.export_function("sessionNew", session_new)?;
     cx.export_function("sessionAdvance", session_advance)?;
     cx.export_function("sessionFulfill", session_fulfill)?;

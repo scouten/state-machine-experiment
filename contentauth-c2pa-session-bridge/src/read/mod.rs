@@ -24,6 +24,20 @@ use crate::compat::for_format;
 
 mod reader;
 
+/// How many leading bytes of an asset [`detect_format`] may look at.
+pub fn detect_window() -> u64 {
+    crate::compat::detect_window()
+}
+
+/// The `format` (a MIME type) a session should be created with for an
+/// asset whose leading bytes are `header`, chosen by content alone.
+///
+/// Fails with [`C2paError::UnsupportedType`] when no registered format's
+/// signature matches.
+pub fn detect_format(header: &[u8]) -> Result<String, Error> {
+    Ok(crate::compat::detect(header)?.to_string())
+}
+
 pub use reader::Reader;
 
 pub use crate::compat::{

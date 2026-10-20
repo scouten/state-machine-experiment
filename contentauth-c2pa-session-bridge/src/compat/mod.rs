@@ -10,7 +10,7 @@ pub mod manifest_store;
 
 pub use context::Context;
 pub use error::{C2paError, Error};
-pub use format::{for_format, FORMATS};
+pub use format::{detect, detect_window, for_format, FORMATS};
 pub use manifest_store::{
     ClaimGeneratorInfo, Manifest, ManifestStore, ValidationState, ValidationStatus,
 };

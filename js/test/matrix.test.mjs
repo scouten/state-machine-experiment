@@ -126,6 +126,8 @@ test("browser Wasm glue: algorithm, format and identities are constructor parame
   record("sign.alg.wasm", "signing", "non-ES256 through Wasm", "wasm-glue", "pass",
     "BuildSession takes format, algorithm and identities; PS* derives its signature length from the leaf certificate (construction only here; the browser contracts run it end to end)");
   new wasm.ReadSession("image/tiff").free();
+  assert.equal(wasm.detectFormat(tiffSource), "image/tiff");
+  assert.throws(() => wasm.detectFormat(new Uint8Array([1, 2, 3, 4])));
   record("format.tiff.read.wasm", "formats", "TIFF read through Wasm", "rust-bridge", "pass",
     "ReadSession(\"image/tiff\") constructs (read end to end through Neon below)");
 });
@@ -142,12 +144,15 @@ test("TIFF through the Worker host, and the host's format gap", async () => {
   assert.throws(() => nativeReader.sessionNew("image/png", undefined), /UnsupportedType|unsupported/i);
   assert.throws(() => nativeSigner.buildNew(JSON.stringify(baseline), "image/png", "es256", []),
     /UnsupportedType|unsupported/i);
-  // The host never detects format: a PNG is handed to the JPEG handler as-is.
+  // Neither caller names a format: Rust recognizes both from content.
+  const detectedSigned = await client.sign(tiffSource, baseline, signerFor("es256"));
+  const detectedRead = await client.read(detectedSigned.asset, { settings: settingsFor("es256"), now: nowSeconds() });
+  assert.equal(detectedRead.report.validation_state, "Trusted");
   const png = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
-  const outcome = await client.read(new Uint8Array(png)).then((value) => `ok:${JSON.stringify(value.report)}`,
-    (error) => `${error.name}: ${error.message}`);
-  record("format.detect.host", "formats", "format detection by content/extension", "js", "gap-js",
-    `format defaults to JPEG unless the caller names one; non-JPEG bytes go to the JPEG handler unannounced; outcome: ${outcome}`);
+  const outcome = await client.read(new Uint8Array(png)).then(() => "ok", (error) => error.name);
+  assert.match(outcome, /UnsupportedType/);
+  record("format.detect.host", "formats", "format detection by content", "rust-bridge", "pass",
+    `with no format named, Rust's registry picks the handler from the asset's leading bytes (host only supplies them): an unnamed TIFF signs and reads Trusted; PNG bytes fail ${outcome}`);
 });
 
 // A canned authority, as in the signing addon's own tests: the token is opaque to

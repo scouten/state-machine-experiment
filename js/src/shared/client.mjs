@@ -106,7 +106,7 @@ export class Client {
    * @param {Uint8Array|Blob} asset Captured synchronously, before any await.
    * @param {{settings?: object, now?: number, format?: string, ocspPolicy?: {allowPrivateHosts?: boolean}}} [options]
    *   `ocspPolicy` governs live OCSP (see `postOcsp`; private hosts are refused by default). `format` is the
-   *   asset's MIME type or extension (default JPEG). `now` is Unix seconds
+   *   asset's MIME type or extension (detected from content when omitted). `now` is Unix seconds
    *   (signed 32-bit) used as the validation clock; defaults to the current time.
    * @returns {Promise<{report: object|null, stats: object, workerMs: number}>}
    */
@@ -129,7 +129,7 @@ export class Client {
    * @param {Signer} signer Runs on the caller's thread; its key never leaves it.
    * @param {unknown} [destination] Optional file destination (Node client only);
    *   omitted means the signed asset is returned in memory.
-   * @param {{format?: string}} [options] Asset type (MIME type or extension; default JPEG).
+   * @param {{format?: string}} [options] Asset type (MIME type or extension; detected from content when omitted).
    *   Add CAWG identity assertions with `signer.identities`: `{alg, certs, roles?,
    *   referencedAssertions?, sign(data)}`; their keys also stay on the caller's thread.
    */
