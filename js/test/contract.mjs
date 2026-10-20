@@ -38,6 +38,26 @@ export async function contract(createClient, small, large, fixture) {
     const ordered = await Promise.all([client.read(small, options), client.read(large, options)]);
     equal(ordered[0].report, expected.report, "queued operation report changed");
     equal(ordered[1].report, fixture.files.large.report, "large report differs");
+    for (const wrap of [
+      (bytes) => new Blob([bytes], { type: "image/jpeg" }),
+      (bytes) => new File([bytes], "misleading.png", { type: "image/png" }),
+    ]) {
+      for (const [bytes, expected] of [[small, fixture.files.small], [large, fixture.files.large]]) {
+        const result = await client.read(wrap(bytes), options);
+        equal(result.report, expected.report, "Blob/File report differs");
+        equal(result.stats, expected.stats, "Blob/File request accounting differs");
+        check(result.stats.maxReadBytes <= 65536, "source read exceeds 64 KiB");
+      }
+      check((await client.read(wrap(changed), options)).report.validation_state === "Invalid",
+        "Blob/File tamper must be Invalid");
+      equal((await client.read(wrap(new Uint8Array([255, 216, 255, 217])), options)).report,
+        null, "unsigned Blob/File must return null");
+      await rejects(client.read(wrap(malformed), options), /./);
+      await rejects(client.read(wrap(small), {
+        settings: { verify: { ocsp_fetch: "invalid" } }, now: fixture.now,
+      }), /BadParam|invalid|expected/i);
+    }
+    await rejects(client.read({ size: small.length }, options), /asset must be/);
 
     const samples = [];
     // Warmup and startup costs are separate from these repeated operations.
@@ -65,7 +85,7 @@ export async function contract(createClient, small, large, fixture) {
     // Isolates must own separate native sessions; disposing one cannot kill another.
     const other = createClient();
     try {
-      const abandoned = client.read(large, options);
+      const abandoned = client.read(new Blob([large]), options);
       const rejection = rejects(abandoned, /disposed/);
       await client.dispose();
       await rejection;
@@ -74,6 +94,7 @@ export async function contract(createClient, small, large, fixture) {
     await rejects(client.read(small, options), /disposed/);
     return { samples, checks: ["full report", "exact request bytes", "input snapshot/no detach",
       "unsigned null", "settings error", "malformed error/retry", "tamper Invalid",
-      "queued operations", "application task progress", "pending disposal", "Worker isolation"] };
+      "queued operations", "Blob/File small and large parity, bounded reads, tamper and errors",
+      "application task progress", "pending disposal", "Worker isolation"] };
   } finally { await client.dispose() }
 }

@@ -13,23 +13,39 @@
  * never read outside the asset.
  * @throws {Error} `invalid asset range`
  */
-function range(start, len, length) {
+export function range(start, len, length) {
   if (!Number.isSafeInteger(start) || !Number.isSafeInteger(len) ||
       !Number.isSafeInteger(start + len) || start < 0 || len < 0 || start + len > length)
     throw new Error("invalid asset range");
+}
+
+export function source(asset) {
+  const length = asset instanceof Blob ? asset.size : asset.length;
+  return {
+    length,
+    async close() {},
+    async read(start, len) {
+      range(start, len, length);
+      const bytes = asset instanceof Blob
+        ? new Uint8Array(await asset.slice(start, start + len).arrayBuffer())
+        : asset.subarray(start, start + len);
+      if (bytes.length !== len) throw new Error("short asset read");
+      return bytes;
+    },
+  };
 }
 
 /**
  * Runs a read/validation session to completion. Requests in one step are
  * independent, so they are answered concurrently.
  * @param {{create(settings?: string): object}} adapter Session factory (Neon or Wasm).
- * @param {Uint8Array} asset
+ * @param {Uint8Array|Blob|object} input Asset bytes, Blob or host source
  * @param {string|undefined} settings JSON reader settings.
  * @param {number} now Unix seconds supplied as the session's clock.
  * @returns {Promise<{report: object|null, stats: object}>} Parsed report
  *   (`null` when the asset has no manifest store) and request counters.
  */
-export async function read(adapter, asset, settings, now) {
+export async function read(adapter, input, settings, now) {
   const session = adapter.create(settings);
   const stats = { reads: 0, bytes: 0, maxReadBytes: 0, advances: 0 };
   try {
@@ -46,15 +62,14 @@ export async function read(adapter, asset, settings, now) {
         switch (request.kind) {
           case "read": {
             const { start, len } = request;
-            range(start, len, asset.length);
-            const bytes = asset.subarray(start, start + len);
+            const bytes = await input.read(start, len);
             stats.reads++;
             stats.bytes += bytes.length;
             stats.maxReadBytes = Math.max(stats.maxReadBytes, bytes.length);
             session.fulfill(request.id, "bytes", bytes);
             break;
           }
-          case "length": session.fulfill(request.id, "length", asset.length); break;
+          case "length": session.fulfill(request.id, "length", input.length); break;
           case "time": session.fulfill(request.id, "time", now); break;
           default: throw new Error(`unsupported host request: ${request.kind}`);
         }
@@ -63,28 +78,48 @@ export async function read(adapter, asset, settings, now) {
   } finally { session.close() }
 }
 
+export function memoryOutput() {
+  let output = new Uint8Array(0);
+  /** Logical output length; `output` may be larger (geometric growth). */
+  let length = 0;
+  return {
+    get length() { return length },
+    read: (start, len) => source(output.subarray(0, length)).read(start, len),
+    async write(offset, bytes) {
+      range(offset, bytes.length, Number.MAX_SAFE_INTEGER);
+      const end = offset + bytes.length;
+      if (end > output.length) {
+        const next = new Uint8Array(Math.max(end, output.length * 2, 4096));
+        next.set(output);
+        output = next;
+      }
+      output.set(bytes, offset);
+      length = Math.max(length, end);
+    },
+    async finish() { return { asset: output.slice(0, length) } },
+    async close() {},
+  };
+}
+
 /**
  * Runs a build-and-sign session to completion. Requests are answered
  * sequentially: the builder's two passes depend on earlier writes. Source and
- * output are addressed by stream name; the output grows in memory.
+ * output are addressed by stream name; the output defaults to memory.
  * @param {{createBuild(definition: string, certs: Uint8Array[]): object}} adapter
- * @param {Uint8Array} asset Asset to sign.
+ * @param {Uint8Array|Blob|object} input Asset to sign.
  * @param {string} definition JSON manifest definition.
  * @param {Uint8Array[]} certs DER certificate chain, leaf first.
  * @param {(request: {id: number, alg: string, data: Uint8Array}) => Promise<Uint8Array>} sign
  *   Produces a raw ES256 signature over `request.data`.
+ * @param {object} [output] Output sink; defaults to {@link memoryOutput}.
  * @returns {Promise<object>} Builder report plus the signed `asset` and `stats`.
  */
-export async function build(adapter, asset, definition, certs, sign) {
+export async function build(adapter, input, definition, certs, sign, output = memoryOutput()) {
   const session = adapter.createBuild(definition, certs);
-  let output = new Uint8Array(0);
-  /** Logical output length; `output` may be larger (geometric growth). */
-  let length = 0;
-  const stats = { reads: 0, bytes: 0, writes: 0, writtenBytes: 0, signs: 0, advances: 0 };
-  /** Maps a request's stream name to its backing bytes. */
+  const stats = { reads: 0, bytes: 0, maxSourceReadBytes: 0, writes: 0, writtenBytes: 0, signs: 0, advances: 0 };
   function stream(name) {
-    if (name === "source") return asset;
-    if (name === "output") return output.subarray(0, length);
+    if (name === "source") return input;
+    if (name === "output") return output;
     throw new Error(`unsupported stream: ${name}`);
   }
   try {
@@ -93,32 +128,25 @@ export async function build(adapter, asset, definition, certs, sign) {
       const step = session.advance();
       if (step.done) {
         const report = session.finish();
-        return { ...report, asset: output.slice(0, length), stats }; // trimmed copy: no stale tail
+        return { ...report, ...await output.finish(), stats };
       }
       if (!step.requests.length) throw new Error("session stalled without host requests");
       for (const request of step.requests) {
         switch (request.kind) {
           case "read": {
-            const bytes = stream(request.stream);
-            range(request.start, request.len, bytes.length);
+            const bytes = await stream(request.stream).read(request.start, request.len);
             stats.reads++;
             stats.bytes += request.len;
-            session.fulfill(request.id, "bytes", bytes.subarray(request.start, request.start + request.len));
+            if (request.stream === "source")
+              stats.maxSourceReadBytes = Math.max(stats.maxSourceReadBytes, request.len);
+            session.fulfill(request.id, "bytes", bytes);
             break;
           }
           case "length": session.fulfill(request.id, "length", stream(request.stream).length); break;
           case "write": {
             if (request.stream !== "output" || !(request.bytes instanceof Uint8Array))
               throw new Error("invalid output write");
-            range(request.offset, request.bytes.length, Number.MAX_SAFE_INTEGER);
-            const end = request.offset + request.bytes.length;
-            if (end > output.length) {
-              const next = new Uint8Array(Math.max(end, output.length * 2, 4096));
-              next.set(output);
-              output = next;
-            }
-            output.set(request.bytes, request.offset);
-            length = Math.max(length, end);
+            await output.write(request.offset, request.bytes);
             stats.writes++;
             stats.writtenBytes += request.bytes.length;
             session.fulfill(request.id, "written");
