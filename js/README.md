@@ -15,8 +15,8 @@ functionality, with shared JavaScript transport, isolation and lifecycle logic.
 Signing is limited to the existing JPEG/ES256 baseline, without timestamps.
 
 This package originated as a proof on branch `ale/shared-worker-poc`, based on
-`main` at `97fac9b`. Its implementation, fixtures and generated artifacts now live in this
-package; the standalone Wasm binding is in the
+`main` at `97fac9b`. Its implementation, fixtures, generated artifacts and
+findings now live in this package; the standalone Wasm binding is in the
 repository-level `contentauth-c2pa-wasm` crate. No migration-branch changes or
 domain features were copied.
 
@@ -239,6 +239,29 @@ ranges, and exports the repository's public TEST ONLY key in PKCS#8 form for the
 application-side WebCrypto test signer. Never substitute production credentials
 in these generated fixtures.
 
+### SDK-to-SDK benchmark
+
+After the builds and fixture generation above, `npm run benchmark:sdk` compares
+public read/sign calls against an **already built** sibling `../c2pa-js` checkout
+(relative to the repository root). It needs that checkout's installed Vite,
+Node distribution/native addon, utilities distribution, and Wasm package.
+The benchmark does not install or rebuild those dependencies. It bundles the
+existing web facade and inline Worker into this proof's ignored generated
+directory, preserving the SDK checkout and its existing build directories.
+
+The command runs Node and all three browsers sequentially. Each SDK gets two
+warmups and six alternating-order measured samples per size/operation.
+Every sign output is validated by both readers outside signing time, and both
+readers must reject tampering. Benchmark fixtures use the SDK's real unsigned
+thumbnail plus a zero-padded 64 MiB variant and a conformant created-action
+definition; they are separate from the original architecture-contract fixtures.
+Only repository TEST ONLY credentials are used.
+
+Results and provenance persist in ignored `results/sdk-*.json`; see
+[SDK performance findings](findings.md#sdk-to-sdk-performance-comparison) for
+medians, ranges, validation differences and ownership/build caveats. This is
+a local warm baseline, not full compatibility or production performance proof.
+
 An application uses the same calls with a different platform entry:
 
 ```js
@@ -345,13 +368,15 @@ measurement:
 
 The local comparison reduced median large-build caller duration by about
 6.7–8.5 times in all browsers; binary is retained as the default. Small builds
-were too short/timer-quantized for strong performance claims.
+were too short/timer-quantized for strong performance claims. See
+[paired measurements and caveats](findings.md#binary-versus-json-write-payload-comparison).
 
 ### Performance interpretation
 
 Ignored `results/{node,chromium,firefox,webkit}.json` records three warm measured
 reads and three builds, task progress, caller/Worker duration and input/binary/source
-fingerprints, plus the paired boundary comparison described above.
+fingerprints, plus the paired boundary comparison described above. The
+checked-in [findings](findings.md) summarize a local run.
 Timing is **not** a pass threshold. The only scheduling assertion is that
 application tasks actually run before the read completes.
 

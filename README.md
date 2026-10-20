@@ -24,7 +24,8 @@ experiment grows.
 For the preferred cross-platform JavaScript host, see
 [`js`](js/README.md): the same JavaScript facade, Worker
 protocol and session driver over browser Wasm and Node Neon, with actual
-end-to-end read/signing tests and caller-owned async signer callbacks. Its supported slice is offline JPEG reading and baseline
+end-to-end read/signing tests, caller-owned async signer callbacks and
+SDK-to-SDK benchmarks. Its supported slice is offline JPEG reading and baseline
 ES256 signing, not full c2pa-js parity. It adds no Rust domain features and uses
 no Tokio runtime. The older Rust async browser hosts and the broader addon
 JavaScript drivers remain available; their capabilities have not been removed.

@@ -49,6 +49,11 @@ trusted read-back run in Node and all three browsers. Whole-input/output
 buffering and abrupt termination remain explicit limits; disposing a Worker
 cannot cancel a caller-owned signer.
 The browser boundary now uses binary bulk write payloads with JSON metadata.
+The [SDK-to-SDK benchmark](../../js/findings.md#sdk-to-sdk-performance-comparison)
+is the performance baseline: real public read/sign calls in Node and all three
+browsers, with cross-validation and explicit ownership/validation differences.
+The shared host is slower on large Node operations; browser results are competitive
+on this narrow baseline, not evidence of full SDK parity.
 Both the binary transport and the retained JSON experiment control pass the same contracts;
 paired large-build measurements isolate a major avoidable boundary cost
 without changing the shared host or Rust builder. This is still copying,
@@ -61,7 +66,7 @@ selection and errors previously owned by `js-compat`; the latter reexports
 those types and retains its original async behavior. Wasm and Neon import the
 neutral bridge directly. The underlying engine/domain logic is not duplicated.
 The package layout is `js/src/{shared,browser,node}`, with contracts under
-`js/test` and transport measurements under `js/benchmarks`.
+`js/test` and transport/SDK measurements under `js/benchmarks`.
 
 The old addon JavaScript drivers remain intentional alternative hosts, not
 silently replaced by the narrower Worker implementation: they support file and

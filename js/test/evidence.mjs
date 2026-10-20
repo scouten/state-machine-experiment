@@ -15,3 +15,15 @@ export async function fingerprints() {
     path, createHash("sha256").update(await readFile(new URL(`../${path}`, import.meta.url))).digest("hex"),
   ])));
 }
+
+/** `fingerprints` plus the SDK benchmark scripts, fixtures and the pinned existing SDK build. */
+export async function sdkFingerprints() {
+  const paths = ["benchmarks/sdk-benchmark.mjs", "benchmarks/sdk-prepare.mjs", "benchmarks/sdk-node.mjs",
+    "benchmarks/sdk-web.mjs", "benchmarks/sdk-browser.mjs", "test/evidence.mjs",
+    "generated/benchmark.json", "generated/benchmark-small-source.jpg",
+    "generated/benchmark-large-source.jpg", "generated/benchmark-small.jpg", "generated/benchmark-large.jpg",
+    "generated/existing-sdk/index.js", "generated/existing-sdk/c2pa_bg.wasm"];
+  return { ...await fingerprints(), ...Object.fromEntries(await Promise.all(paths.map(async (path) => [
+    path, createHash("sha256").update(await readFile(new URL(`../${path}`, import.meta.url))).digest("hex"),
+  ]))) };
+}

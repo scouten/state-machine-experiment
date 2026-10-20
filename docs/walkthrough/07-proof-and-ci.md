@@ -38,7 +38,8 @@ on every PR) and the two Neon addons (`node-addon`, `node-sign-addon`).
 The `javascript-host` job builds the standalone synchronous Wasm binding and
 both Neon addons, then runs the shared Node and Chromium/Firefox/WebKit read and
 signing contracts. It requires real bindings and installed browsers: no skips
-or mock-only substitute.
+or mock-only substitute. The SDK-to-SDK benchmark is a local command requiring
+an existing sibling SDK build, not a dependency of PR CI.
 The C++ binding jobs exercise the Rust C ABI plus C++17, C++20 and pool
 drivers on Linux and macOS. The Linux matrix covers C++ coverage, AddressSanitizer
 and ThreadSanitizer; macOS also exercises the Apple thread pool.

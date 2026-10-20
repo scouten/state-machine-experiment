@@ -38,6 +38,7 @@ flowchart LR
 | **CRLs** | Outside the spec §15.9 OCSP-only process the engine follows, but real certs use them. |
 | **Other hard bindings** (box hash, BMFF) | Only `c2pa.hash.data` is validated. |
 | **Decoded assertion values** (thumbnails, resources) | Needed for fuller `ManifestStore` and `crJson`/`resourceToBytes` parity. |
+| **Action semantic validation** | The SDK benchmark found that the existing validator rejects a created action without `digitalSourceType` while this reader accepts it. Preserve this as a known parity gap, not a transport issue. |
 
 ## 2. More container formats
 
@@ -94,6 +95,10 @@ changes. Choose formats for *what they exercise*, as TIFF did:
   No new core features or Tokio are involved. A paired JSON/binary Wasm
   write-payload comparison preserves both contracts and reduces median local
   large-build time by about 6.7–8.5 times; binary is now the browser default.
+  The [actual SDK comparison](../../js/findings.md#sdk-to-sdk-performance-comparison)
+  now supersedes prototype-only timings as the performance baseline: competitive
+  browser results, slower large Node operations, and a concrete action-validation
+  gap preclude general speed or parity claims.
   Streaming sources/outputs, measured peak memory and production distribution
   remain unproven.
   The neutral read/build bridges and compatibility vocabulary now live in
@@ -121,8 +126,9 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 * **Track c2pa-rs releases** — the compat layer follows a moving target.
 * **Fuzzing** the parsers (JUMBF, COSE, TIFF graph walks) — they already
   refuse hostile input by design, but nothing yet hammers that.
-* **Benchmarks** against c2pa-rs for large assets (the Node numbers are
-  encouraging but not comparative).
+* **Broader SDK benchmarks:** the warm offline JPEG baseline is measured in
+  Node and three browsers. Extend it to representative assets, peak memory,
+  cold start and feature parity before making production performance claims.
 
 ## Questions for discussion
 
