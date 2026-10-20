@@ -14,7 +14,8 @@ flowchart LR
         d3["Formats: JPEG, TIFF/BigTIFF/DNG, registry"]
         d4["Bindings: rs / wasm / node, read and sign<br/>C++ reader: C ABI + blocking / threaded / coroutine hosts"]
         d5["Differential tests vs c2pa-rs"]
-        d6["C++ read + sign; blocking / pool / future / coroutine<br/>atomic file signing + Trusted read-back example"]
+        d6["Shared JS Worker read + baseline sign<br/>browser Wasm / Node Neon, async signer callbacks"]
+        d7["C++ read + sign; blocking / pool / future / coroutine<br/>atomic file signing + Trusted read-back example"]
     end
     subgraph next["Next"]
         direction TB
@@ -83,13 +84,26 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 * **c2pa-node:** `fromManifestDataAndAsset`, `resourceToAsset`, signers,
   CAWG identity assertions (the X.509 type is done on the core read and
   write paths; this is the bindings), Trustmark.
-* **JS hosts over the bridge:** `contentauth-c2pa-session-bridge` now holds the
-  neutral read/build bridges and compatibility vocabulary; the Wasm and Neon
-  bindings are consumers. Next, migrate the older host capabilities behind
-  compatibility facades with preservation tests before removing their
-  separate loops.
+* **Worker-hosted shared JS loop:** the
+  [private JavaScript package](../../js/README.md) now runs the same facade,
+  protocol and session drivers over browser Wasm and Node Neon. Local
+  Chromium/Firefox/WebKit and Node tests establish complete-report/request
+  equality and application task progress for signed 64 MiB reads.
+  Baseline ES256 signing also proves caller-owned async callbacks, failure and
+  disposal handling, queued operation routing and trusted read-back.
+  No new core features or Tokio are involved. A paired JSON/binary Wasm
+  write-payload comparison preserves both contracts and reduces median local
+  large-build time by about 6.7–8.5 times; binary is now the browser default.
+  Streaming sources/outputs, measured peak memory and production distribution
+  remain unproven.
+  The neutral read/build bridges and compatibility vocabulary now live in
+  `contentauth-c2pa-session-bridge`; Wasm and Neon are consumers. Node and all
+  three browser contracts are wired into CI. Next, migrate the older host
+  capabilities behind compatibility facades with preservation tests before
+  removing their separate loops.
 * **Browser:** a `fetch`-backed OCSP `Platform`; the existing async `web`
-  modules still have no browser CI coverage.
+  modules still have no browser CI coverage. The shared-host browser CI runs
+  the synchronous Wasm session boundary, not those alternative modules.
 * **Other host languages** — Python, Swift, Kotlin, .NET: the Node binding
   shows the minimal shape (a handful of synchronous functions plus a host
   loop). Each is a good test of whether the flattened `PendingRequest`/

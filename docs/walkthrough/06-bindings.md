@@ -14,23 +14,45 @@ flowchart TB
     J --> J1["Reader::from_blob(fmt, blob, ctx, platform).await"]
     N --> N1["Portable read bridge<br/>advance / fulfill / finish"]
     N1 --> N2["JS loop in index.mjs<br/>(fs, fetch, event loop)"]
-    N --> CPP["C ABI + C++ read/sign hosts<br/>blocking / thread-pool / coroutine"]
-    N1 --> WB["Synchronous Wasm binding<br/>for a browser Worker"]
-    N1 --> WN["Synchronous Neon binding<br/>for a Node Worker"]
+    N1 --> CPP["C ABI + C++ read/sign hosts<br/>blocking / thread-pool / coroutine"]
+    N1 --> W["Shared JS host<br/>same facade and protocol"]
+    W --> WB["Browser Worker<br/>synchronous Wasm binding"]
+    W --> WN["Node Worker<br/>synchronous Neon binding"]
 ```
 
-The branches show host arrangements, not crate dependency arrows. Both
-bindings expose the same neutral read bridge; neither uses the separate async
-`js-compat` host.
+The branches show host arrangements, not crate dependency arrows. Both Worker
+bindings expose the same neutral read bridge; the browser host does not use
+the separate async `js-compat` host.
 
 | Binding | Mirrors | Async lives in | Notable |
 |---|---|---|---|
 | `rs-compat` | c2pa-rs `Context`, `Reader`, `Manifest` | Nowhere — blocking | One of two network dependencies (with `rs-compat-sign`): `reqwest` answers `Ocsp`. Owns format *policy* (`src/format.rs`). |
 | `js-compat` | c2pa-wasm `WasmReader` | One `async fn` driving the session (`src/drive.rs`) | `Blob` ≈ `Blob.size` + `slice().arrayBuffer()`; `Platform` supplies clock/OCSP, which c2pa-rs gets implicitly. `web` feature adds a `#[wasm_bindgen]` `WasmReader`. |
-| `session-bridge` + Wasm/Neon | Host-driven read/build, with explicit SDK compatibility policy | A JavaScript host in browser/Node Workers; the existing addon hosts also retained | Rust has no runtime, threads, locks or `async`. |
+| `session-bridge` + Wasm/Neon | Host-driven read/build, with explicit SDK compatibility policy | Shared JavaScript host in browser/Node Workers; broader existing addon hosts also retained | Rust has no runtime, threads, locks or `async`. |
 | `session-bridge` + `cpp` | Host-driven read/sign through a C ABI | C++ blocking, thread-pool or coroutine driver | Independent non-JS consumer of both bridges; supports atomic POSIX file signing. |
 
 ## Where the c2pa-rs shapes break down
+
+The preferred [shared JavaScript host](../../js/README.md) takes a different
+host arrangement: the same JS `advance`/`fulfill` driver runs inside a browser
+module Worker or Node Worker thread. A small synchronous Wasm adapter exposes
+the existing read bridge on the browser side; Node reuses Neon unchanged.
+One facade/protocol handles input snapshots, queued reads/builds, results and disposal.
+Actual tests compare complete reports and request bytes across all three
+browsers and Node, including 64 MiB signed reads and application task progress.
+No Tokio, new domain behavior or cooperative scheduling is needed for this
+bounded workflow. Baseline ES256 signing uses the existing portable build bridge
+and a caller-owned async signer through the same Worker service. Signer replies
+bypass its top-level operation queue to avoid deadlock; both operation and
+request IDs route the reply. Delayed callbacks, failures, disposal races and
+trusted read-back run in Node and all three browsers. Whole-input/output
+buffering and abrupt termination remain explicit limits; disposing a Worker
+cannot cancel a caller-owned signer.
+The browser boundary now uses binary bulk write payloads with JSON metadata.
+Both the binary transport and the retained JSON experiment control pass the same contracts;
+paired large-build measurements isolate a major avoidable boundary cost
+without changing the shared host or Rust builder. This is still copying,
+whole-asset-buffered I/O, not a zero-copy or streaming implementation.
 
 The neutral [session-bridge crate](../../contentauth-c2pa-session-bridge/README.md)
 now owns `ReadSessionBridge` and `BuildSessionBridge`, moved from the former
@@ -42,11 +64,13 @@ The bridge preserves the engine's shared `Bytes` for bulk writes and completed
 build manifests rather than copying them into vectors. Wasm's binary write path
 retains those shared buffers until the host consumes them; the final copy into
 JavaScript-owned memory still belongs to the language boundary, not the engine.
+The package layout is `js/src/{shared,browser,node}`, with contracts under
+`js/test` and transport measurements under `js/benchmarks`.
 The old addon JavaScript drivers remain intentional alternative hosts, not
-silently replaced by the narrower Wasm/Neon bridges: they support file and
+silently replaced by the narrower Worker implementation: they support file and
 custom sources, OCSP, timestamp transport and transactional file output.
 Retiring their loops or the Rust async hosts requires preservation tests for
-those capabilities.
+those capabilities. No full c2pa-js facade migration is claimed here.
 Platform adapters and transports are optional within the bindings. Both
 Rust compatibility crates default to `http` (OCSP on the read side,
 RFC 3161 on the signing side); `default-features = false` omits their HTTP
@@ -95,7 +119,8 @@ flowchart LR
     SB --> JS["js-compat-sign<br/>async Builder + AsyncSigner<br/>(JS Promise / WebCrypto)"]
     SB --> ND["session-bridge::build<br/>portable build bridge"]
     ND --> OLD["Existing Neon addon host<br/>files / timestamps retained"]
-    ND --> WP["Wasm / Neon bindings<br/>same build bridge"]
+    ND --> WP["Shared JavaScript Worker host<br/>same build bridge via Neon / Wasm"]
+    WP --> CB["Caller-owned async signer<br/>COSE bytes out, signature back<br/>key outside Worker and Rust"]
     ND --> CPP["C ABI + C++ signing hosts<br/>blocking / thread-pool / coroutine"]
 ```
 
@@ -105,6 +130,7 @@ flowchart LR
   not a `CallbackSigner` special case.
 * `instance_id` and `label` are required in the definition: the engine has
   no RNG, so the host mints them.
-* An optional `tsa_url` opts into an RFC 3161 timestamp in the existing hosts.
+* An optional `tsa_url` opts into an RFC 3161 timestamp in the existing hosts;
+  the shared Worker host still rejects unsupported timestamp requests explicitly.
 
 **Next:** [Proof and CI →](07-proof-and-ci.md)

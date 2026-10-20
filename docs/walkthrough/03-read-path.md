@@ -96,7 +96,7 @@ flowchart LR
     S --- H3["Reader::from_blob<br/>async, Blob.slice().arrayBuffer()<br/>js-compat"]
     S --- H4["ReadSessionBridge<br/>synchronous calls<br/>session-bridge"]
     H4 --- N["Existing Node JS host<br/>Neon"]
-    H4 --- W["Synchronous Wasm binding<br/>browser"]
+    H4 --- W["Shared JS Worker host proof<br/>browser Wasm / Node Neon"]
 ```
 
 See [Bindings](06-bindings.md).

@@ -195,13 +195,19 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   and report conversions previously owned by the browser compatibility crate.
   Wasm and Neon depend on this bridge, not on a runtime-specific host.
   Other language adapters are possible but neither implemented nor a universal ABI.
-- **`contentauth-c2pa-wasm`** — synchronous wasm-bindgen adapters over the
-  session bridge, for a JavaScript host to drive (browser Workers over Wasm;
-  Node Workers use the existing Neon addons). It has its own workspace and
-  pins wasm-bindgen to its CLI schema; CI checks its formatting, Clippy,
-  native request-encoding tests, and `wasm32-unknown-unknown` compilation.
-  The older `js-compat`/`js-compat-sign` Rust async hosts remain alternatives.
-  Retain their tests and the broader addon file/OCSP/timestamp behavior.
+- **`js/` and `contentauth-c2pa-wasm`** — the preferred shared JavaScript
+  direction: one private package with `src/shared`, `src/browser`, `src/node`,
+  contracts under `test`, and measurements under `benchmarks`. Browser Workers
+  drive synchronous wasm-bindgen adapters; Node Workers use existing Neon addons.
+  Offline JPEG reading and baseline ES256 signing with caller-owned async keys
+  are proven; whole-asset copies, limited validation and unsupported network/
+  timestamp requests remain explicit. The Wasm crate has its own workspace and
+  pins wasm-bindgen to its CLI schema; CI checks formatting, Clippy, native
+  request-encoding tests, and `wasm32-unknown-unknown` compilation, while the
+  browser host runs Node and Chromium/Firefox/WebKit contracts.
+  The older `js-compat`/`js-compat-sign` Rust async hosts remain alternatives,
+  not dependencies of the shared JS host. Retain their tests and the broader
+  addon file/OCSP/timestamp behavior until compatibility facades preserve it.
 - **`c2pa-node-compat-addon`** — the Neon `cdylib` (four synchronous
   functions) and the JavaScript driver (`index.mjs`) for the crate above,
   with `node:test` tests and a lag demo. Deliberately **not** a workspace
