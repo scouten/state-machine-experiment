@@ -8,12 +8,14 @@
 
 use std::cell::RefCell;
 
-use contentauth_c2pa_node_compat_sign::{Error, NodeBuildSession, PendingRequest, Reply, Step};
+use contentauth_c2pa_session_bridge::build::{
+    BuildSessionBridge, Error, PendingRequest, Reply, Step,
+};
 use neon::{prelude::*, types::buffer::TypedArray};
 
 /// A session handle JS holds. `RefCell` because Neon hands out `&self`;
 /// JS is single-threaded, so it is never contended.
-struct Session(RefCell<Option<NodeBuildSession>>);
+struct Session(RefCell<Option<BuildSessionBridge>>);
 
 impl Finalize for Session {}
 
@@ -37,7 +39,7 @@ fn build_new(mut cx: FunctionContext) -> JsResult<JsBox<Session>> {
         certs.push(buffer.as_slice(&cx).to_vec());
     }
 
-    match NodeBuildSession::new(&definition, &format, &alg, certs) {
+    match BuildSessionBridge::new(&definition, &format, &alg, certs) {
         Ok(session) => Ok(cx.boxed(Session(RefCell::new(Some(session))))),
         Err(err) => {
             let js = js_error(&mut cx, &err)?;

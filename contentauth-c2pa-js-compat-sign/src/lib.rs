@@ -53,6 +53,10 @@
 //! [`sign`]: Builder::sign
 //! [`sign_blob`]: Builder::sign
 
+//! This remains the alternative Rust-owned async signing host. The shared
+//! JavaScript host uses the neutral synchronous build bridge instead; timestamp
+//! and Blob behavior here is retained, not replaced by that narrower baseline.
+
 #![deny(clippy::expect_used)]
 #![deny(clippy::panic)]
 #![deny(clippy::unwrap_used)]

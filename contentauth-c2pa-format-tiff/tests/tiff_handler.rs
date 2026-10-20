@@ -357,9 +357,11 @@ fn answer(asset: &[u8], request: &contentauth_c2pa_format::IoRequest) -> IoReply
     use contentauth_c2pa_format::IoRequest;
     match request {
         IoRequest::Length { .. } => IoReply::Length(asset.len() as u64),
-        IoRequest::Read { range, .. } => {
-            IoReply::Bytes(asset[range.start as usize..][..range.len as usize].to_vec())
-        }
+        IoRequest::Read { range, .. } => IoReply::Bytes(
+            asset[range.start as usize..][..range.len as usize]
+                .to_vec()
+                .into(),
+        ),
         other => panic!("unexpected request: {other:?}"),
     }
 }

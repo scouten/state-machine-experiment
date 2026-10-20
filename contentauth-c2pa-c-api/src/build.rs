@@ -21,7 +21,7 @@ use contentauth_c2pa_file_builder::{
 use contentauth_c2pa_format_registry::AnyFormat;
 use contentauth_c2pa_primitives::{
     tsa::{timestamp_request, timestamp_token},
-    HostError, SigningAlg,
+    Bytes, HostError, SigningAlg,
 };
 use contentauth_c2pa_sign_baseline::Definition;
 use contentauth_state_machine::{RequestId, Session};
@@ -91,7 +91,7 @@ struct PendingRequestData {
     stream: u32,
     offset: u64,
     len: u64,
-    data: Option<Vec<u8>>,
+    data: Option<Bytes>,
     alg: Option<CString>,
     url: Option<CString>,
 }
@@ -212,7 +212,7 @@ impl BuildSession {
 
     /// Fulfills a read request.
     pub fn fulfill_bytes(&mut self, id: u64, bytes: &[u8]) -> Result<(), Error> {
-        self.fulfill_reply(id, FileBuilderReply::Bytes(bytes.to_vec()))
+        self.fulfill_reply(id, FileBuilderReply::Bytes(Bytes::copy_from_slice(bytes)))
     }
 
     /// Fulfills a length request.
@@ -271,7 +271,7 @@ impl BuildSession {
             .collect();
         let manifest = report.manifest.clone();
         self.finished_report = Some(report);
-        Ok((manifest, exclusions))
+        Ok((manifest.to_vec(), exclusions))
     }
 }
 
@@ -325,7 +325,7 @@ fn describe_request(
             stream: C2PA_SM_STREAM_OUTPUT,
             offset: 0,
             len: 0,
-            data: Some(data.clone()),
+            data: Some(Bytes::copy_from_slice(data)),
             alg: Some(CString::new(alg_name(*alg)?)?),
             url: None,
         }),
@@ -344,7 +344,7 @@ fn describe_request(
                 stream: C2PA_SM_STREAM_OUTPUT,
                 offset: 0,
                 len: 0,
-                data: Some(request),
+                data: Some(request.into()),
                 alg: None,
                 url: Some(CString::new(url)?),
             })

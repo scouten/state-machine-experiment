@@ -2,8 +2,9 @@
 
 use std::{ffi::c_char, os::raw::c_int};
 
-use contentauth_c2pa_node_compat_sign::{
-    Error, NodeBuildSession, PendingRequest, Reply, Step, Stream,
+use contentauth_c2pa_session_bridge::{
+    build::{BuildSessionBridge, Error, PendingRequest, Reply, Step, Stream},
+    Bytes,
 };
 
 use super::{clear, guard, utf8, C2paError, C2paSmError, Failure};
@@ -111,7 +112,7 @@ impl C2paSmBuffer {
 
 /// A cimpl-tracked, opaque signing session. Drive it from one thread at a time.
 pub struct C2paSmBuildSession {
-    inner: NodeBuildSession,
+    inner: BuildSessionBridge,
     fresh: Vec<PendingRequest>,
     done: bool,
 }
@@ -164,7 +165,7 @@ pub struct C2paSmExclusion {
 
 /// A cimpl-tracked, immutable report, independent of the consumed session.
 pub struct C2paSmSignReport {
-    manifest: Vec<u8>,
+    manifest: Bytes,
     exclusions: Vec<C2paSmExclusion>,
 }
 
@@ -250,7 +251,7 @@ pub unsafe extern "C" fn c2pa_sm_build_session_new(
                 .iter()
                 .map(|cert| cert.bytes().map(<[u8]>::to_vec))
                 .collect::<Result<Vec<_>, _>>()?;
-            let inner = NodeBuildSession::new(definition, format, algorithm, certificates)?;
+            let inner = BuildSessionBridge::new(definition, format, algorithm, certificates)?;
             *out_session = tracked(C2paSmBuildSession {
                 inner,
                 fresh: Vec::new(),

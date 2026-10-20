@@ -71,7 +71,7 @@ fn answer(output: &mut Vec<u8>, request: &FileBuilderRequest) -> FileBuilderRepl
                 output.as_slice()
             };
             match source.get(start..end) {
-                Some(bytes) => FileBuilderReply::Bytes(bytes.to_vec()),
+                Some(bytes) => FileBuilderReply::Bytes(bytes.to_vec().into()),
                 None => FileBuilderReply::Failed(HostError::new("range out of bounds")),
             }
         }
@@ -238,7 +238,9 @@ fn a_host_returning_the_wrong_number_of_bytes_fails_the_build() {
                                 session
                                     .fulfill(
                                         request.id,
-                                        FileBuilderReply::Bytes(vec![0; range.len as usize - 1]),
+                                        FileBuilderReply::Bytes(
+                                            vec![0; range.len as usize - 1].into(),
+                                        ),
                                     )
                                     .unwrap();
                                 continue;

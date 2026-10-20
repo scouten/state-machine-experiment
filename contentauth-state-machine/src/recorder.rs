@@ -22,7 +22,7 @@
 //! under a debugger, after a fix — and it will do exactly the same thing,
 //! or [`replay`] reports the first place it did not.
 
-use std::{collections::HashSet, fmt};
+use std::{collections::HashSet, fmt, fmt::Write as _};
 
 use crate::{HostRequest, Request, RequestId, Session, Step};
 
@@ -147,16 +147,42 @@ impl<Req: Request> Transcript<Req> {
     }
 }
 
-/// The longest any one value is shown in a [`Transcript`]'s display form.
+/// The longest any one value's debug text is shown in a [`Transcript`].
 const SHOWN: usize = 120;
 
-/// `value`'s [`Debug`](fmt::Debug) text, cut short at [`SHOWN`] characters.
-fn abbreviated(value: &dyn fmt::Debug) -> String {
-    let text = format!("{value:?}");
-    match text.char_indices().nth(SHOWN) {
-        Some((cut, _)) => format!("{}… ({} chars)", &text[..cut], text.chars().count()),
-        None => text,
+struct BoundedDebug {
+    text: String,
+    truncated: bool,
+}
+
+impl fmt::Write for BoundedDebug {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        let remaining = SHOWN.saturating_sub(self.text.chars().count());
+        if let Some((cut, _)) = value.char_indices().nth(remaining) {
+            self.text.push_str(&value[..cut]);
+            self.truncated = true;
+            return Err(fmt::Error);
+        }
+        self.text.push_str(value);
+        Ok(())
     }
+}
+
+/// Formats at most [`SHOWN`] characters of `value`'s [`Debug`](fmt::Debug) text.
+fn abbreviated(value: &dyn fmt::Debug) -> Result<String, fmt::Error> {
+    let mut output = BoundedDebug {
+        text: String::new(),
+        truncated: false,
+    };
+    match write!(&mut output, "{value:?}") {
+        Ok(()) => {}
+        Err(_) if output.truncated => {}
+        Err(err) => return Err(err),
+    }
+    if output.truncated {
+        output.text.push('…');
+    }
+    Ok(output.text)
 }
 
 impl<Req: Request> fmt::Display for Transcript<Req> {
@@ -183,11 +209,16 @@ impl<Req: Request> fmt::Display for Transcript<Req> {
                     }
                     for (n, request) in issued.iter().enumerate() {
                         let lead = if n == 0 { ", issued" } else { ";" };
-                        write!(f, "{lead} {:?}: {}", request.id, abbreviated(&request.kind))?;
+                        write!(
+                            f,
+                            "{lead} {:?}: {}",
+                            request.id,
+                            abbreviated(&request.kind)?
+                        )?;
                     }
                 }
                 Event::Fulfilled { id, reply, outcome } => {
-                    write!(f, "fulfill {id:?} with {}", abbreviated(reply))?;
+                    write!(f, "fulfill {id:?} with {}", abbreviated(reply)?)?;
                     if let Outcome::Err(err) = outcome {
                         write!(f, " -> rejected: {err}")?;
                     }
@@ -472,13 +503,36 @@ mod tests {
     #[test]
     fn long_values_are_abbreviated_for_reading() {
         let long = "x".repeat(500);
-        let text = abbreviated(&long);
-        assert!(text.ends_with("… (502 chars)"), "{text}");
-        assert_eq!(
-            text.chars().count(),
-            SHOWN + "… (502 chars)".chars().count()
-        );
-        assert_eq!(abbreviated(&"short"), "\"short\"");
+        let text = abbreviated(&long).unwrap();
+        assert!(text.ends_with('…'), "{text}");
+        assert_eq!(text.chars().count(), SHOWN + 1);
+        assert_eq!(abbreviated(&"short").unwrap(), "\"short\"");
+
+        let unicode = "😀".repeat(200);
+        let text = abbreviated(&unicode).unwrap();
+        assert!(text.ends_with('…'), "{text}");
+        assert_eq!(text.chars().count(), SHOWN + 1);
+    }
+
+    #[test]
+    fn abbreviation_stops_debug_formatting_at_the_limit() {
+        struct CountingDebug<'a>(&'a std::cell::Cell<usize>);
+
+        impl fmt::Debug for CountingDebug<'_> {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                for _ in 0..10_000 {
+                    self.0.set(self.0.get() + 1);
+                    write!(formatter, "x")?;
+                }
+                Ok(())
+            }
+        }
+
+        let formatted = std::cell::Cell::new(0);
+        let text = abbreviated(&CountingDebug(&formatted)).unwrap();
+
+        assert_eq!(formatted.get(), SHOWN + 1);
+        assert_eq!(text, format!("{}…", "x".repeat(SHOWN)));
     }
 
     #[test]

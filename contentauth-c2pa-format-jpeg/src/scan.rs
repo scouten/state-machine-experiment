@@ -294,7 +294,7 @@ impl Scanner {
                     Ok(None)
                 }
                 Some(bytes) => {
-                    if bytes != [MARKER_PREFIX, SOI] {
+                    if bytes[..] != [MARKER_PREFIX, SOI] {
                         return Err(malformed("does not begin with an SOI marker"));
                     }
                     self.pos = 2;

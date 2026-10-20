@@ -283,7 +283,8 @@ fn a_completed_operation_stays_complete() {
                 }
                 contentauth_c2pa_format::IoRequest::Read { range, .. } => IoReply::Bytes(
                     unsigned_jpeg(true, true)[range.start as usize..][..range.len as usize]
-                        .to_vec(),
+                        .to_vec()
+                        .into(),
                 ),
                 other => panic!("unexpected request: {other:?}"),
             };

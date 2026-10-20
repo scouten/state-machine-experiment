@@ -121,4 +121,11 @@ a session answers some of an inner session's requests itself and forwards
 only the rest, which is how format handling is wired in
 ([read path](03-read-path.md), [write path](04-write-path.md)).
 
+Synchronous hosts can shorten their reply loop to
+`session.respond(|request| answer(request))?`. Each request is borrowed
+until its reply is ready, then fulfilled before the next is serviced.
+Neither request cloning nor a reply batch is needed. This helper does not
+advance the workflow or change the contract; async hosts and hosts that
+choose their own reply order keep using the individual methods.
+
 **Next:** [Architecture →](02-architecture.md)

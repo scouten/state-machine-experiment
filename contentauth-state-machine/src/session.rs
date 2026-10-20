@@ -80,7 +80,7 @@ pub enum Step {
 /// Sessions are **not re-entrant** and the Rust code provides **no locks**
 /// around them. A host that employs a thread model must
 /// ensure that the methods of a session (`advance`, `fulfill`,
-/// `outstanding_requests`, `finish`) are never called simultaneously from
+/// `outstanding_requests`, `respond`, `finish`) are never called simultaneously from
 /// multiple threads, nor re-entered from within a call already in progress
 /// on the same session. In safe Rust the borrow checker does much of this
 /// for you (`advance` and `fulfill` take `&mut self`, `finish` takes `self`),
@@ -93,8 +93,7 @@ pub enum Step {
 /// on the *same* session must not. Moving a session to another thread
 /// between calls is also fine.
 ///
-/// This trait
-/// carries no logic of its own; it exists so that host-side code (a test
+/// This trait provides a synchronous reply helper so that host-side code (a test
 /// harness, an FFI dispatcher, a generic driver loop) can be written once
 /// against any session built on this engine, whatever workflow it carries
 /// out.
@@ -144,6 +143,36 @@ pub trait Session: Send {
         id: RequestId,
         reply: <Self::Request as Request>::Reply,
     ) -> Result<(), Self::Error>;
+
+    /// Answers all outstanding requests synchronously, in their listed
+    /// order, without cloning requests or allocating a reply batch.
+    ///
+    /// `answer` borrows each request only until it returns an owned reply;
+    /// that borrow ends before [`Self::fulfill`] mutates the session.
+    /// Host failures should be represented in the request vocabulary's
+    /// reply type, just as with a direct call to `fulfill`.
+    ///
+    /// Stops at the first `fulfill` error. Earlier replies remain delivered
+    /// and later requests have not been serviced. With no outstanding
+    /// requests this is a no-op, including on a terminal session.
+    ///
+    /// Does not call [`Self::advance`]. For asynchronous work, partial
+    /// fulfillment, or a different service order, use
+    /// [`Self::outstanding_requests`] and [`Self::fulfill`] directly.
+    fn respond(
+        &mut self,
+        mut answer: impl FnMut(&Self::Request) -> <Self::Request as Request>::Reply,
+    ) -> Result<(), Self::Error>
+    where
+        Self: Sized,
+    {
+        while let Some(request) = self.outstanding_requests().first() {
+            let id = request.id;
+            let reply = answer(&request.kind);
+            self.fulfill(id, reply)?;
+        }
+        Ok(())
+    }
 
     /// Consumes the session and returns the completed result.
     ///
@@ -497,6 +526,171 @@ mod tests {
                 assert_eq!(f.cause, "no pong: lost");
             }
             other => panic!("expected SessionFailed, got {other:?}"),
+        }
+    }
+
+    // Deliberately not Clone: the helper must borrow the original payload.
+    #[derive(Debug)]
+    struct TestRequest(Vec<u8>);
+
+    #[derive(Debug, PartialEq)]
+    enum TestReply {
+        Accepted,
+        Failed,
+        WrongKind,
+    }
+
+    impl Request for TestRequest {
+        type Reply = TestReply;
+
+        fn expected_reply(&self) -> &'static str {
+            "Accepted or Failed"
+        }
+
+        fn accepts(&self, reply: &TestReply) -> bool {
+            matches!(reply, TestReply::Accepted | TestReply::Failed)
+        }
+    }
+
+    #[derive(Default)]
+    struct TestSession {
+        core: SessionCore<TestRequest>,
+        advances: usize,
+    }
+
+    impl Session for TestSession {
+        type Error = ProtocolError;
+        type Output = ();
+        type Request = TestRequest;
+
+        fn advance(&mut self) -> Result<Step, ProtocolError> {
+            self.advances += 1;
+            Ok(Step::AwaitHost)
+        }
+
+        fn outstanding_requests(&self) -> &[HostRequest<TestRequest>] {
+            self.core.outstanding_requests()
+        }
+
+        fn phase(&self) -> String {
+            "Test".into()
+        }
+
+        fn fulfill(&mut self, id: RequestId, reply: TestReply) -> Result<(), ProtocolError> {
+            self.core.fulfill(id, reply)
+        }
+
+        fn finish(self) -> Result<(), ProtocolError> {
+            self.core.finish_check()
+        }
+    }
+
+    #[test]
+    fn respond_borrows_original_requests_in_order_and_delivers_each_reply() {
+        let mut session = TestSession::default();
+        let payload = vec![1, 2, 3];
+        let original = payload.as_ptr();
+        let first = session.core.issue(TestRequest(payload));
+        let second = session.core.issue(TestRequest(vec![4]));
+        let mut calls = 0;
+
+        session
+            .respond(|request| {
+                calls += 1;
+                if calls == 1 {
+                    assert_eq!(request.0.as_ptr(), original);
+                    assert_eq!(request.0, [1, 2, 3]);
+                    TestReply::Accepted
+                } else {
+                    assert_eq!(request.0, [4]);
+                    TestReply::Failed
+                }
+            })
+            .unwrap();
+
+        assert_eq!(calls, 2);
+        assert_eq!(session.advances, 0);
+        assert!(session.outstanding_requests().is_empty());
+        assert_eq!(session.core.take_reply(first), Some(TestReply::Accepted));
+        assert_eq!(session.core.take_reply(second), Some(TestReply::Failed));
+    }
+
+    #[test]
+    fn respond_stops_at_a_rejected_reply_preserving_progress_and_unserviced_requests() {
+        let mut session = TestSession::default();
+        let first = session.core.issue(TestRequest(vec![1]));
+        let second = session.core.issue(TestRequest(vec![2]));
+        let third = session.core.issue(TestRequest(vec![3]));
+        let mut seen = Vec::new();
+
+        let result = session.respond(|request| {
+            seen.push(request.0[0]);
+            if request.0[0] == 2 {
+                TestReply::WrongKind
+            } else {
+                TestReply::Accepted
+            }
+        });
+
+        assert_eq!(
+            result,
+            Err(ProtocolError::ReplyMismatch {
+                id: second,
+                expected: "Accepted or Failed",
+            })
+        );
+        assert_eq!(seen, [1, 2]);
+        assert_eq!(session.core.take_reply(first), Some(TestReply::Accepted));
+        assert_eq!(session.outstanding_requests()[0].id, second);
+        assert_eq!(session.outstanding_requests()[1].id, third);
+
+        session.respond(|_| TestReply::Accepted).unwrap();
+        assert!(session.outstanding_requests().is_empty());
+    }
+
+    #[test]
+    fn respond_with_no_requests_is_a_no_op_even_after_completion_or_failure() {
+        let mut session = TestSession::default();
+        let mut calls = 0;
+        for lifecycle in [
+            Lifecycle::Running,
+            Lifecycle::Complete,
+            Lifecycle::Failed(Failure::default()),
+        ] {
+            session.core.lifecycle = lifecycle.clone();
+            session
+                .respond(|_| {
+                    calls += 1;
+                    TestReply::Accepted
+                })
+                .unwrap();
+        }
+        assert_eq!(calls, 0);
+        assert_eq!(session.advances, 0);
+    }
+
+    #[test]
+    fn respond_propagates_terminal_state_errors_without_servicing_later_requests() {
+        for lifecycle in [Lifecycle::Complete, Lifecycle::Failed(Failure::default())] {
+            let mut session = TestSession::default();
+            session.core.issue(TestRequest(vec![1]));
+            session.core.issue(TestRequest(vec![2]));
+            session.core.lifecycle = lifecycle.clone();
+            let mut calls = 0;
+
+            let result = session.respond(|_| {
+                calls += 1;
+                TestReply::Accepted
+            });
+
+            let expected = if lifecycle == Lifecycle::Complete {
+                ProtocolError::SessionComplete
+            } else {
+                ProtocolError::SessionFailed(Failure::default())
+            };
+            assert_eq!(result, Err(expected));
+            assert_eq!(calls, 1);
+            assert_eq!(session.outstanding_requests().len(), 2);
         }
     }
 }

@@ -109,10 +109,8 @@ impl Platform for WebPlatform {
 /// The string [`Error`] crosses into JavaScript as — c2pa-wasm's own
 /// `From<WasmError> for JsString`, which is the contract c2pa-web's
 /// `reader.ts` matches `C2pa(JumbfNotFound)` against.
-impl From<Error> for JsString {
-    fn from(err: Error) -> Self {
-        JsString::from(err.js_message())
-    }
+fn read_error(err: Error) -> JsString {
+    JsString::from(err.js_message())
 }
 
 /// c2pa-wasm's `WasmReader`, exported to JavaScript under the same name
@@ -145,7 +143,9 @@ impl WasmReader {
         blob: &web_sys::Blob,
         context_json: Option<String>,
     ) -> Result<WasmReader, JsString> {
-        let inner = Reader::from_blob(format, blob, context_json.as_deref(), &WebPlatform).await?;
+        let inner = Reader::from_blob(format, blob, context_json.as_deref(), &WebPlatform)
+            .await
+            .map_err(read_error)?;
 
         Ok(Self {
             inner,

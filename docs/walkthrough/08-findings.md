@@ -6,7 +6,7 @@ about C2PA itself.
 ## The architecture mostly held
 
 * **One engine under three async models worked.** The js-compat and
-  node-compat tests compare against the synchronous host's output; the
+  session-bridge tests compare against the synchronous host's output; the
   engine did not change to accommodate either binding.
 * **Request *sets* are the right primitive.** The reader's hashing window
   (concurrent 64 KiB reads) maps directly onto Node overlapping `fs` reads
@@ -48,6 +48,15 @@ about C2PA itself.
   so recording the host conversation (`Recorder`) captures everything a
   failure depends on, and `replay` reproduces it without the asset's
   original host, clock or network.
+* Zero-copy payloads. Carrying asset chunks, manifest stores and writes as
+  reference-counted `Bytes` instead of `Vec<u8>` changed no contract — only
+  payload types — and, on a 16 MiB JPEG, cut a host that holds the asset
+  in memory from 17 MB allocated per read to 0.11 MB, and `build_and_sign`
+  from 51 MB to 34 MB. Most of the latter was invisible: the host loop's
+  `outstanding_requests().to_vec()` (needed to release the session's
+  borrow before `fulfill`) had been deep-copying every write.
+  The saving stops at an FFI boundary: the C ABI still copies bytes in
+  and out (see `contentauth-c2pa-c-api`'s README).
 
 ## Things that were *not* cheap
 

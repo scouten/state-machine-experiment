@@ -390,9 +390,9 @@ fn misanswered_requests_are_rejected_and_stay_outstanding() {
 fn every_request_kind_is_described() {
     // The engine never issues an OCSP request for this repository's
     // fixtures, so the description of one is checked on the fixture
-    // directly, as `contentauth-c2pa-node-compat` does for its own.
+    // directly, as `contentauth-c2pa-session-bridge` does for its own.
     let mut session = C2paSmSession {
-        inner: NodeSession::new("image/jpeg", None).unwrap(),
+        inner: ReadSessionBridge::new("image/jpeg", None).unwrap(),
         fresh: vec![
             PendingRequest::Read {
                 id: 1,

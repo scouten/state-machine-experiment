@@ -19,7 +19,7 @@
 //! orchestrating session can forward it to its own host without knowing
 //! which handler issued it.
 
-use contentauth_c2pa_primitives::{ByteRange, HostError, StreamId};
+use contentauth_c2pa_primitives::{ByteRange, Bytes, HostError, StreamId};
 use contentauth_state_machine::{ProtocolError, Request, RequestId, SessionCore};
 
 use crate::error::FormatError;
@@ -77,7 +77,11 @@ impl Request for IoRequest {
 #[non_exhaustive]
 pub enum IoReply {
     /// Answers [`IoRequest::Read`]: the requested bytes.
-    Bytes(Vec<u8>),
+    ///
+    /// A [`Bytes`] rather than a `Vec<u8>`, so a host that already holds
+    /// the asset in memory (or mapped) answers with a slice of it rather
+    /// than a copy; a `Vec<u8>` converts in without copying.
+    Bytes(Bytes),
 
     /// Answers [`IoRequest::Length`]: the stream's total length in bytes.
     Length(u64),
@@ -101,7 +105,7 @@ pub fn take_bytes(
     core: &mut SessionCore<IoRequest>,
     id: RequestId,
     range: ByteRange,
-) -> Result<Option<Vec<u8>>, FormatError> {
+) -> Result<Option<Bytes>, FormatError> {
     match core.take_reply(id) {
         None => Ok(None),
 
@@ -165,7 +169,7 @@ mod tests {
 
     fn all_replies() -> Vec<(IoReply, &'static str)> {
         vec![
-            (IoReply::Bytes(vec![1]), "Bytes"),
+            (IoReply::Bytes(vec![1].into()), "Bytes"),
             (IoReply::Length(1024), "Length"),
             (IoReply::Failed(HostError::new("nope")), ""),
         ]
@@ -197,7 +201,7 @@ mod tests {
         let id = core.issue(IoRequest::Read { stream, range });
         assert!(take_bytes(&mut core, id, range).unwrap().is_none());
 
-        core.fulfill(id, IoReply::Bytes(vec![0; 2])).unwrap();
+        core.fulfill(id, IoReply::Bytes(vec![0; 2].into())).unwrap();
         assert!(matches!(
             take_bytes(&mut core, id, range),
             Err(FormatError::ReadLengthMismatch { actual: 2, .. })
@@ -212,8 +216,11 @@ mod tests {
         ));
 
         let id = core.issue(IoRequest::Read { stream, range });
-        core.fulfill(id, IoReply::Bytes(vec![7; 3])).unwrap();
-        assert_eq!(take_bytes(&mut core, id, range).unwrap(), Some(vec![7; 3]));
+        core.fulfill(id, IoReply::Bytes(vec![7; 3].into())).unwrap();
+        assert_eq!(
+            take_bytes(&mut core, id, range).unwrap(),
+            Some(vec![7; 3]).map(Into::into)
+        );
     }
 
     #[test]
@@ -252,7 +259,7 @@ mod tests {
         ));
 
         let id = core.issue(IoRequest::Length { stream });
-        core.fulfill_unchecked(id, IoReply::Bytes(vec![]));
+        core.fulfill_unchecked(id, IoReply::Bytes(vec![].into()));
         assert!(matches!(
             take_length(&mut core, id),
             Err(FormatError::Protocol(ProtocolError::ReplyMismatch {

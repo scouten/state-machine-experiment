@@ -58,7 +58,7 @@ fn answer(request: &FileReadRequest) -> FileReadReply {
             let start = range.start as usize;
             let end = start + range.len as usize;
             match C_JPG.get(start..end) {
-                Some(bytes) => FileReadReply::Bytes(bytes.to_vec()),
+                Some(bytes) => FileReadReply::Bytes(bytes.to_vec().into()),
                 None => FileReadReply::Failed(HostError::new("range out of bounds")),
             }
         }
