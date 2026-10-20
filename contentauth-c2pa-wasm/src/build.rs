@@ -1,5 +1,5 @@
 use contentauth_c2pa_session_bridge::build::{
-    BuildSessionBridge, Error, PendingRequest, Reply, Step,
+    BuildSessionBridge, Error, IdentitySigner, PendingRequest, Reply, Step,
 };
 use serde_json::json;
 use wasm_bindgen::prelude::*;
@@ -10,7 +10,18 @@ fn error(err: Error) -> JsValue {
     value.into()
 }
 
-/// A baseline ES256 JPEG build session owned by one browser Worker.
+/// One CAWG identity as JavaScript describes it.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IdentityJson {
+    alg: String,
+    certs: Vec<Vec<u8>>,
+    #[serde(default)]
+    roles: Vec<String>,
+    referenced_assertions: Option<Vec<String>>,
+}
+
+/// A build session owned by one browser Worker.
 #[wasm_bindgen]
 pub struct BuildSession {
     inner: Option<BuildSessionBridge>,
@@ -21,10 +32,27 @@ pub struct BuildSession {
 impl BuildSession {
     /// Creates the existing builder with public certificate bytes, never a key.
     #[wasm_bindgen(constructor)]
-    pub fn new(definition: &str, certs_json: &str) -> Result<BuildSession, JsValue> {
+    pub fn new(
+        definition: &str,
+        format: &str,
+        alg: &str,
+        certs_json: &str,
+        identities_json: &str,
+    ) -> Result<BuildSession, JsValue> {
         let certs = serde_json::from_str(certs_json)
             .map_err(|err| JsValue::from_str(&format!("invalid certificate list: {err}")))?;
-        BuildSessionBridge::new(definition, "image/jpeg", "es256", certs)
+        let identities: Vec<IdentityJson> = serde_json::from_str(identities_json)
+            .map_err(|err| JsValue::from_str(&format!("invalid identity list: {err}")))?;
+        let identities = identities
+            .into_iter()
+            .map(|identity| IdentitySigner {
+                alg: identity.alg,
+                certs: identity.certs,
+                roles: identity.roles,
+                referenced_assertions: identity.referenced_assertions,
+            })
+            .collect();
+        BuildSessionBridge::new(definition, format, alg, certs, identities)
             .map(|session| Self {
                 inner: Some(session),
                 payloads: Vec::new(),
@@ -75,8 +103,8 @@ impl BuildSession {
                                         "offset": offset, "bytes": bytes })
                                 }
                             }
-                            PendingRequest::Sign { id, alg, data } => {
-                                json!({ "id": id, "kind": "sign", "alg": alg, "data": data })
+                            PendingRequest::Sign { id, alg, data, identity } => {
+                                json!({ "id": id, "kind": "sign", "alg": alg, "data": data, "identity": identity })
                             }
                             _ => return Err(JsValue::from_str("unsupported build host request")),
                         })

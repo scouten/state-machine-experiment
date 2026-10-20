@@ -108,6 +108,7 @@ fn new_session() -> BuildSessionBridge {
         "image/jpeg",
         "es256",
         vec![TEST_SIGNER_CERT.to_vec()],
+        Vec::new(),
     )
     .unwrap()
 }
@@ -162,7 +163,7 @@ fn a_rejected_signature_fails_the_build() {
 
 #[test]
 fn a_bad_definition_is_rejected_before_any_request() {
-    let err = BuildSessionBridge::new("{", "image/jpeg", "es256", vec![])
+    let err = BuildSessionBridge::new("{", "image/jpeg", "es256", vec![], Vec::new())
         .err()
         .unwrap();
     assert!(
@@ -182,6 +183,7 @@ fn timestamping_session() -> BuildSessionBridge {
         "image/jpeg",
         "es256",
         vec![TEST_SIGNER_CERT.to_vec()],
+        Vec::new(),
     )
     .unwrap()
 }

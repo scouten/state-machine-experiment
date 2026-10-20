@@ -224,7 +224,7 @@ See the [compatibility experiment](experiments/2026-10-16-node-compat-facade.md)
   without a whole-input `arrayBuffer()` conversion. The Worker fulfills each
   source request with `slice(start, end).arrayBuffer()`.
   File names and MIME hints do not select a handler or set the output title:
-  this slice remains JPEG-only, and signing metadata comes from the definition.
+  callers name the format (`{format}` on `read` and `sign`; JPEG by default, TIFF/DNG also supported), and signing metadata comes from the definition.
   Node 24.18 rejects direct `fs.openAsBlob()` inputs as non-cloneable; derived
   file-backed wrappers may expose a Node runtime bug. See the
   [experiment report](experiments/2026-10-16-file-blob-memory.md).

@@ -45,8 +45,8 @@ export function source(asset) {
  * @returns {Promise<{report: object|null, stats: object}>} Parsed report
  *   (`null` when the asset has no manifest store) and request counters.
  */
-export async function read(adapter, input, settings, now) {
-  const session = adapter.create(settings);
+export async function read(adapter, input, settings, now, format = "image/jpeg") {
+  const session = adapter.create(settings, format);
   const stats = { reads: 0, bytes: 0, maxReadBytes: 0, advances: 0 };
   try {
     for (;;) {
@@ -156,24 +156,38 @@ export async function postTimestamp({ url, request }, deadlineMs = timestampDead
 }
 
 /**
- * Runs a build-and-sign session to completion. Requests are answered
- * sequentially: the builder's two passes depend on earlier writes. Source and
- * output are addressed by stream name; the output defaults to memory.
- * @param {{createBuild(definition: string, certs: Uint8Array[], alg: string): object}} adapter
- * @param {Uint8Array|Blob|object} input Asset to sign.
+ * Position of a CAWG identity assertion label among the declared identities:
+ * `cawg.identity` is 0, `cawg.identity__N` is N.
+ * @param {string} label
+ */
+export function identityIndex(label) {
+  const match = /^cawg\.identity(?:__(\d+))?$/.exec(label);
+  if (!match) throw new Error(`unexpected identity label ${label}`);
+  return match[1] === undefined ? 0 : Number(match[1]);
+}
+
+/**
+ * Runs a build-and-sign session to completion.
+ * Requests are answered sequentially: the builder's two passes depend on
+ * earlier writes. Source and output are addressed by stream name.
+ * @param {{createBuild(definition: string, certs: Uint8Array[], alg: Algorithm): object}} adapter
+ * @param {Source} input Asset to sign.
  * @param {string} definition JSON manifest definition.
  * @param {Uint8Array[]} certs DER certificate chain, leaf first.
- * @param {(request: {id: number, alg: string, data: Uint8Array}) => Promise<Uint8Array>} sign
- *   Produces the raw signature over `request.data` for `alg`.
- * @param {object} [output] Output sink; defaults to {@link memoryOutput}.
- * @param {string} [alg] Signing algorithm; one of {@link algorithms}.
+ * @param {(request: {id: number, alg: Algorithm, data: Uint8Array}) => Promise<Uint8Array>} sign
+ *   Produces a raw signature over `request.data`.
+ * @param {Output} [output] Destination; defaults to memory.
+ * @param {Algorithm} [alg] Must match what the session asks for.
+ * @param {Function} [timestamp] Answers timestamp requests.
+ * @param {{format?: string, identities?: {alg: Algorithm, certs: Uint8Array[], roles?: string[], referencedAssertions?: string[]}[]}} [extra]
+ *   Asset type (MIME type or extension; default JPEG) and CAWG identities to add.
  * @param {(request: {url: string, request: Uint8Array}) => Promise<Uint8Array>} [timestamp]
- *   Answers a timestamp request; defaults to {@link postTimestamp}.
- * @returns {Promise<object>} Builder report plus the signed `asset` and `stats`.
+ *   Answers timestamp requests; a failure fails the build (never silently unstamped).
+ * @returns {Promise<object>} Builder report plus `output.finish()` fields and `stats`.
  */
 export async function build(adapter, input, definition, certs, sign, output = memoryOutput(),
-  alg = "es256", timestamp = postTimestamp) {
-  const session = adapter.createBuild(definition, certs, alg);
+  alg = "es256", timestamp = postTimestamp, { format = "image/jpeg", identities = [] } = {}) {
+  const session = adapter.createBuild(definition, certs, alg, format, identities);
   const stats = { reads: 0, bytes: 0, maxSourceReadBytes: 0, writes: 0, writtenBytes: 0, signs: 0, advances: 0 };
   function stream(name) {
     if (name === "source") return input;
@@ -211,7 +225,9 @@ export async function build(adapter, input, definition, certs, sign, output = me
             break;
           }
           case "sign": {
-            if (request.alg !== alg) throw new Error(`session asked for ${request.alg}, signer is ${alg}`);
+            // The session fixed its algorithms at creation; a mismatch means a wrong signer.
+            const expected = request.identity == null ? alg : identities[identityIndex(request.identity)]?.alg;
+            if (request.alg !== expected) throw new Error(`session asked for ${request.alg}, signer is ${expected}`);
             stats.signs++;
             const signature = await sign(request);
             session.fulfill(request.id, "signature", signature);

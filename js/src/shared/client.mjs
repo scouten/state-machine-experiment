@@ -1,4 +1,23 @@
-import { algorithms, checkSignature } from "./drive.mjs";
+/**
+ * Main-thread side of the Worker protocol, shared by Node and browsers.
+ *
+ * A {@link Client} sends `read`/`build` commands to a Worker running
+ * `serve()` (see service.mjs) and matches replies by id. It owns the
+ * caller's signer: signing requests come back from the Worker as `sign`
+ * messages, run here, and return as `signReply`, so private keys and async
+ * signing (KMS, WebCrypto, HSM) never enter the Worker.
+ * Any protocol violation or Worker error is fatal: every pending call is
+ * rejected and the Worker terminated.
+ *
+ * @typedef {object} Port Transport abstraction over `Worker`/`worker_threads`.
+ * @property {(message: object) => void} post
+ * @property {(handler: (message: object) => void) => void} onMessage
+ * @property {(handler: (error: Error) => void) => void} onError
+ * @property {() => unknown} terminate
+ * @typedef {{alg: import("./drive.mjs").Algorithm, certs: Uint8Array[],
+ *   sign(data: Uint8Array): Promise<Uint8Array>|Uint8Array}} Signer
+ */
+import { algorithms, checkSignature, identityIndex } from "./drive.mjs";
 
 /**
  * Main-thread side of the Worker protocol, shared by Node and browsers.
@@ -84,12 +103,13 @@ export class Client {
   }
   /**
    * Reads and validates an asset.
-   * @param {Uint8Array} asset Copied synchronously, before any await.
-   * @param {{settings?: object, now?: number}} [options] `now` is Unix seconds
+   * @param {Uint8Array|Blob} asset Captured synchronously, before any await.
+   * @param {{settings?: object, now?: number, format?: string}} [options] `format` is the
+   *   asset's MIME type or extension (default JPEG). `now` is Unix seconds
    *   (signed 32-bit) used as the validation clock; defaults to the current time.
    * @returns {Promise<{report: object|null, stats: object, workerMs: number}>}
    */
-  async read(asset, { settings, now = Math.floor(Date.now() / 1000) } = {}) {
+  async read(asset, { settings, now = Math.floor(Date.now() / 1000), format } = {}) {
     if (this.#closed) throw this.#closed;
     if (!Number.isInteger(now) || now < -2147483648 || now > 2147483647)
       throw new TypeError("proof clock must be signed 32-bit Unix seconds");
@@ -98,17 +118,20 @@ export class Client {
     const json = settings === undefined ? undefined : JSON.stringify(settings);
     await this.#ready;
     if (this.#closed) throw this.#closed;
-    return this.#call({ method: "read", asset: snapshot, settings: json, now });
+    return this.#call({ method: "read", asset: snapshot, settings: json, now, format });
   }
   /**
    * Signs an asset with a manifest built from `definition`.
    * @param {Uint8Array} asset Copied synchronously, before any await.
    * @param {object|string} definition Manifest definition (object or JSON).
-   * @param {{alg: "es256", certs: Uint8Array[], sign(data: Uint8Array): Promise<Uint8Array>|Uint8Array}} signer
-   *   Runs on the caller's thread; its key never leaves it.
-   * @param {*} [destination] Node file destination, when supported.
+   * @param {Signer} signer Runs on the caller's thread; its key never leaves it.
+   * @param {unknown} [destination] Optional file destination (Node client only);
+   *   omitted means the signed asset is returned in memory.
+   * @param {{format?: string}} [options] Asset type (MIME type or extension; default JPEG).
+   *   Add CAWG identity assertions with `signer.identities`: `{alg, certs, roles?,
+   *   referencedAssertions?, sign(data)}`; their keys also stay on the caller's thread.
    */
-  async sign(asset, definition, signer, destination) {
+  async sign(asset, definition, signer, destination, { format } = {}) {
     if (this.#closed) throw this.#closed;
     if (!algorithms.has(signer?.alg) || typeof signer.sign !== "function")
       throw new TypeError(`proof signer must supply sign(data) and one of: ${[...algorithms].join(", ")}`);
@@ -116,12 +139,25 @@ export class Client {
       throw new TypeError("signer certs must be Uint8Array[]");
     const snapshot = this.#snapshot(asset);
     const output = destination === undefined ? undefined : this.#destination(destination);
+    // Capture every callback now: the caller may later replace `signer.sign` or
+    // reorder `signer.identities`, which must not change which key signs.
+    const signerSign = signer.sign.bind(signer);
+    const identitySigns = [];
+    const identities = (signer.identities ?? []).map((identity) => {
+      if (!algorithms.has(identity?.alg) || typeof identity.sign !== "function" ||
+          !Array.isArray(identity.certs) || !identity.certs.every((cert) => cert instanceof Uint8Array))
+        throw new TypeError("each identity needs alg, certs (Uint8Array[]) and sign(data)");
+      identitySigns.push(identity.sign.bind(identity));
+      return { alg: identity.alg, certs: identity.certs.map((cert) => new Uint8Array(cert)),
+        roles: identity.roles, referencedAssertions: identity.referencedAssertions };
+    });
     const certs = signer.certs.map((cert) => new Uint8Array(cert));
     const json = typeof definition === "string" ? definition : JSON.stringify(definition);
-    const sign = signer.sign.bind(signer);
+    const sign = (data, label) => label == null ? signerSign(data) : identitySigns[identityIndex(label)](data);
     await this.#ready;
     if (this.#closed) throw this.#closed;
-    return this.#call({ method: "build", asset: snapshot, definition: json, certs, destination: output, alg: signer.alg }, sign);
+    return this.#call({ method: "build", asset: snapshot, definition: json, certs, destination: output, alg: signer.alg,
+      format, identities }, sign);
   }
   /** Posts a command and registers its pending entry; `sign` is the optional signer callback. */
   #call(command, sign) {
@@ -136,14 +172,14 @@ export class Client {
   async #sign(message, pending) {
     if (!pending.sign || pending.signing || !algorithms.has(message.alg) ||
         !(message.data instanceof Uint8Array) || !Number.isSafeInteger(message.requestId) ||
-        message.requestId < 0) {
+        message.requestId < 0 || (message.identity != null && typeof message.identity !== "string")) {
       this.#fail(new Error("invalid Worker signer request"));
       return;
     }
     pending.signing = true;
     let reply;
     try {
-      const value = await pending.sign(message.data);
+      const value = await pending.sign(message.data, message.identity);
       checkSignature(message.alg, value);
       reply = { ok: true, value: new Uint8Array(value) };
     } catch (error) {

@@ -96,52 +96,53 @@ after(async () => {
     measuredAt: new Date().toISOString(), node: process.version, rows }, null, 2));
 });
 
+// A classic little-endian TIFF with one IFD holding a single entry.
+const tiffSource = new Uint8Array([73, 73, 42, 0, 8, 0, 0, 0, 1, 0, 0, 1, 3, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]);
+
 test("signing algorithms through the Worker host, read back Trusted", async () => {
-  const expected = { es256: "pass", es384: "pass", es512: "pass", ed25519: "pass", ps256: "gap-rust", ps384: "gap-rust", ps512: "gap-rust" };
   for (const alg of Object.keys(algorithms)) {
-    let status = "pass";
-    let evidence = "signed via client.sign, read back via client.read";
-    try {
-      const signed = await client.sign({ path: jpegSource }, baseline, signerFor(alg));
-      const read = await client.read(signed.asset, { settings: settingsFor(alg), now: nowSeconds() });
-      evidence = `validation_state=${read.report.validation_state}`;
-      if (read.report.validation_state !== "Trusted") status = "fail";
-    } catch (error) {
-      evidence = `${error.name}: ${error.message}`;
-      status = /rsa_signature_len/.test(evidence) ? "gap-rust" : "fail";
-    }
-    record(`sign.${alg}`, "signing", `${alg} signature, JPEG`, status === "gap-rust" ? "rust-bridge" : "node-host", status, evidence);
-    assert.equal(status, expected[alg], `${alg}: ${evidence}`);
+    const signed = await client.sign({ path: jpegSource }, baseline, signerFor(alg));
+    const read = await client.read(signed.asset, { settings: settingsFor(alg), now: nowSeconds() });
+    record(`sign.${alg}`, "signing", `${alg} signature, JPEG`, "node-host", "pass",
+      `validation_state=${read.report.validation_state}`);
+    assert.equal(read.report.validation_state, "Trusted", alg);
   }
 });
 
-test("browser Wasm glue: algorithm, format and request surface", async () => {
+test("browser Wasm glue: algorithm, format and identities are constructor parameters", async () => {
   const wasm = await import("../generated/contentauth_c2pa_wasm.js");
   await wasm.default({ module_or_path: await readFile(new URL("../generated/contentauth_c2pa_wasm_bg.wasm", import.meta.url)) });
-  assert.equal(wasm.BuildSession.length, 2, "constructor takes only (definition, certs)");
-  record("sign.alg.wasm", "signing", "non-ES256 through Wasm", "wasm-glue", "gap-glue",
-    "BuildSession(definition, certs) has no algorithm parameter; the Rust glue passes \"es256\" and \"image/jpeg\" literally");
-  assert.throws(() => new wasm.ReadSession("image/tiff"), /UnsupportedType|unsupported/i);
-  record("format.tiff.read.wasm", "formats", "TIFF read through Wasm", "rust-bridge", "gap-rust",
-    "ReadSession(\"image/tiff\") rejects: the neutral bridge's for_format knows only JPEG");
+  assert.equal(wasm.BuildSession.length, 5, "(definition, format, alg, certs, identities)");
+  const certs = (alg) => JSON.stringify([Array.from(keys.get(alg).der)]);
+  for (const alg of Object.keys(algorithms))
+    new wasm.BuildSession(JSON.stringify(baseline), "image/tiff", alg, certs(alg), "[]").free();
+  assert.throws(() => new wasm.BuildSession(JSON.stringify(baseline), "image/jpeg", "ps256", certs("es256"), "[]"),
+    /RSA signer certificate/);
+  record("sign.alg.wasm", "signing", "non-ES256 through Wasm", "wasm-glue", "pass",
+    "BuildSession takes format, algorithm and identities; PS* derives its signature length from the leaf certificate (construction only here; the browser contracts run it end to end)");
+  new wasm.ReadSession("image/tiff").free();
+  record("format.tiff.read.wasm", "formats", "TIFF read through Wasm", "rust-bridge", "pass",
+    "ReadSession(\"image/tiff\") constructs (read end to end through Neon below)");
 });
 
-test("format handling is JPEG-only below the host", async () => {
-  for (const format of ["image/tiff", "tiff", "image/png"]) {
-    assert.throws(() => nativeReader.sessionNew(format, undefined), /UnsupportedType|unsupported/i, format);
-    assert.throws(() => nativeSigner.buildNew(JSON.stringify(baseline), format, "es256", []),
-      /UnsupportedType|unsupported/i, format);
-  }
-  record("format.tiff.read.neon", "formats", "TIFF read through Neon", "rust-bridge", "gap-rust",
-    "sessionNew(\"image/tiff\") rejects UnsupportedType");
-  record("format.tiff.sign.neon", "formats", "TIFF sign through Neon", "rust-bridge", "gap-rust",
-    "buildNew(..., \"image/tiff\", ...) rejects UnsupportedType");
+test("TIFF through the Worker host, and the host's format gap", async () => {
+  const signed = await client.sign(tiffSource, baseline, signerFor("es256"), undefined, { format: "image/tiff" });
+  const read = await client.read(signed.asset, { settings: settingsFor("es256"), now: nowSeconds(), format: "tiff" });
+  assert.equal(read.report.validation_state, "Trusted");
+  record("format.tiff.sign.neon", "formats", "TIFF sign through Neon", "rust-bridge", "pass",
+    "client.sign(..., {format: \"image/tiff\"}) produces an asset the TIFF handler reads back Trusted");
+  record("format.tiff.read.neon", "formats", "TIFF read through Neon", "rust-bridge", "pass",
+    "client.read(..., {format: \"tiff\"}) validates it Trusted");
+
+  assert.throws(() => nativeReader.sessionNew("image/png", undefined), /UnsupportedType|unsupported/i);
+  assert.throws(() => nativeSigner.buildNew(JSON.stringify(baseline), "image/png", "es256", []),
+    /UnsupportedType|unsupported/i);
   // The host never detects format: a PNG is handed to the JPEG handler as-is.
   const png = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
   const outcome = await client.read(new Uint8Array(png)).then((value) => `ok:${JSON.stringify(value.report)}`,
     (error) => `${error.name}: ${error.message}`);
   record("format.detect.host", "formats", "format detection by content/extension", "js", "gap-js",
-    `non-JPEG bytes are passed to the JPEG handler unannounced; outcome: ${outcome}`);
+    `format defaults to JPEG unless the caller names one; non-JPEG bytes go to the JPEG handler unannounced; outcome: ${outcome}`);
 });
 
 // A canned authority, as in the signing addon's own tests: the token is opaque to
@@ -228,6 +229,18 @@ test("RFC 3161 timestamps through the Worker host", async () => {
     "The Worker POSTs with fetch only; the earlier standalone Neon host let the signer override transport and URL");
 });
 
+test("signing callbacks are captured when sign() is called", async () => {
+  const identity = { ...signerFor("es384"), roles: ["cawg.creator"] };
+  const signer = { ...signerFor("es256"), identities: [identity] };
+  const pending = client.sign({ path: jpegSource }, baseline, signer);
+  // Swapping callbacks after the call must not change which key signs.
+  signer.sign = async () => { throw new Error("replacement signer must not run") };
+  identity.sign = async () => { throw new Error("replacement identity signer must not run") };
+  const signed = await pending;
+  const read = await client.read(signed.asset, { settings: settingsFor("es256"), now: nowSeconds() });
+  assert.equal(read.report.validation_state, "Trusted");
+});
+
 test("reader trust, identity and OCSP surface", async () => {
   const signed = await client.sign({ path: jpegSource }, baseline, signerFor("es256"));
   const trusted = await client.read(signed.asset, { settings: settingsFor("es256"), now: nowSeconds() });
@@ -237,13 +250,34 @@ test("reader trust, identity and OCSP surface", async () => {
   record("read.trust.anchors", "reader", "custom trust anchors change validation_state", "node-host", "pass",
     `with anchor ${trusted.report.validation_state}; without ${untrusted.report.validation_state}`);
 
-  // Definitions are closed: nothing in them can request an identity assertion.
-  await assert.rejects(client.sign({ path: jpegSource }, { ...baseline, identities: [{ label: "cawg.identity" }] },
-    signerFor("es256")), /Definition|unknown field|identities/i);
-  record("cawg.sign", "identity", "CAWG identity assertion from JS", "rust-bridge", "gap-rust",
-    "the Definition rejects `identities`; the bridge never builds BuilderSettings::identities, and SignPurpose is not on the wire");
-  record("cawg.read", "identity", "CAWG identity results from a JS read", "rust-bridge", "unverified",
-    "no identity-bearing asset can be produced from JS and none is in the fixtures; report fields not probed");
+  // The identity is signed with a different key and algorithm than the claim, so
+  // only per-label routing in the host can make the result valid.
+  const identity = { ...signerFor("es384"), roles: ["cawg.creator"] };
+  const withIdentity = await client.sign({ path: jpegSource }, baseline,
+    { ...signerFor("es256"), identities: [identity] });
+  const identityRead = await client.read(withIdentity.asset, { settings: settingsFor("es256"), now: nowSeconds() });
+  const text = JSON.stringify(identityRead.report);
+  assert.ok(text.includes("cawg.identity"), "the identity assertion is in the manifest");
+  assert.equal(identityRead.report.validation_state, "Trusted");
+  const identityCodes = (report) => report.validation_status
+    .filter((status) => status.url.endsWith("c2pa.assertions/cawg.identity")).map((status) => status.code);
+  assert.ok(identityCodes(identityRead.report).includes("cawg.x509.signature.validated"),
+    "the identity signature itself verifies, not only the store");
+  // Same certificate, but a signature from a different key of the same width: the
+  // store stays Trusted (identity failures are scoped to their assertion), so only
+  // the identity-specific status can reveal it.
+  const wrongKey = { ...identity, alg: "es256", certs: signerFor("es256").certs, sign: signerFor("ed25519").sign };
+  const forged = await client.sign({ path: jpegSource }, baseline, { ...signerFor("es256"), identities: [wrongKey] });
+  const forgedRead = await client.read(forged.asset, { settings: settingsFor("es256"), now: nowSeconds() });
+  assert.equal(forgedRead.report.validation_state, "Trusted");
+  assert.ok(identityCodes(forgedRead.report).includes("cawg.x509.signature.mismatch"));
+  assert.ok(!identityCodes(forgedRead.report).includes("cawg.x509.signature.validated"));
+  record("cawg.sign", "identity", "CAWG identity assertion from JS", "rust-bridge", "pass",
+    "signer.identities signs each cawg.identity assertion with its own key and algorithm; the bridge carries the label on the sign request");
+  assert.deepEqual(Object.keys(identityRead.report).sort(),
+    ["active_manifest", "manifests", "validation_state", "validation_status"]);
+  record("cawg.read", "identity", "CAWG identity results from a JS read", "rust-bridge", "gap-rust",
+    "an identity-bearing asset reads Trusted, but the c2pa-js-shaped report has no identity section: the reader's own identity results are not serialized by the bridge");
 });
 
 // A CA and a leaf it issued, the leaf naming an OCSP responder: the reader only

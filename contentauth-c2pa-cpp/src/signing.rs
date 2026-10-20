@@ -250,7 +250,8 @@ pub unsafe extern "C" fn c2pa_sm_build_session_new(
                 .iter()
                 .map(|cert| cert.bytes().map(<[u8]>::to_vec))
                 .collect::<Result<Vec<_>, _>>()?;
-            let inner = BuildSessionBridge::new(definition, format, algorithm, certificates)?;
+            let inner =
+                BuildSessionBridge::new(definition, format, algorithm, certificates, Vec::new())?;
             *out_session = tracked(C2paSmBuildSession {
                 inner,
                 fresh: Vec::new(),

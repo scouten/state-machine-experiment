@@ -760,6 +760,7 @@ fn all_request_views_map_fields_and_streams_without_borrowing_temporary_values()
             id: 5,
             alg: "es256",
             data: vec![3, 4],
+            identity: None,
         },
         PendingRequest::Timestamp {
             id: 6,

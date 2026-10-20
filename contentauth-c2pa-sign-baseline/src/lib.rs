@@ -62,5 +62,8 @@ mod error;
 pub mod fixtures;
 
 pub use contentauth_c2pa_builder::{BuilderSettings, SigningAlg};
-pub use definition::{AssertionDefinition, ClaimGenerator, Definition, BASELINE_DEFINITION};
+pub use definition::{
+    is_rsa_pss, rsa_signature_len, AssertionDefinition, ClaimGenerator, Definition,
+    BASELINE_DEFINITION,
+};
 pub use error::Error;

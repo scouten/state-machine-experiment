@@ -923,6 +923,17 @@ TEST(Core, file_signing_publishes_only_success_and_cleans_temporaries) {
         EXPECT_EQ(std::string(std::istreambuf_iterator<char>(input), {}), "keep me");
     }
     EXPECT_EQ(std::distance(std::filesystem::directory_iterator(cleanup.path), std::filesystem::directory_iterator{}), 1);
+    {
+        // A FIFO with no writer would block a plain open forever; it must be refused promptly.
+        const auto fifo = cleanup.path / "source.fifo";
+        EXPECT_EQ(::mkfifo(fifo.c_str(), 0600), 0);
+        EXPECT_THROW_CODE(build_and_sign_file(settings, fifo, cleanup.path / "from-fifo.jpg", fixture_sign),
+                          static_cast<ErrorCode>(C2PA_SM_ERR_BUILD));
+        EXPECT_TRUE(!std::filesystem::exists(cleanup.path / "from-fifo.jpg"));
+        std::filesystem::remove(fifo);
+        EXPECT_EQ(std::distance(std::filesystem::directory_iterator(cleanup.path),
+                               std::filesystem::directory_iterator{}), 1);
+    }
     const std::vector<BuildTimestamp> timestamp_failures{
         {},
         [](const auto &, const auto &) -> std::vector<uint8_t> { throw std::runtime_error("offline"); },

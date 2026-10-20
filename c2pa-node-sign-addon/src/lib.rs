@@ -8,7 +8,9 @@
 
 use std::cell::RefCell;
 
-use contentauth_c2pa_session_bridge::build::{Error, BuildSessionBridge, PendingRequest, Reply, Step};
+use contentauth_c2pa_session_bridge::build::{
+    BuildSessionBridge, Error, IdentitySigner, PendingRequest, Reply, Step,
+};
 use neon::{prelude::*, types::buffer::TypedArray};
 
 /// A session handle JS holds. `RefCell` because Neon hands out `&self`;
@@ -25,7 +27,27 @@ fn js_error<'a>(cx: &mut impl Context<'a>, err: &Error) -> JsResult<'a, JsError>
     Ok(js)
 }
 
-/// `buildNew(definitionJson, format, alg, certs: Buffer[])`.
+/// An optional array of strings property of `obj`.
+fn string_list<'a>(
+    cx: &mut FunctionContext<'a>,
+    obj: Handle<'a, JsObject>,
+    key: &str,
+) -> NeonResult<Option<Vec<String>>> {
+    let value = obj.get_value(cx, key)?;
+    if value.is_a::<JsUndefined, _>(cx) {
+        return Ok(None);
+    }
+    let list = value.downcast_or_throw::<JsArray, _>(cx)?.to_vec(cx)?;
+    let mut out = Vec::with_capacity(list.len());
+    for item in list {
+        out.push(item.downcast_or_throw::<JsString, _>(cx)?.value(cx));
+    }
+    Ok(Some(out))
+}
+
+/// `buildNew(definitionJson, format, alg, certs: Buffer[], identities?)`, where
+/// each identity is `{ alg, certs: Buffer[], roles?: string[],
+/// referencedAssertions?: string[] }`.
 fn build_new(mut cx: FunctionContext) -> JsResult<JsBox<Session>> {
     let definition = cx.argument::<JsString>(0)?.value(&mut cx);
     let format = cx.argument::<JsString>(1)?.value(&mut cx);
@@ -37,7 +59,31 @@ fn build_new(mut cx: FunctionContext) -> JsResult<JsBox<Session>> {
         certs.push(buffer.as_slice(&cx).to_vec());
     }
 
-    match BuildSessionBridge::new(&definition, &format, &alg, certs) {
+    let mut identities = Vec::new();
+    if let Some(list) = cx.argument_opt(4) {
+        if !list.is_a::<JsUndefined, _>(&mut cx) {
+            let list = list.downcast_or_throw::<JsArray, _>(&mut cx)?.to_vec(&mut cx)?;
+            for item in list {
+                let obj = item.downcast_or_throw::<JsObject, _>(&mut cx)?;
+                let alg = obj.get::<JsString, _, _>(&mut cx, "alg")?.value(&mut cx);
+                let mut certs = Vec::new();
+                for cert in obj.get::<JsArray, _, _>(&mut cx, "certs")?.to_vec(&mut cx)? {
+                    let buffer = cert.downcast_or_throw::<JsBuffer, _>(&mut cx)?;
+                    certs.push(buffer.as_slice(&cx).to_vec());
+                }
+                let roles = string_list(&mut cx, obj, "roles")?.unwrap_or_default();
+                let referenced_assertions = string_list(&mut cx, obj, "referencedAssertions")?;
+                identities.push(IdentitySigner {
+                    alg,
+                    certs,
+                    roles,
+                    referenced_assertions,
+                });
+            }
+        }
+    }
+
+    match BuildSessionBridge::new(&definition, &format, &alg, certs, identities) {
         Ok(session) => Ok(cx.boxed(Session(RefCell::new(Some(session))))),
         Err(err) => {
             let js = js_error(&mut cx, &err)?;
@@ -107,7 +153,11 @@ fn build_advance(mut cx: FunctionContext) -> JsResult<JsObject> {
                         obj.set(&mut cx, "offset", offset)?;
                         obj.set(&mut cx, "bytes", bytes)?;
                     }
-                    PendingRequest::Sign { alg, data, .. } => {
+                    PendingRequest::Sign { alg, data, identity, .. } => {
+                        if let Some(label) = identity {
+                            let label = cx.string(label);
+                            obj.set(&mut cx, "identity", label)?;
+                        }
                         let kind = cx.string("sign");
                         let alg = cx.string(alg);
                         let data = JsBuffer::from_slice(&mut cx, data)?;

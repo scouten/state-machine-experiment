@@ -52,6 +52,15 @@ fn invalid_build_inputs_return_owned_errors() {
             "unsupported signing algorithm",
         ),
         ("jpeg", "{", "es256", true, "definition"),
+        // An RSA-PSS build needs the signature length from an RSA leaf; an EC
+        // certificate is refused up front rather than failing mid-build.
+        (
+            "jpeg",
+            BASELINE_DEFINITION,
+            "ps256",
+            true,
+            "RSA signer certificate",
+        ),
     ] {
         let format = CString::new(format).unwrap();
         let definition = CString::new(definition).unwrap();

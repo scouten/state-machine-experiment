@@ -34,4 +34,8 @@ pub enum Error {
     /// requires exactly one.
     #[error("manifest definition needs exactly one claim_generator_info entry")]
     ClaimGenerator,
+
+    /// An RSASSA-PSS signer's certificate could not be read for its key length.
+    #[error("RSA signer certificate: {0}")]
+    SignerCertificate(String),
 }
