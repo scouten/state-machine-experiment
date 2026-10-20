@@ -48,6 +48,9 @@ jobs:
           RUST_BACKTRACE: "1"
         run: cargo llvm-cov --all-features --tests --lcov --output-path lcov.info
 
+      - name: Test standalone Wasm request encoding
+        run: cargo test --manifest-path contentauth-c2pa-wasm/Cargo.toml --locked
+
       # Test code itself shouldn't count for or against coverage.
       - name: Filter out tests
         uses: scouten/uncover-tests@af7baaca5bf5189b968573d5f14627c2e1ea0704 # v1.1.0
@@ -107,6 +110,9 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --all-features --all-targets -- -Dwarnings
 
+      - name: Run Clippy for standalone Wasm binding
+        run: cargo clippy --manifest-path contentauth-c2pa-wasm/Cargo.toml --all-targets --locked -- -Dwarnings
+
   cargo_fmt:
     name: Enforce Rust code format
     runs-on: ubuntu-latest
@@ -123,7 +129,9 @@ jobs:
           components: rustfmt
 
       - name: Check format
-        run: cargo +nightly-2026-01-16 fmt --all -- --check
+        run: |
+          cargo +nightly-2026-01-16 fmt --all -- --check
+          cargo +nightly-2026-01-16 fmt --manifest-path contentauth-c2pa-wasm/Cargo.toml -- --check
 
   docs:
     name: Doc build (stable, warnings denied)
@@ -181,6 +189,9 @@ jobs:
 
       - name: "`cargo check` for wasm32-unknown-unknown"
         run: cargo check --all-features --target wasm32-unknown-unknown --workspace --exclude contentauth-c2pa-rs-compat --exclude contentauth-c2pa-rs-compat-sign
+
+      - name: Check standalone Wasm binding
+        run: cargo check --manifest-path contentauth-c2pa-wasm/Cargo.toml --target wasm32-unknown-unknown --locked
 
       - name: "`cargo check` for wasm32-wasip2"
         run: cargo check --all-features --target wasm32-wasip2 --workspace --exclude contentauth-c2pa-rs-compat --exclude contentauth-c2pa-rs-compat-sign

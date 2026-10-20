@@ -20,16 +20,16 @@
 
 use std::path::PathBuf;
 
-use contentauth_c2pa_node_compat_sign::{
-    Error, NodeBuildSession, PendingRequest, Reply, SignReport, Step, Stream,
-};
 use contentauth_c2pa_rs_compat::{Context, ReadSettings, Reader, ValidationState};
+use contentauth_c2pa_session_bridge::build::{
+    BuildSessionBridge, Error, PendingRequest, Reply, SignReport, Step, Stream,
+};
 use contentauth_c2pa_sign_baseline::{fixtures::*, BASELINE_DEFINITION};
 
 type Signed = Result<Vec<u8>, String>;
 
 fn sign_with(
-    session: NodeBuildSession,
+    session: BuildSessionBridge,
     sign: &dyn Fn(&[u8]) -> Signed,
 ) -> Result<(Vec<u8>, SignReport, usize), Error> {
     sign_and_timestamp_with(session, sign, &|_, _| {
@@ -40,7 +40,7 @@ fn sign_with(
 /// `tsa` plays the time-stamp authority: given the URL and the DER
 /// request, it returns the DER response body.
 fn sign_and_timestamp_with(
-    mut session: NodeBuildSession,
+    mut session: BuildSessionBridge,
     sign: &dyn Fn(&[u8]) -> Signed,
     tsa: &dyn Fn(&str, &[u8]) -> Signed,
 ) -> Result<(Vec<u8>, SignReport, usize), Error> {
@@ -102,8 +102,8 @@ fn test_sign(data: &[u8]) -> Result<Vec<u8>, String> {
     .map_err(|err| err.to_string())
 }
 
-fn new_session() -> NodeBuildSession {
-    NodeBuildSession::new(
+fn new_session() -> BuildSessionBridge {
+    BuildSessionBridge::new(
         BASELINE_DEFINITION,
         "image/jpeg",
         "es256",
@@ -162,7 +162,7 @@ fn a_rejected_signature_fails_the_build() {
 
 #[test]
 fn a_bad_definition_is_rejected_before_any_request() {
-    let err = NodeBuildSession::new("{", "image/jpeg", "es256", vec![])
+    let err = BuildSessionBridge::new("{", "image/jpeg", "es256", vec![])
         .err()
         .unwrap();
     assert!(
@@ -172,12 +172,12 @@ fn a_bad_definition_is_rejected_before_any_request() {
     );
 }
 
-fn timestamping_session() -> NodeBuildSession {
+fn timestamping_session() -> BuildSessionBridge {
     let json = BASELINE_DEFINITION.replace(
         "\"title\"",
         "\"tsa_url\": \"https://tsa.example/\", \"title\"",
     );
-    NodeBuildSession::new(
+    BuildSessionBridge::new(
         &json,
         "image/jpeg",
         "es256",

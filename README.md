@@ -74,9 +74,9 @@ where it could go next — written in Markdown with Mermaid diagrams.
   of the crates above, for a caller that wants c2pa-rs's existing surface
   rather than this workspace's `Session` contract.
 * [`contentauth-c2pa-cpp`](contentauth-c2pa-cpp) — an exploration of a C++
-  binding: a C ABI over the sans-I/O reader session plus header-only C++
-  (blocking, thread-pool and C++20 coroutine drivers), written to show what
-  the session model can express — parallel and multiplexed reads, errors as
+  binding: a C ABI over the neutral read/build bridges plus C++ blocking,
+  thread-pool and C++20 coroutine drivers, written to show what the session
+  model can express — parallel and multiplexed reads and signing, errors as
   values, cancellation by destruction — that a callback-based API cannot.
   See its [README](contentauth-c2pa-cpp/README.md).
 * [`contentauth-c2pa-js-compat`](contentauth-c2pa-js-compat) — the same
@@ -87,9 +87,21 @@ where it could go next — written in Markdown with Mermaid diagrams.
   entirely in this interface-specific layer — an async host awaiting a
   `Blob` and a `Platform` at every request the sans-I/O engine makes —
   and, under a browser-only `web` feature, the `wasm-bindgen` end of it.
-
+  This is the earlier Rust-owned async host, an alternative to driving the
+  synchronous bridge from JavaScript.
+* [`contentauth-c2pa-session-bridge`](contentauth-c2pa-session-bridge) —
+  neutral synchronous `ReadSessionBridge` and `BuildSessionBridge`, extracted
+  from the former Node-named crates. Owns explicit SDK compatibility vocabulary
+  shared with the alternative async host.
 Outside the workspace (see its own README for why):
 
+* [`contentauth-c2pa-wasm`](contentauth-c2pa-wasm) — synchronous wasm-bindgen
+  adapters over the session bridge, for a JavaScript host to drive. Its standalone workspace
+  pins the binding CLI schema.
+* [`c2pa-node-compat-addon`](c2pa-node-compat-addon) and
+  [`c2pa-node-sign-addon`](c2pa-node-sign-addon) — thin Neon consumers of the
+  same neutral bridge. Their existing JavaScript facades retain file/network
+  behavior of their own.
 * [`c2pa-rs-compat-conformance`](c2pa-rs-compat-conformance) — a
   differential test harness proving `contentauth-c2pa-rs-compat` reports
   the same thing as the real c2pa-rs `Reader` for the same file, and a
@@ -103,6 +115,9 @@ Bindings that expose a C API should be built on the
 hand-rolled C FFI. [`contentauth-c2pa-c-api`](contentauth-c2pa-c-api)
 uses cimpl for tracked handles, pointer validation, error conversion, and
 memory ownership; cbindgen generates its C header.
+The experimental [`contentauth-c2pa-cpp`](contentauth-c2pa-cpp) binding uses
+cimpl for its signing ABI and retains a hand-written reader ABI over the
+neutral read bridge. It is separate from `contentauth-c2pa-c-api`.
 
 ## Building
 

@@ -35,6 +35,9 @@ tests, Clippy (`-Dwarnings`), nightly rustfmt, rustdoc (warnings denied),
 Wasm checks, MSRV (1.96.0), `cargo-deny`; plus separate jobs for the
 `c2pa-rs-compat-conformance` differential tests (`compat-conformance`, run
 on every PR) and the two Neon addons (`node-addon`, `node-sign-addon`).
+The C++ binding jobs exercise the Rust C ABI plus C++17, C++20 and pool
+drivers on Linux and macOS. The Linux matrix covers C++ coverage, AddressSanitizer
+and ThreadSanitizer; macOS also exercises the Apple thread pool.
 
 ```mermaid
 flowchart LR
@@ -45,11 +48,16 @@ flowchart LR
     PR --> D[cargo-deny]
     PR --> C["compat-conformance<br/>(differential tests vs c2pa-rs)"]
     PR --> N["node-addon,<br/>node-sign-addon"]
+    PR --> CPP["cpp-binding / cpp-binding-macos<br/>C ABI + C++ drivers<br/>coverage / ASan / TSan"]
 ```
 
 The Wasm checks are a design assertion: **the engine and everything over it
 builds for Wasm unmodified**. Exempt: `rs-compat` and `rs-compat-sign`,
 which deliberately own the workspace's only network dependencies. The `web`
-modules are only *compiled*, not run — there is no browser in CI.
+modules of the alternative Rust async hosts are only *compiled*, not run.
+The standalone synchronous Wasm binding has its own locked wasm32 build check,
+native request-encoding tests (including shared binary payload ownership), Clippy
+and formatting checks. CI does not run it in a browser; the older `web` modules
+are not run either.
 
 **Next:** [Findings →](08-findings.md)

@@ -60,7 +60,7 @@ the cdylib into Node). Currently about 98% of the driver's lines and 87%
 of the addon's; the uncovered remainder is the OCSP-request marshalling
 (no fixture makes the engine issue one) and a file shrinking mid-read.
 CI's `node-addon` job runs it and uploads both reports to Codecov under
-the `node-addon` flag. The Rust core (`contentauth-c2pa-node-compat`)
+the `node-addon` flag. The Rust core (`contentauth-c2pa-session-bridge`)
 is covered by the workspace's own coverage job.
 
 Measured here (release build, 256 MB file whose every byte is hashed,
@@ -93,7 +93,7 @@ because the host, not the Rust engine, owns the network.
 * **Hashing runs on the JS thread**, in small slices. The numbers above
   show that is cheap for SHA-256 at this chunk size, but a host that
   wants it off-thread has a clean option the engine already supports:
-  construct and drive the `NodeSession` inside a `worker_threads` Worker.
+  construct and drive the `ReadSessionBridge` inside a `worker_threads` Worker.
   Same Rust, same loop, different thread; nothing in the crate changes.
 * **Every request crosses the N-API boundary** (a `Buffer` copy per
   chunk). c2pa-node reads inside Rust and crosses once per call. The

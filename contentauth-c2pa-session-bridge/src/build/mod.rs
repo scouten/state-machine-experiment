@@ -11,7 +11,7 @@
 // specific language governing permissions and limitations under
 // each license.
 
-//! [`NodeBuildSession`]: the synchronous surface Node drives.
+//! [`BuildSessionBridge`]: the synchronous surface a language host drives.
 
 use std::collections::HashMap;
 
@@ -19,15 +19,18 @@ use contentauth_c2pa_file_builder::{
     FileBuilderReply, FileBuilderRequest, FileBuilderSession, SignPurpose,
 };
 use contentauth_c2pa_format_jpeg::JpegFormat;
-use contentauth_c2pa_js_compat::{for_format, C2paError};
 use contentauth_c2pa_primitives::{
     tsa::{timestamp_request, timestamp_token},
-    HostError, SigningAlg,
+    Bytes, HostError, SigningAlg,
 };
 use contentauth_c2pa_sign_baseline::Definition;
 use contentauth_state_machine::{RequestId, Session};
 
-use crate::Error;
+use crate::compat::{for_format, C2paError};
+
+mod error;
+
+pub use error::Error;
 
 type Engine = FileBuilderSession<JpegFormat>;
 
@@ -62,14 +65,14 @@ impl Stream {
 
 /// One thing the session needs its host to do, as plain data.
 ///
-/// `id` is what to quote back to [`NodeBuildSession::fulfill`].
+/// `id` is what to quote back to [`BuildSessionBridge::fulfill`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum PendingRequest {
     /// Read exactly `len` bytes of `stream` starting at `start`.
     /// Answer with [`Reply::Bytes`].
     Read {
-        /// The handle to pass to [`NodeBuildSession::fulfill`].
+        /// The handle to pass to [`BuildSessionBridge::fulfill`].
         id: u64,
         /// Which asset.
         stream: Stream,
@@ -81,7 +84,7 @@ pub enum PendingRequest {
 
     /// Report the total length of `stream`. Answer with [`Reply::Length`].
     Length {
-        /// The handle to pass to [`NodeBuildSession::fulfill`].
+        /// The handle to pass to [`BuildSessionBridge::fulfill`].
         id: u64,
         /// Which asset.
         stream: Stream,
@@ -90,20 +93,20 @@ pub enum PendingRequest {
     /// Write `bytes` at `offset` of `stream` (always the output today).
     /// Answer with [`Reply::Written`] once a later read would see them.
     Write {
-        /// The handle to pass to [`NodeBuildSession::fulfill`].
+        /// The handle to pass to [`BuildSessionBridge::fulfill`].
         id: u64,
         /// Which asset.
         stream: Stream,
         /// Offset to write at.
         offset: u64,
-        /// The bytes.
-        bytes: Vec<u8>,
+        /// Shared immutable bytes, cloned without copying the payload.
+        bytes: Bytes,
     },
 
     /// Sign `data` (a COSE `Sig_structure`) with `alg` and answer with
     /// [`Reply::Signature`]: for ECDSA the raw fixed-width `r || s`, not DER.
     Sign {
-        /// The handle to pass to [`NodeBuildSession::fulfill`].
+        /// The handle to pass to [`BuildSessionBridge::fulfill`].
         id: u64,
         /// The algorithm, lower-case: `"es256"`, `"ps256"`, `"ed25519"`...
         alg: &'static str,
@@ -120,7 +123,7 @@ pub enum PendingRequest {
     /// no RFC 3161 knowledge — only an HTTP client. `url` is the
     /// definition's `tsa_url`.
     Timestamp {
-        /// The handle to pass to [`NodeBuildSession::fulfill`].
+        /// The handle to pass to [`BuildSessionBridge::fulfill`].
         id: u64,
         /// The authority's URL (`http` or `https`).
         url: String,
@@ -130,7 +133,7 @@ pub enum PendingRequest {
 }
 
 impl PendingRequest {
-    /// The handle to pass to [`NodeBuildSession::fulfill`].
+    /// The handle to pass to [`BuildSessionBridge::fulfill`].
     pub fn id(&self) -> u64 {
         match self {
             Self::Read { id, .. }
@@ -162,7 +165,7 @@ pub enum Reply {
     Failed(String),
 }
 
-/// What [`NodeBuildSession::advance`] reports.
+/// What [`BuildSessionBridge::advance`] reports.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Step {
     /// Not finished. The vector holds the requests that are *new* since
@@ -170,7 +173,7 @@ pub enum Step {
     /// requests already reported.
     Pending(Vec<PendingRequest>),
 
-    /// Finished; call [`NodeBuildSession::finish`].
+    /// Finished; call [`BuildSessionBridge::finish`].
     Complete,
 }
 
@@ -179,7 +182,7 @@ pub enum Step {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SignReport {
     /// The manifest store's bytes, as embedded.
-    pub manifest: Vec<u8>,
+    pub manifest: Bytes,
     /// The hard binding's exclusions, ascending: the container structure
     /// carrying the manifest, framing included, and anything else the
     /// format's specification excludes (TIFF excludes a length field apart
@@ -200,7 +203,7 @@ pub struct Exclusion {
 ///
 /// A thin, FFI-shaped wrapper over [`FileBuilderSession`]: it never
 /// blocks, never spawns, holds no lock, and never sees a key.
-pub struct NodeBuildSession {
+pub struct BuildSessionBridge {
     inner: Engine,
 
     /// The definition's `tsa_url`: where a timestamp request goes.
@@ -215,7 +218,7 @@ pub struct NodeBuildSession {
     reported: HashMap<RequestId, u64>,
 }
 
-impl NodeBuildSession {
+impl BuildSessionBridge {
     /// Starts signing an asset of type `format` (a MIME type or bare
     /// extension) per `definition_json` (see [`Definition`]), with
     /// algorithm `alg` (`"es256"`, ...) and the DER certificate chain
@@ -290,7 +293,7 @@ impl NodeBuildSession {
     pub fn finish(self) -> Result<SignReport, Error> {
         let report = self.inner.finish().map_err(Error::from)?;
         Ok(SignReport {
-            manifest: report.manifest.into(),
+            manifest: report.manifest,
             exclusions: report
                 .exclusions
                 .iter()
@@ -361,7 +364,7 @@ fn describe(
             id: handle,
             stream: Stream::from_engine(*stream)?,
             offset: *offset,
-            bytes: bytes.clone().into(),
+            bytes: bytes.clone(),
         },
         FileBuilderRequest::Sign {
             purpose: SignPurpose::Claim,
@@ -417,8 +420,8 @@ mod tests {
 
     use super::*;
 
-    fn session() -> NodeBuildSession {
-        NodeBuildSession::new(BASELINE_DEFINITION, "image/jpeg", "es256", vec![vec![1]]).unwrap()
+    fn session() -> BuildSessionBridge {
+        BuildSessionBridge::new(BASELINE_DEFINITION, "image/jpeg", "es256", vec![vec![1]]).unwrap()
     }
 
     #[test]
@@ -457,7 +460,7 @@ mod tests {
                 id: 3,
                 stream: Stream::Output,
                 offset: 9,
-                bytes: vec![1, 2]
+                bytes: vec![1, 2].into()
             }
         );
         assert_eq!(
@@ -491,6 +494,35 @@ mod tests {
             ),
             Err(Error::Unsupported(_))
         ));
+    }
+
+    #[test]
+    fn write_requests_share_the_engines_buffer_even_when_cloned() {
+        let bytes = Bytes::from(vec![0x42; 128 * 1024]);
+        let request = FileBuilderRequest::Write {
+            stream: Engine::OUTPUT_STREAM,
+            offset: 9,
+            bytes: bytes.clone(),
+        };
+        let pending = describe(3, &request, None).unwrap();
+        for request in [&pending, &pending.clone()] {
+            let PendingRequest::Write { bytes: shared, .. } = request else {
+                panic!("expected a write");
+            };
+            assert_eq!(shared.as_ptr(), bytes.as_ptr());
+            assert_eq!(shared.len(), bytes.len());
+        }
+    }
+
+    #[test]
+    fn asset_read_replies_transfer_the_hosts_allocation_to_the_engine() {
+        let bytes = vec![0x42; 128 * 1024];
+        let ptr = bytes.as_ptr();
+        let FileBuilderReply::Bytes(shared) = engine_reply(Reply::Bytes(bytes)).unwrap() else {
+            panic!("expected bytes");
+        };
+        assert_eq!(shared.as_ptr(), ptr);
+        assert_eq!(shared.len(), 128 * 1024);
     }
 
     fn timestamp_engine_request() -> FileBuilderRequest {
@@ -549,12 +581,12 @@ mod tests {
             "\"title\"",
             "\"tsa_url\": \"https://tsa.example/\", \"title\"",
         );
-        let session = NodeBuildSession::new(&json, "image/jpeg", "es256", vec![vec![1]]).unwrap();
+        let session = BuildSessionBridge::new(&json, "image/jpeg", "es256", vec![vec![1]]).unwrap();
         assert_eq!(session.tsa_url.as_deref(), Some("https://tsa.example/"));
 
         let bad = BASELINE_DEFINITION.replace("\"title\"", "\"tsa_url\": \"ftp://x/\", \"title\"");
         assert!(matches!(
-            NodeBuildSession::new(&bad, "image/jpeg", "es256", vec![]),
+            BuildSessionBridge::new(&bad, "image/jpeg", "es256", vec![]),
             Err(Error::Definition(_))
         ));
     }
@@ -600,7 +632,7 @@ mod tests {
     #[test]
     fn arguments_are_checked_before_any_request() {
         let new = |json: &str, format: &str, alg: &str| {
-            NodeBuildSession::new(json, format, alg, vec![])
+            BuildSessionBridge::new(json, format, alg, vec![])
                 .err()
                 .unwrap()
         };
@@ -672,7 +704,7 @@ mod tests {
                 id: 9,
                 stream: s,
                 offset: 0,
-                bytes: vec![],
+                bytes: Bytes::new(),
             },
             PendingRequest::Sign {
                 id: 10,

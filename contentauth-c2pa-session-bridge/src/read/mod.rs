@@ -11,21 +11,28 @@
 // specific language governing permissions and limitations under
 // each license.
 
-//! [`NodeSession`]: the synchronous surface Node drives.
+//! [`ReadSessionBridge`]: the synchronous surface a language host drives.
 
 use std::collections::HashMap;
 
 use contentauth_c2pa_file_reader::{FileReadReply, FileReadRequest, FileReadSession};
 use contentauth_c2pa_format_jpeg::JpegFormat;
-use contentauth_c2pa_js_compat::{for_format, C2paError, Context, Error};
 use contentauth_c2pa_primitives::HostError;
 use contentauth_state_machine::{RequestId, Session};
 
-use crate::reader::Reader;
+use crate::compat::for_format;
+
+mod reader;
+
+pub use reader::Reader;
+
+pub use crate::compat::{
+    C2paError, Context, Error, Manifest, ManifestStore, ValidationState, ValidationStatus,
+};
 
 /// One thing the session needs its host to do, as plain data.
 ///
-/// `id` is what to quote back to [`NodeSession::fulfill`]. Every field is
+/// `id` is what to quote back to [`ReadSessionBridge::fulfill`]. Every field is
 /// a number, string or byte vector: nothing here needs the host to know
 /// about this workspace's types.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -34,7 +41,7 @@ pub enum PendingRequest {
     /// Read exactly `len` bytes of the asset starting at `start`.
     /// Answer with [`Reply::Bytes`].
     Read {
-        /// The handle to pass to [`NodeSession::fulfill`].
+        /// The handle to pass to [`ReadSessionBridge::fulfill`].
         id: u64,
         /// Offset of the first byte.
         start: u64,
@@ -44,20 +51,20 @@ pub enum PendingRequest {
 
     /// Report the asset's total length. Answer with [`Reply::Length`].
     Length {
-        /// The handle to pass to [`NodeSession::fulfill`].
+        /// The handle to pass to [`ReadSessionBridge::fulfill`].
         id: u64,
     },
 
     /// Report the wall clock. Answer with [`Reply::Time`].
     CurrentDateTime {
-        /// The handle to pass to [`NodeSession::fulfill`].
+        /// The handle to pass to [`ReadSessionBridge::fulfill`].
         id: u64,
     },
 
     /// POST `request_der` to the OCSP responder at `url` and return the
     /// response body. Answer with [`Reply::Ocsp`].
     Ocsp {
-        /// The handle to pass to [`NodeSession::fulfill`].
+        /// The handle to pass to [`ReadSessionBridge::fulfill`].
         id: u64,
         /// The responder's URL.
         url: String,
@@ -67,7 +74,7 @@ pub enum PendingRequest {
 }
 
 impl PendingRequest {
-    /// The handle to pass to [`NodeSession::fulfill`].
+    /// The handle to pass to [`ReadSessionBridge::fulfill`].
     pub fn id(&self) -> u64 {
         match self {
             Self::Read { id, .. }
@@ -95,16 +102,16 @@ pub enum Reply {
     Failed(String),
 }
 
-/// What [`NodeSession::advance`] reports.
+/// What [`ReadSessionBridge::advance`] reports.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Step {
     /// Not finished. The vector holds the requests that are *new* since
     /// the last call — possibly none, if the session is still waiting on
-    /// requests already reported. Start them, [`fulfill`](NodeSession::fulfill)
+    /// requests already reported. Start them, [`fulfill`](ReadSessionBridge::fulfill)
     /// as they settle, and advance again once at least one has.
     Pending(Vec<PendingRequest>),
 
-    /// Finished; call [`NodeSession::finish`].
+    /// Finished; call [`ReadSessionBridge::finish`].
     Complete,
 }
 
@@ -114,7 +121,7 @@ pub enum Step {
 /// [`FileReadSession`]: it never blocks, never
 /// spawns, and holds no lock. It is `Send` or not exactly as the engine
 /// is, and nothing here requires either.
-pub struct NodeSession {
+pub struct ReadSessionBridge {
     inner: FileReadSession<JpegFormat>,
 
     /// Numbers handed to the host, mapped to the engine's own ids. The
@@ -128,7 +135,7 @@ pub struct NodeSession {
     reported: HashMap<RequestId, u64>,
 }
 
-impl NodeSession {
+impl ReadSessionBridge {
     /// Starts a read of an asset of type `format` (a MIME type or bare
     /// extension, as c2pa-node's `mimeType`), under c2pa-rs settings JSON
     /// `settings_json` (none: c2pa-rs defaults).
@@ -299,7 +306,7 @@ mod tests {
 
     #[test]
     fn an_answered_request_is_forgotten_rather_than_kept_for_the_whole_read() {
-        let mut session = NodeSession::new("image/jpeg", None).unwrap();
+        let mut session = ReadSessionBridge::new("image/jpeg", None).unwrap();
         let Step::Pending(requests) = session.advance().unwrap() else {
             panic!("a fresh session needs the host");
         };
@@ -354,5 +361,16 @@ mod tests {
             engine_reply(Reply::Failed("no".to_string())),
             FileReadReply::Failed(e) if e.message == "no"
         ));
+    }
+
+    #[test]
+    fn asset_read_replies_transfer_the_hosts_allocation_to_the_engine() {
+        let bytes = vec![0x42; 128 * 1024];
+        let ptr = bytes.as_ptr();
+        let FileReadReply::Bytes(shared) = engine_reply(Reply::Bytes(bytes)) else {
+            panic!("expected bytes");
+        };
+        assert_eq!(shared.as_ptr(), ptr);
+        assert_eq!(shared.len(), 128 * 1024);
     }
 }

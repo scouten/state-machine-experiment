@@ -22,12 +22,12 @@
 //! registry, and the seam a second `contentauth-c2pa-format-*` crate would
 //! extend, exactly as `contentauth-c2pa-rs-compat`'s `format.rs` is: most
 //! naturally by returning a small enum that itself implements
-//! `FormatHandler`, one variant per handler, since [`crate::read_manifest`]
+//! `FormatHandler`, one variant per handler, since the read host
 //! is generic over the handler type rather than a trait object.
 
 use contentauth_c2pa_format_jpeg::JpegFormat;
 
-use crate::error::C2paError;
+use super::error::C2paError;
 
 /// The `format` strings this build can locate a manifest store within: a
 /// MIME type or a bare extension, matched without regard to case.
