@@ -131,8 +131,8 @@ impl Definition {
     /// certificate chain `certificates` (signer first) — the two things a
     /// signer, rather than a definition, decides.
     ///
-    /// RSASSA-PSS algorithms need `BuilderSettings::rsa_signature_len`
-    /// too; set it on the result.
+    /// For an RSASSA-PSS algorithm, `BuilderSettings::rsa_signature_len` is
+    /// derived from the signer's certificate (see [`rsa_signature_len`]).
     pub fn into_settings(
         self,
         alg: SigningAlg,
@@ -140,6 +140,11 @@ impl Definition {
     ) -> Result<BuilderSettings, Error> {
         let [generator] = <[ClaimGenerator; 1]>::try_from(self.claim_generator_info)
             .map_err(|_| Error::ClaimGenerator)?;
+        let rsa_len = if is_rsa_pss(alg) {
+            Some(rsa_signature_len(certificates.first().map(Vec::as_slice))?)
+        } else {
+            None
+        };
 
         let mut settings = BuilderSettings::new(
             self.instance_id,
@@ -149,6 +154,7 @@ impl Definition {
             certificates,
         );
         settings.title = self.title;
+        settings.rsa_signature_len = rsa_len;
         if self.tsa_url.is_some() {
             settings.timestamp = Some(TimestampSettings::default());
         }
@@ -169,12 +175,80 @@ impl Definition {
     }
 }
 
+/// Whether `alg` is one of the RSASSA-PSS algorithms.
+pub fn is_rsa_pss(alg: SigningAlg) -> bool {
+    matches!(
+        alg,
+        SigningAlg::Ps256 | SigningAlg::Ps384 | SigningAlg::Ps512
+    )
+}
+
+/// An RSA signature is as long as the signer's modulus, so the length the
+/// engine must reserve follows from the leaf certificate's public key.
+pub fn rsa_signature_len(leaf: Option<&[u8]>) -> Result<usize, Error> {
+    use der::{asn1::UintRef, Decode, Reader, SliceReader};
+    use x509_cert::Certificate;
+
+    let bad = |why: &str| Error::SignerCertificate(why.to_owned());
+    let leaf = leaf.ok_or_else(|| bad("no certificate"))?;
+    let cert = Certificate::from_der(leaf).map_err(|e| bad(&e.to_string()))?;
+    let key = cert
+        .tbs_certificate
+        .subject_public_key_info
+        .subject_public_key
+        .as_bytes()
+        .ok_or_else(|| bad("unaligned public key"))?;
+    SliceReader::new(key)
+        .and_then(|mut r| {
+            r.sequence(|seq| {
+                let modulus = UintRef::decode(seq)?;
+                let _exponent = UintRef::decode(seq)?;
+                Ok(modulus.as_bytes().len())
+            })
+        })
+        .map_err(|e| bad(&e.to_string()))
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use contentauth_c2pa_builder::AssertionKind;
 
     use super::*;
+
+    // A TEST ONLY self-signed RSA-2048 certificate (no private key is kept).
+    const RSA_CERT: &[u8] = include_bytes!("../tests/fixtures/rsa2048-cert.der");
+
+    #[test]
+    fn rsa_pss_signature_length_follows_the_leaf_modulus() {
+        let definition = Definition::from_json(BASELINE_DEFINITION).unwrap();
+        let settings = definition
+            .into_settings(SigningAlg::Ps256, vec![RSA_CERT.to_vec()])
+            .unwrap();
+        assert_eq!(settings.rsa_signature_len, Some(256));
+    }
+
+    #[test]
+    fn fixed_width_algorithms_leave_the_rsa_length_unset() {
+        let definition = Definition::from_json(BASELINE_DEFINITION).unwrap();
+        let settings = definition
+            .into_settings(SigningAlg::Es256, vec![RSA_CERT.to_vec()])
+            .unwrap();
+        assert_eq!(settings.rsa_signature_len, None);
+    }
+
+    #[test]
+    fn rsa_pss_without_a_readable_rsa_leaf_is_rejected() {
+        let definition = || Definition::from_json(BASELINE_DEFINITION).unwrap();
+        assert!(matches!(
+            definition().into_settings(SigningAlg::Ps384, vec![]),
+            Err(Error::SignerCertificate(_))
+        ));
+        assert!(matches!(
+            definition().into_settings(SigningAlg::Ps384, vec![vec![1, 2, 3]]),
+            Err(Error::SignerCertificate(_))
+        ));
+    }
 
     fn settings(json: &str) -> Result<BuilderSettings, Error> {
         Definition::from_json(json)?.into_settings(SigningAlg::Es256, vec![vec![1]])

@@ -229,6 +229,18 @@ test("RFC 3161 timestamps through the Worker host", async () => {
     "The Worker POSTs with fetch only; the earlier standalone Neon host let the signer override transport and URL");
 });
 
+test("signing callbacks are captured when sign() is called", async () => {
+  const identity = { ...signerFor("es384"), roles: ["cawg.creator"] };
+  const signer = { ...signerFor("es256"), identities: [identity] };
+  const pending = client.sign({ path: jpegSource }, baseline, signer);
+  // Swapping callbacks after the call must not change which key signs.
+  signer.sign = async () => { throw new Error("replacement signer must not run") };
+  identity.sign = async () => { throw new Error("replacement identity signer must not run") };
+  const signed = await pending;
+  const read = await client.read(signed.asset, { settings: settingsFor("es256"), now: nowSeconds() });
+  assert.equal(read.report.validation_state, "Trusted");
+});
+
 test("reader trust, identity and OCSP surface", async () => {
   const signed = await client.sign({ path: jpegSource }, baseline, signerFor("es256"));
   const trusted = await client.read(signed.asset, { settings: settingsFor("es256"), now: nowSeconds() });
@@ -247,6 +259,19 @@ test("reader trust, identity and OCSP surface", async () => {
   const text = JSON.stringify(identityRead.report);
   assert.ok(text.includes("cawg.identity"), "the identity assertion is in the manifest");
   assert.equal(identityRead.report.validation_state, "Trusted");
+  const identityCodes = (report) => report.validation_status
+    .filter((status) => status.url.endsWith("c2pa.assertions/cawg.identity")).map((status) => status.code);
+  assert.ok(identityCodes(identityRead.report).includes("cawg.x509.signature.validated"),
+    "the identity signature itself verifies, not only the store");
+  // Same certificate, but a signature from a different key of the same width: the
+  // store stays Trusted (identity failures are scoped to their assertion), so only
+  // the identity-specific status can reveal it.
+  const wrongKey = { ...identity, alg: "es256", certs: signerFor("es256").certs, sign: signerFor("ed25519").sign };
+  const forged = await client.sign({ path: jpegSource }, baseline, { ...signerFor("es256"), identities: [wrongKey] });
+  const forgedRead = await client.read(forged.asset, { settings: settingsFor("es256"), now: nowSeconds() });
+  assert.equal(forgedRead.report.validation_state, "Trusted");
+  assert.ok(identityCodes(forgedRead.report).includes("cawg.x509.signature.mismatch"));
+  assert.ok(!identityCodes(forgedRead.report).includes("cawg.x509.signature.validated"));
   record("cawg.sign", "identity", "CAWG identity assertion from JS", "rust-bridge", "pass",
     "signer.identities signs each cawg.identity assertion with its own key and algorithm; the bridge carries the label on the sign request");
   assert.deepEqual(Object.keys(identityRead.report).sort(),

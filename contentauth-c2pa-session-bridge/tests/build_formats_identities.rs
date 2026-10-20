@@ -144,7 +144,7 @@ fn ps256_with_a_non_rsa_certificate_is_rejected() {
     .err()
     .unwrap();
     assert!(
-        err.js_message().contains("RSA signer certificate"),
+        err.js_message().contains("SignerCertificate"),
         "{}",
         err.js_message()
     );

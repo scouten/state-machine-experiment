@@ -24,7 +24,7 @@ use contentauth_c2pa_primitives::{
     tsa::{timestamp_request, timestamp_token},
     HostError, SigningAlg,
 };
-use contentauth_c2pa_sign_baseline::Definition;
+use contentauth_c2pa_sign_baseline::{is_rsa_pss, rsa_signature_len, Definition};
 use contentauth_state_machine::{RequestId, Session};
 
 use crate::compat::{for_format, C2paError};
@@ -256,21 +256,15 @@ impl BuildSessionBridge {
         let alg = parse_alg(alg)?;
         let definition = Definition::from_json(definition_json)?;
         let tsa_url = definition.tsa_url.clone();
-        let rsa_len = match alg {
-            SigningAlg::Ps256 | SigningAlg::Ps384 | SigningAlg::Ps512 => {
-                Some(rsa_signature_len(certs.first())?)
-            }
-            _ => None,
-        };
         let mut settings = definition.into_settings(alg, certs)?;
-        settings.rsa_signature_len = rsa_len;
         for identity in identities {
             let alg = parse_alg(&identity.alg)?;
-            let rsa_signature_len = match alg {
-                SigningAlg::Ps256 | SigningAlg::Ps384 | SigningAlg::Ps512 => {
-                    Some(rsa_signature_len(identity.certs.first())?)
-                }
-                _ => None,
+            let rsa_signature_len = if is_rsa_pss(alg) {
+                Some(rsa_signature_len(
+                    identity.certs.first().map(Vec::as_slice),
+                )?)
+            } else {
+                None
             };
             let mut entry = IdentitySettings::x509(alg, identity.certs);
             if let IdentityCredential::X509Cose {
@@ -356,32 +350,6 @@ impl BuildSessionBridge {
 
 /// Parses a signing algorithm name, case-insensitively, as c2pa-rs's JSON
 /// spells it (`"es256"`).
-/// An RSA signature is as long as the signer's modulus, so the length the
-/// engine must reserve follows from the leaf certificate's public key.
-fn rsa_signature_len(leaf: Option<&Vec<u8>>) -> Result<usize, C2paError> {
-    use der::{asn1::UintRef, Decode, Reader, SliceReader};
-    use x509_cert::Certificate;
-
-    let bad = |why: &str| C2paError::BadParam(format!("RSA signer certificate: {why}"));
-    let leaf = leaf.ok_or_else(|| bad("no certificate"))?;
-    let cert = Certificate::from_der(leaf).map_err(|e| bad(&e.to_string()))?;
-    let key = cert
-        .tbs_certificate
-        .subject_public_key_info
-        .subject_public_key
-        .as_bytes()
-        .ok_or_else(|| bad("unaligned public key"))?;
-    SliceReader::new(key)
-        .and_then(|mut r| {
-            r.sequence(|seq| {
-                let modulus = UintRef::decode(seq)?;
-                let _exponent = UintRef::decode(seq)?;
-                Ok(modulus.as_bytes().len())
-            })
-        })
-        .map_err(|e| bad(&e.to_string()))
-}
-
 fn parse_alg(alg: &str) -> Result<SigningAlg, C2paError> {
     Ok(match alg.to_ascii_lowercase().as_str() {
         "es256" => SigningAlg::Es256,

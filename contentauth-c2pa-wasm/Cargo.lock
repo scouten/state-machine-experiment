@@ -257,11 +257,9 @@ dependencies = [
  "contentauth-c2pa-reader",
  "contentauth-c2pa-sign-baseline",
  "contentauth-state-machine",
- "der",
  "serde",
  "serde_json",
  "thiserror",
- "x509-cert",
 ]
 
 [[package]]
@@ -271,9 +269,11 @@ dependencies = [
  "c2pa_cbor",
  "contentauth-c2pa-builder",
  "contentauth-c2pa-primitives",
+ "der",
  "serde",
  "serde_json",
  "thiserror",
+ "x509-cert",
 ]
 
 [[package]]

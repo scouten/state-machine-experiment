@@ -276,7 +276,9 @@ FileBuildHost::FileBuildHost(const std::filesystem::path &source, const std::fil
       temporary_(destination.string() + ".XXXXXX") {
     if (source.string().find('\0') != std::string::npos || temporary_.find('\0') != std::string::npos)
         throw std::runtime_error("embedded NUL in build path");
-    source_ = ::open(source.c_str(), O_RDONLY);
+    // O_NONBLOCK keeps a writer-less FIFO from hanging the open; a non-regular
+    // source is then rejected by length(), which checks the opened descriptor.
+    source_ = ::open(source.c_str(), O_RDONLY | O_NONBLOCK);
     if (source_ < 0) throw std::runtime_error("cannot open build source");
     output_ = ::mkstemp(temporary_.data());
     if (output_ < 0) {

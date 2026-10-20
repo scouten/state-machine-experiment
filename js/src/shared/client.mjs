@@ -139,17 +139,21 @@ export class Client {
       throw new TypeError("signer certs must be Uint8Array[]");
     const snapshot = this.#snapshot(asset);
     const output = destination === undefined ? undefined : this.#destination(destination);
+    // Capture every callback now: the caller may later replace `signer.sign` or
+    // reorder `signer.identities`, which must not change which key signs.
+    const signerSign = signer.sign.bind(signer);
+    const identitySigns = [];
     const identities = (signer.identities ?? []).map((identity) => {
       if (!algorithms.has(identity?.alg) || typeof identity.sign !== "function" ||
           !Array.isArray(identity.certs) || !identity.certs.every((cert) => cert instanceof Uint8Array))
         throw new TypeError("each identity needs alg, certs (Uint8Array[]) and sign(data)");
+      identitySigns.push(identity.sign.bind(identity));
       return { alg: identity.alg, certs: identity.certs.map((cert) => new Uint8Array(cert)),
         roles: identity.roles, referencedAssertions: identity.referencedAssertions };
     });
     const certs = signer.certs.map((cert) => new Uint8Array(cert));
     const json = typeof definition === "string" ? definition : JSON.stringify(definition);
-    const sign = (data, label) => label == null ? signer.sign(data)
-      : signer.identities[identityIndex(label)].sign(data);
+    const sign = (data, label) => label == null ? signerSign(data) : identitySigns[identityIndex(label)](data);
     await this.#ready;
     if (this.#closed) throw this.#closed;
     return this.#call({ method: "build", asset: snapshot, definition: json, certs, destination: output, alg: signer.alg,
