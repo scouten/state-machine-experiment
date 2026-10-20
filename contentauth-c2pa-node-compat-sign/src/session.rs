@@ -290,7 +290,7 @@ impl NodeBuildSession {
     pub fn finish(self) -> Result<SignReport, Error> {
         let report = self.inner.finish().map_err(Error::from)?;
         Ok(SignReport {
-            manifest: report.manifest,
+            manifest: report.manifest.into(),
             exclusions: report
                 .exclusions
                 .iter()
@@ -361,7 +361,7 @@ fn describe(
             id: handle,
             stream: Stream::from_engine(*stream)?,
             offset: *offset,
-            bytes: bytes.clone(),
+            bytes: bytes.clone().into(),
         },
         FileBuilderRequest::Sign {
             purpose: SignPurpose::Claim,
@@ -401,7 +401,7 @@ fn engine_reply(reply: Reply) -> Result<FileBuilderReply, Error> {
             Ok(token) => FileBuilderReply::Timestamp(token),
             Err(err) => FileBuilderReply::Failed(err),
         },
-        Reply::Bytes(bytes) => FileBuilderReply::Bytes(bytes),
+        Reply::Bytes(bytes) => FileBuilderReply::Bytes(bytes.into()),
         Reply::Length(len) => FileBuilderReply::Length(len),
         Reply::Written => FileBuilderReply::Written,
         Reply::Signature(bytes) => FileBuilderReply::Signature(bytes),
@@ -448,7 +448,7 @@ mod tests {
                 &FileBuilderRequest::Write {
                     stream: out,
                     offset: 9,
-                    bytes: vec![1, 2]
+                    bytes: vec![1, 2].into()
                 },
                 None
             )
@@ -562,7 +562,7 @@ mod tests {
     #[test]
     fn replies_map_to_the_engines_kind() {
         assert!(
-            matches!(engine_reply(Reply::Bytes(vec![1])).unwrap(), FileBuilderReply::Bytes(b) if b == [1])
+            matches!(engine_reply(Reply::Bytes(vec![1])).unwrap(), FileBuilderReply::Bytes(b) if b[..] == [1])
         );
         assert!(matches!(
             engine_reply(Reply::Length(3)).unwrap(),

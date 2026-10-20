@@ -77,18 +77,17 @@ where
             return session.finish();
         }
 
-        for request in session.outstanding_requests().to_vec() {
-            let reply = answer(
+        session.respond(|request| {
+            answer(
                 source_stream,
                 output_stream,
                 &mut source,
                 &mut output,
                 &mut signers,
                 &mut answer_timestamp,
-                &request.kind,
-            );
-            session.fulfill(request.id, reply)?;
-        }
+                request,
+            )
+        })?;
     }
 }
 
@@ -124,7 +123,7 @@ fn answer<S: Read + Seek, O: Read + Write + Seek>(
                 return FileBuilderReply::Failed(HostError::new("unknown stream"));
             };
             match read {
-                Ok(bytes) => FileBuilderReply::Bytes(bytes),
+                Ok(bytes) => FileBuilderReply::Bytes(bytes.into()),
                 Err(err) => FileBuilderReply::Failed(read_failed(*range, &err)),
             }
         }
@@ -494,7 +493,7 @@ mod tests {
             &FileBuilderRequest::Write {
                 stream: output_stream(),
                 offset: 0,
-                bytes: vec![1, 2, 3],
+                bytes: vec![1, 2, 3].into(),
             },
         );
 
@@ -516,7 +515,7 @@ mod tests {
             &FileBuilderRequest::Write {
                 stream: output_stream(),
                 offset: 1,
-                bytes: vec![9, 9],
+                bytes: vec![9, 9].into(),
             },
         );
         assert!(matches!(reply, FileBuilderReply::Written));
@@ -559,7 +558,7 @@ mod tests {
             &FileBuilderRequest::Write {
                 stream: output_stream(),
                 offset: 0,
-                bytes: vec![1],
+                bytes: vec![1].into(),
             },
         );
 

@@ -100,7 +100,7 @@ impl Host {
             BuilderRequest::AssetBytes { range, .. } => {
                 let start = range.start as usize;
                 let end = start + range.len as usize;
-                BuilderHostReply::AssetBytes(self.asset[start..end].to_vec())
+                BuilderHostReply::AssetBytes(self.asset[start..end].to_vec().into())
             }
 
             BuilderRequest::Sign { alg, data, .. } => {
@@ -191,14 +191,14 @@ fn read_back_with_manifest(
                     let (start, len) = manifest_range;
                     let start = start as usize;
                     let end = start + len as usize;
-                    ReadHostReply::ManifestStore(Some(asset[start..end].to_vec()))
+                    ReadHostReply::ManifestStore(Some(asset[start..end].to_vec().into()))
                 }
                 ReadRequest::CurrentDateTime => ReadHostReply::CurrentDateTime(1_800_000_000),
                 ReadRequest::AssetLength { .. } => ReadHostReply::AssetLength(asset.len() as u64),
                 ReadRequest::AssetBytes { range, .. } => {
                     let start = range.start as usize;
                     let end = start + range.len as usize;
-                    ReadHostReply::AssetBytes(asset[start..end].to_vec())
+                    ReadHostReply::AssetBytes(asset[start..end].to_vec().into())
                 }
                 other => panic!("unexpected request: {other:?}"),
             };
@@ -345,14 +345,14 @@ fn an_untrusted_signer_reads_back_as_merely_valid() {
                     let (start, len) = manifest_range;
                     let start = start as usize;
                     let end = start + len as usize;
-                    ReadHostReply::ManifestStore(Some(asset[start..end].to_vec()))
+                    ReadHostReply::ManifestStore(Some(asset[start..end].to_vec().into()))
                 }
                 ReadRequest::CurrentDateTime => ReadHostReply::CurrentDateTime(1_800_000_000),
                 ReadRequest::AssetLength { .. } => ReadHostReply::AssetLength(asset.len() as u64),
                 ReadRequest::AssetBytes { range, .. } => {
                     let start = range.start as usize;
                     let end = start + range.len as usize;
-                    ReadHostReply::AssetBytes(asset[start..end].to_vec())
+                    ReadHostReply::AssetBytes(asset[start..end].to_vec().into())
                 }
                 other => panic!("unexpected request: {other:?}"),
             };
@@ -428,7 +428,7 @@ fn a_host_that_refuses_to_sign_fails_the_session() {
                     session
                         .fulfill(
                             request.id,
-                            BuilderHostReply::AssetBytes(asset[start..end].to_vec()),
+                            BuilderHostReply::AssetBytes(asset[start..end].to_vec().into()),
                         )
                         .unwrap();
                 }

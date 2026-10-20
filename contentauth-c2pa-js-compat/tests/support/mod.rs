@@ -152,7 +152,9 @@ pub fn build_and_embed(source: &[u8]) -> (EmbedPlan, Vec<u8>) {
                 }
 
                 BuilderRequest::AssetBytes { range, .. } => BuilderHostReply::AssetBytes(
-                    asset[range.start as usize..][..range.len as usize].to_vec(),
+                    asset[range.start as usize..][..range.len as usize]
+                        .to_vec()
+                        .into(),
                 ),
 
                 BuilderRequest::Sign { alg, data, .. } => {

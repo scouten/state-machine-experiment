@@ -178,7 +178,7 @@ impl Scan {
                             };
                             self.phase = Phase::Done(Found {
                                 total,
-                                store: Some((carrier, jumbf)),
+                                store: Some((carrier, jumbf.into())),
                             });
                         }
                     }

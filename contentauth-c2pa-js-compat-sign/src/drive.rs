@@ -22,7 +22,7 @@ use contentauth_c2pa_file_builder::{
 use contentauth_c2pa_js_compat::Blob;
 use contentauth_c2pa_primitives::{
     tsa::{timestamp_request, timestamp_token},
-    ByteRange, HashAlgorithm, HostError,
+    ByteRange, Bytes, HashAlgorithm, HostError,
 };
 use contentauth_state_machine::{Session, Step};
 
@@ -53,7 +53,7 @@ where
             let report = session.finish()?;
             return Ok(SignedAsset {
                 asset: output,
-                manifest: report.manifest,
+                manifest: report.manifest.into(),
             });
         }
 
@@ -62,7 +62,7 @@ where
                 FileBuilderRequest::Read { stream, range } if *stream == source_stream => {
                     match source.bytes(*range).await {
                         Ok(bytes) if bytes.len() as u64 == range.len => {
-                            FileBuilderReply::Bytes(bytes)
+                            FileBuilderReply::Bytes(bytes.into())
                         }
                         Ok(bytes) => FileBuilderReply::Failed(HostError::new(format!(
                             "asked for {} bytes at {}, but the blob returned {}",
@@ -76,7 +76,7 @@ where
 
                 FileBuilderRequest::Read { stream, range } if *stream == output_stream => {
                     match slice(&output, *range) {
-                        Ok(bytes) => FileBuilderReply::Bytes(bytes.to_vec()),
+                        Ok(bytes) => FileBuilderReply::Bytes(Bytes::copy_from_slice(bytes)),
                         Err(err) => FileBuilderReply::Failed(err),
                     }
                 }
