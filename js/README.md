@@ -28,14 +28,16 @@ flowchart TB
     Client["Shared JS Client<br/>snapshot, IDs, errors, disposal"]
     Service["Shared Worker service<br/>serialized operations"]
     Drive["Shared JS host loop<br/>advance / answer / fulfill / finish"]
+    Source["Worker-owned source<br/>bytes / Blob slices / Node file reads"]
     Browser["Browser adapter<br/>synchronous wasm-bindgen calls"]
     Node["Node adapter<br/>synchronous Neon calls"]
     Session["Portable read / build bridges<br/>plain-data requests and replies"]
     Reader["FileReadSession / FileBuilderSession<br/>C2PA reader / builder"]
     Signer["Application-owned async signer<br/>key stays outside Worker and Rust"]
     App --> Client
-    Client -->|"postMessage: clone bytes, no transfer"| Service
+    Client -->|"postMessage: bytes / Blob / Node path"| Service
     Service --> Drive
+    Drive --> Source
     Service -->|"sign request: operation + request ID"| Client
     Client --> Signer
     Signer -->|"signature or error"| Client
@@ -47,8 +49,8 @@ flowchart TB
 ```
 
 The application and service are in different execution realms. Platform files
-only start Workers, normalize message/error/termination APIs and translate
-binding values. The **same imported modules**, not parallel implementations,
+start Workers, normalize message/error/termination APIs, translate
+binding values and open platform-specific sources. The **same imported modules**, not parallel implementations,
 own these behaviors:
 
 | Module | Shared responsibility |
@@ -56,6 +58,7 @@ own these behaviors:
 | [client.mjs](src/shared/client.mjs) | Public Promise API; request identity; input snapshot; signer callbacks; reply/error handling; disposal |
 | [service.mjs](src/shared/service.mjs) | Worker command dispatch; serial operation queue; independently dispatched signer replies |
 | [drive.mjs](src/shared/drive.mjs) | Read/build session progression; source/output bytes; host replies; request accounting; cleanup |
+| [Node source](src/node/source.mjs) | Worker-owned file handle, positioned range reads and close; no Rust changes |
 | [contract.mjs](test/contract.mjs), [signing.mjs](test/signing.mjs) | Identical read and signing acceptance checks in Node and all three browsers |
 
 The runtime-neutral
@@ -151,26 +154,111 @@ flowchart TB
 
 ## Ownership and execution
 
+### Node compatibility facade
+
+The opt-in [compatibility namespace](src/node/compat.mjs) offers a narrow
+c2pa-node-shaped API over one reused Worker:
+
+```js
+import { createNodeCompat } from "./src/node/compat.mjs";
+const sdk = createNodeCompat();
+const { Reader, Builder, CallbackSigner, Context } = sdk;
+try {
+  const context = new Context({
+    trust: { userAnchors: inlinePem },
+    verify: { ocspFetch: false, remoteManifestFetch: false,
+      verifyAfterReading: true, verifyTrust: true, verifyAfterSign: false },
+  });
+  const reader = await Reader.fromAsset({ path: "./signed.jpg" }, context);
+  const json = reader?.json();
+  const builder = await Builder.withJsonAsync(definition, context);
+  const signer = CallbackSigner.newSigner({
+    alg: "es256", certs: [pemCertificateBuffer],
+    reserveSize: 10000, directCoseHandling: false,
+  }, async (data) => signRawEs256(data)); // Buffer in, 64-byte r||s out.
+  const output = { buffer: null }; // Or { path: "./output.jpg" }.
+  const manifest = await builder.signAsync(signer, { path: "./input.jpg" }, output);
+  // manifest and output.buffer are Buffers; a file destination has no buffer.
+} finally {
+  await sdk.dispose();
+}
+```
+
+This is a compatibility **slice**, not an alias for the entire SDK.
+Supported: Buffer/file assets, JPEG MIME aliases/omitted MIME on reads,
+`Reader.json/activeLabel/getActive`, unsigned `null`, `Builder.withJsonAsync`
+and raw ES256 `CallbackSigner` signing to Buffer/file destinations.
+Each namespace owns one Worker; reports are snapshots, not native handles.
+Unlike the original SDK, disposal is explicit and rejects queued operations.
+
+Settings accept the local `Context` or a raw object with inline
+`trust.userAnchors` and the offline verification switches shown above.
+Unsupported settings/configurations reject; no URL fetching or suppressed
+validation is emulated. Only `reserveSize: 10000` is accepted as the experiment
+configuration; it does not reconfigure Rust's manifest reservation. Definitions
+must already satisfy the existing baseline (including instance ID and label).
+This facade does not add RNG, actions checks, formats or other Rust features.
+
+Missing migration surfaces include native handles/resources, detached/remote
+manifests, LocalSigner/identity/timestamp signing, mutable builder workflows,
+legacy JSON/TOML settings, full error-string equivalence and the existing SDK's
+10 GB reader size-limit/error policy. Reader report fields/validation remain
+exactly those supplied by the current Rust bridge. Default trust behavior is
+not claimed equivalent to the reference SDK.
+
+Run `npm run test:compat` against the built sibling SDK, and
+`npm run benchmark:compat` for isolated raw-Worker/facade/reference comparisons.
+See the [compatibility experiment](experiments/2026-10-16-node-compat-facade.md).
+
+### Shared client ownership
+
 - One Worker per client. Workers are reused; top-level operations are queued.
   Pending requests within one operation can be answered as a batch.
 - Native handles and Wasm objects never cross Worker boundaries. Results are
   plain reports and, for signing, output/manifest bytes and exclusion ranges.
-- `read()` and `sign()` copy input before their first await, then use structured cloning.
-  Caller buffers remain attached and mutation cannot change a queued read.
-  This costs memory and synchronous caller work proportional to input size.
+- `read()` and `sign()` accept `Uint8Array`, `Blob` and `File`; the Node client
+  also accepts `{ path: "/path/to/asset.jpg" }`, matching c2pa-node's input shape.
+  Byte arrays are copied before the first await, then structured-cloned;
+  caller buffers remain attached and mutation cannot change a queued operation.
+  Immutable Blobs/Files are sent through structured cloning,
+  without a whole-input `arrayBuffer()` conversion. The Worker fulfills each
+  source request with `slice(start, end).arrayBuffer()`.
+  File names and MIME hints do not select a handler or set the output title:
+  this slice remains JPEG-only, and signing metadata comes from the definition.
+  Node 24.18 rejects direct `fs.openAsBlob()` inputs as non-cloneable; derived
+  file-backed wrappers may expose a Node runtime bug. See the
+  [experiment report](experiments/2026-10-16-file-blob-memory.md).
+- Node paths are resolved to absolute strings before the first await; the
+  descriptor is snapshotted, **not the file contents**. The Worker opens a
+  regular file when its queued operation starts, uses positional exact reads,
+  and closes it before replying on success or failure. It opens without blocking
+  and checks the opened handle, so named pipes reject without stalling the queue.
+  Keep the file unchanged
+  until the operation finishes. Truncation/short reads fail explicitly; this
+  does not detect every concurrent same-length rewrite or promise a filesystem
+  snapshot. Reader requests are at most 64 KiB for the tested assets; builder
+  source-copy requests are bounded at 1 MiB by the existing Rust session.
+  Prefer paths for Node disk assets, not `fs.openAsBlob()`.
 - Signing also snapshots the definition and public certificates. The signer
   function and private key stay in the application realm. Only the COSE signing
   input and raw signature/error cross the Worker protocol.
-- Build output is buffered in a growable in-memory array inside the Worker,
-  then copied and cloned back. This is not file-backed or constant-memory.
-- This proof accepts in-memory JPEG bytes only. It does not promise streaming
-  input, constant memory, zero-copy transfer or free result transport.
+- By default, build output is buffered in a growable in-memory array inside
+  the Worker, then copied and cloned back. Node can instead supply a destination
+  path: the Worker writes/reads a temporary file in bounded requests and renames
+  it into place after successful signing, returning metadata rather than asset
+  bytes. See [file-output signing](#node-file-output-signing).
+- Blob/File inputs avoid eager whole-source byte materialization in this host.
+  They do not promise constant total memory, zero-copy transfer, streamed output
+  or a measured peak-memory improvement. Wasm still copies requested bytes.
 - Successful `finish` consumes the Rust session. Wasm wrappers are explicitly
   freed in `finally`; Neon error handles become eligible for isolate GC.
   Client disposal terminates its Worker, releasing that isolate's resources.
 - Disposal rejects pending calls. It is **abrupt termination**, not graceful
-  cancellation. There are no external file writes or Worker-owned network
-  operations. Caller-owned signing cannot be cancelled by terminating the
+  cancellation. Node disposal waits for Worker termination and removes tracked
+  temporary output files; failed operations retain their temporary paths so
+  disposal can retry a failed unlink. Cleanup errors are surfaced, not ignored.
+  An output already renamed into place stays committed.
+  There are no Worker-owned network operations. Caller-owned signing cannot be cancelled by terminating the
   Worker; its late success/rejection is consumed without posting a reply.
 - No periodic task yields are inserted. A busy Worker can delay its own control
   messages; the application remains on a separate event loop. Responsive
@@ -179,6 +267,76 @@ flowchart TB
   validation and manifest generation remain Rust-owned.
 
 ### Signer callbacks and queueing
+
+The same client methods accept any supported source representation:
+
+```js
+const readResult = await client.read(fileInput.files[0], { settings });
+const signed = await client.sign(new Blob([jpegBytes], { type: "image/jpeg" }),
+  definition, signer);
+// signed.asset and signed.manifest remain Uint8Array values.
+```
+
+With the Node client, use the file directly without a caller-side `readFile`:
+
+```js
+const report = await client.read({ path: "./input.jpg" }, { settings });
+const signed = await client.sign({ path: "./input.jpg" }, definition, signer);
+```
+
+This adds input-shape parity, not a drop-in legacy `Reader`/`Builder` shim.
+Signing defaults to buffered bytes; a Node destination path is optional.
+The [Node file-path memory proof](experiments/2026-10-16-node-file-path-memory.md)
+compares both input representations against the current Node SDK in isolated
+processes:
+
+```sh
+npm run benchmark:path
+```
+
+It uses the existing generated fixtures and SDK benchmark metadata (prepare
+with `npm run fixtures` and `node benchmarks/sdk-node.mjs` after building the
+bindings/reference SDK). Results go to ignored `results/path-node.json`.
+
+### Node file-output signing
+
+Pass a fourth argument to write the signed asset to disk:
+
+```js
+const result = await client.sign({ path: "./input.jpg" }, definition, signer,
+  { path: "./signed.jpg" });
+// result.path: absolute destination; result.outputBytes: file length.
+// result.manifest, result.exclusions and result.stats remain available.
+// result.asset is absent: the signed asset is not loaded/cloned back.
+```
+
+Bytes input also works with a file destination. The destination path is
+snapshotted/resolved before awaiting Worker startup. Only Node accepts it;
+browser clients reject file destinations explicitly.
+
+The Worker exclusively creates an unpredictable temporary file beside the
+destination, answers output reads/writes with positioned filesystem I/O, then
+closes and renames the completed file. An existing destination is replaced only
+on success, not truncated in advance; a destination symlink is replaced rather
+than followed. Failed sessions, signer calls and renames remove the temporary
+file. Await `client.dispose()` for cleanup after cancellation.
+
+The destination directory must already exist. This is atomic replacement on
+the tested macOS filesystem, **not crash-durable storage**: no `fsync` guarantee,
+and killing the entire process can leave temporary files. Cancellation racing
+with the final rename can reject a call whose output already committed.
+Permissions/metadata of an existing destination are not preserved; new files
+use mode `0600` subject to the process umask.
+
+The [file-output experiment](experiments/2026-10-16-node-file-output-memory.md)
+compares buffered and file destinations in both SDKs:
+
+```sh
+npm run benchmark:output
+```
+
+No source conversion is required at the call site. A File's name/type are not
+copied into the manifest; set the title explicitly in `definition`.
 
 ```mermaid
 sequenceDiagram
@@ -249,6 +407,15 @@ The benchmark does not install or rebuild those dependencies. It bundles the
 existing web facade and inline Worker into this proof's ignored generated
 directory, preserving the SDK checkout and its existing build directories.
 
+The current parity baseline is upstream c2pa-js `main` at `20531aa`, using
+c2pa-rs **0.91.3** (Node SDK **0.9.10**, web SDK **0.15.4**).
+Rebuild the sibling SDK's Node and Wasm release artifacts after updating it;
+do not reuse binaries from an older checkout. Preparation verifies the lockfile's
+c2pa version and records that version with checkout/package/artifact provenance.
+Historical experiment reports retain their original versions and measurements.
+See the [baseline refresh report](experiments/2026-10-16-sdk-baseline-refresh.md)
+for rebuild commands and artifact hashes.
+
 The command runs Node and all three browsers sequentially. Each SDK gets two
 warmups and six alternating-order measured samples per size/operation.
 Every sign output is validated by both readers outside signing time, and both
@@ -258,7 +425,7 @@ definition; they are separate from the original architecture-contract fixtures.
 Only repository TEST ONLY credentials are used.
 
 Results and provenance persist in ignored `results/sdk-*.json`; see
-[SDK performance findings](findings.md#sdk-to-sdk-performance-comparison) for
+[SDK performance findings](experiments/2026-10-16-sdk-performance.md) for
 medians, ranges, validation differences and ownership/build caveats. This is
 a local warm baseline, not full compatibility or production performance proof.
 
@@ -369,14 +536,14 @@ measurement:
 The local comparison reduced median large-build caller duration by about
 6.7–8.5 times in all browsers; binary is retained as the default. Small builds
 were too short/timer-quantized for strong performance claims. See
-[paired measurements and caveats](findings.md#binary-versus-json-write-payload-comparison).
+[paired measurements and caveats](experiments/2026-10-16-binary-transport.md).
 
 ### Performance interpretation
 
 Ignored `results/{node,chromium,firefox,webkit}.json` records three warm measured
 reads and three builds, task progress, caller/Worker duration and input/binary/source
 fingerprints, plus the paired boundary comparison described above. The
-checked-in [findings](findings.md) summarize a local run.
+checked-in [findings](experiments/README.md) summarize a local run.
 Timing is **not** a pass threshold. The only scheduling assertion is that
 application tasks actually run before the read completes.
 
@@ -388,19 +555,27 @@ Worker time includes session construction, hashing and report serialization;
 build time also includes output assembly and the awaited application signer.
 Their difference is not an isolated FFI cost.
 
-Worker isolation does not remove copying: each read snapshots and clones the
-entire asset. Large messages can still briefly occupy the calling thread.
+Worker isolation does not remove copying: byte-array reads snapshot and clone
+the entire asset; Blob/File reads instead materialize requested slices.
+Large byte-array messages can still briefly occupy the calling thread.
 No peak memory or frame-deadline guarantee is established.
 
 ## Deliberate non-goals and next trigger
 
-No new domain validation, formats, compatibility shims, identity/timestamp
+No new domain validation, formats, identity/timestamp
 support, network hosts, worker pools, custom schedulers, public cancellation
 API or streaming-storage abstraction. No production publication.
 
+New experiments are recorded in separate reports under
+[experiments/](experiments/README.md), with reproduction, acceptance evidence and
+measurement limitations. The [File/Blob experiment](experiments/2026-10-16-file-blob-memory.md)
+compares byte-array and slice-backed input latency and sampled process memory.
+
 The binary experiment identifies a large avoidable binding cost, not the cause
-of every remaining native/browser difference. Next, measure peak memory and
-copying across input sizes before selecting file/Blob-backed sources/outputs.
-The proof still buffers entire assets and wasm-bindgen still copies payload
-bytes. No core async conversion is needed. Do not add cooperative Worker
+of every remaining native/browser difference. The File/Blob follow-up measures
+latency and sampled RSS, not exact peak/retained memory or isolated copying cost.
+Browser signing and Node buffered output still hold entire outputs in memory;
+Node also supports direct file output. wasm-bindgen still copies payload
+bytes. No core async conversion
+is needed. Do not add cooperative Worker
 scheduling without a required message/progress behavior that fails a test.

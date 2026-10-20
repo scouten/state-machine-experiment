@@ -38,6 +38,13 @@ host arrangement: the same JS `advance`/`fulfill` driver runs inside a browser
 module Worker or Node Worker thread. A small synchronous Wasm adapter exposes
 the existing read bridge on the browser side; Node reuses Neon unchanged.
 One facade/protocol handles input snapshots, queued reads/builds, results and disposal.
+Both entry points accept byte arrays, Blobs and Files. Blob/File sources are
+read as requested slices inside the Worker rather than eagerly converted to
+whole-asset byte arrays. File names and MIME hints do not override the JPEG-only
+handler or the signing definition. Output remains buffered. A
+[File/Blob experiment](../../js/experiments/2026-10-16-file-blob-memory.md)
+measures latency and sampled process RSS, with limited memory coverage rather
+than a universal peak-memory claim.
 Actual tests compare complete reports and request bytes across all three
 browsers and Node, including 64 MiB signed reads and application task progress.
 No Tokio, new domain behavior or cooperative scheduling is needed for this
@@ -49,15 +56,16 @@ trusted read-back run in Node and all three browsers. Whole-input/output
 buffering and abrupt termination remain explicit limits; disposing a Worker
 cannot cancel a caller-owned signer.
 The browser boundary now uses binary bulk write payloads with JSON metadata.
-The [SDK-to-SDK benchmark](../../js/findings.md#sdk-to-sdk-performance-comparison)
+The [SDK-to-SDK benchmark](../../js/experiments/2026-10-16-sdk-performance.md)
 is the performance baseline: real public read/sign calls in Node and all three
 browsers, with cross-validation and explicit ownership/validation differences.
-The shared host is slower on large Node operations; browser results are competitive
+The measured byte-array shared host is slower on large Node operations; browser results are competitive
 on this narrow baseline, not evidence of full SDK parity.
 Both the binary transport and the retained JSON experiment control pass the same contracts;
 paired large-build measurements isolate a major avoidable boundary cost
-without changing the shared host or Rust builder. This is still copying,
-whole-asset-buffered I/O, not a zero-copy or streaming implementation.
+without changing the shared host or Rust builder. Wasm still copies source
+bytes, byte-array inputs remain whole-asset snapshots, and signing output is
+buffered; Blob/File slicing is not an end-to-end streaming implementation.
 
 The neutral [session-bridge crate](../../contentauth-c2pa-session-bridge/README.md)
 now owns `ReadSessionBridge` and `BuildSessionBridge`, moved from the former
@@ -98,6 +106,25 @@ Honest differences, found by building these:
 
 ## What the tests show
 
+* The opt-in [Node compatibility facade](../../js/src/node/compat.mjs) runs
+  c2pa-node-shaped `Reader.fromAsset`, report accessors, `Builder.withJsonAsync`
+  and baseline `CallbackSigner.signAsync` calls over one explicit-lifetime
+  Worker namespace. Identical client scenarios run against c2pa-node 0.9.10
+  and this facade; unsupported options fail explicitly. See the
+  [facade experiment](../../js/experiments/2026-10-16-node-compat-facade.md)
+  for supported shapes, measured overhead and remaining migration gaps.
+* The shared Worker host accepts c2pa-node-shaped `{ path }` inputs on Node for
+  reads and baseline signing. Its Worker owns and closes the file, while the
+  same shared session loop answers bounded range requests. File/Blob slices
+  serve the browser instead. The
+  [isolated Node memory proof](../../js/experiments/2026-10-16-node-file-path-memory.md)
+  compares paths and buffers in both architectures. Node signing now also
+  accepts a destination `{ path }`: the shared loop uses a file-backed output
+  host, including read-back for hashing, and returns metadata without whole
+  asset buffering. Temporary files are exclusively created beside the
+  destination and renamed on success, cleaned on failure/disposal.
+  See the [file-output comparison](../../js/experiments/2026-10-16-node-file-output-memory.md).
+  This does not establish full SDK or validation parity.
 * `js-compat`: a `Blob` whose every read genuinely suspends, on a
   hand-rolled executor (no runtime dependency): completes correctly;
   yields once per request; **two reads interleave on one thread** — what a

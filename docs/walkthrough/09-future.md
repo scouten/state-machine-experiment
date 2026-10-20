@@ -38,7 +38,7 @@ flowchart LR
 | **CRLs** | Outside the spec §15.9 OCSP-only process the engine follows, but real certs use them. |
 | **Other hard bindings** (box hash, BMFF) | Only `c2pa.hash.data` is validated. |
 | **Decoded assertion values** (thumbnails, resources) | Needed for fuller `ManifestStore` and `crJson`/`resourceToBytes` parity. |
-| **Action semantic validation** | The SDK benchmark found that the existing validator rejects a created action without `digitalSourceType` while this reader accepts it. Preserve this as a known parity gap, not a transport issue. |
+| **Action semantic validation** | A native differential test reproduces rejection of a created action without `digitalSourceType` by c2pa-rs but not this reader, despite matching signatures/hashes. The reader lacks action-content validation, not transport fidelity. Add version-aware domain checks and negative conformance cases; see the [investigation](../../js/experiments/2026-10-16-validation-parity.md). |
 
 ## 2. More container formats
 
@@ -95,17 +95,40 @@ changes. Choose formats for *what they exercise*, as TIFF did:
   No new core features or Tokio are involved. A paired JSON/binary Wasm
   write-payload comparison preserves both contracts and reduces median local
   large-build time by about 6.7–8.5 times; binary is now the browser default.
-  The [actual SDK comparison](../../js/findings.md#sdk-to-sdk-performance-comparison)
+  The [actual SDK comparison](../../js/experiments/2026-10-16-sdk-performance.md)
   now supersedes prototype-only timings as the performance baseline: competitive
   browser results, slower large Node operations, and a concrete action-validation
   gap preclude general speed or parity claims.
   Streaming sources/outputs, measured peak memory and production distribution
   remain unproven.
+  The [File/Blob memory experiment](../../js/experiments/2026-10-16-file-blob-memory.md)
+  now has File/Blob inputs for both reading and signing, answering requested
+  source slices in the Worker. Latency and sampled RSS comparisons against
+  byte arrays and the existing SDK show a responsiveness/throughput tradeoff;
+  accurate total peak/retained memory, WebKit XPC coverage and Wasm attribution
+  still need better instrumentation. Blob support alone does not remove Wasm
+  copies or buffered signing outputs.
+  Node now also accepts `{ path }` for Worker-owned positional file reads on
+  both read/sign paths, avoiding whole-source loading and Worker cloning.
+  The [file-path memory proof](../../js/experiments/2026-10-16-node-file-path-memory.md)
+  measures each operation in a fresh process against c2pa-node 0.9.10 /
+  c2pa-rs 0.91.3, with bytes and paths in both SDKs. Source-input parity is
+  narrower than full report/validation parity.
+  Node now also has a destination-path signing sink: bounded output writes and
+  read-back, exclusive temporary files, rename on success and cleanup on
+  failure/disposal, without returning asset bytes. The
+  [file-output proof](../../js/experiments/2026-10-16-node-file-output-memory.md)
+  compares this with the existing SDK's file destination. Browser output sinks,
+  crash durability and general constant-memory claims remain unproven.
   The neutral read/build bridges and compatibility vocabulary now live in
   `contentauth-c2pa-session-bridge`; Wasm and Neon are consumers. Node and all
   three browser contracts are wired into CI. Next, migrate the older host
   capabilities behind compatibility facades with preservation tests before
-  removing their separate loops.
+  removing their separate loops. An opt-in
+  [Node facade experiment](../../js/experiments/2026-10-16-node-compat-facade.md)
+  now demonstrates unchanged supported Reader/callback-signing client scenarios
+  against both SDKs, with Buffer/file destinations and explicit Worker disposal.
+  This is a narrow migration seam, not full compatibility or new Rust behavior.
 * **Browser:** a `fetch`-backed OCSP `Platform`; the existing async `web`
   modules still have no browser CI coverage. The shared-host browser CI runs
   the synchronous Wasm session boundary, not those alternative modules.

@@ -8,6 +8,10 @@ import { createHash } from "node:crypto";
 
 const sdkRoot = fileURLToPath(new URL("../../../c2pa-js/", import.meta.url));
 const output = fileURLToPath(new URL("../generated/existing-sdk/", import.meta.url));
+const lock = await readFile(`${sdkRoot}Cargo.lock`, "utf8");
+const c2paVersion = lock.match(/\[\[package\]\]\nname = "c2pa"\nversion = "([^"]+)"/)?.[1];
+if (c2paVersion !== "0.91.3")
+  throw new Error(`Parity baseline requires c2pa-rs 0.91.3; SDK lockfile resolves ${c2paVersion ?? "no c2pa version"}. Update the documented baseline explicitly before comparing another version.`);
 await mkdir(output, { recursive: true });
 for (const [name, entry] of [["index", "index"]]) {
   await build({
@@ -27,5 +31,6 @@ for (const name of ["c2pa-node", "c2pa-web"])
   versions[name] = JSON.parse(await readFile(`${sdkRoot}packages/${name}/package.json`)).version;
 const provenance = { checkout: sdkRoot, commit: execFileSync("git", ["-C", sdkRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
   status: execFileSync("git", ["-C", sdkRoot, "status", "--short"], { encoding: "utf8" }).trim(),
-  versions, hashes, note: "Web facade/Worker bundled from checkout source; pre-existing Wasm and Neon artifacts fingerprinted, not rebuilt here." };
+  versions, c2paVersion, hashes,
+  note: "Web facade/Worker bundled from checkout source; Wasm and Neon artifacts fingerprinted, not rebuilt by this preparation command. Rebuild both after updating the SDK checkout; lock version alone does not prove binary provenance." };
 await writeFile(`${output}/provenance.json`, JSON.stringify(provenance, null, 2));
