@@ -1,7 +1,10 @@
+// In-page half of the browser SDK comparison: runs the existing c2pa-web SDK
+// and the shared host through the same benchmark inside one browser.
 import { createClient } from "../src/browser/client.mjs";
 import { createC2pa, Reader, Builder, Context } from "../generated/existing-sdk/index.js";
 import { benchmark, coseSigner } from "./sdk-benchmark.mjs";
 
+/** Runs the comparison in the current page and returns its report. */
 export async function run() {
   const fixture = await (await fetch("/generated/fixtures.json")).json();
   const metadata = await (await fetch("/generated/benchmark.json")).json();

@@ -1,5 +1,9 @@
+// Adapter-neutral measurement core for the SDK-to-SDK comparison: each adapter
+// reads and signs the same fixtures, and every result is validated before its
+// timing is recorded, so a fast wrong answer cannot count.
 function check(value, message) { if (!value) throw new Error(message) }
 
+/** Throws unless the report is the expected Trusted, validated active manifest for the fixture definition. */
 export function validateReport(report, definition) {
   check(report?.validation_state === "Trusted", `benchmark asset not Trusted: ${JSON.stringify(report?.validation_status)}`);
   const manifest = report.manifests[report.active_manifest];
@@ -11,6 +15,7 @@ export function validateReport(report, definition) {
     check(statuses.some((status) => status.code === code), `benchmark missing ${code}`);
 }
 
+/** Runs every adapter over the fixtures and signer, returning validated timing samples. */
 export async function benchmark(adapters, fixtures, signer) {
   const samples = [];
   const validation = [];

@@ -1,3 +1,6 @@
+// Node side of the SDK comparison: the existing c2pa-node SDK and this
+// workspace's shared host run the same benchmark and write results/ with
+// source fingerprints as provenance.
 import { Reader, Builder, CallbackSigner, Context } from "../../../c2pa-js/packages/c2pa-node/dist/index.js";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { createClient } from "../src/node/client.mjs";

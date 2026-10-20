@@ -1,3 +1,6 @@
+// Browser driver for the SDK comparison: serves the repository over HTTP and
+// runs sdk-web.mjs in Chromium, Firefox and WebKit, writing results/ with
+// source fingerprints as provenance.
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { readFile, writeFile, mkdir } from "node:fs/promises";

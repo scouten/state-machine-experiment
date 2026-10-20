@@ -1,3 +1,5 @@
+// Builds the existing c2pa-web SDK from the sibling c2pa-js checkout into
+// generated/ and pins its hashes, so the comparison runs against a fixed build.
 import { build } from "../../../c2pa-js/node_modules/vite/dist/node/index.js";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
