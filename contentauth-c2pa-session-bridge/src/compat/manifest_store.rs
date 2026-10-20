@@ -131,6 +131,44 @@ pub struct Manifest {
     /// Labels of the assertions physically present in the manifest's
     /// assertion store, in store order.
     pub assertions: Vec<String>,
+
+    /// The CAWG identity assertions this manifest carries, in store order.
+    /// An extension beyond c2pa-js's report, which has no place for
+    /// identity results.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub identity_assertions: Vec<IdentityAssertion>,
+}
+
+/// One CAWG identity assertion and the outcome of checking it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct IdentityAssertion {
+    /// The assertion's label within its manifest, e.g. `cawg.identity`.
+    pub label: String,
+
+    /// The `sig_type`, verbatim.
+    pub sig_type: String,
+
+    /// The kind of credential: `x509.cose`, `identity_claims_aggregation`
+    /// or `unknown`.
+    pub credential: String,
+
+    /// The signer certificate's subject, when the signature verified.
+    pub signer: Option<String>,
+
+    /// The roles the named actor claims.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub roles: Vec<String>,
+
+    /// URLs of the assertions this identity vouches for.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub referenced_assertions: Vec<String>,
+
+    /// Whether no validation status names this assertion as failed.
+    /// Unrecognized credentials are not reported as valid.
+    pub valid: bool,
+
+    /// The validation statuses that name this assertion.
+    pub validation_status: Vec<ValidationStatus>,
 }
 
 /// Overall validation outcome for a manifest store, as c2pa-rs's
@@ -208,7 +246,12 @@ impl ManifestStore {
             manifests: report
                 .manifests
                 .iter()
-                .map(|manifest| (manifest.label.clone(), Manifest::from_inner(manifest)))
+                .map(|manifest| {
+                    (
+                        manifest.label.clone(),
+                        Manifest::from_inner(manifest, &report.statuses),
+                    )
+                })
                 .collect(),
             validation_state: report.validation_state.into(),
             validation_status: report
@@ -227,7 +270,13 @@ impl ManifestStore {
 
 impl Manifest {
     /// Reports one of `report`'s manifests; see [`ManifestStore::from_report`].
-    pub fn from_inner(manifest: &contentauth_c2pa_reader::Manifest) -> Self {
+    ///
+    /// `statuses` are the store's validation statuses, from which each
+    /// identity assertion's own outcome is selected.
+    pub fn from_inner(
+        manifest: &contentauth_c2pa_reader::Manifest,
+        statuses: &[contentauth_c2pa_reader::ValidationStatus],
+    ) -> Self {
         Self {
             label: manifest.label.clone(),
             claim_generator: manifest.claim.claim_generator.clone(),
@@ -246,6 +295,55 @@ impl Manifest {
             format: manifest.claim.format.clone(),
             instance_id: manifest.claim.instance_id.clone().unwrap_or_default(),
             assertions: manifest.assertion_labels.clone(),
+            identity_assertions: manifest
+                .identity_assertions
+                .iter()
+                .map(|identity| IdentityAssertion::from_inner(identity, statuses))
+                .collect(),
+        }
+    }
+}
+
+impl IdentityAssertion {
+    fn from_inner(
+        identity: &contentauth_c2pa_reader::identity::IdentityAssertion,
+        statuses: &[contentauth_c2pa_reader::ValidationStatus],
+    ) -> Self {
+        use contentauth_c2pa_reader::identity::IdentityCredential;
+
+        let (credential, signer) = match &identity.credential {
+            IdentityCredential::X509Cose { signer } => ("x509.cose", signer.clone()),
+            IdentityCredential::IdentityClaimsAggregation => ("identity_claims_aggregation", None),
+            _ => ("unknown", None),
+        };
+        let named: Vec<_> = statuses
+            .iter()
+            .filter(|status| status.url.as_deref() == Some(identity.url.as_str()))
+            .collect();
+        let valid = signer.is_some() && !named.iter().any(|status| status.is_failure());
+        let validation_status: Vec<ValidationStatus> = named
+            .into_iter()
+            .map(|status| ValidationStatus {
+                code: status.code.clone(),
+                url: status.url.clone(),
+                explanation: status.explanation.clone(),
+                trust_list_uri: status.trust_list_uri.clone(),
+            })
+            .collect();
+
+        Self {
+            label: identity.label.clone(),
+            sig_type: identity.sig_type.clone(),
+            credential: credential.to_string(),
+            signer,
+            roles: identity.roles.clone(),
+            referenced_assertions: identity
+                .referenced_assertions
+                .iter()
+                .map(|uri| uri.url.clone())
+                .collect(),
+            valid,
+            validation_status,
         }
     }
 }
@@ -313,6 +411,7 @@ mod tests {
             format: Some("image/jpeg".to_string()),
             instance_id: String::new(),
             assertions: vec!["c2pa.hash.data".to_string()],
+            identity_assertions: vec![],
         };
 
         let json = serde_json::to_value(manifest).unwrap_or(serde_json::Value::Null);

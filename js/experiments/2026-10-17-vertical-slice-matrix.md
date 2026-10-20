@@ -43,7 +43,7 @@ CA + leaf chain with an AIA OCSP URL.
 | Live OCSP read, Node | fail | js | "unsupported host request: ocsp"; needs an SSRF policy (older addon has `ocspPolicy`) |
 | Live OCSP read, Wasm | fail | glue | `ReadSession.advance` errors "outside this offline proof" |
 | CAWG identity signing | pass | — | *(closed in the bridge)* `signer.identities` with their own key and algorithm; the sign request carries the assertion label |
-| CAWG identity reading | fail | rust | an identity-bearing asset reads `Trusted`, but the c2pa-js-shaped report has no identity section |
+| CAWG identity reading | pass | — | *(closed in the bridge report)* each manifest carries `identity_assertions` (label, `sig_type`, credential kind, verified signer, roles, referenced assertions, its own statuses, `valid`); absent when there are none |
 
 ## Findings
 
@@ -53,7 +53,7 @@ CA + leaf chain with an AIA OCSP URL.
    do. TIFF, RSA-PSS and CAWG identity signing are now closed there (the
    bridge takes formats from the registry, derives the RSA length from the
    leaf certificate, and accepts identity signers). Only identity *results*
-   in the read report remain.
+   in the read report remained; those are now reported too, as an extension field the c2pa-js schema lacks.
 3. Wasm lags Neon in two places (timestamp, OCSP), both glue.
 4. JS-side follow-ups: OCSP policy, TSA override, content-based format
    detection, and mapping facade `ps256`/`timeAuthorityUrl` (still rejected on

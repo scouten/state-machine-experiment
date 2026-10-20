@@ -53,7 +53,10 @@ impl Reader {
 
     /// The active manifest, if any — c2pa-node's `getActive()`.
     pub fn active_manifest(&self) -> Option<Manifest> {
-        self.report.manifests.last().map(Manifest::from_inner)
+        self.report
+            .manifests
+            .last()
+            .map(|manifest| Manifest::from_inner(manifest, &self.report.statuses))
     }
 
     /// The remote manifest URL, or `""` — c2pa-node's `remoteUrl()`.

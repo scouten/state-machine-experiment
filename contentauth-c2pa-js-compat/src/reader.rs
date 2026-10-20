@@ -153,7 +153,10 @@ impl Reader {
     /// search return an earlier manifest than the last (active) one the
     /// label is documented to mean.
     pub fn active_manifest(&self) -> Option<Manifest> {
-        self.report.manifests.last().map(Manifest::from_inner)
+        self.report
+            .manifests
+            .last()
+            .map(|manifest| Manifest::from_inner(manifest, &self.report.statuses))
     }
 
     /// The manifest store as a pretty-printed JSON string — c2pa-wasm's

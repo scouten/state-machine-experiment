@@ -18,8 +18,12 @@
 use std::path::PathBuf;
 
 use contentauth_c2pa_rs_compat::{Context, ReadSettings, Reader, ValidationState};
-use contentauth_c2pa_session_bridge::build::{
-    BuildSessionBridge, IdentitySigner, PendingRequest, Reply, Step, Stream,
+use contentauth_c2pa_session_bridge::{
+    build::{BuildSessionBridge, IdentitySigner, PendingRequest, Reply, Step, Stream},
+    compat::manifest_store::{Manifest, ValidationState as BridgeState},
+    read::{
+        PendingRequest as ReadRequest, ReadSessionBridge, Reply as ReadReply, Step as ReadStep,
+    },
 };
 use contentauth_c2pa_sign_baseline::{fixtures::*, BASELINE_DEFINITION};
 
@@ -148,4 +152,119 @@ fn ps256_with_a_non_rsa_certificate_is_rejected() {
         "{}",
         err.js_message()
     );
+}
+
+/// Signs `SOURCE_JPEG` with one identity whose signature, if `forge`, is
+/// corrupted, and reads the result back through the bridge's reader.
+fn read_identity(forge: bool, tamper_asset: bool) -> (Manifest, BridgeState) {
+    let identity = IdentitySigner {
+        alg: "es256".to_string(),
+        certs: vec![TEST_SIGNER_CERT.to_vec()],
+        roles: Vec::new(),
+        referenced_assertions: None,
+    };
+    let mut session = session("image/jpeg", vec![identity]);
+    let mut output: Vec<u8> = Vec::new();
+    while let Step::Pending(requests) = session.advance().unwrap() {
+        for request in requests {
+            let id = request.id();
+            let reply = match request {
+                PendingRequest::Read {
+                    stream, start, len, ..
+                } => {
+                    let bytes = match stream {
+                        Stream::Source => SOURCE_JPEG,
+                        Stream::Output => &output[..],
+                    };
+                    Reply::Bytes(bytes[start as usize..(start + len) as usize].to_vec())
+                }
+                PendingRequest::Length { stream, .. } => Reply::Length(match stream {
+                    Stream::Source => SOURCE_JPEG.len() as u64,
+                    Stream::Output => output.len() as u64,
+                }),
+                PendingRequest::Write { offset, bytes, .. } => {
+                    let end = offset as usize + bytes.len();
+                    if output.len() < end {
+                        output.resize(end, 0);
+                    }
+                    output[offset as usize..end].copy_from_slice(&bytes);
+                    Reply::Written
+                }
+                PendingRequest::Sign { data, identity, .. } => {
+                    let mut signature = sign(&data);
+                    if forge && identity.is_some() {
+                        signature[10] ^= 0xff;
+                    }
+                    Reply::Signature(signature)
+                }
+                other => panic!("unexpected {other:?}"),
+            };
+            session.fulfill(id, reply).unwrap();
+        }
+    }
+    session.finish().unwrap();
+
+    if tamper_asset {
+        // The last bytes are image data, outside the manifest store.
+        let last = output.len() - 3;
+        output[last] ^= 0xff;
+    }
+
+    let mut reader = ReadSessionBridge::new("image/jpeg", None).unwrap();
+    loop {
+        match reader.advance().unwrap() {
+            ReadStep::Complete => break,
+            ReadStep::Pending(requests) => {
+                for request in requests {
+                    let reply = match &request {
+                        ReadRequest::Read { start, len, .. } => ReadReply::Bytes(
+                            output[*start as usize..(*start + *len) as usize].to_vec(),
+                        ),
+                        ReadRequest::Length { .. } => ReadReply::Length(output.len() as u64),
+                        ReadRequest::CurrentDateTime { .. } => ReadReply::Time(1_800_000_000),
+                        _ => ReadReply::Failed("unsupported".to_string()),
+                    };
+                    reader.fulfill(request.id(), reply).unwrap();
+                }
+            }
+        }
+    }
+    let reader = reader.finish().unwrap().unwrap();
+    let manifest = reader.active_manifest().unwrap();
+    assert_eq!(manifest.identity_assertions.len(), 1);
+    (manifest, reader.validation_state())
+}
+
+#[test]
+fn a_verified_identity_is_reported_valid() {
+    let (manifest, _) = read_identity(false, false);
+    let identity = &manifest.identity_assertions[0];
+    assert!(identity.signer.is_some());
+    assert!(identity.valid);
+}
+
+#[test]
+fn an_identity_with_a_forged_signature_is_not_valid() {
+    let (manifest, _) = read_identity(true, false);
+    let identity = &manifest.identity_assertions[0];
+    assert!(identity.signer.is_none());
+    assert!(!identity.valid);
+    assert!(
+        identity
+            .validation_status
+            .iter()
+            .any(|status| status.code == "cawg.x509.signature.mismatch"),
+        "{:?}",
+        identity.validation_status
+    );
+}
+
+#[test]
+fn a_failure_that_does_not_name_the_identity_does_not_invalidate_it() {
+    let (manifest, state) = read_identity(false, true);
+    // The store itself fails (its asset hash no longer matches)...
+    assert_ne!(state, BridgeState::Trusted);
+    let identity = &manifest.identity_assertions[0];
+    assert!(identity.signer.is_some());
+    assert!(identity.valid);
 }
