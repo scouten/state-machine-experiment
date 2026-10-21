@@ -54,6 +54,16 @@ paired large-build measurements isolate a major avoidable boundary cost
 without changing the shared host or Rust builder. This is still copying,
 whole-asset-buffered I/O, not a zero-copy or streaming implementation.
 
+The JS package's **test-only** Blob-piece output experiment separately drives
+unchanged build read/write requests with immutable Blob pieces, bounded output
+hash reads and replacement slices for final manifest patches. Node/Neon and
+real-browser Wasm tests compare bytes, logical lengths and exclusions with the
+array control and validate `Trusted` readback without materializing the complete
+final Blob. Gap/overwrite tests cover zero filling and stale tails. Counters
+measure explicit JS copies and completed reads, not physical Blob copies or
+peak memory. No production storage/result API changes; ordinary Worker output
+and its disposal/queue behavior remain unchanged.
+
 The neutral [session-bridge crate](../../contentauth-c2pa-session-bridge/README.md)
 now owns `ReadSessionBridge` and `BuildSessionBridge`, moved from the former
 Node-named crates. Its explicit `compat` module owns settings, reports, format

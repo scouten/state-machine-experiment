@@ -94,8 +94,14 @@ changes. Choose formats for *what they exercise*, as TIFF did:
   No new core features or Tokio are involved. A paired JSON/binary Wasm
   write-payload comparison preserves both contracts and reduces median local
   large-build time by about 6.7–8.5 times; binary is now the browser default.
-  Streaming sources/outputs, measured peak memory and production distribution
-  remain unproven.
+  A test-only Blob-piece output experiment now proves bounded output hash
+  reads and final patching, exact logical lengths/gaps/exclusions and Trusted
+  readback in Node and real browsers. It consumes main's existing read/write
+  requests and array source, independently of input or CopyRange changes.
+  Paired array/Blob counters cover explicit JS copy operations, not physical
+  Blob internals or peak memory. Production streaming sources/outputs, a public
+  Blob-result/storage API, measured peak memory and production distribution
+  remain next; ordinary signing still returns `Uint8Array`.
   The neutral read/build bridges and compatibility vocabulary now live in
   `contentauth-c2pa-session-bridge`; Wasm and Neon are consumers. Node and all
   three browser contracts are wired into CI. Next, migrate the older host

@@ -10,6 +10,7 @@ import { chromium, firefox, webkit } from "playwright";
 import { fingerprints } from "./evidence.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
+const outputOnly = process.argv.includes("--output-only");
 const server = createServer(async (request, response) => {
   try {
     const name = decodeURIComponent(new URL(request.url, "http://localhost").pathname);
@@ -42,33 +43,39 @@ try {
       const errors = [];
       page.on("pageerror", (error) => errors.push(error.message));
       await page.goto(origin);
-      const result = await page.evaluate(async () => {
+      const result = await page.evaluate(async (outputOnly) => {
         const { createClient } = await import("/src/browser/client.mjs");
         const { contract } = await import("/test/contract.mjs");
         const { signingContract } = await import("/test/signing.mjs");
         const { boundaryComparison } = await import("/benchmarks/boundary.mjs");
+        const { outputContract } = await import("/test/output-contract.mjs");
+        const { adapter } = await import("/test/output-wasm.mjs");
         const fixture = await (await fetch("/generated/fixtures.json")).json();
         const load = async (name) => new Uint8Array(await (await fetch(`/generated/${name}.jpg`)).arrayBuffer());
         const pkcs8 = await (await fetch("/generated/test-signer.pk8")).arrayBuffer();
-        const small = await load("small");
-        const large = await load("large");
+        const small = outputOnly ? undefined : await load("small");
+        const large = outputOnly ? undefined : await load("large");
         const transports = {};
-        for (const transport of ["json", "binary"]) {
+        for (const transport of outputOnly ? [] : ["json", "binary"]) {
           const create = transport === "binary" ? () => createClient() : () => createClient({ transport });
           const signing = await signingContract(create, fixture, pkcs8);
           transports[transport] = { ...(await contract(create, small, large, fixture)), signing };
         }
-        const comparison = await boundaryComparison(createClient, fixture, pkcs8);
-        return { ...transports.binary, transports, comparison,
+        const comparison = outputOnly ? undefined : await boundaryComparison(createClient, fixture, pkcs8);
+        const output = await outputContract(adapter, fixture, pkcs8);
+        return { ...transports.binary, transports, comparison, output,
           userAgent: navigator.userAgent };
-      });
+      }, outputOnly);
       assert.deepEqual(errors, [], `${name}: unhandled application error`);
       await mkdir(new URL("../results/", import.meta.url), { recursive: true });
-      await writeFile(new URL(`../results/${name}.json`, import.meta.url),
+      await writeFile(new URL(`../results/${outputOnly ? "output-" : ""}${name}.json`, import.meta.url),
         JSON.stringify({ measuredAt: new Date().toISOString(), fingerprints: await fingerprints(), ...result }, null, 2));
-      console.log(`${name}: all ${result.checks.length} shared contract checks pass`);
-      console.log(`${name}: all ${result.signing.checks.length} shared signing checks pass`);
-      console.log(`${name}: both JSON/binary contracts pass; ${result.comparison.samples.length} paired boundary samples validated`);
+      if (!outputOnly) {
+        console.log(`${name}: all ${result.checks.length} shared contract checks pass`);
+        console.log(`${name}: all ${result.signing.checks.length} shared signing checks pass`);
+        console.log(`${name}: both JSON/binary contracts pass; ${result.comparison.samples.length} paired boundary samples validated`);
+      }
+      console.log(`${name}: measured Blob-output storage ${JSON.stringify(result.output)}`);
     } finally { await browser.close() }
   }
 } finally { await new Promise((resolve) => server.close(resolve)) }

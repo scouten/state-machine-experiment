@@ -178,6 +178,58 @@ flowchart TB
 - OCSP, timestamps and unrecognized host requests fail explicitly. Core
   validation and manifest generation remain Rust-owned.
 
+### Test-only Blob-piece output experiment
+
+[`test/blob-output.mjs`](test/blob-output.mjs) is an independently runnable
+alternative storage host for the **existing** build read/write requests. It
+does not change the public Client API, input storage, Rust, or the default
+`Uint8Array` signing result. Run `npm test` for Node/Neon and
+`npm run test:browser` for real Chromium/Firefox/WebKit/Wasm, after the normal
+binding/fixture build below. The original Worker contracts still run.
+`npm run test:output:browser` runs only the focused storage experiment,
+without the Worker contracts or boundary-cost benchmark.
+
+The experiment stores immutable Blob pieces, splits/replaces intersecting pieces
+for final manifest patches, and represents unwritten gaps as logical zero
+extents. Output hash reads materialize only their requested ranges. Its final
+result is a Blob with exactly the logical length, not an array with unused
+capacity; an earlier finalized Blob remains immutable after later writes.
+Unit tests compare overwrite/gap/zero-write behavior to an array model.
+Small and 64 MiB JPEGs compare complete output bytes, COSE signing input,
+manifest size and exact exclusions, then read back as `Trusted` through bounded
+Blob reads. The experiment's source input remains a `Uint8Array`, independent
+of any range-source changes; production Client snapshot semantics are unchanged.
+
+A paired, instrumented array control reproduces main's geometric output
+growth and final trimmed copy. It counts bytes at the actual `.set`/`.slice`
+sites; Blob storage counts supplied write bytes, patch bytes, completed range
+reads and piece counts. `results/output-node.json` and each browser result's
+`output` section record counters and elapsed time. Both timed hosts reuse a
+valid signature precomputed outside their intervals, checking the exact COSE
+input rather than including first-variant crypto cost or random signatures.
+These are **not peak memory,
+allocation, or physical-copy measurements**. Blob construction/slicing may
+copy, share or retain backing data internally; final patches can retain replaced
+data. Both variants still receive copied write payloads from Rust, and Blob
+hash reads allocate byte arrays. Tests verify Blob output without converting the
+whole final result to a byte array.
+
+For the 64 MiB input, both stores service 68 writes (67,112,416 payload bytes)
+including a 1,770-byte final manifest patch, and 1,025 output hash reads
+(67,108,864 bytes, maximum 65,536 per read). Final logical size is 67,110,646.
+The array control explicitly copies 66,176,776 bytes during growth and
+67,110,646 for final trimming, reaching capacity 67,223,040. Blob storage instead
+reaches 67 logical pieces with neither explicit whole-output growth copies nor
+a final byte-array materialization. **However**, its hash reads materialize
+67,108,864 bytes in range-sized arrays, where the array control uses views.
+These counters do not establish net memory savings; local timing samples also
+do not establish a speedup.
+
+This is a storage feasibility experiment, not a production streaming API or a
+performance claim. There is no OPFS, CopyRange, new dependency, external network
+or Worker Blob-result option. A production storage/result API, fragmentation
+policy, browser backing-store behavior and measured peak memory remain next.
+
 ### Signer callbacks and queueing
 
 ```mermaid

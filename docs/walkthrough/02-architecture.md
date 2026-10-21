@@ -11,6 +11,11 @@ standalone Wasm and Neon bindings, plus the standalone JavaScript package.
 The C++ reader/signing binding is another implemented bridge consumer. The outlined
 Python node and its dotted edge indicate prospective reuse only.
 
+The JS package also has a test-only Blob-piece output host for the existing
+build request vocabulary. Its direct Wasm/Neon experiments do not add a
+production crate, dependency edge, Worker protocol or public result option:
+ordinary signing still uses a growable array and returns `Uint8Array`.
+
 ```mermaid
 flowchart BT
     SM["contentauth-state-machine<br/><i>engine</i>"]
