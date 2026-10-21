@@ -8,6 +8,7 @@
   "engines": { "node": ">=20" },
   "scripts": {
     "build": "cargo build --release && node build.mjs",
+    "test:leases": "cargo build --release --features io-lease-experiment && node build.mjs && node --expose-gc --test experiment/io-leases.test.mjs",
     "test": "node --test \"test/*.test.mjs\"",
     "coverage": "node --test --experimental-test-coverage --test-coverage-exclude=\"test/**\" --test-coverage-exclude=\"examples/**\" --test-coverage-exclude=build.mjs --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=lcov.info \"test/*.test.mjs\"",
     "demo": "node examples/lag.mjs"

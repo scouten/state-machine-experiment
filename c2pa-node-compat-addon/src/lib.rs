@@ -17,6 +17,9 @@ use contentauth_c2pa_session_bridge::read::{
 };
 use neon::{prelude::*, types::buffer::TypedArray};
 
+#[cfg(feature = "io-lease-experiment")]
+mod io_lease_experiment;
+
 /// A session handle JS holds. `RefCell` because Neon hands out `&self`;
 /// JS is single-threaded, so it is never contended.
 struct Session(RefCell<Option<ReadSessionBridge>>);
@@ -163,6 +166,8 @@ fn session_finish(mut cx: FunctionContext) -> JsResult<JsValue> {
 
 #[neon::main]
 fn main(mut cx: ModuleContext) -> NeonResult<()> {
+    #[cfg(feature = "io-lease-experiment")]
+    io_lease_experiment::register(&mut cx)?;
     cx.export_function("sessionNew", session_new)?;
     cx.export_function("sessionAdvance", session_advance)?;
     cx.export_function("sessionFulfill", session_fulfill)?;

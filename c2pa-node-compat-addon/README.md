@@ -1,5 +1,98 @@
 # c2pa-node-compat-addon
 
+## Native I/O lease experiment
+
+**Status: runnable, test-only capability bound; no production zero-copy
+read/fulfill or immutable write lease.** Independent of unmerged C++ lease
+work (#65), based on the shared `Bytes` payloads already merged in #47.
+No browser OPFS work, source API migration, engine changes, or new dependencies.
+The default build has neither the experimental exports nor external buffers.
+
+Run from this directory on **standard Node without V8 sandboxed pointers**:
+
+```sh
+npm run test:leases
+# Restore the ordinary addon afterward:
+npm run build
+npm test
+```
+
+Do **not** run the probe in sandboxed Electron or another sandboxed-pointer
+runtime. Neon explicitly warns that external-buffer creation can terminate
+those VMs; it is not a catchable capability check or a portable optimization.
+The Cargo feature `io-lease-experiment` explicitly enables Neon's otherwise
+disabled `external-buffers` feature. Nothing in `index.mjs` calls the probes.
+Tests create and remove their fixtures within `experiment/`.
+
+### API and empirical evidence
+
+Inspected/resolved **Neon 1.1.2**, with the addon's existing `napi-6` setting
+(see its [`JsBuffer` API](https://docs.rs/neon/1.1.2/neon/types/struct.JsBuffer.html#method.external)
+and `src/types_impl/buffer/types.rs` / `src/sys/buffer.rs` implementation).
+Its `JsBuffer::external` and `JsArrayBuffer::external` require
+`T: AsMut<[u8]> + Send + 'static`; they consume `T`, box it, expose its mutable
+slice through N-API, and install a finalizer that drops that box. `Bytes` does
+not implement `AsMut<[u8]>`. Neither external API returns ownership on release,
+and Neon provides no supported detach/reclaim/seal API. Its `from_slice`
+explicitly allocates a JS buffer and copies the slice.
+
+Local proof on **Node v22.22.0, macOS arm64** uses real files and a
+**114,688-byte** payload:
+
+| Boundary | Evidence | Payload copy/allocation |
+|---|---|---|
+| Allocate Rust Vec → external Buffer → `FileHandle.read` | Rust pointer before transfer equals Neon view pointer before/after file I/O | One zero-initialized Vec payload allocation; zero boundary-copy bytes |
+| Filled external Buffer → immutable Rust `Bytes` snapshot | Simultaneously live source/destination pointers differ; retained JS alias mutations do not alter snapshot | One new payload Vec allocation, 114,688 copied bytes; Vec → Bytes preserves its pointer |
+| Immutable `Bytes` → writable external Buffer → `FileHandle.write` | Bytes pointer differs from staged Vec; Vec pointer equals Neon view pointer; output file matches | One staging Vec payload allocation, 114,688 copied bytes |
+
+These counts are from the explicit operations, not a process allocator profiler.
+Pointer equality establishes the external-buffer mapping, **not** zero-copy
+kernel I/O. Neon also boxes the owner and the probe allocates metadata; those
+are not payload allocations. `leaseProbeObserve` uses an additional, explicitly
+excluded `from_slice` copy to assert snapshot contents.
+
+Tests cover full reads, partial EOF (zero-initialized tail, snapshot only actual
+prefix), zero-byte EOF, length rejection, sliced writes, immutable isolation,
+abandonment, retained aliases, and dropping the owner while real read/write
+promises are outstanding. A per-allocation drop counter remains live without
+retaining the allocation. With forced GC it reports exactly one finalization
+after the last JS view/result is released, never while a retained alias or
+pending I/O still needs the buffer. This is observed lifetime behavior on the
+tested runtime, **not** a deterministic disposal or cancellation guarantee.
+Dropping a probe owner means dropping JS references, not cancelling a session.
+No actual `fulfill`, session/request identity checks, or exact-request-length
+lease validation are implemented or claimed.
+
+The transfer probe additionally observes `DataCloneError` from
+`structuredClone(external.buffer, { transfer: [external.buffer] })`; existing
+views remain writable. This prevents using that JS operation as a seal on the
+tested runtime. There is no broad exception fallback.
+
+### Blocker and recommended seam
+
+Reads can fill Rust-allocated storage directly, **but the supported Neon API
+hands that storage exclusively to JS until GC**. Handing the same allocation to
+immutable `Bytes` while a Buffer/subarray/Uint8Array alias remains writable is
+not safe. GC is not a request-scoped completion barrier, and Neon's finalizer
+drops rather than returns the Vec. The probe therefore takes a real snapshot,
+not a fake seal. For writes, exposing shared immutable `Bytes` as a mutable JS
+Buffer would likewise violate its ownership contract; the probe deliberately
+stages a Vec, matching the ordinary boundary's copy budget rather than claiming
+an improvement. Unique ownership conversions are not a general shared-Bytes
+write solution.
+
+A future production seam needs an explicitly supported ownership/revocation
+mechanism before immutable publication (all JS aliases revoked, pending I/O
+settled, exact length and session/request/lease identity checked). Immutable
+writes need an enforceable read-only or exclusive-ownership transport rather
+than an `AsMut` wrapper around shared Bytes. A core acquire/fill/seal protocol
+like #65 alone does not solve those Neon constraints; that PR is not used here.
+Until such a seam exists, retain the current `.to_vec()` read and
+`JsBuffer::from_slice` write copies. No unsafe code or retained Rust alias to
+JS-writable external data is introduced by the probe.
+
+## Existing reader host
+
 c2pa-node's `Reader` API on this workspace's sans-I/O engine, with a
 different split of labor from c2pa-node's own: **Node owns every
 asynchronous operation; Rust holds a state machine and is only ever called

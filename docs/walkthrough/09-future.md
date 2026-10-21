@@ -72,6 +72,16 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 
 ## 4. Bindings and hosts
 
+* **Node native I/O leases — capability bound established, integration next:**
+  the [opt-in Neon probe](../../c2pa-node-compat-addon/README.md#native-io-lease-experiment)
+  proves pointer-identical external-Vec file reads/writes plus GC lifetime,
+  alias and EOF behavior. It also measures the remaining immutable `Bytes`
+  snapshot/staging copies. Production read sealing needs supported alias
+  revocation and ownership recovery; immutable write leases need an enforceable
+  read-only or exclusive transport. Current Neon APIs do not supply those
+  semantics. No core lease implementation or other unmerged branch is used,
+  and ordinary hosts still copy. This is completed evidence, not a completed
+  zero-copy feature.
 * **C++ host integrations:** production private-key providers and real TSA HTTP
   transport remain host responsibilities, as do atomic publication on non-POSIX
   systems and packaging (`install`/`find_package`, vcpkg, Conan). The baseline

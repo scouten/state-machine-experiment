@@ -29,6 +29,12 @@ ES256 signing, not full c2pa-js parity. It adds no Rust domain features and uses
 no Tokio runtime. The older Rust async browser hosts and the broader addon
 JavaScript drivers remain available; their capabilities have not been removed.
 
+The independent [Node native I/O lease probe](c2pa-node-compat-addon/README.md#native-io-lease-experiment)
+is opt-in and test-only. It proves `fs.read`/`fs.write` can use a Rust-owned
+external Vec directly, but **does not remove the immutable `Bytes` boundary
+copies**: Neon's supported API transfers mutable ownership to JavaScript, with
+no supported seal/reclaim operation. Normal addons and hosts are unchanged.
+
 New here? [`docs/walkthrough`](docs/walkthrough/README.md) is a guided tour —
 how this differs from c2pa-rs and its bindings, the architecture, and
 where it could go next — written in Markdown with Mermaid diagrams.

@@ -15,6 +15,11 @@ publish = false
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+# Test-only, standard Node builds without V8 sandboxed pointers. Never enabled
+# by the normal build: Neon warns external buffers can terminate sandboxed VMs.
+io-lease-experiment = ["neon/external-buffers"]
+
 [dependencies]
 contentauth-c2pa-session-bridge = { path = "../contentauth-c2pa-session-bridge" }
 # No `futures` feature, on purpose: nothing in this addon is asynchronous.

@@ -64,6 +64,16 @@ The bridge preserves the engine's shared `Bytes` for bulk writes and completed
 build manifests rather than copying them into vectors. Wasm's binary write path
 retains those shared buffers until the host consumes them; the final copy into
 JavaScript-owned memory still belongs to the language boundary, not the engine.
+An independent, opt-in [Node file-I/O lease probe](../../c2pa-node-compat-addon/README.md#native-io-lease-experiment)
+now bounds that boundary: Neon's external buffers let real `fs.read`/`fs.write`
+use a Rust-owned Vec without copying it into a JS-owned payload allocation.
+However, Neon consumes a mutable `AsMut<[u8]>` owner until GC; it exposes no
+supported reclaim/seal operation, and shared immutable `Bytes` cannot satisfy
+that bound. The probe measures distinct snapshot/staging allocations in both
+directions and retains those necessary copies. It tests aliases, EOF,
+abandonment and in-flight disposal without connecting the probe to sessions.
+Normal Neon builds and hosts are unchanged; this is not production zero-copy,
+nor does it depend on the unmerged C++ lease work.
 The package layout is `js/src/{shared,browser,node}`, with contracts under
 `js/test` and transport measurements under `js/benchmarks`.
 The old addon JavaScript drivers remain intentional alternative hosts, not
