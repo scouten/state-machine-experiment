@@ -49,6 +49,10 @@ trusted read-back run in Node and all three browsers. Whole-input/output
 buffering and abrupt termination remain explicit limits; disposing a Worker
 cannot cancel a caller-owned signer.
 The browser boundary now uses binary bulk write payloads with JSON metadata.
+The independent `npm run test:read-leases` capability proof checks BYOB buffer
+transfer rejection and direct OPFS-to-Wasm I/O in three engines. It does not add
+a Rust-owned read lease or OPFS SDK dependency. Normal File/Blob sources cannot
+gain this capability simply by adding a writable lease.
 Both the binary transport and the retained JSON experiment control pass the same contracts;
 paired large-build measurements isolate a major avoidable boundary cost
 without changing the shared host or Rust builder. This is still copying,

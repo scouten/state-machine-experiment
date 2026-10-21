@@ -96,6 +96,10 @@ changes. Choose formats for *what they exercise*, as TIFF did:
   large-build time by about 6.7–8.5 times; binary is now the browser default.
   Streaming sources/outputs, measured peak memory and production distribution
   remain unproven.
+  An independent browser capability proof now checks direct OPFS reads into
+  Wasm and BYOB's incompatible buffer-transfer requirement. This is not a
+  production read lease, nor a recommendation to stage File/Blob inputs into
+  OPFS. WebKit requires a temporary normal profile for the local OPFS proof.
   The neutral read/build bridges and compatibility vocabulary now live in
   `contentauth-c2pa-session-bridge`; Wasm and Neon are consumers. Node and all
   three browser contracts are wired into CI. Next, migrate the older host

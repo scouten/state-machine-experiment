@@ -2,6 +2,7 @@
 // Chromium, Firefox and WebKit against a loopback-only static server, loading
 // the real Wasm build. Run via `npm run test:browser`.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { readFile, mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -33,16 +34,43 @@ const server = createServer(async (request, response) => {
 });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const origin = `http://127.0.0.1:${server.address().port}`;
+const readLeasesOnly = process.argv.includes("--read-leases");
 try {
   assert.equal((await fetch(origin)).status, 200);
   for (const [name, engine] of Object.entries({ chromium, firefox, webkit })) {
-    const browser = await engine.launch({ headless: true });
+    // WebKit's ephemeral context rejects OPFS. Playwright cleans this temporary
+    // normal-browsing profile on close; default SDK tests retain their context.
+    const browser = readLeasesOnly && name === "webkit"
+      ? await engine.launchPersistentContext("", { headless: true })
+      : await engine.launch({ headless: true });
     try {
       const page = await browser.newPage();
       const errors = [];
       page.on("pageerror", (error) => errors.push(error.message));
       await page.goto(origin);
-      const result = await page.evaluate(async () => {
+      const result = await page.evaluate(async (readLeasesOnly) => {
+        if (readLeasesOnly) {
+          const readLeases = await new Promise((resolve, reject) => {
+            const worker = new Worker("/test/read-leases.mjs", { type: "module" });
+            const timer = setTimeout(() => {
+              worker.terminate();
+              reject(new Error("read-lease proof timed out"));
+            }, 30_000);
+            worker.onmessage = ({ data }) => {
+              clearTimeout(timer);
+              worker.terminate();
+              if (data.ok) resolve(data.value);
+              else reject(new Error(data.error));
+            };
+            worker.onerror = (event) => {
+              clearTimeout(timer);
+              worker.terminate();
+              reject(new Error(event.message));
+            };
+            worker.postMessage({});
+          });
+          return { readLeases, userAgent: navigator.userAgent };
+        }
         const { createClient } = await import("/src/browser/client.mjs");
         const { contract } = await import("/test/contract.mjs");
         const { signingContract } = await import("/test/signing.mjs");
@@ -61,11 +89,19 @@ try {
         const comparison = await boundaryComparison(createClient, fixture, pkcs8);
         return { ...transports.binary, transports, comparison,
           userAgent: navigator.userAgent };
-      });
+      }, readLeasesOnly);
       assert.deepEqual(errors, [], `${name}: unhandled application error`);
       await mkdir(new URL("../results/", import.meta.url), { recursive: true });
-      await writeFile(new URL(`../results/${name}.json`, import.meta.url),
-        JSON.stringify({ measuredAt: new Date().toISOString(), fingerprints: await fingerprints(), ...result }, null, 2));
+      const hashes = readLeasesOnly
+        ? Object.fromEntries(await Promise.all(["test/browser.mjs", "test/read-leases.mjs", "package.json", "package-lock.json"]
+          .map(async (path) => [path, createHash("sha256").update(await readFile(new URL(`../${path}`, import.meta.url))).digest("hex")])))
+        : await fingerprints();
+      await writeFile(new URL(`../results/${name}${readLeasesOnly ? "-read-leases" : ""}.json`, import.meta.url),
+        JSON.stringify({ measuredAt: new Date().toISOString(), fingerprints: hashes, ...result }, null, 2));
+      if (readLeasesOnly) {
+        console.log(`${name}: all ${result.readLeases.checks.length} read-lease capability checks pass`);
+        continue;
+      }
       console.log(`${name}: all ${result.checks.length} shared contract checks pass`);
       console.log(`${name}: all ${result.signing.checks.length} shared signing checks pass`);
       console.log(`${name}: both JSON/binary contracts pass; ${result.comparison.samples.length} paired boundary samples validated`);

@@ -367,6 +367,37 @@ Worker isolation does not remove copying: each read snapshots and clones the
 entire asset. Large messages can still briefly occupy the calling thread.
 No peak memory or frame-deadline guarantee is established.
 
+## Independent browser read-lease capability experiment
+
+`npm run test:read-leases` runs [a dedicated Worker proof](test/read-leases.mjs)
+without building Rust or generating C2PA fixtures. It tests actual browser I/O
+into `WebAssembly.Memory`, not a Rust-owned lease or production SDK source.
+Use `npm ci` and install the matching Playwright browsers first if missing.
+Results with source fingerprints go to ignored `results/*-read-leases.json`.
+
+All three tested engines reject byte-stream BYOB reads into Wasm memory: BYOB
+transfers its backing buffer, which Wasm does not permit. An ordinary-buffer
+control confirms transfer behavior. Direct `structuredClone` transfer also
+rejects Wasm storage (TypeError/DataCloneError vary by engine).
+
+All three engines can fill Wasm views using OPFS synchronous reads in a dedicated
+Worker. For a 1,048,593 byte fixture, staged reads allocate a JS chunk and copy
+1,048,593 bytes into Wasm; direct reads eliminate that staging copy. Every byte
+is checked, including nonzero offsets, EOF rejection, zero-length reads and
+fresh destinations after memory growth. Handle/file cleanup runs in `finally`.
+This excludes fixture setup and browser/OS internals, and establishes neither
+peak RSS nor performance.
+
+WebKit's ephemeral/private context rejected OPFS locally. The focused experiment
+therefore uses an auto-cleaned temporary normal profile; ordinary SDK tests are
+unchanged. OPFS is not a dependency or recommendation for normal File/Blob SDK
+inputs: staging arbitrary inputs into it would add its own I/O/copies.
+
+A future useful read lease should follow #65's independent acquire/fill/seal/
+fulfill ownership, exact-length and session/request identity rules. An in-memory
+JS source still needs a JS-to-Wasm copy even with such a lease. This experiment
+does not add a production lease API or an OPFS host.
+
 ## Deliberate non-goals and next trigger
 
 No new domain validation, formats, compatibility shims, identity/timestamp
