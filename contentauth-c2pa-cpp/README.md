@@ -209,7 +209,11 @@ the real library, so drift is a link or test failure.
 
 * **Rust** (`cargo test -p contentauth-c2pa-cpp`): drives the ABI end to end
   from Rust, plus null/malformed arguments, misanswered requests, the OCSP
-  request mapping (which no fixture here provokes), panics and `Send`/`Sync`.
+  request mapping and authenticated good/revoked response fixtures, panics,
+  `Send`/`Sync`, and independent zero-copy read/write buffer ownership.
+  The consolidation tests replicate the existing C API's behavioral scenarios
+  and characterize differences before replacing either ABI; see the
+  [consolidation plan](../docs/c-api-consolidation-plan.md).
 * **C++** (`ctest`): one C++20 GoogleTest executable, `c2pa_sm_tests`, covers
   core APIs, thread pools, signing, and coroutines. Each test is discovered
   individually by CTest, alongside the existing example tests. The normal build

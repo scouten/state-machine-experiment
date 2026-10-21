@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::panic)]
 
+mod consolidation;
+
 use std::{ffi::CString, ptr};
 
 use base64::Engine;

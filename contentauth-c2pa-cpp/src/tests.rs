@@ -17,6 +17,9 @@ use std::ffi::CStr;
 
 use super::*;
 
+#[path = "tests/reader.rs"]
+mod reader_cases;
+
 const C_JPG: &[u8] = include_bytes!("../../contentauth-c2pa-reader/tests/fixtures/C.jpg");
 
 /// Inside every certificate's validity window, and not the wall clock.
@@ -377,8 +380,6 @@ fn misanswered_requests_are_rejected_and_stay_outstanding() {
         fulfill(session, &reply(C2PA_SM_REPLY_FAILED, first.id, 0, b"late")).unwrap_err();
     assert_eq!(code, C2PA_SM_ERR_INVALID_ARGUMENT);
 
-    // A null `data` with zero length is an empty slice, not a crash; the
-    // engine rejects an empty read as a wrong-sized reply, not this layer.
     let second = requests(session);
     assert!(second.is_empty(), "fulfill invalidates borrowed requests");
 
@@ -388,9 +389,8 @@ fn misanswered_requests_are_rejected_and_stay_outstanding() {
 
 #[test]
 fn every_request_kind_is_described() {
-    // The engine never issues an OCSP request for this repository's
-    // fixtures, so the description of one is checked on the fixture
-    // directly, as `contentauth-c2pa-session-bridge` does for its own.
+    // A synthetic batch isolates field mapping; reader_cases also drives
+    // real OCSP requests from the shared C API certificate fixtures.
     let mut session = C2paSmSession {
         inner: ReadSessionBridge::new("image/jpeg", None).unwrap(),
         fresh: vec![
