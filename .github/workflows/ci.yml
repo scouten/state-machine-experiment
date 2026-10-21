@@ -95,6 +95,13 @@ jobs:
         with:
           tool: cargo-llvm-cov
 
+      - name: Check C API feature configurations and generated header
+        run: |
+          bash contentauth-c2pa-c-api/tests/check-features.sh
+          cargo test -p contentauth-c2pa-c-api --no-default-features --features read
+          cargo test -p contentauth-c2pa-c-api --no-default-features --features build
+          cargo test -p contentauth-c2pa-c-api --no-default-features
+
       - name: Generate code coverage
         env:
           RUST_BACKTRACE: "1"

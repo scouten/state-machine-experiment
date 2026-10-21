@@ -17,6 +17,7 @@ flowchart LR
         d6["Shared JS Worker read + baseline sign<br/>browser Wasm / Node Neon, async signer callbacks"]
         d7["C++ read + sign; blocking / pool / future / coroutine<br/>atomic file signing + Trusted read-back example"]
         d8["C++ signing read + write leases:<br/>host I/O directly into/from Rust-owned buffers"]
+        d9["Canonical C API: tracked reader/build/results,<br/>independent signing buffer leases, registry formats"]
     end
     subgraph next["Next"]
         direction TB
@@ -73,6 +74,11 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 
 ## 4. Bindings and hosts
 
+* **C/C++ FFI consolidation:** the tested C++ Rust boundary has been
+  adopted by the canonical C API with tracked ownership, selectable exports,
+  and registry-backed JPEG/TIFF/DNG. Next, switch C++ to that library/header
+  and then remove its duplicate Rust ABI; neither step is implemented yet.
+  See the [phase plan](../c-api-consolidation-plan.md).
 * **C++ host integrations:** production private-key providers and real TSA HTTP
   transport remain host responsibilities, as do atomic publication on non-POSIX
   systems and packaging (`install`/`find_package`, vcpkg, Conan). The baseline

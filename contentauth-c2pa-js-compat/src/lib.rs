@@ -91,8 +91,8 @@
 //!   [`Blob`]s.
 //! * **`resourceToBytes`, `crJson`** — both depend on resource and
 //!   thumbnail data [`contentauth_c2pa_reader`] does not decode yet.
-//! * **Every format but JPEG** — the bridge's `compat::format` is the seam, as
-//!   it is in `contentauth-c2pa-rs-compat`.
+//! * **Formats beyond JPEG and TIFF/BigTIFF/DNG** — the bridge's
+//!   `compat::format` selects from the workspace's format registry.
 //! * **The full `@contentauth/c2pa-types` `ManifestStore` shape** —
 //!   ingredients, decoded assertion values, thumbnails. [`ManifestStore`]
 //!   carries the top-level contract (a map of manifests keyed by label, an

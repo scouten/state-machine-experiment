@@ -9,472 +9,740 @@
 #include <stdlib.h>
 
 /**
- * Session is parked waiting for requests to be fulfilled.
+ * Success.
  */
-#define C2PA_SM_STEP_PENDING 0
+#define C2PA_SM_OK 0
 
 /**
- * Session has completed successfully.
+ * Invalid argument, settings, handle, request ID or reply kind.
  */
-#define C2PA_SM_STEP_COMPLETE 1
+#define C2PA_SM_ERR_INVALID_ARGUMENT 1
 
 /**
- * An error occurred during advance.
+ * Unsupported container format.
  */
-#define C2PA_SM_STEP_ERROR -1
+#define C2PA_SM_ERR_UNSUPPORTED_TYPE 2
 
 /**
- * Input source stream identifier.
+ * No manifest store was found.
  */
-#define C2PA_SM_STREAM_SOURCE 0
+#define C2PA_SM_ERR_NOT_FOUND 3
 
 /**
- * Output destination stream identifier.
+ * Reading or validation could not complete.
  */
-#define C2PA_SM_STREAM_OUTPUT 1
+#define C2PA_SM_ERR_READ 4
 
 /**
- * Request to read bytes from source or output.
+ * A Rust panic was caught at the boundary.
  */
-#define C2PA_SM_BUILD_REQ_READ 0
+#define C2PA_SM_ERR_PANIC 5
 
 /**
- * Request for length of source stream.
+ * Read `len` bytes starting at `start`.
  */
-#define C2PA_SM_BUILD_REQ_LENGTH 1
+#define C2PA_SM_REQUEST_READ 0
 
 /**
- * Request to write bytes to output stream.
+ * Report asset length.
  */
-#define C2PA_SM_BUILD_REQ_WRITE 2
+#define C2PA_SM_REQUEST_LENGTH 1
 
 /**
- * Request to sign the full COSE Sig_structure message bytes in `data`, not a digest.
- *
- * Return a COSE-format signature: ECDSA uses fixed-width `r || s`, not DER.
+ * Report Unix seconds, UTC.
  */
-#define C2PA_SM_BUILD_REQ_SIGN 3
+#define C2PA_SM_REQUEST_TIME 2
 
 /**
- * Request for RFC 3161 TSA timestamp over token request.
+ * POST body to the OCSP URL.
  */
-#define C2PA_SM_BUILD_REQ_TIMESTAMP 4
+#define C2PA_SM_REQUEST_OCSP 3
 
 /**
- * Request to read bytes from asset.
+ * Read bytes reply.
  */
-#define C2PA_SM_READ_REQ_READ 0
+#define C2PA_SM_REPLY_BYTES 0
 
 /**
- * Request for asset total length.
+ * Asset length reply.
  */
-#define C2PA_SM_READ_REQ_LENGTH 1
+#define C2PA_SM_REPLY_LENGTH 1
 
 /**
- * Request for current UTC time in epoch seconds.
+ * Unix seconds reply.
  */
-#define C2PA_SM_READ_REQ_CURRENT_DATE_TIME 2
+#define C2PA_SM_REPLY_TIME 2
 
 /**
- * Request to perform an OCSP POST and return response DER.
+ * OCSP response body reply.
  */
-#define C2PA_SM_READ_REQ_OCSP 3
+#define C2PA_SM_REPLY_OCSP 3
 
 /**
- * Opaque build-session handle exposed to C.
+ * Host failure, data contains a UTF-8 diagnostic.
+ */
+#define C2PA_SM_REPLY_FAILED 4
+
+/**
+ * Signing-specific error codes.
+ */
+typedef enum C2paSmBuildErrorCode {
+  /**
+   * Host I/O, signing, timestamping or build failure.
+   */
+  C2PA_SM_ERR_BUILD = 6,
+} C2paSmBuildErrorCode;
+
+/**
+ * Host reply payload kinds; incoming unknown integers are rejected.
+ */
+typedef enum C2paSmBuildReplyKind {
+  /**
+   * Requested bytes.
+   */
+  C2PA_SM_BUILD_REPLY_BYTES = 0,
+  /**
+   * Stream length.
+   */
+  C2PA_SM_BUILD_REPLY_LENGTH = 1,
+  /**
+   * Entire write is visible to subsequent reads.
+   */
+  C2PA_SM_BUILD_REPLY_WRITTEN = 2,
+  /**
+   * Signature; ES256 requires raw r || s, not DER.
+   */
+  C2PA_SM_BUILD_REPLY_SIGNATURE = 3,
+  /**
+   * Unmodified DER TimeStampResp.
+   */
+  C2PA_SM_BUILD_REPLY_TIMESTAMP = 4,
+  /**
+   * UTF-8 failure message.
+   */
+  C2PA_SM_BUILD_REPLY_FAILED = 5,
+} C2paSmBuildReplyKind;
+
+/**
+ * Operations requested by a signing session.
+ */
+typedef enum C2paSmBuildRequestKind {
+  /**
+   * Read exactly the requested range.
+   */
+  C2PA_SM_BUILD_REQUEST_READ = 0,
+  /**
+   * Report a stream's length.
+   */
+  C2PA_SM_BUILD_REQUEST_LENGTH = 1,
+  /**
+   * Write the entire payload and make it visible to subsequent reads.
+   */
+  C2PA_SM_BUILD_REQUEST_WRITE = 2,
+  /**
+   * Sign the complete COSE Sig_structure.
+   */
+  C2PA_SM_BUILD_REQUEST_SIGN = 3,
+  /**
+   * POST the encoded RFC 3161 request.
+   */
+  C2PA_SM_BUILD_REQUEST_TIMESTAMP = 4,
+} C2paSmBuildRequestKind;
+
+/**
+ * Streams addressed by signing I/O requests.
+ */
+typedef enum C2paSmBuildStream {
+  /**
+   * Read-only source.
+   */
+  C2PA_SM_BUILD_SOURCE = 0,
+  /**
+   * Separate, initially empty, readable and writable output.
+   */
+  C2PA_SM_BUILD_OUTPUT = 1,
+} C2paSmBuildStream;
+
+/**
+ * Overall validation outcome.
+ */
+typedef enum C2paSmValidationState {
+  /**
+   * No reader.
+   */
+  C2PA_SM_VALIDATION_UNAVAILABLE = -1,
+  /**
+   * Failed or incomplete validation.
+   */
+  C2PA_SM_VALIDATION_INVALID = 0,
+  /**
+   * Valid but untrusted signer.
+   */
+  C2PA_SM_VALIDATION_VALID = 1,
+  /**
+   * Valid and trusted signer.
+   */
+  C2PA_SM_VALIDATION_TRUSTED = 2,
+} C2paSmValidationState;
+
+/**
+ * Tracked signing session; serialize calls.
  */
 typedef struct C2paSmBuildSession C2paSmBuildSession;
 
 /**
- * Opaque owner for a finished build's exclusion ranges.
- *
- * Obtain the borrowed range pointer with [`c2pa_sm_exclusions_data`] and
- * release this owner with [`c2pa_sm_exclusions_free`].
+ * Sealed read storage; writable pointers must no longer be used.
  */
-typedef struct C2paSmExclusionList C2paSmExclusionList;
+typedef struct C2paSmCompletedRead C2paSmCompletedRead;
 
 /**
- * Opaque read-session handle exposed to C.
+ * An independently owned, tracked error; free with [`c2pa_sm_error_free`].
  */
-typedef struct C2paSmReadSession C2paSmReadSession;
+typedef struct C2paSmError C2paSmError;
 
 /**
- * C representation of a build request.
+ * Writable read storage owned independently of its session.
  */
-typedef struct C2paSmBuildRequest {
+typedef struct C2paSmReadBuffer C2paSmReadBuffer;
+
+/**
+ * Tracked immutable result; accessors may run concurrently.
+ */
+typedef struct C2paSmReader C2paSmReader;
+
+/**
+ * Tracked read in progress; serialize its operations.
+ */
+typedef struct C2paSmSession C2paSmSession;
+
+/**
+ * Tracked immutable report, independent of its consumed session.
+ */
+typedef struct C2paSmSignReport C2paSmSignReport;
+
+/**
+ * Immutable write storage retained independently of its session.
+ */
+typedef struct C2paSmWriteBuffer C2paSmWriteBuffer;
+
+/**
+ * Request view, borrowed until the next mutable session operation.
+ */
+typedef struct C2paSmRequest {
   /**
-   * Unique handle for fulfillment.
+   * C2PA_SM_REQUEST_* value.
+   */
+  int kind;
+  /**
+   * Outstanding request ID.
    */
   uint64_t id;
   /**
-   * Request kind: `C2PA_SM_BUILD_REQ_*`.
-   */
-  uint32_t kind;
-  /**
-   * Stream: `C2PA_SM_STREAM_*`.
-   */
-  uint32_t stream;
-  /**
-   * Offset for `READ` or `WRITE`.
-   */
-  uint64_t offset;
-  /**
-   * Byte length for `READ`.
-   */
-  uint64_t len;
-  /**
-   * Data payload for `WRITE`, `SIGN`, or `TIMESTAMP`.
-   * For `SIGN`, these are the full COSE Sig_structure message bytes, not a digest.
-   */
-  const uint8_t *data;
-  /**
-   * Length of `data` in bytes.
-   */
-  uintptr_t data_len;
-  /**
-   * Signing algorithm name (e.g. "es256"), or null.
-   */
-  const char *alg;
-  /**
-   * TSA URL for `TIMESTAMP`, or null.
-   */
-  const char *url;
-} C2paSmBuildRequest;
-
-/**
- * C exclusion structure.
- */
-typedef struct C2paSmExclusion {
-  /**
-   * Start offset in output.
+   * READ offset.
    */
   uint64_t start;
   /**
-   * Byte length.
+   * READ length.
+   */
+  uint64_t len;
+  /**
+   * OCSP URL; UTF-8, not NUL-terminated.
+   */
+  const char *url;
+  /**
+   * URL length.
+   */
+  uintptr_t url_len;
+  /**
+   * DER OCSP request.
+   */
+  const uint8_t *body;
+  /**
+   * Body length.
+   */
+  uintptr_t body_len;
+} C2paSmRequest;
+
+/**
+ * Host reply, copied before fulfill returns.
+ */
+typedef struct C2paSmReply {
+  /**
+   * C2PA_SM_REPLY_* value.
+   */
+  int kind;
+  /**
+   * Request ID.
+   */
+  uint64_t id;
+  /**
+   * LENGTH or TIME value.
+   */
+  int64_t value;
+  /**
+   * BYTES, OCSP or FAILED payload.
+   */
+  const uint8_t *data;
+  /**
+   * Payload length.
+   */
+  uintptr_t data_len;
+} C2paSmReply;
+
+/**
+ * Borrowed byte range. Null is permitted only with zero length.
+ */
+typedef struct C2paSmBuffer {
+  /**
+   * First byte; strings are UTF-8 and not NUL-terminated.
+   */
+  const uint8_t *data;
+  /**
+   * Readable byte count.
+   */
+  uintptr_t len;
+} C2paSmBuffer;
+
+/**
+ * Request view, valid until the next session mutation.
+ */
+typedef struct C2paSmBuildRequest {
+  /**
+   * C2paSmBuildRequestKind ABI integer.
+   */
+  int kind;
+  /**
+   * Request ID.
+   */
+  uint64_t id;
+  /**
+   * C2paSmBuildStream for I/O.
+   */
+  int stream;
+  /**
+   * Read start or write offset.
+   */
+  uint64_t offset;
+  /**
+   * Read length.
+   */
+  uint64_t len;
+  /**
+   * Write bytes, signing input or encoded TimeStampReq.
+   */
+  struct C2paSmBuffer data;
+  /**
+   * UTF-8 signing algorithm, not NUL-terminated.
+   */
+  struct C2paSmBuffer algorithm;
+  /**
+   * UTF-8 timestamp URL, not NUL-terminated.
+   */
+  struct C2paSmBuffer url;
+} C2paSmBuildRequest;
+
+/**
+ * Host reply; payload copied before fulfill returns.
+ */
+typedef struct C2paSmBuildReply {
+  /**
+   * C2paSmBuildReplyKind ABI integer.
+   */
+  int kind;
+  /**
+   * Outstanding ID.
+   */
+  uint64_t id;
+  /**
+   * Length reply value.
+   */
+  uint64_t value;
+  /**
+   * Bytes, signature, timestamp or failure message.
+   */
+  struct C2paSmBuffer data;
+} C2paSmBuildReply;
+
+/**
+ * Exclusive initialized storage; valid until seal or free.
+ */
+typedef struct C2paSmMutableBytes {
+  /**
+   * Writable first byte. Never retain after sealing.
+   */
+  uint8_t *data;
+  /**
+   * Exact requested count.
+   */
+  uintptr_t len;
+} C2paSmMutableBytes;
+
+/**
+ * Hard-binding exclusion in the completed asset.
+ */
+typedef struct C2paSmExclusion {
+  /**
+   * First byte.
+   */
+  uint64_t start;
+  /**
+   * Byte count.
    */
   uint64_t len;
 } C2paSmExclusion;
 
 /**
- * C representation of a read request.
+ * Borrowed report storage, valid until report free.
  */
-typedef struct C2paSmReadRequest {
+typedef struct C2paSmSignReportView {
   /**
-   * Unique handle for fulfillment.
+   * Embedded manifest. Signed asset is already in host output.
    */
-  uint64_t id;
+  struct C2paSmBuffer manifest;
   /**
-   * Request kind: `C2PA_SM_READ_REQ_*`.
+   * Ascending exclusions.
    */
-  uint32_t kind;
+  const struct C2paSmExclusion *exclusions;
   /**
-   * Offset for `READ`.
+   * Exclusion count.
    */
-  uint64_t start;
-  /**
-   * Byte length for `READ`.
-   */
-  uint64_t len;
-  /**
-   * URL for `OCSP`, or null.
-   */
-  const char *url;
-  /**
-   * OCSP request DER bytes, or null.
-   */
-  const uint8_t *request_der;
-  /**
-   * Byte length of `request_der`.
-   */
-  uintptr_t request_der_len;
-} C2paSmReadRequest;
+  uintptr_t exclusion_count;
+} C2paSmSignReportView;
 
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
 
 /**
- * Frees a string allocated by this library.
- *
- * # Safety
- * `string` must be null or an allocation returned by this library.
+ * Library version, NUL-terminated and static.
  */
-void c2pa_sm_string_free(char *string);
+const char *c2pa_sm_version(void);
 
 /**
- * Creates a new sans-I/O build session.
+ * Frees a returned string. Null, stale and non-string handles are no-ops.
  *
  * # Safety
- * String arguments must be valid null-terminated C strings. For nonzero
- * `cert_count`, the certificate pointer and length arrays and each
- * certificate buffer must be valid. A non-null `err_out` must point to
- * writable storage.
+ * No host may access the string during or after its successful destruction.
  */
-struct C2paSmBuildSession *c2pa_sm_build_new(const char *format,
-                                             const char *definition_json,
-                                             const char *alg,
-                                             const uint8_t *const *certs_der,
-                                             const uintptr_t *cert_lens,
-                                             uintptr_t cert_count,
-                                             char **err_out);
+void c2pa_sm_string_free(char *s);
 
 /**
- * Advances the build session.
- *
- * The returned array and all nested pointers borrow session-owned buffers and are
- * valid until the next `c2pa_sm_build_advance`, `c2pa_sm_build_finish`, or
- * `c2pa_sm_build_free` call. Fulfillment calls do not invalidate them.
- * Each request is returned only once; its ID remains outstanding until a reply is
- * accepted. Async hosts must copy request details and payloads before advancing again.
+ * Error code; INVALID_ARGUMENT for null, stale or wrong-type handles.
  *
  * # Safety
- * `session`, `out_requests`, and `out_count` must be valid pointers. A
- * non-null `err_out` must point to writable storage.
+ * Serialize destruction with this call.
  */
-int32_t c2pa_sm_build_advance(struct C2paSmBuildSession *session,
-                              const struct C2paSmBuildRequest **out_requests,
-                              uintptr_t *out_count,
-                              char **err_out);
+int c2pa_sm_error_code(const struct C2paSmError *error);
 
 /**
- * Fulfills a build read request with bytes.
+ * Borrowed NUL-terminated message; empty for invalid handles.
  *
  * # Safety
- * `session` must be live. For nonzero `len`, `bytes` must be valid for reads
- * of `len` bytes. A non-null `err_out` must point to writable storage.
+ * Keep the error alive until use of the returned borrow ends.
  */
-int32_t c2pa_sm_build_fulfill_bytes(struct C2paSmBuildSession *session,
-                                    uint64_t id,
-                                    const uint8_t *bytes,
-                                    uintptr_t len,
-                                    char **err_out);
+const char *c2pa_sm_error_message(const struct C2paSmError *error);
 
 /**
- * Fulfills a build length request.
+ * Borrowed c2pa-rs Debug-spelled name; empty for invalid handles.
  *
  * # Safety
- * `session` must be live. A non-null `err_out` must point to writable storage.
+ * Keep the error alive until use of the returned borrow ends.
  */
-int32_t c2pa_sm_build_fulfill_length(struct C2paSmBuildSession *session,
-                                     uint64_t id,
-                                     uint64_t length,
-                                     char **err_out);
+const char *c2pa_sm_error_name(const struct C2paSmError *error);
 
 /**
- * Fulfills a build write request once the host has written the requested bytes.
+ * Frees an owned error. Null, stale, wrong-type and busy handles are no-ops.
  *
  * # Safety
- * `session` must be live. A non-null `err_out` must point to writable storage.
+ * No borrowed error string may remain in use when destruction succeeds.
  */
-int32_t c2pa_sm_build_fulfill_written(struct C2paSmBuildSession *session,
-                                      uint64_t id,
-                                      char **err_out);
+void c2pa_sm_error_free(struct C2paSmError *error);
 
 /**
- * Fulfills a signing request with a COSE-format signature over the full message
- * bytes in the request's `data`. ECDSA uses fixed-width `r || s`, not DER.
+ * Starts a read. Null or whitespace-only settings select backend defaults
+ * (including disabled online OCSP). Inputs are copied.
  *
  * # Safety
- * `session` must be live. For nonzero `sig_len`, `sig` must be valid for reads
- * of `sig_len` bytes. A non-null `err_out` must point to writable storage.
+ * Strings must be valid C strings; out_session writable; out_error null or writable.
  */
-int32_t c2pa_sm_build_fulfill_signature(struct C2paSmBuildSession *session,
-                                        uint64_t id,
-                                        const uint8_t *sig,
-                                        uintptr_t sig_len,
-                                        char **err_out);
+int c2pa_sm_session_new(const char *format,
+                        const char *settings_json,
+                        struct C2paSmSession **out_session,
+                        struct C2paSmError **out_error);
 
 /**
- * Fulfills a timestamp request with DER `TimeStampResp` bytes.
+ * Cancels a read; null, stale, wrong-type and busy handles are no-ops.
  *
  * # Safety
- * `session` must be live. For nonzero `resp_len`, `resp` must be valid for
- * reads of `resp_len` bytes. A non-null `err_out` must point to writable storage.
+ * End all borrowed request access before destruction succeeds.
  */
-int32_t c2pa_sm_build_fulfill_timestamp(struct C2paSmBuildSession *session,
-                                        uint64_t id,
-                                        const uint8_t *resp,
-                                        uintptr_t resp_len,
-                                        char **err_out);
+void c2pa_sm_session_free(struct C2paSmSession *session);
 
 /**
- * Fulfills a build request with a host failure.
+ * Advances bounded work; done is nonzero only when ready to finish.
+ * New requests are exposed once, not repeated while outstanding.
  *
  * # Safety
- * `session` must be live and `msg` a valid null-terminated C string. A
- * non-null `err_out` must point to writable storage.
+ * out_done must be writable; out_error null or writable. Serialize session calls
+ * with use of any borrowed request view.
  */
-int32_t c2pa_sm_build_fulfill_failed(struct C2paSmBuildSession *session,
-                                     uint64_t id,
-                                     const char *msg,
-                                     char **err_out);
+int c2pa_sm_session_advance(struct C2paSmSession *session,
+                            int *out_done,
+                            struct C2paSmError **out_error);
 
 /**
- * Finishes the build and returns tracked manifest bytes and an exclusion-list handle.
- *
- * Call only after `advance` returns `C2PA_SM_STEP_COMPLETE`. Once valid arguments
- * reach the engine, finishing consumes the workflow even if it returns an error.
+ * Number of newly issued requests; zero for invalid or busy handles.
  *
  * # Safety
- * All output pointers and `session` must be valid. A non-null `err_out` must
- * point to writable storage.
+ * Serialize mutations with this call.
  */
-int32_t c2pa_sm_build_finish(struct C2paSmBuildSession *session,
-                             uint8_t **out_manifest_ptr,
-                             uintptr_t *out_manifest_len,
-                             struct C2paSmExclusionList **out_exclusions_ptr,
-                             uintptr_t *out_exclusions_count,
-                             char **err_out);
+uintptr_t c2pa_sm_session_request_count(const struct C2paSmSession *session);
 
 /**
- * Returns a borrowed pointer to an exclusion list's entries.
- *
- * The pointer is valid until the list is released by [`c2pa_sm_exclusions_free`].
+ * Describes a new request. Invalid handles, null output or an invalid index
+ * return false without modifying out.
  *
  * # Safety
- * `exclusions` must be a live list returned by [`c2pa_sm_build_finish`]. A
- * non-null `err_out` must point to writable storage.
+ * out must be null or writable; keep the session alive and unmodified while
+ * using any returned payload borrows.
  */
-const struct C2paSmExclusion *c2pa_sm_exclusions_data(struct C2paSmExclusionList *exclusions,
-                                                      char **err_out);
+bool c2pa_sm_session_request(const struct C2paSmSession *session,
+                             uintptr_t index,
+                             struct C2paSmRequest *out);
 
 /**
- * Frees a build session.
+ * Fulfills one request, in any order. Rejected IDs/kinds remain outstanding.
  *
  * # Safety
- * `session` must be null or a live pointer returned by [`c2pa_sm_build_new`].
+ * reply must be null or initialized; nonempty data readable for data_len.
+ * out_error null or writable. End request borrows before calling.
  */
-void c2pa_sm_build_free(struct C2paSmBuildSession *session);
+int c2pa_sm_session_fulfill(struct C2paSmSession *session,
+                            const struct C2paSmReply *reply,
+                            struct C2paSmError **out_error);
 
 /**
- * Frees manifest bytes allocated by this library.
- *
- * `len` is retained for ABI clarity; cimpl tracks the allocation's size.
+ * Consumes a valid session on success or failure, even with a null output.
+ * An unsigned asset succeeds with a null reader. Busy/invalid handles remain
+ * untouched. A caller must discard its session handle after consumption.
  *
  * # Safety
- * `bytes` must be null or an allocation returned by this library.
+ * out_reader writable; out_error null or writable. No request borrow may remain.
  */
-void c2pa_sm_bytes_free(uint8_t *bytes, uintptr_t _len);
+int c2pa_sm_session_finish(struct C2paSmSession *session,
+                           struct C2paSmReader **out_reader,
+                           struct C2paSmError **out_error);
 
 /**
- * Frees an exclusion-list handle returned by [`c2pa_sm_build_finish`].
+ * Frees a reader; invalid/busy handles are no-ops.
  *
  * # Safety
- * `exclusions` must be null or a live handle returned by this library.
+ * No view borrowed from this reader may remain in use.
  */
-void c2pa_sm_exclusions_free(struct C2paSmExclusionList *exclusions);
+void c2pa_sm_reader_free(struct C2paSmReader *reader);
 
 /**
- * Creates a new sans-I/O read session.
+ * Owned pretty JSON, freed with string_free; null for invalid/busy handles.
  *
  * # Safety
- * `format` and non-null `settings_json` must be valid null-terminated C strings.
- * A non-null `err_out` must point to writable storage.
+ * Serialize reader destruction with this call.
  */
-struct C2paSmReadSession *c2pa_sm_read_new(const char *format,
-                                           const char *settings_json,
-                                           char **err_out);
+char *c2pa_sm_reader_json(const struct C2paSmReader *reader);
 
 /**
- * Advances the read session.
- *
- * The returned array and all nested pointers borrow session-owned buffers and are
- * valid until the next `c2pa_sm_read_advance`, `c2pa_sm_read_finish`, or
- * `c2pa_sm_read_free` call. Fulfillment calls do not invalidate them.
- * Each request is returned only once; its ID remains outstanding until a reply is
- * accepted. Async hosts must copy request details and payloads before advancing again.
+ * Overall outcome; unavailable for invalid/busy handles.
  *
  * # Safety
- * `session`, `out_requests`, and `out_count` must be valid pointers; a non-null
- * `err_out` must point to writable storage.
+ * Serialize reader destruction with this call.
  */
-int32_t c2pa_sm_read_advance(struct C2paSmReadSession *session,
-                             const struct C2paSmReadRequest **out_requests,
-                             uintptr_t *out_count,
-                             char **err_out);
+enum C2paSmValidationState c2pa_sm_reader_validation_state(const struct C2paSmReader *reader);
 
 /**
- * Fulfills a read request with bytes.
+ * Owned active label, freed with string_free; null if absent or invalid.
  *
  * # Safety
- * `session` must be a live session. For nonzero `len`, `bytes` must be valid
- * for reads of `len` bytes. A non-null `err_out` must point to writable storage.
+ * Serialize reader destruction with this call.
  */
-int32_t c2pa_sm_read_fulfill_bytes(struct C2paSmReadSession *session,
-                                   uint64_t id,
-                                   const uint8_t *bytes,
-                                   uintptr_t len,
-                                   char **err_out);
+char *c2pa_sm_reader_active_label(const struct C2paSmReader *reader);
 
 /**
- * Fulfills a length request.
+ * True for an embedded manifest; false for invalid/busy handles.
  *
  * # Safety
- * `session` must be a live session. A non-null `err_out` must point to writable storage.
+ * Serialize reader destruction with this call.
  */
-int32_t c2pa_sm_read_fulfill_length(struct C2paSmReadSession *session,
-                                    uint64_t id,
-                                    uint64_t length,
-                                    char **err_out);
+bool c2pa_sm_reader_is_embedded(const struct C2paSmReader *reader);
 
 /**
- * Fulfills a current-time request with UTC epoch seconds.
+ * Starts a build, copying inputs. Certificates must be a nonempty chain of
+ * nonempty DER buffers. Unlike the experimental C++ boundary, empty chains
+ * are rejected immediately, preserving the canonical constructor policy.
  *
  * # Safety
- * `session` must be a live session. A non-null `err_out` must point to writable storage.
+ * Strings valid C strings; certs readable for cert_count initialized buffers,
+ * each readable for len; out_session writable; out_error null or writable.
  */
-int32_t c2pa_sm_read_fulfill_time(struct C2paSmReadSession *session,
-                                  uint64_t id,
-                                  int64_t epoch_secs,
-                                  char **err_out);
+int c2pa_sm_build_session_new(const char *definition_json,
+                              const char *format,
+                              const char *algorithm,
+                              const struct C2paSmBuffer *certs,
+                              uintptr_t cert_count,
+                              struct C2paSmBuildSession **out_session,
+                              struct C2paSmError **out_error);
 
 /**
- * Fulfills an OCSP request with response DER bytes.
+ * Advances a build. Count is new requests, not all outstanding requests.
+ * Zero count without done still means waiting.
  *
  * # Safety
- * `session` must be live. For nonzero `len`, `bytes` must be valid for reads
- * of `len` bytes. A non-null `err_out` must point to writable storage.
+ * Outputs writable, out_error null or writable. End payload borrows and
+ * serialize session operations.
  */
-int32_t c2pa_sm_read_fulfill_ocsp(struct C2paSmReadSession *session,
-                                  uint64_t id,
-                                  const uint8_t *bytes,
-                                  uintptr_t len,
-                                  char **err_out);
+int c2pa_sm_build_session_advance(struct C2paSmBuildSession *session,
+                                  int *out_done,
+                                  uintptr_t *out_count,
+                                  struct C2paSmError **out_error);
 
 /**
- * Fulfills a read request with a host failure.
+ * Copies a descriptor. Copy borrowed payloads before mutating the session.
  *
  * # Safety
- * `session` must be live and `msg` a valid null-terminated C string. A
- * non-null `err_out` must point to writable storage.
+ * out writable, out_error null or writable; serialize session mutations
+ * with this call and use of its borrowed payloads.
  */
-int32_t c2pa_sm_read_fulfill_failed(struct C2paSmReadSession *session,
-                                    uint64_t id,
-                                    const char *msg,
-                                    char **err_out);
+int c2pa_sm_build_session_request(struct C2paSmBuildSession *session,
+                                  uintptr_t index,
+                                  struct C2paSmBuildRequest *out,
+                                  struct C2paSmError **out_error);
 
 /**
- * Finishes a read session and retrieves its JSON report.
- *
- * Call only after `advance` returns `C2PA_SM_STEP_COMPLETE`. Once valid arguments
- * reach the engine, finishing consumes the workflow even if it returns an error.
+ * Answers one outstanding request. Invalid IDs/kinds leave it outstanding.
  *
  * # Safety
- * `session`, `out_json`, and `out_has_manifest` must be valid pointers. A
- * non-null `err_out` must point to writable storage.
+ * reply initialized with readable payload; out_error null or writable.
+ * End all borrowed session payload accesses. Failed leased reads require
+ * the host to stop accessing writable bytes; their leases still need free.
  */
-int32_t c2pa_sm_read_finish(struct C2paSmReadSession *session,
-                            char **out_json,
-                            bool *out_has_manifest,
-                            char **err_out);
+int c2pa_sm_build_session_fulfill(struct C2paSmBuildSession *session,
+                                  const struct C2paSmBuildReply *reply,
+                                  struct C2paSmError **out_error);
 
 /**
- * Frees a read session, including a partially driven or cancelled session.
+ * Retains immutable write bytes without copying. Multiple leases may share
+ * storage; each survives acknowledgment and session destruction.
  *
  * # Safety
- * `session` must be null or a live pointer returned by [`c2pa_sm_read_new`].
+ * Outputs writable and distinct; out_error null or writable. Serialize session
+ * operations. Never mutate the bytes or use them after freeing the buffer.
  */
-void c2pa_sm_read_free(struct C2paSmReadSession *session);
+int c2pa_sm_build_write_acquire(struct C2paSmBuildSession *session,
+                                uint64_t id,
+                                struct C2paSmWriteBuffer **out_buffer,
+                                struct C2paSmBuffer *out_bytes,
+                                struct C2paSmError **out_error);
+
+/**
+ * Frees retained write storage independently. Invalid/busy handles stay owned.
+ *
+ * # Safety
+ * buffer writable, out_error null or writable. Stop all I/O using the bytes.
+ */
+int c2pa_sm_write_buffer_free(struct C2paSmWriteBuffer **buffer, struct C2paSmError **out_error);
+
+/**
+ * Acquires fallibly allocated, initialized storage for an outstanding read.
+ * Each request can acquire only one lease, even after abandonment.
+ *
+ * # Safety
+ * Outputs writable and distinct, out_error null or writable. Serialize session
+ * operations. Only the host may access writable bytes until seal.
+ */
+int c2pa_sm_build_read_acquire(struct C2paSmBuildSession *session,
+                               uint64_t id,
+                               struct C2paSmReadBuffer **out_buffer,
+                               struct C2paSmMutableBytes *out_bytes,
+                               struct C2paSmError **out_error);
+
+/**
+ * Seals storage once all I/O stops; consumes and nulls on success.
+ * Wrong count or invalid/busy handle preserves ownership.
+ *
+ * # Safety
+ * Slots writable and distinct, out_error null or writable. No access to the
+ * writable bytes, including from other threads, may remain.
+ */
+int c2pa_sm_read_seal(struct C2paSmReadBuffer **buffer,
+                      uintptr_t bytes_read,
+                      struct C2paSmCompletedRead **out_completed,
+                      struct C2paSmError **out_error);
+
+/**
+ * Moves sealed storage into its original request without copying.
+ * Invalid sessions/requests preserve the completed handle.
+ *
+ * # Safety
+ * completed writable, out_error null or writable. Serialize session operations
+ * and ownership transitions.
+ */
+int c2pa_sm_build_fulfill_read(struct C2paSmBuildSession *session,
+                               uint64_t id,
+                               struct C2paSmCompletedRead **completed,
+                               struct C2paSmError **out_error);
+
+/**
+ * Frees abandoned writable storage independently and nulls on success.
+ *
+ * # Safety
+ * buffer writable, out_error null or writable. Stop all I/O using the bytes.
+ */
+int c2pa_sm_read_buffer_free(struct C2paSmReadBuffer **buffer, struct C2paSmError **out_error);
+
+/**
+ * Frees sealed storage independently and nulls on success.
+ *
+ * # Safety
+ * completed writable, out_error null or writable.
+ */
+int c2pa_sm_completed_read_free(struct C2paSmCompletedRead **completed,
+                                struct C2paSmError **out_error);
+
+/**
+ * Consumes a valid session on success or failure, including early finish or
+ * null output. Invalid/busy handles are rejected without consuming them.
+ *
+ * # Safety
+ * out_report writable, out_error null or writable. End session payload borrows.
+ */
+int c2pa_sm_build_session_finish(struct C2paSmBuildSession *session,
+                                 struct C2paSmSignReport **out_report,
+                                 struct C2paSmError **out_error);
+
+/**
+ * Cancels a build. Null is a no-op; invalid/busy handles return an error.
+ *
+ * # Safety
+ * out_error null or writable; end session payload borrows.
+ */
+int c2pa_sm_build_session_free(struct C2paSmBuildSession *session, struct C2paSmError **out_error);
+
+/**
+ * Returns immutable report storage; report may cross threads.
+ *
+ * # Safety
+ * out writable, out_error null or writable. Do not free concurrently or while
+ * any returned borrow remains in use.
+ */
+int c2pa_sm_sign_report_view(const struct C2paSmSignReport *report,
+                             struct C2paSmSignReportView *out,
+                             struct C2paSmError **out_error);
+
+/**
+ * Frees a report. Null is a no-op; invalid/busy handles return an error.
+ *
+ * # Safety
+ * out_error null or writable; end all report borrows.
+ */
+int c2pa_sm_sign_report_free(struct C2paSmSignReport *report, struct C2paSmError **out_error);
 
 #ifdef __cplusplus
 }  // extern "C"

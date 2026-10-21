@@ -40,7 +40,7 @@ flowchart BT
     PNS["c2pa-node-sign-addon<br/><i>existing signing Neon boundary</i>"]
     CPP["contentauth-c2pa-cpp<br/><i>reader + signing C ABI</i>"]
     PY["POSSIBLE: Python host + binding adapter<br/><i>not implemented or tested</i>"]
-    CAPI["c2pa-c-api<br/><i>C ABI for FFI</i>"]
+    CAPI["c2pa-c-api<br/><i>canonical C ABI + buffer leases</i>"]
 
     RD --> SM & PR
     BD --> SM & PR
@@ -52,7 +52,7 @@ flowchart BT
     FB --> BD & FM
     RSC --> FR & RG
     JSC --> FR & BR
-    BR --> FR & FB & JP & SB & RD
+    BR --> FR & FB & RG & SB & RD
     SB --> BD
     RSS --> SB & FB & JP
     JSS --> SB & FB & JSC
@@ -62,7 +62,7 @@ flowchart BT
     PNS -.-> BR
     CPP -->|"read/build bridges"| BR
     PY -.->|"could drive same bridge protocol"| BR
-    CAPI --> FR & FB & RG & JSC & SB
+    CAPI --> BR
 
     classDef engine fill:#dbeafe,stroke:#2563eb,color:#000
     classDef core fill:#dcfce7,stroke:#16a34a,color:#000
@@ -80,9 +80,10 @@ flowchart BT
 
 (Edges to `primitives` and `state-machine` from most crates are omitted
 where they would only add noise; every session crate depends on both.)
-The C API's `read` feature enables its file-reader and JS-compat edges;
-`build` enables its file-builder and sign-baseline edges. Both are on by
-default, but a downstream client can select either workflow independently.
+The C API's `read` and `build` features independently select its exported
+workflows; either enables its shared session-bridge backend. Both are on
+by default. C++ still builds its original ABI until the next consolidation
+phase; there is not yet a C++-to-C-API dependency.
 
 ## Layers
 
@@ -128,11 +129,11 @@ flowchart TB
 | `…-file-builder` | Orchestration | `FileBuilderSession`: `plan_embed`/`commit` + `BuilderSession`, never buffering the asset; plus blocking hosts. |
 | `…-rs-compat` | Binding | c2pa-rs `Context` + `Reader::with_file` slice; default `http` feature enables `reqwest` OCSP, otherwise uses the local-only file host. |
 | `…-js-compat` | Alternative host | Earlier c2pa-wasm `WasmReader` slice; Rust async host with `Blob`/`Platform`, retaining its `web` exports and tests. Imports shared compatibility vocabulary from the neutral bridge. |
-| `…-session-bridge` | Binding | `read::ReadSessionBridge`, `build::BuildSessionBridge` and explicit `compat` conversions; no runtime, Wasm or Neon dependencies. Replaces both former Node-named Rust crates. |
+| `…-session-bridge` | Binding | `read::ReadSessionBridge`, `build::BuildSessionBridge` and explicit `compat` conversions; registry-backed JPEG/TIFF/DNG, no runtime, Wasm or Neon dependencies. Replaces both former Node-named Rust crates. |
 | `…-sign-baseline` | Binding | The baseline signing case (JSON definition → `BuilderSettings`) every write binding is held to. |
 | `…-rs/js-compat-sign` | Binding / alternative host | Blocking and Rust async baseline signing hosts retained. `rs-compat-sign`'s default `http` feature enables `reqwest` for RFC 3161; without it, the signer supplies the transport. |
 | `c2pa-node-compat-addon`, `c2pa-node-sign-addon` | Binding | Separate Neon workspaces over the neutral read/build bridges. Existing JavaScript facades retain broader file/OCSP/timestamp behavior. |
-| `…-c-api` | Binding | Thread-free, callback-free C ABI (`c2pa_sm_*`); independently selectable `read`/`build` features, cimpl-tracked handles and a cbindgen-generated header declaring both APIs. |
+| `…-c-api` | Binding | Canonical thread-free, callback-free C ABI over the neutral bridge (`c2pa_sm_*`); selectable `read`/`build` exports, cimpl-tracked handles, typed readers/signing results, independent zero-copy signing read/write leases and a generated header. |
 | `c2pa-rs-compat-conformance` | Test | Separate workspace; differential tests against the real `c2pa` crate. |
 | `contentauth-c2pa-wasm` + `js/` | Binding / preferred JS host | Standalone synchronous Wasm boundary and private JS package with shared host, browser and Node entry points. Offline JPEG read/baseline ES256 sign; caller-owned async callbacks. |
 | `contentauth-c2pa-cpp` | Binding | C++17/20 reader and signing drivers over the neutral read/build bridges; cimpl-tracked signing C ABI, blocking memory/stream/POSIX-file hosts, pooled/future/parallel drivers and C++20 coroutines. A public-header ES256 signing example reads its output back as Trusted. Does not depend on the JS driver. |

@@ -8,6 +8,13 @@ It is a Rust static library behind a small C ABI (`src/lib.rs`,
 `include/contentauth_c2pa_sm.h`) and **C++** on top (`include/contentauth/`),
 header-only except for signing and the thread pools (`cpp/src/`, built as `c2pa_sm_cpp`):
 
+The [canonical C API](../contentauth-c2pa-c-api/) now also implements this
+reader/signing vocabulary and the independent signing buffer leases, with
+tracked reader/common ownership and registry-backed formats. This C++ build
+still uses its original Rust boundary and header. Switching its dependency
+and deleting the duplicate Rust implementation are the remaining
+[consolidation phases](../docs/c-api-consolidation-plan.md).
+
 | Header | Standard | Provides |
 |---|---|---|
 | `c2pa_sm.hpp` | C++17 | `Session`, `Reader`, the request/reply vocabulary, `Exception`, the blocking driver `read()`, hosts for memory / `std::istream` / files |

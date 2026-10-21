@@ -41,9 +41,10 @@ it — so that *every* host interaction, asset bytes included, is a real
 
 ## What this covers
 
-One use case, worked through end to end: **read and validate a C2PA
-manifest store from an asynchronously-readable JPEG, and report it the
-way c2pa-wasm does.**
+**Read and validate a C2PA manifest store from an asynchronously-readable
+JPEG or TIFF/BigTIFF/DNG, and report it the way c2pa-wasm does.**
+Format selection uses the neutral bridge's standard registry; asset I/O
+still belongs to the async host.
 
 ```rust,no_run
 use contentauth_c2pa_js_compat::{OfflinePlatform, Reader};
@@ -123,8 +124,8 @@ produce, including the exact `C2pa(JumbfNotFound)` string.
   with two `Blob`s.
 * **`resourceToBytes`, `crJson`** — depend on resource and thumbnail data
   the engine does not decode yet.
-* **Formats other than JPEG** — the bridge's `compat::format` is the seam, exactly as
-  in `contentauth-c2pa-rs-compat`.
+* **Formats other than JPEG and TIFF/BigTIFF/DNG** — the bridge's
+  `compat::format` selects from the workspace's format registry.
 * **The full `@contentauth/c2pa-types` `ManifestStore`** — ingredients,
   decoded assertion values, thumbnails. `ManifestStore` carries the
   top-level contract, populated with what the engine reports today, in

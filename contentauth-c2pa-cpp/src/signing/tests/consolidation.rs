@@ -41,7 +41,7 @@ fn c_api_constructor_scenarios_validate_each_string_with_valid_companion_fields(
 }
 
 #[test]
-fn build_format_aliases_and_current_registry_gaps_are_explicit() {
+fn build_format_aliases_select_registered_handlers() {
     let definition = CString::new(BASELINE_DEFINITION).unwrap();
     let certificate = C2paSmBuffer::borrowed(TEST_SIGNER_CERT);
     for (format, supported) in [
@@ -49,10 +49,11 @@ fn build_format_aliases_and_current_registry_gaps_are_explicit() {
         (c"jpeg", true),
         (c"jpg", true),
         (c"JPEG", true),
-        (c"image/jpg", false),
-        (c"image/tiff", false),
-        (c"tiff", false),
-        (c"dng", false),
+        (c"image/jpg", true),
+        (c"image/tiff", true),
+        (c"tiff", true),
+        (c"dng", true),
+        (c"image/png", false),
     ] {
         let mut session = ptr::null_mut();
         let mut error = ptr::null_mut();

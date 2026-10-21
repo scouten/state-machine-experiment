@@ -62,25 +62,19 @@ fn constructor_rejects_invalid_settings_types_and_non_utf8_settings() {
 }
 
 #[test]
-fn tiff_and_registry_only_aliases_remain_unsupported() {
+fn tiff_and_registry_aliases_are_supported() {
     for format in ["image/tiff", "tiff", "tif", "dng", "image/jpg"] {
         let format = cstr(format);
         let mut session = ptr::null_mut();
         let mut err = ptr::null_mut();
-        // SAFETY: valid strings and output slots; no asset is needed for rejection.
+        // SAFETY: valid strings and output slots; construction does not read an asset.
         assert_eq!(
             unsafe { c2pa_sm_session_new(format.as_ptr(), ptr::null(), &mut session, &mut err) },
-            C2PA_SM_ERR_UNSUPPORTED_TYPE
+            C2PA_SM_OK
         );
-        assert!(session.is_null());
-        assert_eq!(
-            take_error(err),
-            (
-                C2PA_SM_ERR_UNSUPPORTED_TYPE,
-                "type is unsupported".to_owned(),
-                "C2pa(UnsupportedType)".to_owned(),
-            )
-        );
+        assert!(!session.is_null());
+        assert!(err.is_null());
+        unsafe { c2pa_sm_session_free(session) };
     }
 }
 

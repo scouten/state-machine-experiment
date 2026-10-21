@@ -44,9 +44,10 @@ Compare both ABIs and define one contract covering:
 - Read/write lease ownership and cancellation rules.
 
 There are meaningful differences to resolve, not just different function
-names. For example, the C API's [read finish implementation](../contentauth-c2pa-c-api/src/read.rs)
-currently returns JSON and a found flag, while C++ exposes a richer reader
-object.
+names. For example, the former C API returned JSON and a found flag from
+read finish, while C++ exposed a richer reader object. The canonical
+[reader ABI](../contentauth-c2pa-c-api/src/reading.rs) now uses the richer
+result contract.
 
 Replicate the existing C API's test scenarios and assertions against the
 C++ project's Rust FFI while retaining the original tests. Adapt test
@@ -110,8 +111,10 @@ the tested lease mechanisms in the canonical boundary.
 - Keep storage alive independently of acknowledgment or session destruction.
 - Release explicitly after actual I/O completion.
 
-The C API's [current read fulfillment](../contentauth-c2pa-c-api/src/build.rs)
-copies bytes, so moving only declarations would not suffice.
+The former C API copied read replies, so moving only declarations would
+not suffice. The canonical
+[signing implementation](../contentauth-c2pa-c-api/src/signing.rs) must
+retain the replacement's allocation transfers, not reintroduce those copies.
 
 Move the Rust lease tests alongside the canonical implementation, adding
 coverage for its handle model and feature configurations.
@@ -241,9 +244,11 @@ Before considering the migration complete:
 
 ## Phase 1 coverage inventory
 
-The original C API tests remain in place. The C++ Rust ABI tests exercise
-the replacement independently; no production ABI, header, build routing,
-or workspace membership is changed in this phase.
+At the Phase 1 checkpoint (`b222b96`), the original C API tests remained
+in place and the C++ Rust ABI tests exercised the replacement independently.
+No production ABI, header, build routing, or workspace membership changed
+in that phase. Phase 2 migrates the behavioral coverage to the canonical
+crate rather than retaining the obsolete API's test drivers.
 
 ### Replicated reader and cleanup scenarios
 
@@ -336,13 +341,13 @@ Rust ABI tests.
 
 ### Contract differences and replacement prerequisites
 
-These are characterized differences, not claims that both APIs are
-already interchangeable:
+These differences describe the Phase 1 baseline, not the final canonical
+contract. Their Phase 2 resolutions are recorded below.
 
 - **Formats:** The C API resolves formats through a registry whose default
   features include JPEG and TIFF; it also normalizes `image/jpg`.
-  The current C++ session bridge accepts only `image/jpeg`, `jpeg`, and
-  `jpg`, case-insensitively. The new
+  At that checkpoint the C++ session bridge accepted only `image/jpeg`,
+  `jpeg`, and `jpg`, case-insensitively. The
   `build_format_aliases_and_current_registry_gaps_are_explicit` test records
   this limitation. Preserve registry-backed formats and accepted aliases
   before completing Phase 2; silently dropping them is not consolidation.
@@ -385,10 +390,10 @@ already interchangeable:
 
 ## Phase 1 results
 
-Phase 1 is implemented: 25 additional Rust ABI tests (14 reader/common,
+Phase 1 added 25 Rust ABI tests (14 reader/common,
 11 signing) supplement the existing lifetime and zero-copy tests.
-The inventory covers all 33 replacement exports. Production code, headers,
-workspace membership, dependencies, and CMake routing are unchanged.
+The inventory covered all 33 replacement exports. Production code, headers,
+workspace membership, dependencies, and CMake routing were unchanged.
 
 | Validation | Result |
 |---|---|
@@ -414,9 +419,98 @@ Validation was performed on macOS. Linux-only POSIX fault-injection
 tests were not run. The C++ sanitizer configurations instrument C++,
 not the linked Rust static library.
 
-This is a characterized test baseline, not a claim of drop-in parity:
-the format and tracked-handle gaps and the contract choices listed above
-must be resolved as part of Phase 2. Phases 2–4 have not started.
+This established a characterized test baseline rather than drop-in parity.
+The next phase resolves the format and tracked-handle gaps and makes the
+remaining contract choices explicit.
+
+## Phase 2 results
+
+The canonical C API now owns the proven reader/signing vocabulary and
+independent signing read/write leases, backed by the neutral session bridge.
+The old exported API and its implementation have been replaced, not retained
+behind an adapter.
+
+| Surface | Canonical implementation |
+|---|---|
+| Shared constants, error/string ownership and panic containment | [`src/lib.rs`](../contentauth-c2pa-c-api/src/lib.rs) |
+| Reader sessions and typed immutable results | [`src/reading.rs`](../contentauth-c2pa-c-api/src/reading.rs) |
+| Signing sessions, leases and result views | [`src/signing.rs`](../contentauth-c2pa-c-api/src/signing.rs) |
+| Shared ownership tests | [`src/common_tests.rs`](../contentauth-c2pa-c-api/src/common_tests.rs) |
+| Reader/protocol/roundtrip tests | [`src/tests.rs`](../contentauth-c2pa-c-api/src/tests.rs) |
+| Signing/lease tests | [`src/signing/tests.rs`](../contentauth-c2pa-c-api/src/signing/tests.rs) and its consolidation submodule |
+| Export selection and generated-header smoke tests | [`tests/check-features.sh`](../contentauth-c2pa-c-api/tests/check-features.sh) |
+| Generated C declarations | [`include/contentauth_c2pa_c_api.h`](../contentauth-c2pa-c-api/include/contentauth_c2pa_c_api.h) |
+
+### Resolved prerequisites and contract choices
+
+- **Formats:** both bridges now use `Registry::standard()` and `AnyFormat`,
+  preserving JPEG, TIFF/BigTIFF/DNG, MIME/extension hints and `image/jpg`.
+  This also broadens format selection for the existing C++ and alternative
+  async JavaScript hosts; their format tests and documentation are updated.
+  The C++ constructor test is now
+  `build_format_aliases_select_registered_handlers`.
+- **Ownership:** canonical reader sessions, results, errors and returned
+  strings use cimpl tracking, as do signing sessions/results/leases.
+  Null, stale, wrong-type and busy-handle behavior is covered without
+  intentionally dereferencing invalid owning pointers.
+- **Certificates:** the canonical constructor rejects empty certificate
+  chains and empty entries, preserving the original C API's early validation.
+  This does not claim certificate-chain cryptographic validation at construction.
+- **Settings:** empty/whitespace reader settings are treated as absent.
+  JSON values still undergo the backend's normal type/structure validation.
+- **OCSP:** online fetching remains opt-in under the compatibility settings;
+  authenticated transport tests enable it explicitly.
+- **Results and replies:** the replacement's typed reader/signing results
+  and explicit ownership are canonical. A valid finish consumes the session
+  even when incomplete/failed; empty read payloads can cross the boundary
+  before the engine rejects a short read. Neither behavior preserves the
+  obsolete API's exact signatures or numeric error vocabulary.
+- **Features:** `read` and `build` independently select exported workflows.
+  The generated header declares both APIs consistently; disabled APIs are
+  absent from the library. Either workflow enables the shared bridge backend;
+  neither workflow compiles that backend through the C API dependency.
+
+The canonical TIFF/DNG roundtrip test,
+`reading::tests::roundtrip::tiff_and_dng_roundtrip_have_two_nonadjacent_exclusions`,
+builds real TIFF bytes under both hints, asserts exactly two nonadjacent
+exclusions, then reads back through the canonical ABI as Trusted and checks
+the complete baseline manifest object. The migrated lease tests retain
+allocation-identity and independent-lifetime assertions.
+
+### Validation
+
+| Validation | Result |
+|---|---|
+| Workspace, all features | 931 tests passed in 60 suites |
+| Canonical C API, both/read-only/build-only/neither | 71 / 26 / 43 / 4 tests passed |
+| Canonical Rust ABI coverage | 98.08% lines; 97% functions |
+| Workflow export selection | Symbol presence/absence verified for all four feature configurations |
+| Generated header | Identical across feature configurations; C11 and C++17 smoke checks passed |
+| C++ normal / ASan / TSan | 110 tests/examples passed in each configuration |
+| Node reader / signing addons | 27 / 26 tests passed |
+| Wasm workspace checks | `wasm32-unknown-unknown` and `wasm32-wasip2` passed, excluding the two network-owning Rust compatibility crates |
+| Standalone Wasm boundary | `wasm32-unknown-unknown` check passed |
+| Workspace Clippy / rustdoc / pinned nightly formatting | Passed with warnings denied where applicable |
+
+The [CI test job](../.github/workflows/ci.yml) now runs the header/export
+smoke script and all three nondefault feature test configurations. The
+existing workspace coverage run exercises the default-enabled workflows.
+The workflow YAML parses successfully and its added commands pass locally;
+Linux execution remains CI validation.
+
+Remaining uncovered canonical Rust sites are allocation/tracking refusal,
+poisoned-string-lock handling, future non-exhaustive request variants,
+sealing rollback, and closing/mapping locations. Unsupported races, invalid
+enum values and deliberate allocation exhaustion are not manufactured to
+reach defensive paths. Coverage was measured with an isolated profile
+directory to avoid mixed instrumentation.
+
+Validation was performed on macOS. Linux-only POSIX fault-injection tests
+were not run, and the C++ sanitizers do not instrument Rust.
+
+C++ still links its original Rust library and uses its existing header.
+No CMake rerouting, workspace removal, or duplicate-FFI deletion has been
+performed: those remain Phases 3 and 4.
 
 ## Execution
 
@@ -431,6 +525,6 @@ until its targeted tests pass and the results and any platform-specific
 validation gaps are reported. Do not defer testing to the end of the
 consolidation.
 
-Phase 1 is implemented and validated as recorded above. This document
-continues to be the execution plan for Phases 2–4; no ABI replacement,
-C++ rerouting, or duplicate-FFI deletion has occurred yet.
+Phase 1 is committed as `b222b96`; Phase 2 replaces the canonical ABI.
+This document continues to be the execution plan for Phases 3 and 4.
+C++ rerouting and duplicate-FFI deletion have not occurred yet.
