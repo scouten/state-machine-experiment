@@ -252,9 +252,11 @@ crate rather than retaining the obsolete API's test drivers.
 
 ### Replicated reader and cleanup scenarios
 
-The additional tests live in
-[`tests/reader.rs`](../contentauth-c2pa-cpp/src/tests/reader.rs), alongside
-the existing [`tests.rs`](../contentauth-c2pa-cpp/src/tests.rs) suite.
+The additional tests lived in `src/tests/reader.rs`, alongside the existing
+`src/tests.rs` suite, of the former `contentauth-c2pa-cpp` Rust crate. That
+crate was removed in Phase 4; its files remain readable at commit `b222b96`,
+and every test was mapped to the canonical suite (see
+[Phase 4 results](#phase-4-results)).
 
 | Original C API scenario | Replacement coverage |
 |---|---|
@@ -295,10 +297,11 @@ table have the prefix `c2pa_sm_`.
 
 ### Replicated build scenarios
 
-The additional tests live in
-[`signing/tests/consolidation.rs`](../contentauth-c2pa-cpp/src/signing/tests/consolidation.rs),
-alongside the existing
-[`signing/tests.rs`](../contentauth-c2pa-cpp/src/signing/tests.rs) suite.
+The additional tests lived in `src/signing/tests/consolidation.rs`, alongside
+the existing `src/signing/tests.rs` suite, of the same former crate (see
+commit `b222b96`); they now live in the canonical
+[`signing/tests/consolidation.rs`](../contentauth-c2pa-c-api/src/signing/tests/consolidation.rs)
+and [`signing/tests.rs`](../contentauth-c2pa-c-api/src/signing/tests.rs).
 
 | Original C API scenario | Replacement coverage |
 |---|---|
@@ -530,7 +533,7 @@ dependency on its former Rust ABI.
   names, struct layouts and ownership rules. Public C++ APIs, including the
   read/write buffer interfaces, are unchanged.
 - The CMake project now enables C. A new plain C11 program,
-  [`cpp/tests/c_link_smoke.c`](../contentauth-c2pa-cpp/cpp/tests/c_link_smoke.c),
+  [`tests/c_link_smoke.c`](../contentauth-c2pa-cpp/tests/c_link_smoke.c),
   runs as CTest `c_api.c_link_smoke`. It links only the canonical library,
   drives a read session by hand over an in-memory JPEG, and checks the
   no-manifest result, owned errors, `jpeg`/`image/jpg`/`tif`/`image/tiff`/`dng`
@@ -557,8 +560,70 @@ has no running Docker daemon or Linux toolchain; the CI Linux jobs run both.
 The sanitizers instrument the C++ only, not the Rust library.
 
 The old Rust ABI crate, its tests, its hand-written headers and its
-`cbindgen.toml` remain in the tree, unused by the C++ build, until Phase 4
-deletes them after confirming each useful test has a canonical replacement.
+`cbindgen.toml` remained in the tree, unused by the C++ build, until Phase 4
+deleted them after confirming each useful test has a canonical replacement.
+
+## Phase 4 results
+
+There is now one C ABI implementation, `contentauth-c2pa-c-api`, and the C++
+binding consumes it directly.
+
+**Test audit before deletion.** The old crate's 66 Rust tests were compared
+with the canonical suite. 65 have a same-named canonical test; the one that
+does not,
+`empty_certificate_chain_and_entries_are_not_rejected_at_construction`,
+recorded behavior the canonical constructor deliberately reversed, and is
+replaced by `empty_certificate_chain_and_entries_are_rejected_at_construction`.
+A crude assertion-count comparison flagged about 44 same-named tests as
+possibly weaker. Each large drop was reviewed against its old body and
+helpers; where a scenario or assertion had been lost in migration it was
+restored (for example the constructor test went from 2 back to broad
+per-string, per-certificate and per-output-pointer coverage, with separate
+embedded-NUL tests), and the rest were helper refactors. The audit also
+restored checks for null/wrong-type/stale report handles, cross-thread
+transfer, request-field mapping and cimpl exclusivity. Canonical test counts
+by configuration are now 72 (both features), 26 (read only), 44 (build only)
+and 4 (neither). Contract differences that are deliberate and not ported:
+the old suite accepted a null byte pointer with nonzero length as empty
+(rejected canonically, with the pending request preserved), empty
+certificate chains are rejected, and blank settings succeed.
+
+**Removed:** the `contentauth-c2pa-cpp` Rust crate (`Cargo.toml`, `src/**`,
+its tests), its `cbindgen.toml`, and the hand-written
+`include/contentauth_c2pa_sm.h` and `include/contentauth_c2pa_sm_sign.h`; its
+workspace membership and lockfile entry. Nothing builds, links or documents
+them any longer. `contentauth-c2pa-session-bridge` stays, since the C API and
+other bindings use it.
+
+**Functional C++ layout** (a pure move, done after and separate from the
+deletion): the vestigial `cpp/` directory was flattened.
+
+| Before | After |
+|---|---|
+| `cpp/src/sign*.cpp` | `src/signing/` |
+| `cpp/src/*_thread_pool.cpp`, `cpp/include/contentauth/*_thread_pool.hpp` | `src/executors/` |
+| `cpp/include/scope_exit.hpp` | `src/support/` |
+| `cpp/tests/**`, `cpp/include/signing_support.hpp` (test-only) | `tests/` |
+| `include/contentauth/` (public), `examples/` | unchanged |
+
+CMake, the CI coverage filters, the READMEs, `CLAUDE.md` and the walkthrough
+links were updated; the C++ README has a directory table.
+
+| Validation | Result |
+|---|---|
+| Workspace tests, all features | 866 passed (the 931 before, minus the 66 removed, plus 1 added by the audit) |
+| Workspace Clippy, nightly formatting, rustdoc | Passed with warnings denied |
+| Canonical C API, both / read only / build only / neither | 72 / 26 / 44 / 4 passed |
+| `check-features.sh` | All four configurations: symbols, stable header, C11, C++17 |
+| Wasm checks (`wasm32-unknown-unknown`, `wasm32-wasip2`) | Passed, excluding the two network-owning Rust compatibility crates |
+| C++ after deletion, fresh directories: normal / ASan / TSan | 111 passed in each |
+| C++ after the layout move, fresh directory | 111 passed |
+
+Still not run locally: the Linux-only POSIX fault-injection tests and the
+gcovr coverage report (no Linux toolchain or running Docker daemon here); the
+CI Linux jobs run both. In particular the Linux-only `target_sources` path
+in `CMakeLists.txt` was updated for the move but can only be exercised on
+Linux.
 
 ## Execution
 
@@ -573,6 +638,6 @@ until its targeted tests pass and the results and any platform-specific
 validation gaps are reported. Do not defer testing to the end of the
 consolidation.
 
-Phase 1 is committed as `b222b96` and Phase 2 as `62e1324`; Phase 3 routes
-the C++ build to the canonical C API. This document continues to be the
-execution plan for Phase 4. Deleting the duplicate Rust ABI has not occurred yet.
+Phase 1 is committed as `b222b96`, Phase 2 as `62e1324` and Phase 3 as
+`7f8dd3e`. Phase 4 removes the duplicate Rust ABI and applies the functional
+C++ layout. All four phases are implemented; Phase 4 is not yet committed.

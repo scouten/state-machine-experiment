@@ -2,7 +2,7 @@
 
 #include "contentauth/c2pa_sm_sign_async.hpp"
 #include "fixtures.hpp"
-#include "../tests/support.hpp"
+#include "support.hpp"
 #include <openssl/ecdsa.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>

@@ -7,11 +7,20 @@ behavior that a callback-based C++ API cannot?**
 It is **C++** (`include/contentauth/`) over the canonical C ABI of
 [`contentauth-c2pa-c-api`](../contentauth-c2pa-c-api/) (its static library and
 generated `contentauth_c2pa_c_api.h`), header-only except for signing and the
-thread pools (`cpp/src/`, built as `c2pa_sm_cpp`). CMake builds that library
-with cargo and links it; this directory's own Rust ABI (`src/`, `Cargo.toml`)
-is no longer linked and awaits removal in the final consolidation phase, as are
-its hand-written `include/contentauth_c2pa_sm*.h` headers. See the
+thread pools (`src/`, built as `c2pa_sm_cpp`). CMake builds that library
+with cargo and links it. This directory holds no Rust: the former duplicate
+Rust ABI crate and its hand-written headers were removed once the canonical
+C API covered every useful test. See the
 [consolidation plan](../docs/c-api-consolidation-plan.md).
+
+| Directory | Contents |
+|---|---|
+| `include/contentauth/` | Public C++ headers: the only include path a client sees |
+| `src/signing/` | Compiled signing implementation: blocking, pooled/future and coroutine drivers |
+| `src/executors/` | The bundled thread pools (portable and Apple GCD); private |
+| `src/support/` | Private helpers |
+| `tests/` | GoogleTest suites, shared test support, the C++17 compile check and the C link smoke test |
+| `examples/` | Read, parallel-read and signing programs |
 
 | Header | Standard | Provides |
 |---|---|---|
@@ -111,7 +120,7 @@ A `Session` never performs I/O, never blocks, never spawns, never calls back.
 When the engine needs something it parks and reports *requests* (read these
 bytes, tell me the time, POST this OCSP request); the host answers in any order
 and any subset; `advance()` continues. That is an inversion of control, and in
-C++ it buys the following — all demonstrated in `cpp/tests/` and
+C++ it buys the following — all demonstrated in `tests/` and
 `examples/parallel.cpp`:
 
 1. **The host picks the concurrency, per call site, with the same engine.**
@@ -221,9 +230,9 @@ than dereferenced.
   suite drives it end to end from Rust, plus null/malformed arguments,
   misanswered requests, the OCSP request mapping and authenticated good/revoked
   response fixtures, panics, `Send`/`Sync`, and independent zero-copy
-  read/write buffer ownership. The duplicate suite in this crate
-  (`cargo test -p contentauth-c2pa-cpp`) is no longer linked by the C++ build and
-  is removed with the crate in the final consolidation phase; see the
+  read/write buffer ownership. It is the only Rust suite for this ABI; the
+  former duplicate in this directory was removed after an audit mapped
+  each of its tests to a canonical equivalent; see the
   [consolidation plan](../docs/c-api-consolidation-plan.md).
 * **C** (`c2pa_sm_c_smoke`, test `c_api.c_link_smoke`): a plain C11 program,
   with no C++ wrapper involved, links the canonical library, drives a read
@@ -292,8 +301,8 @@ implemented in [`contentauth-c2pa-c-api`](../contentauth-c2pa-c-api/src/signing.
 over cimpl 0.4.1. Phase 3 adds the move-only
 C++17 `BuildSession`, blocking `build_and_sign`, and memory, seekable-stream,
 and POSIX atomic-file host declarations in the same C++ header. Their
-implementations live in `cpp/src/sign.cpp`; signing callers must link the
-`c2pa_sm_cpp` CMake target, not just the Rust static library. Both Rust and C++ tests
+implementations live in `src/signing/sign.cpp`; signing callers must link the
+`c2pa_sm_cpp` CMake target, not just the Rust static library. Both the C API's Rust tests and the C++ tests
 sign and read back the baseline JPEG as `Trusted`, with an explicit trust
 anchor and clock. Existing reader APIs are unchanged.
 
@@ -403,7 +412,7 @@ or returns malformed data must fail rather than produce untimestamped output.
 
 ### Async C++ signing
 
-Phase 4 adds `c2pa_sm_sign_async.hpp`, compiled in `cpp/src/sign_async.cpp`.
+Phase 4 adds `c2pa_sm_sign_async.hpp`, compiled in `src/signing/sign_async.cpp`.
 `Building` owns a single-driver session; `AsyncBuildHost::start` owns requests,
 and callbacks only post to `BuildMailbox`. `step` never waits; use its mailbox
 wait/waker or `build_parallel`. `build_future` owns its driver thread and host;
@@ -419,7 +428,7 @@ through one FIFO drain task per adapter, without parking other pool workers
 or holding a mutex during user code. See the header for lifetime boundaries.
 
 Compiled implementations share the internal C++17 `detail::make_scope_exit`
-helper in `cpp/include/scope_exit.hpp` for cleanup on normal exit or exception
+helper in `src/support/scope_exit.hpp` for cleanup on normal exit or exception
 unwinding. Each guard owns a non-throwing callable, runs it once, and is neither
 copyable nor movable. The header is private, not part of the public binding API.
 
@@ -594,7 +603,7 @@ Task<SignReport> sign(BuildSession session, AsyncBuildHost &host) {
 }
 ```
 
-* The compiled implementation is `cpp/src/sign_coro.cpp`. It reuses `Building`,
+* The compiled implementation is `src/signing/sign_coro.cpp`. It reuses `Building`,
   `BuildMailbox`, `Task<T>` and `spawn`, without a scheduler or worker of its own.
   `.get()` blocks its caller; `co_await` and `spawn` suspend at host boundaries.
 * Replies resume on their delivery thread. Inline replies are drained without

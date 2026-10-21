@@ -445,10 +445,10 @@ jobs:
 
     # `contentauth-c2pa-cpp` is C++17 readers, compiled signing/thread pools
     # and C++20 coroutines over the canonical `contentauth-c2pa-c-api` C
-    # library and header. Its Rust half is an ordinary workspace member,
-    # tested by the jobs above; this job builds the C++ half against it
-    # with CMake (including a plain C client of the same library) and runs
-    # the C++ tests and examples three ways:
+    # library and header. It holds no Rust of its own; the C API is an
+    # ordinary workspace member, tested by the jobs above, and this job
+    # builds it with cargo through CMake (along with a plain C client of the
+    # same library) and runs the C++ tests and examples three ways:
     #   - plain, with coverage of C++ headers and sources (uploaded to Codecov);
     #   - under AddressSanitizer (leaks, use-after-free on cancellation);
     #   - under ThreadSanitizer (the session handed between threads, and
@@ -510,8 +510,7 @@ jobs:
         run: >
           gcovr --root . --object-directory contentauth-c2pa-cpp/build
           --filter 'contentauth-c2pa-cpp/include/'
-          --filter 'contentauth-c2pa-cpp/cpp/src/'
-          --filter 'contentauth-c2pa-cpp/cpp/include/scope_exit\.hpp$'
+          --filter 'contentauth-c2pa-cpp/src/'
           --gcov-ignore-parse-errors negative_hits.warn_once_per_file
           --exclude-throw-branches --exclude-unreachable-branches
           --lcov lcov.cpp.info --txt

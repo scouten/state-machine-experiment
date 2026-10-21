@@ -52,6 +52,10 @@ fn a_panic_never_unwinds_across_the_boundary() {
             CStr::from_ptr(c2pa_sm_error_name(error)).to_bytes(),
             b"Panic"
         );
+        assert!(CStr::from_ptr(c2pa_sm_error_message(error))
+            .to_str()
+            .unwrap()
+            .contains("panic"));
         c2pa_sm_error_free(error);
     }
     assert_eq!(

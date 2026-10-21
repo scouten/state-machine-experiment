@@ -1,5 +1,5 @@
 #include "contentauth/c2pa_sm_sign_async.hpp"
-#include "scope_exit.hpp"
+#include "support/scope_exit.hpp"
 
 #include <algorithm>
 #include <atomic>

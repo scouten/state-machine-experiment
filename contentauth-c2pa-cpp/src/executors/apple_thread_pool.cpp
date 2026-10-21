@@ -1,7 +1,7 @@
 // Copyright 2026 Adobe. All rights reserved.
 // Licensed under the Apache License, Version 2.0 or the MIT license, at your option.
 
-#include "contentauth/apple_thread_pool.hpp"
+#include "apple_thread_pool.hpp"
 
 #include <dispatch/dispatch.h>
 

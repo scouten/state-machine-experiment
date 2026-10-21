@@ -31,8 +31,10 @@ fn result(code: c_int, error: *mut C2paSmError) -> AbiResult<()> {
 fn invalid(f: impl FnOnce(*mut *mut C2paSmError) -> c_int) {
     let mut e = ptr::null_mut();
     let c = f(&mut e);
-    assert_eq!(c, 1);
-    assert_eq!(result(c, e).unwrap_err().0, 1);
+    assert_eq!(c, C2PA_SM_ERR_INVALID_ARGUMENT);
+    let (code, message) = result(c, e).unwrap_err();
+    assert_eq!(code, C2PA_SM_ERR_INVALID_ARGUMENT);
+    assert!(!message.is_empty());
 }
 pub(crate) struct Build(*mut C2paSmBuildSession);
 impl Build {
@@ -300,12 +302,16 @@ impl Host {
                             } else {
                                 None
                             };
+                            if let Some(lease) = &lease {
+                                assert_eq!(lease.view.data, r.data.data);
+                                assert_eq!(lease.view.len, r.data.len);
+                            }
                             let bytes = lease
                                 .as_ref()
                                 .map_or(data.as_slice(), |l| unsafe { l.view.bytes().unwrap() });
                             if let (Some(l), Some((start, len))) = (&lease, self.source_buffer) {
-                                let p = l.view.data as usize;
-                                if p >= start && p + l.view.len <= start + len {
+                                if len >= 64 * 1024 && len == l.view.len {
+                                    assert_eq!(l.view.data as usize, start);
                                     self.shared_source_writes += 1
                                 }
                             }
@@ -328,11 +334,13 @@ impl Host {
                             )
                             .unwrap();
                             reply.kind = 3;
-                            signer.sign(&data).unwrap()
+                            let signature = signer.sign(&data).unwrap();
+                            assert_eq!(signature.len(), 64);
+                            signature
                         }
                         4 => {
                             assert_eq!(url, b"https://tsa.example/");
-                            assert_eq!(data[0], 0x30);
+                            assert_eq!(data.first(), Some(&0x30));
                             reply.kind = 4;
                             self.timestamp.clone()
                         }
@@ -424,9 +432,11 @@ fn signing_abi_round_trips_a_jpeg_through_the_existing_reader_as_trusted() {
         assert_eq!(h.seen[3..], [1, 0]);
         let v = report.view();
         let m = unsafe { v.manifest.bytes().unwrap() };
+        assert!(!m.is_empty());
         assert!(h.output.windows(m.len()).any(|w| w == m));
         let exclusions = unsafe { std::slice::from_raw_parts(v.exclusions, v.exclusion_count) };
         assert!(!exclusions.is_empty());
+        assert!(exclusions.iter().map(|r| r.len).sum::<u64>() >= m.len() as u64);
         assert!(exclusions
             .iter()
             .all(|r| r.len > 0 && r.start + r.len <= h.output.len() as u64));
@@ -455,6 +465,10 @@ fn wrong_and_duplicate_replies_leave_the_protocol_well_defined() {
     let b = Build::new(BASELINE_DEFINITION);
     assert_eq!(b.advance().unwrap(), (false, 1));
     let r = b.request(0).unwrap();
+    assert_eq!(
+        r.kind,
+        C2paSmBuildRequestKind::C2PA_SM_BUILD_REQUEST_LENGTH as c_int
+    );
     let response = C2paSmBuildReply {
         kind: 1,
         id: r.id,
@@ -547,8 +561,12 @@ fn constructor_validates_strings_certificates_and_output_pointers() {
         (def.as_ptr(), c"\xff".as_ptr(), c"es256".as_ptr()),
         (def.as_ptr(), c"jpeg".as_ptr(), c"\xff".as_ptr()),
         (def.as_ptr(), c"jpeg".as_ptr(), c"bad".as_ptr()),
+        (def.as_ptr(), c"jpeg".as_ptr(), c"".as_ptr()),
+        (c"{".as_ptr(), c"jpeg".as_ptr(), c"es256".as_ptr()),
+        (c"".as_ptr(), c"jpeg".as_ptr(), c"es256".as_ptr()),
         (c"{}".as_ptr(), c"jpeg".as_ptr(), c"es256".as_ptr()),
     ] {
+        s = ptr::dangling_mut();
         unsafe { invalid(|e| c2pa_sm_build_session_new(d, f, a, &cert, 1, &mut s, e)) };
         assert!(s.is_null());
     }
@@ -586,6 +604,132 @@ fn constructor_validates_strings_certificates_and_output_pointers() {
                 e,
             )
         });
+        assert!(s.is_null());
+        for (format, expected) in [
+            (c"image/png", C2PA_SM_ERR_UNSUPPORTED_TYPE),
+            (c"", C2PA_SM_ERR_UNSUPPORTED_TYPE),
+        ] {
+            s = ptr::dangling_mut();
+            let mut e = ptr::null_mut();
+            let code = c2pa_sm_build_session_new(
+                def.as_ptr(),
+                format.as_ptr(),
+                c"es256".as_ptr(),
+                &cert,
+                1,
+                &mut s,
+                &mut e,
+            );
+            assert_eq!(result(code, e).unwrap_err().0, expected);
+            assert!(s.is_null());
+        }
+        for (d, f, a, certs, count) in [
+            (ptr::null(), ptr::null(), ptr::null(), ptr::null(), 0),
+            (
+                def.as_ptr(),
+                c"jpeg".as_ptr(),
+                c"es256".as_ptr(),
+                ptr::null(),
+                0,
+            ),
+        ] {
+            s = ptr::dangling_mut();
+            assert_eq!(
+                c2pa_sm_build_session_new(d, f, a, certs, count, &mut s, ptr::null_mut()),
+                C2PA_SM_ERR_INVALID_ARGUMENT
+            );
+            assert!(s.is_null());
+        }
+        assert_eq!(
+            c2pa_sm_build_session_new(
+                def.as_ptr(),
+                c"jpeg".as_ptr(),
+                c"es256".as_ptr(),
+                &cert,
+                1,
+                ptr::null_mut(),
+                ptr::null_mut(),
+            ),
+            C2PA_SM_ERR_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            c2pa_sm_build_session_new(
+                def.as_ptr(),
+                c"jpeg".as_ptr(),
+                c"es256".as_ptr(),
+                &cert,
+                1,
+                &mut s,
+                ptr::null_mut(),
+            ),
+            C2PA_SM_OK
+        );
+        assert!(!s.is_null());
+        assert_eq!(c2pa_sm_build_session_free(s, ptr::null_mut()), C2PA_SM_OK);
+    }
+}
+#[test]
+// C literals cannot represent the interior NULs and trailing bytes under test.
+#[allow(clippy::manual_c_str_literals)]
+fn constructor_strings_end_at_the_first_nul() {
+    let definition = CString::new(BASELINE_DEFINITION).unwrap();
+    let mut nul_definition = definition.as_bytes_with_nul().to_vec();
+    nul_definition.extend_from_slice(b"\xffnot json\0");
+    let cert = C2paSmBuffer::borrowed(TEST_SIGNER_CERT);
+    for (d, f, a) in [
+        (
+            nul_definition.as_ptr().cast(),
+            c"jpeg".as_ptr(),
+            c"es256".as_ptr(),
+        ),
+        (
+            definition.as_ptr(),
+            b"jpeg\0\xffunsupported\0".as_ptr().cast(),
+            c"es256".as_ptr(),
+        ),
+        (
+            definition.as_ptr(),
+            c"jpeg".as_ptr(),
+            b"es256\0\xffunsupported\0".as_ptr().cast(),
+        ),
+    ] {
+        let mut s = ptr::null_mut();
+        let mut e = ptr::dangling_mut();
+        let code = unsafe { c2pa_sm_build_session_new(d, f, a, &cert, 1, &mut s, &mut e) };
+        result(code, e).unwrap();
+        assert!(!s.is_null());
+        assert_eq!(
+            unsafe { c2pa_sm_build_session_free(s, ptr::null_mut()) },
+            C2PA_SM_OK
+        );
+    }
+    let mut malformed_definition = b"{\0".to_vec();
+    malformed_definition.extend_from_slice(definition.as_bytes_with_nul());
+    for (d, f, a, expected) in [
+        (
+            malformed_definition.as_ptr().cast(),
+            c"jpeg".as_ptr(),
+            c"es256".as_ptr(),
+            C2PA_SM_ERR_INVALID_ARGUMENT,
+        ),
+        (
+            definition.as_ptr(),
+            b"image/png\0jpeg\0".as_ptr().cast(),
+            c"es256".as_ptr(),
+            C2PA_SM_ERR_UNSUPPORTED_TYPE,
+        ),
+        (
+            definition.as_ptr(),
+            c"jpeg".as_ptr(),
+            b"bad\0es256\0".as_ptr().cast(),
+            C2PA_SM_ERR_INVALID_ARGUMENT,
+        ),
+    ] {
+        let mut s = ptr::dangling_mut();
+        let mut e = ptr::null_mut();
+        let code = unsafe { c2pa_sm_build_session_new(d, f, a, &cert, 1, &mut s, &mut e) };
+        assert_eq!(result(code, e).unwrap_err().0, expected);
+        assert!(s.is_null());
     }
 }
 #[test]
@@ -624,6 +768,24 @@ fn exported_operations_validate_handles_outputs_and_reply_buffers() {
                 .0,
                 1
             );
+            unsafe {
+                invalid(|e| c2pa_sm_sign_report_view(ptr::null(), ptr::null_mut(), e));
+                let mut view = C2paSmSignReportView {
+                    exclusion_count: 99,
+                    ..Default::default()
+                };
+                invalid(|e| c2pa_sm_sign_report_view(ptr::null(), &mut view, e));
+                assert_eq!(view.exclusion_count, 0);
+                invalid(|e| c2pa_sm_sign_report_view(b.0.cast(), &mut view, e));
+                invalid(|e| c2pa_sm_sign_report_free(b.0.cast(), e));
+                assert!(b.advance().is_ok());
+                let mut e = ptr::dangling_mut();
+                let code = c2pa_sm_build_session_free(ptr::null_mut(), &mut e);
+                result(code, e).unwrap();
+                e = ptr::dangling_mut();
+                let code = c2pa_sm_sign_report_free(ptr::null_mut(), &mut e);
+                result(code, e).unwrap();
+            }
         }
     }
     assert_eq!(
@@ -652,6 +814,7 @@ fn failed_finish_with_null_output_consumes_the_session() {
     let handle = std::mem::replace(&mut b.0, ptr::null_mut());
     unsafe { invalid(|e| c2pa_sm_build_session_finish(handle, ptr::null_mut(), e)) };
     assert!(cimpl::checkout_exclusive(handle).is_err());
+    unsafe { invalid(|e| c2pa_sm_build_session_free(handle, e)) };
 }
 #[test]
 fn reports_are_independent_typed_handles_and_cannot_be_freed_twice() {
@@ -659,6 +822,7 @@ fn reports_are_independent_typed_handles_and_cannot_be_freed_twice() {
     let mut h = Host::default();
     let mut report = h.drive(&mut b).unwrap();
     assert!(report.view().manifest.len > 0);
+    assert!(!report.view().manifest.data.is_null());
     assert!(b.0.is_null());
     let handle = report.0;
     unsafe {
@@ -667,6 +831,8 @@ fn reports_are_independent_typed_handles_and_cannot_be_freed_twice() {
         assert_eq!(c2pa_sm_sign_report_free(handle, ptr::null_mut()), 0);
         report.0 = ptr::null_mut();
         invalid(|e| c2pa_sm_sign_report_free(handle, e));
+        let mut out = C2paSmSignReportView::default();
+        invalid(|e| c2pa_sm_sign_report_view(handle, &mut out, e));
     }
 }
 #[test]
@@ -678,13 +844,26 @@ fn handles_and_owned_errors_can_cross_threads() {
     sync::<C2paSmSignReport>();
     send::<C2paSmError>();
     let mut b = Build::new(BASELINE_DEFINITION);
+    assert_eq!(b.advance().unwrap(), (false, 1));
     let raw = std::mem::replace(&mut b.0, ptr::null_mut()) as usize;
-    std::thread::spawn(move || {
+    let report = std::thread::spawn(move || {
         let mut b = Build(raw as *mut C2paSmBuildSession);
-        assert!(Host::default().drive(&mut b).unwrap().view().manifest.len > 0)
+        let request = b.request(0).unwrap();
+        b.fulfill(C2paSmBuildReply {
+            kind: C2paSmBuildReplyKind::C2PA_SM_BUILD_REPLY_LENGTH as c_int,
+            id: request.id,
+            value: SOURCE_JPEG.len() as u64,
+            ..Default::default()
+        })
+        .unwrap();
+        let mut report = Host::default().drive(&mut b).unwrap();
+        assert!(report.view().manifest.len > 0);
+        std::mem::replace(&mut report.0, ptr::null_mut()) as usize
     })
     .join()
     .unwrap();
+    let report = Report(report as *mut C2paSmSignReport);
+    assert!(report.view().manifest.len > 0);
     let error = std::thread::spawn(|| {
         let mut build = Build::new(BASELINE_DEFINITION);
         let handle = std::mem::replace(&mut build.0, ptr::null_mut());
@@ -756,6 +935,23 @@ fn all_request_views_map_fields_and_streams_without_borrowing_temporary_values()
             _ => unreachable!(),
         }
     }
+    let output_read = PendingRequest::Read {
+        id: 6,
+        stream: Stream::Output,
+        start: 40,
+        len: 50,
+    };
+    let r = describe(&output_read).unwrap();
+    assert_eq!(
+        (r.id, r.kind, r.stream, r.offset, r.len),
+        (
+            6,
+            C2paSmBuildRequestKind::C2PA_SM_BUILD_REQUEST_READ as c_int,
+            1,
+            40,
+            50
+        )
+    );
 }
 #[test]
 fn busy_handles_cannot_be_freed_or_consumed_by_another_operation() {
@@ -767,29 +963,42 @@ fn busy_handles_cannot_be_freed_or_consumed_by_another_operation() {
         invalid(|e| c2pa_sm_build_session_finish(b.0, &mut out, e));
     }
     assert!(out.is_null());
+    assert_eq!(b.advance().unwrap_err().0, C2PA_SM_ERR_INVALID_ARGUMENT);
     drop(guard);
-    assert!(Host::default().drive(&mut b).unwrap().view().manifest.len > 0);
+    let report = Host::default().drive(&mut b).unwrap();
+    let guard = cimpl::checkout_shared(report.0).unwrap();
+    unsafe { invalid(|e| c2pa_sm_sign_report_free(report.0, e)) };
+    drop(guard);
+    assert!(report.view().manifest.len > 0);
 }
 #[test]
 fn reply_kind_conversion_accepts_only_declared_variants() {
     for i in 0..=5 {
         assert_eq!(C2paSmBuildReplyKind::try_from(i).unwrap() as c_int, i)
     }
-    for i in [-1, 6, c_int::MIN, c_int::MAX] {
-        assert!(C2paSmBuildReplyKind::try_from(i).is_err())
+    for i in [-1, 6, 99, c_int::MIN, c_int::MAX] {
+        assert_eq!(
+            C2paSmBuildReplyKind::try_from(i),
+            Err("unknown build reply kind")
+        )
     }
 }
 #[test]
 fn cimpl_handles_are_exclusive_typed_and_consumable() {
     let h = tracked(42_u64).unwrap();
-    let guard = cimpl::checkout_exclusive(h).unwrap();
+    let mut guard = cimpl::checkout_exclusive(h).unwrap();
     assert_eq!(*guard, 42);
+    *guard = 43;
+    assert!(cimpl::checkout_exclusive(h).is_err());
+    assert!(cimpl::checkout_exclusive(h.cast::<u32>()).is_err());
     assert!(cimpl::checkout_shared(h).is_err());
     assert!(cimpl::untrack_owned(h).is_err());
     drop(guard);
     assert!(cimpl::checkout_exclusive(h.cast::<u32>()).is_err());
-    assert_eq!(cimpl::untrack_owned(h).unwrap(), 42);
+    assert_eq!(cimpl::untrack_owned(h).unwrap(), 43);
+    assert!(cimpl::checkout_exclusive(h).is_err());
     assert!(cimpl::untrack_owned(h).is_err());
+    assert!(cimpl::checkout_exclusive::<u64>(ptr::null_mut()).is_err());
 }
 #[test]
 fn read_lease_sealing_and_reply_conversion_preserve_the_allocation() {

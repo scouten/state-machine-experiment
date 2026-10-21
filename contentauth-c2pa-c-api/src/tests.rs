@@ -13,6 +13,7 @@ const NOW: i64 = 1_800_000_000;
 const UNSIGNED: &[u8] = &[0xff, 0xd8, 0xff, 0xd9];
 
 fn text(s: *const c_char) -> String {
+    assert!(!s.is_null());
     unsafe { CStr::from_ptr(s) }.to_str().unwrap().into()
 }
 fn take_error(e: *mut C2paSmError) -> (c_int, String, String) {
@@ -42,6 +43,7 @@ fn new_session(format: &str, settings: Option<&str>) -> *mut C2paSmSession {
     };
     assert_eq!(code, 0, "{:?}", take_error(error));
     assert!(!session.is_null());
+    assert!(error.is_null());
     session
 }
 fn advance(session: *mut C2paSmSession) -> Result<bool, (c_int, String, String)> {
@@ -127,6 +129,7 @@ fn drive(s: *mut C2paSmSession, asset: &[u8]) -> (c_int, *mut C2paSmReader, *mut
 fn signed_reader() -> *mut C2paSmReader {
     let (code, r, e) = drive(new_session("jpeg", None), C_JPG);
     assert_eq!(code, 0, "{:?}", take_error(e));
+    assert!(e.is_null());
     assert!(!r.is_null());
     r
 }
@@ -166,6 +169,7 @@ fn a_malformed_asset_is_a_read_error_not_a_panic() {
     let e = take_error(e);
     assert_eq!(e.0, 4);
     assert!(!e.1.is_empty());
+    assert!(e.2.starts_with("C2pa(Read("), "{e:?}");
 }
 #[test]
 fn session_creation_failures_are_values() {
@@ -179,7 +183,14 @@ fn session_creation_failures_are_values() {
         let code = unsafe { c2pa_sm_session_new(f.as_ptr(), s.as_ptr(), &mut session, &mut error) };
         assert_eq!(code, expected);
         assert!(session.is_null());
-        assert_eq!(take_error(error).0, expected);
+        let error = take_error(error);
+        assert_eq!(error.0, expected);
+        if expected == C2PA_SM_ERR_UNSUPPORTED_TYPE {
+            assert_eq!(error.1, "type is unsupported");
+            assert_eq!(error.2, "C2pa(UnsupportedType)");
+        } else {
+            assert!(error.2.starts_with("C2pa(BadParam("), "{error:?}");
+        }
     }
 }
 #[test]
@@ -201,13 +212,45 @@ fn null_and_malformed_arguments_are_errors_not_undefined_behavior() {
             c2pa_sm_session_new(ptr::null(), ptr::null(), &mut s, ptr::null_mut()),
             1
         );
+        assert!(s.is_null());
+        assert_eq!(
+            c2pa_sm_session_new(c"\xff\xfe".as_ptr(), ptr::null(), &mut s, &mut e),
+            C2PA_SM_ERR_INVALID_ARGUMENT
+        );
+        assert!(s.is_null());
+        assert_eq!(take_error(e).1, "format is not valid UTF-8");
         let s = new_session("jpeg", None);
+        assert_eq!(
+            c2pa_sm_session_advance(s, ptr::null_mut(), &mut e),
+            C2PA_SM_ERR_INVALID_ARGUMENT
+        );
+        take_error(e);
+        assert_eq!(c2pa_sm_session_request_count(ptr::null()), 0);
+        let mut request = std::mem::MaybeUninit::<C2paSmRequest>::uninit();
+        assert!(!c2pa_sm_session_request(
+            ptr::null(),
+            0,
+            request.as_mut_ptr()
+        ));
+        assert!(!c2pa_sm_session_request(s, 0, request.as_mut_ptr()));
         assert_eq!(c2pa_sm_session_fulfill(s, ptr::null(), &mut e), 1);
         take_error(e);
         assert_eq!(
-            c2pa_sm_session_finish(ptr::null_mut(), ptr::null_mut(), &mut e),
+            c2pa_sm_session_fulfill(ptr::null_mut(), &reply(2, 0, 0, &[]), &mut e),
+            C2PA_SM_ERR_INVALID_ARGUMENT
+        );
+        take_error(e);
+        assert_eq!(
+            c2pa_sm_session_fulfill(s, &reply(99, 0, 0, &[]), &mut e),
+            C2PA_SM_ERR_INVALID_ARGUMENT
+        );
+        assert_eq!(take_error(e).1, "unknown reply kind 99");
+        let mut reader = ptr::null_mut();
+        assert_eq!(
+            c2pa_sm_session_finish(ptr::null_mut(), &mut reader, &mut e),
             1
         );
+        assert!(reader.is_null());
         take_error(e);
         assert!(!c2pa_sm_session_request(ptr::null(), 0, ptr::null_mut()));
         let mut done = 0;
@@ -224,9 +267,20 @@ fn null_and_malformed_arguments_are_errors_not_undefined_behavior() {
             c2pa_sm_reader_validation_state(ptr::null()),
             C2paSmValidationState::C2PA_SM_VALIDATION_UNAVAILABLE
         );
+        assert_eq!(c2pa_sm_session_finish(s, ptr::null_mut(), &mut e), 1);
+        take_error(e);
+        assert!(cimpl::checkout_exclusive(s).is_err());
         c2pa_sm_session_free(s);
         c2pa_sm_reader_free(ptr::null_mut());
         c2pa_sm_session_free(ptr::null_mut());
+        c2pa_sm_string_free(ptr::null_mut());
+        c2pa_sm_error_free(ptr::null_mut());
+        assert_eq!(
+            c2pa_sm_error_code(ptr::null()),
+            C2PA_SM_ERR_INVALID_ARGUMENT
+        );
+        assert_eq!(text(c2pa_sm_error_message(ptr::null())), "");
+        assert_eq!(text(c2pa_sm_error_name(ptr::null())), "");
     }
 }
 #[test]
@@ -234,8 +288,12 @@ fn misanswered_requests_are_rejected_and_stay_outstanding() {
     let s = new_session("jpeg", None);
     assert!(!advance(s).unwrap());
     let r = requests(s)[0];
-    assert_eq!(fulfill(s, &reply(2, u64::MAX, 0, &[])).unwrap_err().0, 1);
-    assert_eq!(fulfill(s, &reply(1, r.id, -1, &[])).unwrap_err().0, 1);
+    let error = fulfill(s, &reply(2, u64::MAX, 0, &[])).unwrap_err();
+    assert_eq!(error.0, 1);
+    assert!(error.1.contains("no outstanding request"), "{error:?}");
+    let error = fulfill(s, &reply(1, r.id, -1, &[])).unwrap_err();
+    assert_eq!(error.0, 1);
+    assert!(error.1.contains("negative"), "{error:?}");
     answer(s, &r, C_JPG);
     assert_eq!(fulfill(s, &reply(4, r.id, 0, b"late")).unwrap_err().0, 1);
     assert!(requests(s).is_empty());
@@ -266,7 +324,7 @@ fn every_request_kind_is_described() {
         r.iter().map(|r| r.kind).collect::<Vec<_>>(),
         vec![0, 1, 2, 3]
     );
-    assert_eq!((r[0].start, r[0].len), (7, 9));
+    assert_eq!((r[0].id, r[0].start, r[0].len), (1, 7, 9));
     unsafe {
         assert_eq!(
             std::slice::from_raw_parts(r[3].url.cast::<u8>(), r[3].url_len),
@@ -288,6 +346,10 @@ fn engine_errors_map_to_their_codes() {
     ] {
         assert_eq!(Failure::from(Error::C2pa(e)).code, c);
     }
+    assert_eq!(
+        Failure::from(Error::C2pa(C2paError::JumbfNotFound)).name,
+        "C2pa(JumbfNotFound)"
+    );
 }
 #[test]
 fn an_ocsp_reply_is_marshalled_and_refused_by_id() {
@@ -315,14 +377,17 @@ fn sessions_move_between_threads_and_readers_are_shared() {
 #[test]
 fn constructor_rejects_invalid_settings_types_and_non_utf8_settings() {
     for settings in [c"{\"verify\":{\"ocsp_fetch\":\"yes\"}}", c"\xff"] {
-        let mut s = ptr::null_mut();
+        let mut s = ptr::dangling_mut();
         let mut e = ptr::null_mut();
         assert_eq!(
             unsafe { c2pa_sm_session_new(c"jpeg".as_ptr(), settings.as_ptr(), &mut s, &mut e) },
             1
         );
         assert!(s.is_null());
-        assert_eq!(take_error(e).0, 1);
+        let error = take_error(e);
+        assert_eq!(error.0, 1);
+        assert!(!error.1.is_empty());
+        assert!(!error.2.is_empty());
     }
     for settings in [None, Some("{}"), Some(""), Some(" \n\t ")] {
         assert_eq!(
@@ -355,7 +420,9 @@ fn all_reply_variants_reject_null_sessions_and_unknown_ids() {
             fulfill(ptr::null_mut(), &r).unwrap_err(),
             (1, "session is null".into())
         );
-        assert_eq!(fulfill(s, &r).unwrap_err().0, 1);
+        let error = fulfill(s, &r).unwrap_err();
+        assert_eq!(error.0, 1);
+        assert!(error.1.contains("no outstanding request"), "{error:?}");
         assert_eq!(
             unsafe { c2pa_sm_session_fulfill(s, &r, ptr::null_mut()) },
             1
@@ -379,7 +446,12 @@ fn invalid_payloads_preserve_requests_and_host_failure_is_terminal() {
     let s = new_session("jpeg", None);
     assert!(!advance(s).unwrap());
     let r = requests(s)[0];
-    for (kind, value, code) in [(2, 0, 4), (1, -1, 1), (3, 0, 4), (99, 0, 1)] {
+    let wrong_kind = if r.kind == C2PA_SM_REQUEST_TIME {
+        C2PA_SM_REPLY_LENGTH
+    } else {
+        C2PA_SM_REPLY_TIME
+    };
+    for (kind, value, code) in [(wrong_kind, 0, 4), (1, -1, 1), (3, 0, 4), (99, 0, 1)] {
         assert_eq!(
             fulfill(s, &reply(kind, r.id, value, &[])).unwrap_err().0,
             code
@@ -389,12 +461,13 @@ fn invalid_payloads_preserve_requests_and_host_failure_is_terminal() {
     let e = advance(s).unwrap_err();
     assert_eq!(e.0, 4);
     assert!(e.1.contains("read cancelled \u{fffd}"), "{e:?}");
+    assert!(e.2.starts_with("C2pa(Read("), "{e:?}");
     assert_eq!(advance(s).unwrap_err().0, 4);
     let mut r = ptr::null_mut();
     let mut e = ptr::null_mut();
     assert_eq!(unsafe { c2pa_sm_session_finish(s, &mut r, &mut e) }, 4);
     assert!(r.is_null());
-    take_error(e);
+    assert_eq!(take_error(e).0, C2PA_SM_ERR_READ);
 }
 #[test]
 fn empty_byte_payloads_are_accepted_then_fail_reading() {
@@ -426,31 +499,53 @@ fn empty_byte_payloads_are_accepted_then_fail_reading() {
         let (c, r, e) = drive(s, C_JPG);
         assert_eq!(c, 4);
         assert!(r.is_null());
-        take_error(e);
+        assert_eq!(take_error(e).0, C2PA_SM_ERR_READ);
     }
 }
 #[test]
 fn nonempty_null_or_overflow_payload_is_rejected_without_consuming_request() {
-    let s = new_session("jpeg", None);
-    assert!(!advance(s).unwrap());
-    let r = requests(s)[0];
-    for (data, data_len) in [(ptr::null(), 1), (b"x".as_ptr(), usize::MAX)] {
-        assert_eq!(
-            fulfill(
-                s,
-                &C2paSmReply {
-                    data,
-                    data_len,
-                    ..reply(0, r.id, 0, &[])
-                }
-            )
-            .unwrap_err()
-            .0,
-            1
-        );
+    for target_kind in [C2PA_SM_REQUEST_LENGTH, C2PA_SM_REQUEST_READ] {
+        let s = new_session("jpeg", None);
+        let pending = loop {
+            assert!(!advance(s).unwrap());
+            let pending = requests(s);
+            if pending.iter().any(|r| r.kind == target_kind) {
+                break pending;
+            }
+            for r in pending {
+                answer(s, &r, C_JPG);
+            }
+        };
+        let r = pending.iter().find(|r| r.kind == target_kind).unwrap();
+        for (data, data_len) in [(ptr::null(), 1), (b"x".as_ptr(), usize::MAX)] {
+            assert_eq!(
+                fulfill(
+                    s,
+                    &C2paSmReply {
+                        data,
+                        data_len,
+                        ..reply(0, r.id, 0, &[])
+                    }
+                )
+                .unwrap_err()
+                .0,
+                C2PA_SM_ERR_INVALID_ARGUMENT
+            );
+        }
+        for r in pending {
+            answer(s, &r, C_JPG);
+        }
+        let (code, reader, error) = drive(s, C_JPG);
+        assert_eq!((code, error), (C2PA_SM_OK, ptr::null_mut()));
+        assert!(!reader.is_null());
+        unsafe {
+            assert_eq!(
+                c2pa_sm_reader_validation_state(reader),
+                C2paSmValidationState::C2PA_SM_VALIDATION_VALID
+            );
+            c2pa_sm_reader_free(reader);
+        }
     }
-    answer(s, &r, UNSIGNED);
-    assert_eq!(drive(s, UNSIGNED), (0, ptr::null_mut(), ptr::null_mut()));
 }
 #[test]
 fn finish_consumes_incomplete_sessions_and_clears_reader_output() {
@@ -463,7 +558,7 @@ fn finish_consumes_incomplete_sessions_and_clears_reader_output() {
         let mut e = ptr::null_mut();
         assert_eq!(unsafe { c2pa_sm_session_finish(s, &mut r, &mut e) }, 4);
         assert!(r.is_null());
-        take_error(e);
+        assert!(!take_error(e).1.is_empty());
         assert!(cimpl::checkout_exclusive(s).is_err());
     }
     let s = new_session("jpeg", None);
@@ -480,6 +575,7 @@ fn advance_reports_only_new_requests_until_replies_arrive() {
     let s = new_session("jpeg", None);
     assert!(!advance(s).unwrap());
     let p = requests(s);
+    assert!(!p.is_empty());
     for _ in 0..2 {
         assert!(!advance(s).unwrap());
         assert!(requests(s).is_empty());
@@ -524,6 +620,7 @@ fn owned_reader_strings_outlive_the_reader_and_do_not_alias() {
             c2pa_sm_string_free(s);
             c2pa_sm_string_free(s);
         }
+        c2pa_sm_string_free(ptr::null_mut());
     }
 }
 #[test]
@@ -535,11 +632,15 @@ fn owned_errors_outlive_the_session_and_success_clears_error_slots() {
         assert_eq!(c2pa_sm_session_fulfill(s, &r, &mut e), 1);
         let owned = e;
         let message = c2pa_sm_error_message(owned);
+        let name = c2pa_sm_error_name(owned);
         let mut done = 0;
         assert_eq!(c2pa_sm_session_advance(s, &mut done, &mut e), 0);
         assert!(e.is_null());
         c2pa_sm_session_free(s);
         assert!(text(message).contains("no outstanding request"));
+        assert!(text(name).starts_with("C2pa(BadParam("));
+        assert_eq!(c2pa_sm_error_message(owned), message);
+        assert_eq!(c2pa_sm_error_name(owned), name);
         assert_eq!(take_error(owned).0, 1);
     }
 }
@@ -587,6 +688,7 @@ pub(crate) fn assert_validation(
 ) {
     let (c, r, e) = drive(new_session(format, settings), asset);
     assert_eq!(c, 0, "{:?}", take_error(e));
+    assert!(e.is_null());
     assert!(!r.is_null());
     unsafe {
         assert_eq!(c2pa_sm_reader_validation_state(r), expected);
@@ -604,6 +706,8 @@ pub(crate) fn assert_baseline(format: &str, asset: &[u8], anchor: &[u8]) {
     let settings = format!(r#"{{"trust":{{"trust_anchors":{pem:?}}}}}"#);
     let (c, r, e) = drive(new_session(format, Some(&settings)), asset);
     assert_eq!(c, 0, "{:?}", take_error(e));
+    assert!(e.is_null());
+    assert!(!r.is_null());
     let d = Definition::from_json(BASELINE_DEFINITION).unwrap();
     unsafe {
         assert_eq!(
@@ -633,6 +737,10 @@ pub(crate) fn assert_baseline(format: &str, asset: &[u8], anchor: &[u8]) {
             })
         );
         assert_eq!(json["validation_state"], "Trusted");
+        let label = c2pa_sm_reader_active_label(r);
+        assert_eq!(text(label), d.label);
+        c2pa_sm_string_free(label);
+        assert!(c2pa_sm_reader_is_embedded(r));
         c2pa_sm_reader_free(r);
     }
 }
@@ -696,6 +804,8 @@ mod roundtrip {
             "{:?}",
             take_error(e)
         );
+        assert!(e.is_null());
+        assert!(!r.is_null());
         unsafe {
             let raw = c2pa_sm_reader_json(r);
             let json = text(raw);
@@ -713,6 +823,11 @@ mod roundtrip {
     fn build_and_read_roundtrip_preserves_the_baseline_manifest_fields() {
         let bytes = asset();
         assert_baseline("jpeg", &bytes, ROOT);
+        let (json, state, n) = ocsp(&bytes, Some(false), None);
+        assert_eq!(n, 0);
+        assert_eq!(state, C2paSmValidationState::C2PA_SM_VALIDATION_TRUSTED);
+        let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(json["validation_state"], "Trusted");
     }
     #[test]
     fn authenticated_ocsp_responses_distinguish_good_and_revoked_signers() {
@@ -754,6 +869,8 @@ mod roundtrip {
                 C2paSmValidationState::C2PA_SM_VALIDATION_TRUSTED,
                 "{json}"
             );
+            let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert_eq!(value["validation_state"], "Trusted");
             assert!(
                 json.contains("signingCredential.ocsp.inaccessible"),
                 "{json}"

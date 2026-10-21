@@ -75,6 +75,13 @@ fn empty_certificate_chain_and_entries_are_rejected_at_construction() {
         (
             C2paSmBuffer {
                 data: TEST_SIGNER_CERT.as_ptr(),
+                len: 0,
+            },
+            1,
+        ),
+        (
+            C2paSmBuffer {
+                data: TEST_SIGNER_CERT.as_ptr(),
                 len: usize::MAX,
             },
             1,
@@ -96,25 +103,32 @@ fn empty_certificate_chain_and_entries_are_rejected_at_construction() {
         };
         assert!(s.is_null());
     }
-    let certs = [
-        C2paSmBuffer::borrowed(TEST_SIGNER_CERT),
-        C2paSmBuffer::default(),
-    ];
-    let mut s = ptr::null_mut();
-    unsafe {
-        invalid(|e| {
-            c2pa_sm_build_session_new(
-                def.as_ptr(),
-                c"jpeg".as_ptr(),
-                c"es256".as_ptr(),
-                certs.as_ptr(),
-                2,
-                &mut s,
-                e,
-            )
-        })
-    };
-    assert!(s.is_null());
+    for certs in [
+        [
+            C2paSmBuffer::borrowed(TEST_SIGNER_CERT),
+            C2paSmBuffer::default(),
+        ],
+        [
+            C2paSmBuffer::default(),
+            C2paSmBuffer::borrowed(TEST_SIGNER_CERT),
+        ],
+    ] {
+        let mut s = ptr::dangling_mut();
+        unsafe {
+            invalid(|e| {
+                c2pa_sm_build_session_new(
+                    def.as_ptr(),
+                    c"jpeg".as_ptr(),
+                    c"es256".as_ptr(),
+                    certs.as_ptr(),
+                    certs.len(),
+                    &mut s,
+                    e,
+                )
+            })
+        };
+        assert!(s.is_null());
+    }
 }
 #[test]
 fn c_api_unknown_build_ids_are_rejected_for_every_reply_kind() {
@@ -217,6 +231,7 @@ fn c_api_short_form_timestamp_token_is_embedded_without_its_response_envelope() 
     assert_eq!(h.seen[4], 1);
     let v = report.view();
     let m = unsafe { v.manifest.bytes().unwrap() };
+    assert!(!m.is_empty());
     assert!(m
         .windows(timestamp[7..].len())
         .any(|w| w == &timestamp[7..]));
@@ -249,12 +264,16 @@ fn all_build_session_exports_reject_null_and_wrong_type_handles_without_consumin
     for bad in [ptr::null_mut(), report.0.cast()] {
         let mut done = 7;
         let mut n = 8;
-        let mut r = C2paSmBuildRequest::default();
-        let mut out = ptr::null_mut();
+        let mut r = C2paSmBuildRequest {
+            id: 42,
+            ..Default::default()
+        };
+        let mut out = ptr::dangling_mut();
         unsafe {
             invalid(|e| c2pa_sm_build_session_advance(bad, &mut done, &mut n, e));
             assert_eq!((done, n), (0, 0));
             invalid(|e| c2pa_sm_build_session_request(bad, 0, &mut r, e));
+            assert_eq!(r.id, 0);
             invalid(|e| c2pa_sm_build_session_fulfill(bad, &C2paSmBuildReply::default(), e));
             invalid(|e| c2pa_sm_build_session_finish(bad, &mut out, e));
             assert!(out.is_null());
@@ -263,6 +282,27 @@ fn all_build_session_exports_reject_null_and_wrong_type_handles_without_consumin
             } else {
                 invalid(|e| c2pa_sm_build_session_free(bad, e));
             }
+            let mut read = ptr::dangling_mut();
+            let mut writable = C2paSmMutableBytes {
+                data: ptr::dangling_mut(),
+                len: 99,
+            };
+            invalid(|e| c2pa_sm_build_read_acquire(bad, 1, &mut read, &mut writable, e));
+            assert!(read.is_null());
+            assert!(writable.data.is_null());
+            assert_eq!(writable.len, 0);
+            let mut write = ptr::dangling_mut();
+            let mut bytes = C2paSmBuffer {
+                data: ptr::dangling(),
+                len: 99,
+            };
+            invalid(|e| c2pa_sm_build_write_acquire(bad, 1, &mut write, &mut bytes, e));
+            assert!(write.is_null());
+            assert!(bytes.data.is_null());
+            assert_eq!(bytes.len, 0);
+            let mut completed = ptr::null_mut();
+            invalid(|e| c2pa_sm_build_fulfill_read(bad, 1, &mut completed, e));
+            assert!(completed.is_null());
         }
         assert!(report.view().manifest.len > 0);
     }
@@ -271,9 +311,28 @@ fn all_build_session_exports_reject_null_and_wrong_type_handles_without_consumin
 fn read_lease_wrong_type_and_stale_handles_preserve_the_real_owners() {
     let b = Build::new(BASELINE_DEFINITION);
     let r = b.first_read();
+    let guard = cimpl::checkout_exclusive(b.0).unwrap();
+    assert_eq!(
+        b.acquire(r.id).err().unwrap().0,
+        C2PA_SM_ERR_INVALID_ARGUMENT
+    );
+    drop(guard);
     let mut l = b.acquire(r.id).unwrap();
+    unsafe {
+        let mut wrong = b.0.cast();
+        let mut output = ptr::dangling_mut();
+        invalid(|e| c2pa_sm_read_seal(&mut wrong, 0, &mut output, e));
+        assert_eq!(wrong, b.0.cast());
+        assert!(output.is_null());
+        let mut wrong = l.raw.cast();
+        invalid(|e| c2pa_sm_completed_read_free(&mut wrong, e));
+        assert_eq!(wrong, l.raw.cast());
+        invalid(|e| c2pa_sm_build_fulfill_read(b.0, r.id, &mut wrong, e));
+        assert_eq!(wrong, l.raw.cast());
+    }
     let stale = l.raw;
     let mut c = l.seal(l.view.len).unwrap();
+    assert!(l.raw.is_null());
     unsafe {
         let mut wrong = c.0.cast();
         invalid(|e| c2pa_sm_read_buffer_free(&mut wrong, e));
@@ -282,7 +341,12 @@ fn read_lease_wrong_type_and_stale_handles_preserve_the_real_owners() {
         invalid(|e| c2pa_sm_completed_read_free(&mut wrong, e));
         assert_eq!(wrong, b.0.cast());
         let mut stale = stale;
-        invalid(|e| c2pa_sm_read_seal(&mut stale, 0, &mut ptr::null_mut(), e));
+        let mut output = ptr::dangling_mut();
+        invalid(|e| c2pa_sm_read_seal(&mut stale, 0, &mut output, e));
+        assert!(!stale.is_null());
+        assert!(output.is_null());
+        invalid(|e| c2pa_sm_read_buffer_free(&mut stale, e));
+        assert!(!stale.is_null());
         let old = c.0;
         assert_eq!(c2pa_sm_completed_read_free(&mut c.0, ptr::null_mut()), 0);
         assert!(c.0.is_null());

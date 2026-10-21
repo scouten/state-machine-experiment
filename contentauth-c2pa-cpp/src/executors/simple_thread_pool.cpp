@@ -1,7 +1,7 @@
 // Copyright 2026 Adobe. All rights reserved.
 // Licensed under the Apache License, Version 2.0 or the MIT license, at your option.
 
-#include "contentauth/simple_thread_pool.hpp"
+#include "simple_thread_pool.hpp"
 
 #include <algorithm>
 #include <condition_variable>

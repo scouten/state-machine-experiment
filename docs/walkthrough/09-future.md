@@ -76,10 +76,10 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 
 * **C/C++ FFI consolidation:** the tested C++ Rust boundary has been
   adopted by the canonical C API with tracked ownership, selectable exports,
-  and registry-backed JPEG/TIFF/DNG, and the C++ binding now builds and
-  tests against that library and its generated header. Next, remove the
-  now-unused duplicate Rust ABI crate and headers from the C++ directory and
-  give it a functional layout; that is not implemented yet.
+  and registry-backed JPEG/TIFF/DNG, and the C++ binding builds and
+  tests against that library and its generated header; the duplicate Rust ABI
+  crate and hand-written headers are gone. Remaining: a functional C++
+  directory layout, which is not implemented yet.
   See the [phase plan](../c-api-consolidation-plan.md).
 * **C++ host integrations:** production private-key providers and real TSA HTTP
   transport remain host responsibilities, as do atomic publication on non-POSIX

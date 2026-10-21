@@ -47,11 +47,11 @@ File -> C++ vector -> copy into Rust vector -> Rust hasher
 
 The relevant implementation points are:
 
-* [`FileBuildHost::read_into`](../../contentauth-c2pa-cpp/cpp/src/sign.cpp):
+* [`FileBuildHost::read_into`](../../contentauth-c2pa-cpp/src/signing/sign.cpp):
   now reads directly into the Rust-owned destination.
-* [`BuildSession::fulfill`](../../contentauth-c2pa-cpp/cpp/src/sign.cpp):
+* [`BuildSession::fulfill`](../../contentauth-c2pa-cpp/src/signing/sign.cpp):
   now transfers a completed lease for read replies.
-* [`reply_value`](../../contentauth-c2pa-cpp/src/signing.rs):
+* [`reply_value`](../../contentauth-c2pa-c-api/src/signing.rs):
   still copies incoming bytes on the unleased C reply path.
 * [`HashStream`](../../contentauth-c2pa-builder/src/hash_stream.rs):
   consumes owned chunks and passes borrowed slices to the hasher.
@@ -144,7 +144,7 @@ Separating **seal** from **fulfill** is deliberate:
 * Dropping a late reply after cancellation frees its allocation safely.
 
 This uses the worker-completion and mailbox model in
-[`sign_async.cpp`](../../contentauth-c2pa-cpp/cpp/src/sign_async.cpp).
+[`sign_async.cpp`](../../contentauth-c2pa-cpp/src/signing/sign_async.cpp).
 
 ## C++ interface
 
@@ -199,8 +199,8 @@ the supplied pointer instead of allocating a C++ vector.
 
 The blocking, pooled, and coroutine drivers move requests and
 completed replies without cloning their storage. The integration is in
-[`sign_async.cpp`](../../contentauth-c2pa-cpp/cpp/src/sign_async.cpp) and
-[`sign_coro.cpp`](../../contentauth-c2pa-cpp/cpp/src/sign_coro.cpp) alongside
+[`sign_async.cpp`](../../contentauth-c2pa-cpp/src/signing/sign_async.cpp) and
+[`sign_coro.cpp`](../../contentauth-c2pa-cpp/src/signing/sign_coro.cpp) alongside
 the blocking driver.
 
 A memory-backed host still copies existing asset bytes into the supplied
@@ -244,7 +244,7 @@ moves byte replies, and
 borrowed slices.
 
 The new lease fulfillment path bypasses the read-reply `.to_vec()` in
-[`reply_value`](../../contentauth-c2pa-cpp/src/signing.rs), without
+[`reply_value`](../../contentauth-c2pa-c-api/src/signing.rs), without
 requiring a new byte-storage abstraction throughout the engine.
 
 Phase 1 uses initialized storage with fallible allocation and explicit
@@ -300,7 +300,7 @@ has been requested.
 
 ## Implemented phase 2: immutable write leases
 
-[`describe`](../../contentauth-c2pa-cpp/cpp/src/sign.cpp) acquires a
+[`describe`](../../contentauth-c2pa-cpp/src/signing/sign.cpp) acquires a
 `WriteBuffer` rather than copying a Rust write payload into a C++ vector:
 
 ```text

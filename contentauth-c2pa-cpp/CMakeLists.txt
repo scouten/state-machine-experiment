@@ -74,20 +74,21 @@ endfunction()
 
 # ---- the C++ library --------------------------------------------------------
 # The signing implementation and thread pools are compiled; reader drivers
-# stay header-only. Clients see `include/`; `cpp/include/` is private.
-set(C2PA_SM_CPP_SOURCES cpp/src/simple_thread_pool.cpp cpp/src/sign.cpp cpp/src/sign_async.cpp)
+# stay header-only. Clients see `include/`; `src/` (signing, executors and
+# support code) is private.
+set(C2PA_SM_CPP_SOURCES src/executors/simple_thread_pool.cpp src/signing/sign.cpp src/signing/sign_async.cpp)
 if(APPLE)
-  list(APPEND C2PA_SM_CPP_SOURCES cpp/src/apple_thread_pool.cpp)
+  list(APPEND C2PA_SM_CPP_SOURCES src/executors/apple_thread_pool.cpp)
 endif()
 add_library(c2pa_sm_cpp STATIC ${C2PA_SM_CPP_SOURCES})
 target_include_directories(c2pa_sm_cpp
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
-  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/cpp/include")
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(c2pa_sm_cpp PUBLIC c2pa_sm)
 set_target_properties(c2pa_sm_cpp PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 c2pa_sm_target_flags(c2pa_sm_cpp)
 
-add_library(c2pa_sm_coro STATIC cpp/src/sign_coro.cpp)
+add_library(c2pa_sm_coro STATIC src/signing/sign_coro.cpp)
 target_link_libraries(c2pa_sm_coro PUBLIC c2pa_sm_cpp)
 target_compile_features(c2pa_sm_coro PUBLIC cxx_std_20)
 set_target_properties(c2pa_sm_coro PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
@@ -133,17 +134,17 @@ if(BUILD_TESTING)
   endif()
 
   add_executable(c2pa_sm_tests
-    cpp/tests/tests_cxx17.cpp
-    cpp/tests/tests_sign_async.cpp
-    cpp/tests/tests_pool.cpp
-    cpp/tests/tests_cxx20.cpp
-    cpp/tests/tests_assertions.cpp)
+    tests/tests_cxx17.cpp
+    tests/tests_sign_async.cpp
+    tests/tests_pool.cpp
+    tests/tests_cxx20.cpp
+    tests/tests_assertions.cpp)
   target_link_libraries(c2pa_sm_tests PRIVATE c2pa_sm_coro GTest::gtest_main OpenSSL::Crypto)
-  target_include_directories(c2pa_sm_tests PRIVATE cpp/include "${CMAKE_CURRENT_BINARY_DIR}")
+  target_include_directories(c2pa_sm_tests PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}")
   set_target_properties(c2pa_sm_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
   target_compile_definitions(c2pa_sm_tests PRIVATE C2PA_SM_FIXTURE="${FIXTURE}")
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    target_sources(c2pa_sm_tests PRIVATE cpp/tests/tests_sign_posix.cpp)
+    target_sources(c2pa_sm_tests PRIVATE tests/tests_sign_posix.cpp)
     target_link_options(c2pa_sm_tests PRIVATE
       -Wl,--wrap=pread -Wl,--wrap=pwrite -Wl,--wrap=fstat -Wl,--wrap=fsync)
   endif()
@@ -154,7 +155,7 @@ if(BUILD_TESTING)
   include(GoogleTest)
   gtest_discover_tests(c2pa_sm_tests TEST_PREFIX "cpp." PROPERTIES TIMEOUT 120)
 
-  add_executable(c2pa_sm_cxx17_check cpp/tests/compile_cxx17.cpp)
+  add_executable(c2pa_sm_cxx17_check tests/compile_cxx17.cpp)
   target_link_libraries(c2pa_sm_cxx17_check PRIVATE c2pa_sm_cpp)
   set_target_properties(c2pa_sm_cxx17_check PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
   # Build/link only: never run or add unexecuted header counters to coverage.
@@ -162,7 +163,7 @@ if(BUILD_TESTING)
 
   # A plain C11 client of the canonical header and library, linked without
   # any C++ wrapper.
-  add_executable(c2pa_sm_c_smoke cpp/tests/c_link_smoke.c)
+  add_executable(c2pa_sm_c_smoke tests/c_link_smoke.c)
   target_link_libraries(c2pa_sm_c_smoke PRIVATE c2pa_sm)
   set_target_properties(c2pa_sm_c_smoke PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
   c2pa_sm_target_flags(c2pa_sm_c_smoke NO_COVERAGE)
