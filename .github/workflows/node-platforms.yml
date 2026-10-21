@@ -1,0 +1,86 @@
+name: Node platform baseline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Node baseline (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            platform: linux
+            arch: x64
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
+            platform: darwin
+            arch: x64
+          - target: aarch64-apple-darwin
+            runner: macos-15
+            platform: darwin
+            arch: arm64
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2022
+            platform: win32
+            arch: x64
+    env:
+      CARGO_BUILD_TARGET: ${{ matrix.target }}
+      EXPECTED_PLATFORM: ${{ matrix.platform }}
+      EXPECTED_ARCH: ${{ matrix.arch }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: 1.96.0
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: |
+            c2pa-node-compat-addon -> target
+            c2pa-node-sign-addon -> target
+          key: node-platform-${{ matrix.target }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+      - name: Build reader and signing addons
+        run: |
+          npm --prefix c2pa-node-compat-addon run build
+          npm --prefix c2pa-node-sign-addon run build
+      - name: Check native Node host and run baseline (Node 22)
+        run: |
+          node --input-type=module -e 'import assert from "node:assert/strict"; assert.equal(process.platform, process.env.EXPECTED_PLATFORM); assert.equal(process.arch, process.env.EXPECTED_ARCH); console.log(process.versions);'
+          node --test c2pa-node-compat-addon/test/build.test.mjs c2pa-node-compat-addon/test/reader.test.mjs c2pa-node-sign-addon/test/sign.test.mjs
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+      - name: Check native Node host and run same binaries (Node 24)
+        run: |
+          node --input-type=module -e 'import assert from "node:assert/strict"; assert.equal(process.platform, process.env.EXPECTED_PLATFORM); assert.equal(process.arch, process.env.EXPECTED_ARCH); console.log(process.versions);'
+          node --test c2pa-node-compat-addon/test/build.test.mjs c2pa-node-compat-addon/test/reader.test.mjs c2pa-node-sign-addon/test/sign.test.mjs
+      - name: Retain tested native binaries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: node-baseline-${{ matrix.target }}
+          path: |
+            c2pa-node-compat-addon/index.node
+            c2pa-node-sign-addon/index.node
+          if-no-files-found: error
+          retention-days: 14

@@ -16,6 +16,7 @@ flowchart LR
         d5["Differential tests vs c2pa-rs"]
         d6["Shared JS Worker read + baseline sign<br/>browser Wasm / Node Neon, async signer callbacks"]
         d7["C++ read + sign; blocking / pool / future / coroutine<br/>atomic file signing + Trusted read-back example"]
+        d8["Node compatibility baseline CI: five targets<br/>read/sign on Node 22 and 24"]
     end
     subgraph next["Next"]
         direction TB
@@ -71,6 +72,12 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 * **Generator `icon`**, richer assertion helpers.
 
 ## 4. Bindings and hosts
+
+The [five-platform Node baseline](../../c2pa-node-compat-addon/README.md#five-platform-baseline-ci)
+now has native build/load/read/sign CI jobs and retained test binaries. Follow-up
+distribution work remains separate: clean consumer installation without Rust,
+complete release-artifact selection, and minimum OS/glibc/runtime validation.
+The baseline does not claim full SDK feature parity.
 
 * **C++ host integrations:** production private-key providers and real TSA HTTP
   transport remain host responsibilities, as do atomic publication on non-POSIX

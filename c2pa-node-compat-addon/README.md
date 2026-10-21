@@ -46,6 +46,41 @@ npm test        # 27 tests under node:test
 npm run demo    # event-loop delay while hashing a large file
 ```
 
+### Five-platform baseline CI
+
+[Node platform baseline](../.github/workflows/node-platforms.yml) runs on PRs
+and pushes to `main`, using native hosts rather than cross-compilation alone:
+
+| Rust target | Native runner |
+|---|---|
+| `x86_64-unknown-linux-gnu` | `ubuntu-24.04` |
+| `aarch64-unknown-linux-gnu` | `ubuntu-24.04-arm` |
+| `x86_64-apple-darwin` | `macos-15-intel` |
+| `aarch64-apple-darwin` | `macos-15` |
+| `x86_64-pc-windows-msvc` | `windows-2022` |
+
+Each job uses Rust 1.96.0, builds both addons, asserts Node's OS/architecture,
+and runs the same binaries under Node 22 and 24. The selected suites are
+`test/build.test.mjs`, `test/reader.test.mjs`, and the signing addon's
+`test/sign.test.mjs`: file/buffer/async reads, ES256 sign/read-back as Trusted,
+concurrency, failure cleanup, output replacement, and timestamp handling.
+This is a platform baseline, not full SDK feature parity; it deliberately does
+not substitute for either addon's complete `npm test` suite. Coverage remains
+in the existing Linux jobs.
+
+Successful jobs retain both tested `index.node` files, in their respective
+addon directories, as `node-baseline-<target>` artifacts for 14 days. These are
+CI artifacts, not installable npm releases or a minimum-OS support promise.
+
+To reproduce a target build on its native host, set `CARGO_BUILD_TARGET` to
+the matching triple before `npm run build`. Both build scripts honor that
+variable and `CARGO_TARGET_DIR`; without a target, host builds work as before.
+From the repository root, after building both addons, run the exact baseline:
+
+```sh
+node --test c2pa-node-compat-addon/test/build.test.mjs c2pa-node-compat-addon/test/reader.test.mjs c2pa-node-sign-addon/test/sign.test.mjs
+```
+
 Tests cover: path / buffer / custom async source giving identical JSON;
 format sniffing; `null` for no manifest store; c2pa-rs `Debug` strings as
 error names (`C2pa(UnsupportedType)`); the host choosing 1, 2, or N reads
