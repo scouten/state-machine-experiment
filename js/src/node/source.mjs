@@ -1,0 +1,38 @@
+import { open } from "node:fs/promises";
+import { openSource, range, snapshotAsset } from "../shared/source.mjs";
+
+/** Node also accepts `{path: string}`; files must stay unchanged until settled. */
+export function snapshotNodeAsset(asset) {
+  if (asset instanceof Uint8Array || (typeof Blob !== "undefined" && asset instanceof Blob))
+    return snapshotAsset(asset);
+  if (asset && typeof asset.path === "string") return { path: asset.path };
+  return snapshotAsset(asset);
+}
+
+/** Opens only when its queued operation starts, and closes when it settles. */
+export async function openNodeSource(asset) {
+  if (!asset || typeof asset.path !== "string") return openSource(asset);
+  const file = await open(asset.path, "r");
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile() || !Number.isSafeInteger(stat.size)) throw new Error("invalid asset file");
+    return {
+      length: stat.size,
+      async read(start, len) {
+        range(start, len, stat.size);
+        const bytes = new Uint8Array(len);
+        let offset = 0;
+        while (offset < len) {
+          const { bytesRead } = await file.read(bytes, offset, len - offset, start + offset);
+          if (!bytesRead) throw new Error("short asset read");
+          offset += bytesRead;
+        }
+        return bytes;
+      },
+      close: () => file.close(),
+    };
+  } catch (error) {
+    await file.close();
+    throw error;
+  }
+}

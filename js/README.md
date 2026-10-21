@@ -34,7 +34,7 @@ flowchart TB
     Reader["FileReadSession / FileBuilderSession<br/>C2PA reader / builder"]
     Signer["Application-owned async signer<br/>key stays outside Worker and Rust"]
     App --> Client
-    Client -->|"postMessage: clone bytes, no transfer"| Service
+    Client -->|"postMessage: snapshot bytes or immutable Blob"| Service
     Service --> Drive
     Service -->|"sign request: operation + request ID"| Client
     Client --> Signer
@@ -56,6 +56,7 @@ own these behaviors:
 | [client.mjs](src/shared/client.mjs) | Public Promise API; request identity; input snapshot; signer callbacks; reply/error handling; disposal |
 | [service.mjs](src/shared/service.mjs) | Worker command dispatch; serial operation queue; independently dispatched signer replies |
 | [drive.mjs](src/shared/drive.mjs) | Read/build session progression; source/output bytes; host replies; request accounting; cleanup |
+| [source.mjs](src/shared/source.mjs) | Validated exact byte ranges from arrays or Blob/File; Node adds positioned file reads in its own adapter |
 | [contract.mjs](test/contract.mjs), [signing.mjs](test/signing.mjs) | Identical read and signing acceptance checks in Node and all three browsers |
 
 The runtime-neutral
@@ -155,16 +156,28 @@ flowchart TB
   Pending requests within one operation can be answered as a batch.
 - Native handles and Wasm objects never cross Worker boundaries. Results are
   plain reports and, for signing, output/manifest bytes and exclusion ranges.
-- `read()` and `sign()` copy input before their first await, then use structured cloning.
+- `read()` and `sign()` copy `Uint8Array` input before their first await, then use structured cloning.
   Caller buffers remain attached and mutation cannot change a queued read.
   This costs memory and synchronous caller work proportional to input size.
+  Browser `Blob`/`File` inputs instead cross directly as immutable structured-clone
+  values; only `slice(start, end).arrayBuffer()` materializes requested ranges
+  inside the Worker. Neither client nor Worker converts the whole Blob to bytes.
+  Node additionally accepts `{path: "/absolute/input.jpg"}` and opens the file
+  when its queued operation begins, using positioned exact reads and closing it
+  on success/failure. Keep that file unchanged until the call settles: unlike
+  byte snapshots or Blobs, paths do not promise an invocation-time snapshot.
 - Signing also snapshots the definition and public certificates. The signer
   function and private key stay in the application realm. Only the COSE signing
   input and raw signature/error cross the Worker protocol.
 - Build output is buffered in a growable in-memory array inside the Worker,
   then copied and cloned back. This is not file-backed or constant-memory.
-- This proof accepts in-memory JPEG bytes only. It does not promise streaming
-  input, constant memory, zero-copy transfer or free result transport.
+- These sources support the existing JPEG read/sign slice, not new formats.
+  A read range is validated before storage access; short reads fail rather than
+  silently pad. Report stats count completed source reads, actual bytes, largest
+  read and highest end offset (`source*` fields separate signing source reads
+  from output hashing). They are not RSS/allocation measurements.
+  This is range-backed input, not constant-memory signing, physical Blob
+  zero-copy, or free result transport. Wasm/Neon boundaries still copy bytes.
 - Successful `finish` consumes the Rust session. Wasm wrappers are explicitly
   freed in `finally`; Neon error handles become eligible for isolate GC.
   Client disposal terminates its Worker, releasing that isolate's resources.
@@ -177,6 +190,21 @@ flowchart TB
   cancellation/progress or concurrent shared-Worker execution is not promised.
 - OCSP, timestamps and unrecognized host requests fail explicitly. Core
   validation and manifest generation remain Rust-owned.
+
+### Range-backed source proof
+
+`npm test` includes Node file-backed signing/readback, truncation/closure and
+range validation tests. `npm run test:browser` additionally passes real Blob
+and File inputs through the ordinary Worker client in Chromium, Firefox and
+WebKit (File inputs come from real disk files via file inputs, not just
+`new File` over in-memory bytes). `npm run test:ranges:browser` runs only that focused proof, without the
+boundary-cost benchmark or baseline byte-input loading. Both full runners retain
+all original byte-array contracts. For the 64 MiB fixture,
+actual completed reads total 67,110,652 bytes (including rereads), with a 65,536
+byte maximum; signing source reads total 67,108,870 bytes, with a 1,048,576 byte
+maximum and no read past 67,108,864. Signing output still occupies a growable
+array, a trimmed result copy and Worker result cloning. Results/logs are local,
+ignored under `results/`; no inference about peak memory is made.
 
 ### Signer callbacks and queueing
 
@@ -363,9 +391,11 @@ Worker time includes session construction, hashing and report serialization;
 build time also includes output assembly and the awaited application signer.
 Their difference is not an isolated FFI cost.
 
-Worker isolation does not remove copying: each read snapshots and clones the
-entire asset. Large messages can still briefly occupy the calling thread.
-No peak memory or frame-deadline guarantee is established.
+Worker isolation does not remove copying: the byte-array benchmark above
+snapshots and clones the entire asset. Blob/File and Node path inputs avoid
+that whole-input byte conversion, but requested ranges still cross the Rust
+boundary. Large byte messages can still briefly occupy the calling thread.
+No peak memory or frame-deadline guarantee is established by either path.
 
 ## Deliberate non-goals and next trigger
 
@@ -374,8 +404,9 @@ support, network hosts, worker pools, custom schedulers, public cancellation
 API or streaming-storage abstraction. No production publication.
 
 The binary experiment identifies a large avoidable binding cost, not the cause
-of every remaining native/browser difference. Next, measure peak memory and
-copying across input sizes before selecting file/Blob-backed sources/outputs.
-The proof still buffers entire assets and wasm-bindgen still copies payload
+of every remaining native/browser difference. Range-backed inputs now have a
+bounded-I/O proof; next, measure peak memory and copying across input sizes
+before selecting non-monolithic output storage.
+The proof still buffers entire outputs and wasm-bindgen still copies payload
 bytes. No core async conversion is needed. Do not add cooperative Worker
 scheduling without a required message/progress behavior that fails a test.

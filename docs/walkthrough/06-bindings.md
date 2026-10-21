@@ -45,14 +45,19 @@ bounded workflow. Baseline ES256 signing uses the existing portable build bridge
 and a caller-owned async signer through the same Worker service. Signer replies
 bypass its top-level operation queue to avoid deadlock; both operation and
 request IDs route the reply. Delayed callbacks, failures, disposal races and
-trusted read-back run in Node and all three browsers. Whole-input/output
-buffering and abrupt termination remain explicit limits; disposing a Worker
+trusted read-back run in Node and all three browsers. Byte-array input snapshots,
+whole-output buffering and abrupt termination remain explicit limits; disposing a Worker
 cannot cancel a caller-owned signer.
 The browser boundary now uses binary bulk write payloads with JSON metadata.
 Both the binary transport and the retained JSON experiment control pass the same contracts;
 paired large-build measurements isolate a major avoidable boundary cost
-without changing the shared host or Rust builder. This is still copying,
-whole-asset-buffered I/O, not a zero-copy or streaming implementation.
+without changing the Rust builder. Browser Blob/File inputs now use exact
+validated `slice().arrayBuffer()` reads inside the Worker without a whole-input
+snapshot; Node `{path}` inputs use positioned file reads with operation-scoped
+handles. Files must remain unchanged until the operation settles. Real-browser
+and Node proofs log actual source bytes and maximum read bounds, not RSS.
+Output still grows in a single array; neither language boundaries nor Blob
+internals are claimed to be physically zero-copy.
 
 The neutral [session-bridge crate](../../contentauth-c2pa-session-bridge/README.md)
 now owns `ReadSessionBridge` and `BuildSessionBridge`, moved from the former

@@ -7,6 +7,7 @@
  */
 import { read, build } from "./drive.mjs";
 import { protocol, failure, remoteError } from "./client.mjs";
+import { openSource } from "./source.mjs";
 
 export { protocol, failure };
 
@@ -15,7 +16,7 @@ export { protocol, failure };
  * @param {import("./client.mjs").Port} port
  * @param {object} adapter Session factory (`create`, `createBuild`) for this environment.
  */
-export function serve(port, adapter) {
+export function serve(port, adapter, open = openSource) {
   let queue = Promise.resolve();
   /** Outstanding signer callbacks by command id (at most one per command). */
   const callbacks = new Map();
@@ -34,11 +35,13 @@ export function serve(port, adapter) {
     }
     queue = queue.then(async () => {
       const started = performance.now();
+      let source;
       try {
         if (message.method !== "read" && message.method !== "build")
           throw new Error("invalid Worker command");
+        source = await open(message.asset);
         const result = message.method === "read"
-          ? await read(adapter, message.asset, message.settings, message.now)
+          ? await read(adapter, message.asset, message.settings, message.now, source)
           : await build(adapter, message.asset, message.definition, message.certs, (request) =>
             new Promise((resolve, reject) => {
               if (callbacks.has(message.id)) throw new Error("signer callback already pending");
@@ -50,10 +53,14 @@ export function serve(port, adapter) {
                 callbacks.delete(message.id);
                 reject(error);
               }
-            }));
+            }), source);
+        await source.close();
+        source = undefined;
         port.post({ protocol, id: message.id, ok: true,
           value: { ...result, workerMs: performance.now() - started } });
       } catch (error) {
+        // Preserve the operation's failure even if cleanup also fails.
+        try { await source?.close() } catch {}
         port.post({ protocol, id: message.id, ok: false, error: failure(error) });
       }
     });
