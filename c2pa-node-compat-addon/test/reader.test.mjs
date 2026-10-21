@@ -3,12 +3,12 @@ import { mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { _native, answerRequest, defaultOcspPolicy, openSource, Reader } from "../index.mjs";
 
-const PATH = new URL("../../contentauth-c2pa-reader/tests/fixtures/C.jpg", import.meta.url)
-  .pathname;
+const PATH = fileURLToPath(new URL("../../contentauth-c2pa-reader/tests/fixtures/C.jpg", import.meta.url));
 const BYTES = readFileSync(PATH);
 // Inside every certificate's validity window, and not the wall clock, so a
 // pass proves the *host's* clock was the one the engine used.

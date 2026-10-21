@@ -6,6 +6,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import test, { after, before } from "node:test";
 
 import { _native as native, answerRequest, Builder, openOutput, openSource, signAsset } from "../index.mjs";
@@ -14,13 +15,13 @@ import { _native as native, answerRequest, Builder, openOutput, openSource, sign
 // build product (`index.node`, git-ignored): build it here if it is
 // missing, so `npm test` works from a clean checkout. CI's job builds it
 // explicitly first.
-const READER_DIR = new URL("../../c2pa-node-compat-addon/", import.meta.url).pathname;
+const READER_DIR = fileURLToPath(new URL("../../c2pa-node-compat-addon/", import.meta.url));
 if (!existsSync(join(READER_DIR, "index.node"))) {
   execFileSync("npm", ["run", "build"], { cwd: READER_DIR, stdio: "inherit" });
 }
-const { Reader } = await import(join(READER_DIR, "index.mjs"));
+const { Reader } = await import(new URL("../../c2pa-node-compat-addon/index.mjs", import.meta.url));
 
-const fixture = (p) => new URL(`../../${p}`, import.meta.url).pathname;
+const fixture = (p) => fileURLToPath(new URL(`../../${p}`, import.meta.url));
 const SOURCE = fixture("contentauth-c2pa-reader/tests/fixtures/C.jpg");
 const CERT_DER = readFileSync(fixture("contentauth-c2pa-builder/tests/fixtures/test-signer.der"));
 const KEY = createPrivateKey(readFileSync(fixture("contentauth-c2pa-builder/tests/fixtures/test-signer.key.pem")));

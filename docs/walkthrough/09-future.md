@@ -22,6 +22,7 @@ flowchart LR
         d11["M3 slice: explicit module Worker<br/>callbacks, cleanup, network, CSP proof"]
         d12["M3 feature slices: resources / reports / trust<br/>ingredient metadata / Context parity, 17/249 upstream"]
         d13["Adobe-shaped read corpus: Node + browser<br/>JPEG/TIFF reports, resources, explicit trust"]
+        d14["Node native baseline CI: five targets<br/>read/sign on Node 22 and 24"]
     end
     subgraph next["Next"]
         direction TB
@@ -77,6 +78,12 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 * **Generator `icon`**, richer assertion helpers.
 
 ## 4. Bindings and hosts
+
+The [five-platform Node baseline](../../c2pa-node-compat-addon/README.md#five-platform-baseline-ci)
+now has native build/load/read/sign CI jobs and retained test binaries. Follow-up
+distribution work remains separate: clean consumer installation without Rust,
+complete release-artifact selection, and minimum OS/glibc/runtime validation.
+The baseline does not claim full SDK feature parity.
 
 See the [JS migration implementation and proof plan](../js-migration-plan.md)
 for the staged browser/Node parity work and compatibility-shim rollout.

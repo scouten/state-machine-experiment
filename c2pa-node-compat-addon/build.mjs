@@ -5,15 +5,19 @@
 // Honors CARGO_TARGET_DIR, which `cargo llvm-cov show-env` sets for the
 // coverage build.
 import { copyFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
 
 const profile = process.argv[2] ?? "release";
 const target = process.env.CARGO_TARGET_DIR ?? "target";
+const artifactDir = process.env.CARGO_BUILD_TARGET
+  ? join(target, process.env.CARGO_BUILD_TARGET, profile)
+  : join(target, profile);
 const candidates = [
-  `${target}/${profile}/libc2pa_node_compat_addon.so`,
-  `${target}/${profile}/libc2pa_node_compat_addon.dylib`,
-  `${target}/${profile}/c2pa_node_compat_addon.dll`,
+  join(artifactDir, "libc2pa_node_compat_addon.so"),
+  join(artifactDir, "libc2pa_node_compat_addon.dylib"),
+  join(artifactDir, "c2pa_node_compat_addon.dll"),
 ];
 const built = candidates.find(existsSync);
-if (!built) throw new Error(`no addon found under ${target}/${profile}; run cargo build first`);
+if (!built) throw new Error(`no addon found under ${artifactDir}; run cargo build first`);
 copyFileSync(built, "index.node");
 console.log(`${built} -> index.node`);

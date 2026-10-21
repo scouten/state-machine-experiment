@@ -76,6 +76,12 @@ flowchart BT
 (Edges to `primitives` and `state-machine` from most crates are omitted
 where they would only add noise; every session crate depends on both.)
 
+The two Neon addons have separate Cargo workspaces and are not covered by
+root workspace tests. [Native Node platform CI](../../.github/workflows/node-platforms.yml)
+builds both on Linux x64/ARM64, macOS Intel/Apple Silicon, and Windows x64,
+then loads and exercises the same binaries under Node 22 and 24. This is a
+read/sign platform baseline, not full SDK parity or distribution certification.
+
 ## Layers
 
 ```mermaid
