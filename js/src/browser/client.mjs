@@ -11,7 +11,7 @@ export function createClient({ transport = "binary" } = {}) {
   url.searchParams.set("transport", transport);
   const worker = new Worker(url, { type: "module" });
   return new Client({
-    post: (message) => worker.postMessage(message),
+    post: (message, transfer) => worker.postMessage(message, transfer),
     onMessage: (callback) => { worker.onmessage = (event) => callback(event.data) },
     onError(callback) {
       worker.onerror = (event) => { event.preventDefault(); callback(new Error(event.message)) };

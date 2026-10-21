@@ -82,6 +82,10 @@ export async function signingContract(createClient, fixture, pkcs8) {
     check(signing.calls === 1, "expected exactly one signer call");
     check(bytes.byteLength === 4, "source detached");
     await validate(client, result, "small");
+    const owned = source("small");
+    const transferred = client.sign(owned, baseline.definition, signer("small"), { ownership: "transfer" });
+    check(owned.byteLength === 0, "signing did not consume transferred input synchronously");
+    await validate(client, await within(transferred), "small");
 
     const entered = deferred();
     const release = deferred();

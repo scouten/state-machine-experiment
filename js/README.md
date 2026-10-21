@@ -34,7 +34,7 @@ flowchart TB
     Reader["FileReadSession / FileBuilderSession<br/>C2PA reader / builder"]
     Signer["Application-owned async signer<br/>key stays outside Worker and Rust"]
     App --> Client
-    Client -->|"postMessage: clone bytes, no transfer"| Service
+    Client -->|"postMessage: transfer private snapshots"| Service
     Service --> Drive
     Service -->|"sign request: operation + request ID"| Client
     Client --> Signer
@@ -151,11 +151,28 @@ flowchart TB
 
 ## Ownership and execution
 
+Input ownership is explicit: `read(bytes, { ownership: "transfer" })` and
+`sign(bytes, definition, signer, { ownership: "transfer" })` synchronously
+consume the complete backing ArrayBuffer before awaiting Worker readiness.
+All aliases become detached, even if later validation, startup or execution
+fails. Use this only when surrendering the entire buffer. Subviews, shared
+memory, nontransferable Wasm buffers and Node pooled/untransferable storage
+are rejected without detaching their backing store. This requires the
+`ArrayBuffer.transferToFixedLength` API available in Node 22+ and tested browsers.
+
+The default `ownership: "copy"` preserves invocation-time snapshot and attached
+caller-buffer behavior. Both modes transfer privately owned storage to the
+Worker instead of structured-cloning its payload. For an N-byte input this
+removes N clone bytes in default mode, or also avoids the N-byte snapshot in
+consuming mode. This is application copy volume, not measured peak RSS or an
+end-to-end zero-copy claim; read replies still copy into Rust. Signer certificates
+are always snapshotted, and the signer/key remain application-owned.
+
 - One Worker per client. Workers are reused; top-level operations are queued.
   Pending requests within one operation can be answered as a batch.
 - Native handles and Wasm objects never cross Worker boundaries. Results are
   plain reports and, for signing, output/manifest bytes and exclusion ranges.
-- `read()` and `sign()` copy input before their first await, then use structured cloning.
+- By default `read()` and `sign()` copy input before their first await, then transfer the private snapshot.
   Caller buffers remain attached and mutation cannot change a queued read.
   This costs memory and synchronous caller work proportional to input size.
 - Signing also snapshots the definition and public certificates. The signer
@@ -164,7 +181,7 @@ flowchart TB
 - Build output is buffered in a growable in-memory array inside the Worker,
   then copied and cloned back. This is not file-backed or constant-memory.
 - This proof accepts in-memory JPEG bytes only. It does not promise streaming
-  input, constant memory, zero-copy transfer or free result transport.
+  input, constant memory, end-to-end zero-copy I/O or free result transport.
 - Successful `finish` consumes the Rust session. Wasm wrappers are explicitly
   freed in `finally`; Neon error handles become eligible for isolate GC.
   Client disposal terminates its Worker, releasing that isolate's resources.
@@ -358,13 +375,14 @@ application tasks actually run before the read completes.
 The synthetic asset is JPEG framing plus a zero-filled tail signed using the
 existing core. This exercises logical hashing, not realistic image metadata,
 physical I/O, a legacy comparison or cold-start distributions. Caller time
-includes input snapshot/cloning, queueing, report transfer and parsing;
+includes input snapshot/transfer, queueing, report transfer and parsing;
 Worker time includes session construction, hashing and report serialization;
 build time also includes output assembly and the awaited application signer.
 Their difference is not an isolated FFI cost.
 
-Worker isolation does not remove copying: each read snapshots and clones the
-entire asset. Large messages can still briefly occupy the calling thread.
+Worker isolation does not remove copying: default reads still snapshot the
+entire asset, while consuming transfer avoids that snapshot. Read replies still
+copy into Rust. Large snapshots can briefly occupy the calling thread.
 No peak memory or frame-deadline guarantee is established.
 
 ## Deliberate non-goals and next trigger

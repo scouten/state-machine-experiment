@@ -84,7 +84,10 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 * **c2pa-node:** `fromManifestDataAndAsset`, `resourceToAsset`, signers,
   CAWG identity assertions (the X.509 type is done on the core read and
   write paths; this is the bindings), Trustmark.
-* **Worker-hosted shared JS loop:** the
+* **Worker-hosted shared JS loop:** the input boundary now transfers private
+  snapshots; explicit consuming input
+  ownership also avoids the initial full-input copy, with attached-buffer
+  defaults preserved and pooled/subview transfer rejected. The
   [private JavaScript package](../../js/README.md) now runs the same facade,
   protocol and session drivers over browser Wasm and Node Neon. Local
   Chromium/Firefox/WebKit and Node tests establish complete-report/request
