@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { readFile, mkdir, writeFile } from "node:fs/promises";
 import test from "node:test";
 import { Client, protocol } from "../src/shared/client.mjs";
+import { ClientPool } from "../src/shared/pool.mjs";
+import { serve } from "../src/shared/service.mjs";
+import { read } from "../src/shared/drive.mjs";
 import { createClient } from "../src/node/client.mjs";
 import { contract } from "./contract.mjs";
 import { signingContract } from "./signing.mjs";
@@ -98,8 +101,129 @@ test("shared facade propagates startup/crash failure and disposes pending calls"
   assert.ok(stopped > 0);
 });
 
+test("AbortSignal cancels one call without poisoning the Worker client", async () => {
+  let receive;
+  const messages = [];
+  const client = new Client({
+    onMessage(callback) { receive = callback }, onError() {},
+    terminate() {}, post(message) { messages.push(message) },
+  });
+  receive({ protocol, ready: true });
+  const controller = new AbortController();
+  const cancelled = client.read(new Uint8Array(4), { signal: controller.signal });
+  const rejected = assert.rejects(cancelled, { name: "AbortError" });
+  await new Promise((resolve) => setImmediate(resolve));
+  const command = messages.find((message) => message.method === "read");
+  controller.abort();
+  await rejected;
+  assert.ok(messages.some((message) => message.method === "cancel" && message.id === command.id));
+  receive({ protocol, id: command.id, ok: false,
+    error: { name: "AbortError", message: "The operation was aborted" } });
+
+  const next = client.read(new Uint8Array(4));
+  await new Promise((resolve) => setImmediate(resolve));
+  const nextCommand = messages.find((message) => message.method === "read" && message.id !== command.id);
+  receive({ protocol, id: nextCommand.id, ok: true, value: { report: null } });
+  assert.deepEqual(await next, { report: null });
+  await client.dispose();
+});
+
+test("cancelled signer callbacks are consumed without a late Worker reply", async () => {
+  let receive;
+  let enter;
+  let release;
+  const started = new Promise((resolve) => { enter = resolve });
+  const signerGate = new Promise((resolve) => { release = resolve });
+  const messages = [];
+  const client = new Client({
+    onMessage(callback) { receive = callback }, onError() {},
+    terminate() {}, post(message) { messages.push(message) },
+  });
+  receive({ protocol, ready: true });
+  const controller = new AbortController();
+  const result = client.sign(new Uint8Array(1), "{}", {
+    alg: "es256", certs: [],
+    async sign() { enter(); await signerGate; return new Uint8Array(64) },
+  }, { signal: controller.signal });
+  const rejected = assert.rejects(result, { name: "AbortError" });
+  await new Promise((resolve) => setImmediate(resolve));
+  const command = messages.find((message) => message.method === "build");
+  receive({ protocol, method: "sign", id: command.id, requestId: 4,
+    alg: "es256", data: new Uint8Array(1) });
+  await started;
+  controller.abort();
+  await rejected;
+  release();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(messages.some((message) => message.method === "cancel" && message.id === command.id));
+  assert.equal(messages.some((message) => message.method === "signReply"), false);
+  receive({ protocol, id: command.id, ok: false,
+    error: { name: "AbortError", message: "The operation was aborted" } });
+  await client.dispose();
+});
+
+test("service removes queued cancellations and interrupts a running signer wait", async () => {
+  let receive;
+  const messages = [];
+  let builds = 0;
+  let reads = 0;
+  let closed = false;
+  serve({
+    onMessage(callback) { receive = callback },
+    post(message) { messages.push(message) },
+  }, {
+    create() {
+      reads++;
+      return { advance: () => ({ done: true }), finish: () => "null", close() {} };
+    },
+    createBuild() {
+      builds++;
+      return {
+        advance: () => ({ done: false, requests: [
+          { id: 7, kind: "sign", alg: "es256", data: new Uint8Array(1) },
+        ] }),
+        fulfill() {},
+        close() { closed = true },
+      };
+    },
+  });
+  receive({ protocol, id: 1, method: "build", asset: new Uint8Array(1), definition: "{}", certs: [] });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(messages.some((message) => message.method === "sign" && message.id === 1));
+  receive({ protocol, id: 2, method: "read", asset: new Uint8Array(1) });
+  receive({ protocol, id: 2, method: "cancel" });
+  const queuedResult = await waitForMessage(messages, (message) => message.id === 2 && message.ok === false);
+  assert.equal(queuedResult.error.name, "AbortError");
+  assert.equal(reads, 0, "cancelled queued work never creates a session");
+
+  receive({ protocol, id: 1, method: "cancel" });
+  const runningResult = await waitForMessage(messages, (message) => message.id === 1 && message.ok === false);
+  assert.equal(runningResult.error.name, "AbortError");
+  assert.equal(builds, 1);
+  assert.equal(closed, true, "running session is closed on cancellation");
+});
+
+test("running session observes cancellation after a long synchronous advance", async () => {
+  const controller = new AbortController();
+  let fulfilled = false;
+  let closed = false;
+  const session = {
+    advance() {
+      const until = performance.now() + 12;
+      while (performance.now() < until) {}
+      return { done: false, requests: [{ id: 1, kind: "time" }] };
+    },
+    fulfill() { fulfilled = true },
+    close() { closed = true },
+  };
+  const operation = read({ create: () => session }, new Uint8Array(1), undefined, 0, controller.signal);
+  setTimeout(() => controller.abort(), 0);
+  await assert.rejects(operation, { name: "AbortError" });
+  assert.equal(fulfilled, false, "cancellation is checked before replying to the session");
+  assert.equal(closed, true);
+});
+
 test("a worker pool matches one worker, spreads load, validates size and replaces dead workers", async () => {
-  const { ClientPool } = await import("../src/shared/pool.mjs");
   const folder = new URL("../generated/", import.meta.url);
   const fixture = JSON.parse(await readFile(new URL("fixtures.json", folder)));
   const key = await crypto.subtle.importKey("pkcs8", await readFile(new URL("test-signer.pk8", folder)),
@@ -143,3 +267,64 @@ test("a worker pool matches one worker, spreads load, validates size and replace
   await fakes.dispose();
   await assert.rejects(fakes.read(4), /disposed/);
 });
+
+test("graceful pool disposal rejects admission and drains accepted calls", async () => {
+  let finish;
+  let finishIdle;
+  let disposed = false;
+  const idle = new Promise((resolve) => { finishIdle = resolve });
+  const pool = new ClientPool(() => ({
+    failure: undefined,
+    read: () => new Promise((resolve) => { finish = resolve }),
+    sign() { throw new Error("unexpected sign") },
+    whenIdle: () => idle,
+    dispose: async () => { disposed = true },
+  }));
+  const call = pool.read(new Uint8Array(1));
+  const closing = pool.dispose({ drain: true });
+  await assert.rejects(pool.read(new Uint8Array(1)), /disposed/);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(disposed, false, "workers remain alive while accepted calls drain");
+  finish("complete");
+  assert.equal(await call, "complete");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(disposed, false, "wait for the Worker to acknowledge all commands");
+  finishIdle();
+  await closing;
+  assert.equal(disposed, true);
+});
+
+test("graceful disposal waits for a cancelled command's Worker acknowledgement", async () => {
+  let receive;
+  let terminated = false;
+  const messages = [];
+  const client = new Client({
+    onMessage(callback) { receive = callback }, onError() {},
+    terminate() { terminated = true }, post(message) { messages.push(message) },
+  });
+  const pool = new ClientPool(() => client);
+  receive({ protocol, ready: true });
+  const controller = new AbortController();
+  const call = pool.read(new Uint8Array(1), { signal: controller.signal });
+  const rejected = assert.rejects(call, { name: "AbortError" });
+  await new Promise((resolve) => setImmediate(resolve));
+  const command = messages.find((message) => message.method === "read");
+  controller.abort();
+  await rejected;
+  const closing = pool.dispose({ drain: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(terminated, false, "do not terminate before the canceled session closes");
+  receive({ protocol, id: command.id, ok: false,
+    error: { name: "AbortError", message: "The operation was aborted" } });
+  await closing;
+  assert.equal(terminated, true);
+});
+
+async function waitForMessage(messages, predicate) {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const message = messages.find(predicate);
+    if (message) return message;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.fail("timed out waiting for Worker protocol message");
+}

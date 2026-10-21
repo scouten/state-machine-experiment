@@ -39,6 +39,14 @@ export async function contract(createClient, small, large, fixture) {
     equal(ordered[0].report, expected.report, "queued operation report changed");
     equal(ordered[1].report, fixture.files.large.report, "large report differs");
 
+    const cancellation = new AbortController();
+    const cancelTimer = setTimeout(() => cancellation.abort(), 0);
+    try {
+      await rejects(client.read(large, { ...options, signal: cancellation.signal }), /AbortError/);
+    } finally { clearTimeout(cancelTimer) }
+    equal((await client.read(small, options)).report, expected.report,
+      "cancelled operation poisoned its Worker");
+
     const samples = [];
     // Warmup and startup costs are separate from these repeated operations.
     for (let iteration = 0; iteration < 3; iteration++) {
@@ -74,6 +82,7 @@ export async function contract(createClient, small, large, fixture) {
     await rejects(client.read(small, options), /disposed/);
     return { samples, checks: ["full report", "exact request bytes", "input snapshot/no detach",
       "unsigned null", "settings error", "malformed error/retry", "tamper Invalid",
-      "queued operations", "application task progress", "pending disposal", "Worker isolation"] };
+      "queued operations", "AbortSignal cancellation/reuse", "application task progress",
+      "pending disposal", "Worker isolation"] };
   } finally { await client.dispose() }
 }
