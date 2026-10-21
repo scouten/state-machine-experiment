@@ -99,10 +99,7 @@ pub(crate) fn read_and_validate(path: &Path, settings: ReadSettings) -> Result<R
             return Ok(session.finish()?);
         }
 
-        for request in session.outstanding_requests().to_vec() {
-            let reply = answer(&mut source, &client, &request.kind);
-            session.fulfill(request.id, reply)?;
-        }
+        session.respond(|request| answer(&mut source, &client, request))?;
     }
 }
 
@@ -113,7 +110,7 @@ fn answer(
 ) -> FileReadReply {
     match request {
         FileReadRequest::Read { range, .. } => match read_range(source, *range) {
-            Ok(bytes) => FileReadReply::Bytes(bytes),
+            Ok(bytes) => FileReadReply::Bytes(bytes.into()),
             Err(err) => FileReadReply::Failed(HostError::new(format!(
                 "could not read {}+{} bytes: {err}",
                 range.start, range.len

@@ -1487,7 +1487,7 @@ mod tests {
 
             for (id, is_store) in asks {
                 let reply = if is_store {
-                    ReadHostReply::ManifestStore(Some(bytes.clone()))
+                    ReadHostReply::ManifestStore(Some(bytes.clone().into()))
                 } else {
                     ReadHostReply::CurrentDateTime(NOW)
                 };
@@ -1607,9 +1607,14 @@ mod tests {
         session
             .fulfill(
                 id,
-                ReadHostReply::ManifestStore(Some(test_support::manifest_store(&[
-                    test_support::manifest("urn:uuid:one", "one.jpg", &[]),
-                ]))),
+                ReadHostReply::ManifestStore(Some(
+                    test_support::manifest_store(&[test_support::manifest(
+                        "urn:uuid:one",
+                        "one.jpg",
+                        &[],
+                    )])
+                    .into(),
+                )),
             )
             .unwrap();
 
@@ -1648,9 +1653,14 @@ mod tests {
         session
             .fulfill(
                 id,
-                ReadHostReply::ManifestStore(Some(test_support::manifest_store(&[
-                    test_support::manifest("urn:uuid:one", "one.jpg", &[]),
-                ]))),
+                ReadHostReply::ManifestStore(Some(
+                    test_support::manifest_store(&[test_support::manifest(
+                        "urn:uuid:one",
+                        "one.jpg",
+                        &[],
+                    )])
+                    .into(),
+                )),
             )
             .unwrap();
 
@@ -1681,13 +1691,14 @@ mod tests {
         session
             .fulfill(
                 id,
-                ReadHostReply::ManifestStore(Some(test_support::manifest_store(&[
-                    test_support::manifest_with_broken_signature(
+                ReadHostReply::ManifestStore(Some(
+                    test_support::manifest_store(&[test_support::manifest_with_broken_signature(
                         "urn:uuid:broken",
                         &[],
                         test_support::claim_box("broken.jpg"),
-                    ),
-                ]))),
+                    )])
+                    .into(),
+                )),
             )
             .unwrap();
 
@@ -1727,7 +1738,7 @@ mod tests {
                 match request.kind {
                     ReadRequest::ManifestStore { .. } => session.fulfill(
                         request.id,
-                        ReadHostReply::ManifestStore(Some(store.clone())),
+                        ReadHostReply::ManifestStore(Some(store.clone().into())),
                     )?,
 
                     ReadRequest::CurrentDateTime => {
@@ -1740,7 +1751,7 @@ mod tests {
                     ReadRequest::AssetBytes { range, .. } => {
                         let start = range.start as usize;
                         let bytes = asset[start..start + range.len as usize].to_vec();
-                        session.fulfill(request.id, ReadHostReply::AssetBytes(bytes))?
+                        session.fulfill(request.id, ReadHostReply::AssetBytes(bytes.into()))?
                     }
 
                     // None of this module's synthetic certificates carry an
@@ -1918,11 +1929,9 @@ mod tests {
         session
             .fulfill(
                 id,
-                ReadHostReply::ManifestStore(Some(store_bound_with_algs(
-                    None,
-                    None,
-                    vec![0u8; 32],
-                ))),
+                ReadHostReply::ManifestStore(Some(
+                    store_bound_with_algs(None, None, vec![0u8; 32]).into(),
+                )),
             )
             .unwrap();
 
@@ -1959,9 +1968,14 @@ mod tests {
         session
             .fulfill(
                 id,
-                ReadHostReply::ManifestStore(Some(test_support::manifest_store(&[
-                    test_support::manifest("urn:uuid:none", "none.jpg", &["c2pa.actions"]),
-                ]))),
+                ReadHostReply::ManifestStore(Some(
+                    test_support::manifest_store(&[test_support::manifest(
+                        "urn:uuid:none",
+                        "none.jpg",
+                        &["c2pa.actions"],
+                    )])
+                    .into(),
+                )),
             )
             .unwrap();
 
@@ -2028,7 +2042,7 @@ mod tests {
 
         let id = session.outstanding_requests()[0].id;
         session
-            .fulfill(id, ReadHostReply::ManifestStore(Some(vec![0u8; 4])))
+            .fulfill(id, ReadHostReply::ManifestStore(Some(vec![0u8; 4].into())))
             .unwrap();
 
         assert!(matches!(
@@ -2064,7 +2078,7 @@ mod tests {
         session
             .fulfill(
                 id,
-                ReadHostReply::ManifestStore(Some(store_bound_to(&[], vec![0u8; 32]))),
+                ReadHostReply::ManifestStore(Some(store_bound_to(&[], vec![0u8; 32]).into())),
             )
             .unwrap();
 
@@ -2085,7 +2099,7 @@ mod tests {
         // A chunk the host returns short can never be folded in.
         let id = session.outstanding_requests()[0].id;
         session
-            .fulfill(id, ReadHostReply::AssetBytes(vec![4u8; 10]))
+            .fulfill(id, ReadHostReply::AssetBytes(vec![4u8; 10].into()))
             .unwrap();
 
         assert!(matches!(

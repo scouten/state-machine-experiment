@@ -367,7 +367,7 @@ fn signing_abi_round_trips_a_jpeg_through_the_existing_reader_as_trusted() {
             base64_certificate()
         );
         let settings = format!(r#"{{"trust":{{"trust_anchors":{pem:?}}}}}"#);
-        let mut reader = crate::NodeSession::new("image/jpeg", Some(&settings)).unwrap();
+        let mut reader = crate::ReadSessionBridge::new("image/jpeg", Some(&settings)).unwrap();
         loop {
             match reader.advance().unwrap() {
                 crate::Step::Complete => break,
@@ -857,7 +857,7 @@ fn all_request_views_map_fields_and_streams_without_borrowing_temporary_values()
             id: 4,
             stream: Stream::Output,
             offset: 60,
-            bytes: vec![1, 2],
+            bytes: vec![1, 2].into(),
         },
         PendingRequest::Sign {
             id: 5,

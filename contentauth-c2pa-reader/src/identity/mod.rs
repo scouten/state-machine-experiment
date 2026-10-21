@@ -497,14 +497,15 @@ mod tests {
             for (id, request) in asks {
                 let reply = match (request, now) {
                     (ReadRequest::ManifestStore { .. }, _) => {
-                        ReadHostReply::ManifestStore(Some(bytes.clone()))
+                        ReadHostReply::ManifestStore(Some(bytes.clone().into()))
                     }
                     (ReadRequest::AssetLength { .. }, _) => {
                         ReadHostReply::AssetLength(IDENTITY_ASSET.len() as u64)
                     }
                     (ReadRequest::AssetBytes { range, .. }, _) => ReadHostReply::AssetBytes(
                         IDENTITY_ASSET[range.start as usize..(range.start + range.len) as usize]
-                            .to_vec(),
+                            .to_vec()
+                            .into(),
                     ),
                     (ReadRequest::CurrentDateTime, Some(now)) => {
                         ReadHostReply::CurrentDateTime(now)

@@ -287,7 +287,7 @@ and any supported assertions. The acceptance fixture includes a title and
 one `c2pa.actions.v2` assertion containing `c2pa.created`. Unknown definition
 fields fail rather than being ignored. A private key is never an input.
 
-The bridge delegates to `contentauth-c2pa-node-compat-sign::NodeBuildSession`,
+The bridge delegates to `contentauth-c2pa-session-bridge::build::BuildSessionBridge`,
 which is already a host-agnostic, synchronous wrapper over the file builder.
 Do not add another signing engine or an I/O dependency to this binding.
 
