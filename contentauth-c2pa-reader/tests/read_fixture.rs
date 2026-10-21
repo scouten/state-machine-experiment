@@ -135,7 +135,7 @@ impl Host<'_> {
                 match ask {
                     Ask::Store(id) => session.fulfill(
                         id,
-                        ReadHostReply::ManifestStore(Some(self.manifest_store.to_vec())),
+                        ReadHostReply::ManifestStore(Some(self.manifest_store.to_vec().into())),
                     )?,
 
                     Ask::Time(id) => {
@@ -154,8 +154,10 @@ impl Host<'_> {
                         let asset = self.asset.expect("bytes asked for without an asset");
                         let start = range.start as usize;
                         let end = start + range.len as usize;
-                        session
-                            .fulfill(id, ReadHostReply::AssetBytes(asset[start..end].to_vec()))?
+                        session.fulfill(
+                            id,
+                            ReadHostReply::AssetBytes(asset[start..end].to_vec().into()),
+                        )?
                     }
                 }
             }
@@ -551,7 +553,7 @@ fn a_trusted_timestamp_carries_a_host_that_has_no_clock() {
     session
         .fulfill(
             id,
-            ReadHostReply::ManifestStore(Some(MANIFEST_STORE.to_vec())),
+            ReadHostReply::ManifestStore(Some(MANIFEST_STORE.to_vec().into())),
         )
         .unwrap();
 
@@ -581,7 +583,9 @@ fn a_trusted_timestamp_carries_a_host_that_has_no_clock() {
                 None => ReadHostReply::AssetLength(ASSET.len() as u64),
                 Some(range) => {
                     let start = range.start as usize;
-                    ReadHostReply::AssetBytes(ASSET[start..start + range.len as usize].to_vec())
+                    ReadHostReply::AssetBytes(
+                        ASSET[start..start + range.len as usize].to_vec().into(),
+                    )
                 }
             };
             session.fulfill(id, reply).unwrap();
@@ -630,7 +634,7 @@ fn a_host_with_no_clock_leaves_the_chain_unevaluated() {
     session
         .fulfill(
             id,
-            ReadHostReply::ManifestStore(Some(MANIFEST_STORE.to_vec())),
+            ReadHostReply::ManifestStore(Some(MANIFEST_STORE.to_vec().into())),
         )
         .unwrap();
 
@@ -661,7 +665,9 @@ fn a_host_with_no_clock_leaves_the_chain_unevaluated() {
                 None => ReadHostReply::AssetLength(ASSET.len() as u64),
                 Some(range) => {
                     let start = range.start as usize;
-                    ReadHostReply::AssetBytes(ASSET[start..start + range.len as usize].to_vec())
+                    ReadHostReply::AssetBytes(
+                        ASSET[start..start + range.len as usize].to_vec().into(),
+                    )
                 }
             };
             session.fulfill(id, reply).unwrap();

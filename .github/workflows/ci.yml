@@ -21,6 +21,58 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  javascript-host:
+    name: Shared JavaScript host (Node and three browsers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master@2026-06-30
+        with:
+          toolchain: stable
+          components: clippy
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: |
+            c2pa-node-compat-addon -> target
+            c2pa-node-sign-addon -> target
+            contentauth-c2pa-wasm -> target
+
+      - name: Install Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Install JavaScript dependencies and browsers
+        working-directory: js
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium firefox webkit
+
+      - name: Install matching Wasm binding CLI
+        run: cargo install wasm-bindgen-cli --version 0.2.122 --locked
+
+      - name: Build real bindings and fixtures
+        working-directory: js
+        run: |
+          npm run build:bindings
+          npm run fixtures
+
+      - name: Lint synchronous Wasm boundary
+        run: cargo clippy --manifest-path contentauth-c2pa-wasm/Cargo.toml --target wasm32-unknown-unknown -- -Dwarnings
+
+      - name: Node and browser preservation contracts
+        working-directory: js
+        run: |
+          npm test
+          npm run test:browser
+
   tests:
     name: Unit tests + code coverage
     runs-on: ubuntu-latest
@@ -47,6 +99,9 @@ jobs:
         env:
           RUST_BACKTRACE: "1"
         run: cargo llvm-cov --all-features --tests --lcov --output-path lcov.info
+
+      - name: Test standalone Wasm request encoding
+        run: cargo test --manifest-path contentauth-c2pa-wasm/Cargo.toml --locked
 
       # Test code itself shouldn't count for or against coverage.
       - name: Filter out tests
@@ -107,6 +162,9 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --all-features --all-targets -- -Dwarnings
 
+      - name: Run Clippy for standalone Wasm binding
+        run: cargo clippy --manifest-path contentauth-c2pa-wasm/Cargo.toml --all-targets --locked -- -Dwarnings
+
   cargo_fmt:
     name: Enforce Rust code format
     runs-on: ubuntu-latest
@@ -123,7 +181,9 @@ jobs:
           components: rustfmt
 
       - name: Check format
-        run: cargo +nightly-2026-01-16 fmt --all -- --check
+        run: |
+          cargo +nightly-2026-01-16 fmt --all -- --check
+          cargo +nightly-2026-01-16 fmt --manifest-path contentauth-c2pa-wasm/Cargo.toml -- --check
 
   docs:
     name: Doc build (stable, warnings denied)
@@ -181,6 +241,9 @@ jobs:
 
       - name: "`cargo check` for wasm32-unknown-unknown"
         run: cargo check --all-features --target wasm32-unknown-unknown --workspace --exclude contentauth-c2pa-rs-compat --exclude contentauth-c2pa-rs-compat-sign
+
+      - name: Check standalone Wasm binding
+        run: cargo check --manifest-path contentauth-c2pa-wasm/Cargo.toml --target wasm32-unknown-unknown --locked
 
       - name: "`cargo check` for wasm32-wasip2"
         run: cargo check --all-features --target wasm32-wasip2 --workspace --exclude contentauth-c2pa-rs-compat --exclude contentauth-c2pa-rs-compat-sign
@@ -374,11 +437,11 @@ jobs:
     runs-on: ubuntu-latest
 
     # `contentauth-c2pa-cpp` is a Rust static library behind a C ABI plus
-    # header-only C++ (C++17 core and thread-based drivers, C++20
-    # coroutines). Its Rust half is an ordinary workspace member, tested by
+    # C++17 readers, compiled signing/thread pools and C++20 coroutines.
+    # Its Rust half is an ordinary workspace member, tested by
     # the jobs above; this job builds the C++ half against it with CMake
     # and runs the C++ tests and examples three ways:
-    #   - plain, with coverage of the C++ headers (uploaded to Codecov);
+    #   - plain, with coverage of C++ headers and sources (uploaded to Codecov);
     #   - under AddressSanitizer (leaks, use-after-free on cancellation);
     #   - under ThreadSanitizer (the session handed between threads, and
     #     completions racing the driver).
@@ -407,9 +470,12 @@ jobs:
         with:
           workspaces: ". -> contentauth-c2pa-cpp/build/cargo"
 
+      - name: Install OpenSSL development package
+        run: sudo apt-get update && sudo apt-get install --yes libssl-dev
+
       - name: Configure
         working-directory: contentauth-c2pa-cpp
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug ${{ matrix.cmake_args }}
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON -DC2PA_SM_FETCH_GTEST=ON ${{ matrix.cmake_args }}
 
       - name: Build
         working-directory: contentauth-c2pa-cpp
@@ -419,7 +485,9 @@ jobs:
         working-directory: contentauth-c2pa-cpp
         env:
           TSAN_OPTIONS: halt_on_error=1
-        run: ctest --test-dir build --output-on-failure
+        run: |
+          ctest --test-dir build --output-on-failure --parallel 2
+          ./build/c2pa_sm_tests
 
       - name: Install gcovr
         if: matrix.name == 'coverage'
@@ -435,6 +503,7 @@ jobs:
           gcovr --root . --object-directory contentauth-c2pa-cpp/build
           --filter 'contentauth-c2pa-cpp/include/'
           --filter 'contentauth-c2pa-cpp/cpp/src/'
+          --filter 'contentauth-c2pa-cpp/cpp/include/scope_exit\.hpp$'
           --gcov-ignore-parse-errors negative_hits.warn_once_per_file
           --exclude-throw-branches --exclude-unreachable-branches
           --lcov lcov.cpp.info --txt
@@ -483,7 +552,7 @@ jobs:
 
       - name: Configure
         working-directory: contentauth-c2pa-cpp
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON -DC2PA_SM_FETCH_GTEST=ON
 
       - name: Build
         working-directory: contentauth-c2pa-cpp
@@ -491,4 +560,6 @@ jobs:
 
       - name: Test
         working-directory: contentauth-c2pa-cpp
-        run: ctest --test-dir build --output-on-failure
+        run: |
+          ctest --test-dir build --output-on-failure --parallel 2
+          ./build/c2pa_sm_tests

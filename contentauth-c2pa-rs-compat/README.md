@@ -88,6 +88,19 @@ See the crate's top-level doc comment (`src/lib.rs`) for the full list —
 
 ## Building
 
+The default `http` feature enables the blocking `reqwest` OCSP transport.
+Set `default-features = false` to keep the complete compatibility API and
+local-file host without linking an HTTP client. This uses the existing
+`contentauth-c2pa-file-reader` local host: online OCSP requests are reported
+as unavailable, with the reader's usual unreachable-responder policy.
+Stapled responses are still validated; disabling the transport does not
+disable revocation validation or change `ReadSettings::check_ocsp`.
+To supply a custom network transport, drive `FileReadSession` directly.
+
+```sh
+cargo test -p contentauth-c2pa-rs-compat --no-default-features
+```
+
 ```sh
 cargo test
 ```

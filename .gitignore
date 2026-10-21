@@ -1,8 +1,13 @@
 /target
 lcov.info
 Cargo.lock
+!/contentauth-c2pa-wasm/Cargo.lock
 
 **/CMakeFiles/**
 build/
+!/contentauth-c2pa-session-bridge/src/build/
 **/cargo/**
 .vscode/
+
+.DS_Store
+Thumbs.db

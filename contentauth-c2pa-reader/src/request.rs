@@ -27,7 +27,7 @@
 //! is what lets the engine's [`contentauth_state_machine::RequestTracker`]
 //! validate replies without knowing what the requests mean.
 
-use contentauth_c2pa_primitives::{ByteRange, StreamId};
+use contentauth_c2pa_primitives::{ByteRange, Bytes, StreamId};
 use contentauth_state_machine::Request;
 
 use crate::error::HostError;
@@ -137,10 +137,13 @@ impl Request for ReadRequest {
 pub enum ReadHostReply {
     /// Answers [`ReadRequest::ManifestStore`]: the manifest store bytes, or
     /// `None` if the asset contains no manifest store.
-    ManifestStore(Option<Vec<u8>>),
+    ManifestStore(Option<Bytes>),
 
     /// Answers [`ReadRequest::AssetBytes`]: the requested bytes.
-    AssetBytes(Vec<u8>),
+    ///
+    /// A [`Bytes`], so a host holding the asset in memory (or mapped)
+    /// answers with a slice of it rather than a copy.
+    AssetBytes(Bytes),
 
     /// Answers [`ReadRequest::AssetLength`]: the stream's total length in
     /// bytes.
@@ -188,7 +191,7 @@ mod tests {
     fn all_replies() -> Vec<(ReadHostReply, &'static str)> {
         vec![
             (ReadHostReply::ManifestStore(None), "ManifestStore"),
-            (ReadHostReply::AssetBytes(vec![1]), "AssetBytes"),
+            (ReadHostReply::AssetBytes(vec![1].into()), "AssetBytes"),
             (ReadHostReply::AssetLength(1024), "AssetLength"),
             (
                 ReadHostReply::CurrentDateTime(1_756_400_000),

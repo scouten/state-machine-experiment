@@ -71,6 +71,11 @@ close to it:
 * **Hashing happens on the host's thread**, in small slices between awaits.
   Moving it off-thread means running the session in a Worker — possible
   without changing the engine, but the host's job.
+* **Serializing a session's calls is the host's job.** Sessions are not
+  re-entrant and the Rust code puts no locks around them; a host with a
+  thread model must never call one session's methods simultaneously from
+  several threads. Crashes or unpredictable behavior are likely otherwise.
+  (Calls on *different* sessions may safely run at the same time.)
 * **A second implementation to keep honest.** Reader/validator logic is
   written from scratch here, so conformance to c2pa-rs and to the spec is
   something to *keep proving*, not inherit.
@@ -111,5 +116,12 @@ separate crates with their own request vocabularies. Sessions can *nest*:
 a session answers some of an inner session's requests itself and forwards
 only the rest, which is how format handling is wired in
 ([read path](03-read-path.md), [write path](04-write-path.md)).
+
+Synchronous hosts can shorten their reply loop to
+`session.respond(|request| answer(request))?`. Each request is borrowed
+until its reply is ready, then fulfilled before the next is serviced.
+Neither request cloning nor a reply batch is needed. This helper does not
+advance the workflow or change the contract; async hosts and hosts that
+choose their own reply order keep using the individual methods.
 
 **Next:** [Architecture →](02-architecture.md)

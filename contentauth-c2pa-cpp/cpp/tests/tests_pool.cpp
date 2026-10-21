@@ -9,7 +9,7 @@
 #include <utility>
 #include <vector>
 
-#include "check.hpp"
+#include "assertions.hpp"
 #include "contentauth/thread_pool.hpp"
 
 using namespace c2pa::sm;
@@ -29,7 +29,7 @@ std::vector<Factory> pools() {
 
 }  // namespace
 
-TEST(every_posted_task_runs_exactly_once_and_destruction_waits_for_them) {
+TEST(ThreadPool, every_posted_task_runs_exactly_once_and_destruction_waits_for_them) {
     constexpr int kProducers = 4;
     constexpr int kPerProducer = 500;
     for (const Factory &make : pools()) {
@@ -50,12 +50,12 @@ TEST(every_posted_task_runs_exactly_once_and_destruction_waits_for_them) {
             }
         }  // the pool is destroyed with work possibly still queued
         for (auto &count : runs) {
-            CHECK_EQ(count.load(), 1);
+            EXPECT_EQ(count.load(), 1);
         }
     }
 }
 
-TEST(a_running_task_may_post_another) {
+TEST(ThreadPool, a_running_task_may_post_another) {
     for (const Factory &make : pools()) {
         std::atomic<int> ran{0};
         {
@@ -70,11 +70,11 @@ TEST(a_running_task_may_post_another) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
         }
-        CHECK_EQ(ran.load(), 2);
+        EXPECT_EQ(ran.load(), 2);
     }
 }
 
-TEST(the_simple_pool_runs_as_many_tasks_at_once_as_it_has_workers) {
+TEST(ThreadPool, the_simple_pool_runs_as_many_tasks_at_once_as_it_has_workers) {
     // Each task waits for the other, so this only finishes with two workers.
     std::atomic<int> arrived{0};
     std::atomic<int> saw_both{0};
@@ -93,16 +93,14 @@ TEST(the_simple_pool_runs_as_many_tasks_at_once_as_it_has_workers) {
             });
         }
     }
-    CHECK_EQ(saw_both.load(), 2);
+    EXPECT_EQ(saw_both.load(), 2);
 }
 
-TEST(the_simple_pool_always_has_at_least_one_worker) {
+TEST(ThreadPool, the_simple_pool_always_has_at_least_one_worker) {
     std::atomic<int> ran{0};
     {
         auto pool = make_simple_thread_pool(0);
         pool->post([&] { ++ran; });
     }
-    CHECK_EQ(ran.load(), 1);
+    EXPECT_EQ(ran.load(), 1);
 }
-
-int main() { return check::run_all(); }

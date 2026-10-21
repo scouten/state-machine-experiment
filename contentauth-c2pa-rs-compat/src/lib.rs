@@ -47,10 +47,17 @@
 //! ([`Context`], `Reader`, [`Manifest`], [`ValidationState`],
 //! [`ValidationStatus`], [`Error`], and the JSON shape in `src/json.rs`),
 //! plus one piece of genuinely new plumbing: `src/host.rs`, a
-//! [`reqwest`]-backed host answering live OCSP checks, since nothing
+//! `reqwest`-backed host answering live OCSP checks, since nothing
 //! sans-I/O in this workspace can make an HTTP request on its own. See
 //! that module's own docs for why this is the one crate here that owns a
 //! network dependency.
+//!
+//! # Features
+//!
+//! `http` (enabled by default) provides the blocking OCSP transport.
+//! Without it, file reading uses the local-only host, which reports online
+//! OCSP requests as unavailable rather than making network requests.
+//! Stapled OCSP validation and all other validation remain enabled.
 //!
 //! The `Context`/`Reader::from_context`/`with_file` shape is deliberately
 //! the preferred one here, not merely one of several equally-supported
@@ -105,6 +112,7 @@
 mod context;
 mod error;
 mod format;
+#[cfg_attr(not(feature = "http"), path = "host_local.rs")]
 mod host;
 mod json;
 mod manifest;

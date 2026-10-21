@@ -44,6 +44,21 @@ whatever outcomes have arrived and make further progress.
    may be reported in any order.
 4. On `Complete`: consume the session with `finish` to obtain its result.
 
+### Threading
+
+A session is **not re-entrant**, and the Rust code provides **no locks**
+around it. Any host that employs a thread model must ensure the session's
+methods are never called simultaneously from multiple threads (nor
+re-entered from within a call in progress on the same session). Crashes or
+unpredictable behavior are likely if this constraint is violated. Calls on
+*different* sessions may safely run at the same time; only calls on the
+*same* session must not. A session may also move to another thread between
+calls. In safe Rust the
+borrow checker does much of this for you (`advance` and `fulfill` take
+`&mut self`, `finish` takes `self`), but hosts that share a session through
+interior mutability or reach it through a raw-handle binding must enforce
+it themselves.
+
 See the `Session` trait and `SessionCore` in [`src/session.rs`](src/session.rs)
 for the concrete API.
 
@@ -58,7 +73,8 @@ workflow can be written either of two ways, and the host cannot tell which:
   `advance` matches on it. Every state is explicit and inspectable — and
   every new wait costs a variant, a handler, and the same
   `None` / `Failed` / wrong-reply arms again.
-  `contentauth-c2pa-reader`'s `ReadSession` is written this way.
+  `contentauth-c2pa-reader`'s `ReadSession` and
+  `contentauth-c2pa-builder`'s `BuilderSession` use this approach.
 * **As an `async fn`, with `Workflow`** ([`src/workflow.rs`](src/workflow.rs)).
   The workflow asks its `Host` handle for what it needs and `.await`s the
   reply; the compiler generates the state machine, including the locals,
@@ -67,27 +83,23 @@ workflow can be written either of two ways, and the host cannot tell which:
   there is no executor, runtime, or thread, and nothing to wake, because a
   `PendingReply` is ready exactly when `fulfill` has delivered its reply.
   Issuing several requests before awaiting any puts them in front of the
-  host at once. `contentauth-c2pa-builder`'s `BuilderSession` is written
-  this way.
-
-```rust,ignore
-async fn build(host: Host<BuilderRequest>, settings: BuilderSettings) -> Result<BuilderReport, Error> {
-    let exclusions = ask(&host, ReservePlaceholder { .. }, ..).await?;
-    let asset_len = ask(&host, AssetLength { .. }, ..).await?;
-    let hash = hash_stream::hash(&host, ..).await?; // a sub-workflow
-    for index in 0..manifest.identity_count() {
-        let signature = ask(&host, Sign { .. }, ..).await?;
-        // ...
-    }
-    // ...
-}
-```
+  host at once. The reader's experimental `read_workflow` is an example;
+  it is available behind that crate's `engine` feature.
 
 The trade: a `Workflow`'s position is opaque — a test observes it as a host
 does, through `outstanding_requests`, rather than by matching on a phase
 enum — and it must await only `PendingReply`s (or futures built from them).
 Awaiting anything else would never be woken; `advance` reports that as
 `ProtocolError::WorkflowStalled` instead of hanging.
+
+Synchronous hosts can use `session.respond(|request| answer(request))?`
+after each `AwaitHost`. This borrows each request, obtains its owned reply,
+and calls `fulfill` before servicing the next request: no request clones
+or intermediate reply batch are needed. It stops on the first protocol
+error, leaves earlier replies delivered, and does not call `advance`.
+Host-operation failures are carried in the vocabulary's reply type.
+Async hosts and hosts that service only a subset or choose another order
+continue to use `outstanding_requests` / `fulfill` directly.
 
 ## Building
 

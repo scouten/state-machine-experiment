@@ -6,7 +6,10 @@ and the reader, builder and format handlers know nothing about each other.**
 
 ## Dependency graph
 
-Arrows point from a crate to what it depends on (workspace crates only).
+Arrows point from a crate to what it depends on. Dashed edges include the
+standalone Wasm and Neon bindings, plus the standalone JavaScript package.
+The C++ reader/signing binding is another implemented bridge consumer. The outlined
+Python node and its dotted edge indicate prospective reuse only.
 
 ```mermaid
 flowchart BT
@@ -26,12 +29,18 @@ flowchart BT
 
     RSC["rs-compat<br/><i>c2pa-rs Reader shape</i>"]
     JSC["js-compat<br/><i>c2pa-wasm shape, async</i>"]
-    NDC["node-compat<br/><i>sync NodeSession</i>"]
+    BR["session-bridge<br/><i>read/build bridges + explicit compat policy</i>"]
 
     SB["sign-baseline"]
     RSS["rs-compat-sign"]
     JSS["js-compat-sign"]
-    NDS["node-compat-sign"]
+    HOST["js/src/shared<br/><i>one JS host in both Workers</i>"]
+    PW["contentauth-c2pa-wasm<br/><i>standalone synchronous Wasm boundary</i>"]
+    PN["c2pa-node-compat-addon<br/><i>existing Neon boundary</i>"]
+    PNS["c2pa-node-sign-addon<br/><i>existing signing Neon boundary</i>"]
+    CPP["contentauth-c2pa-cpp<br/><i>reader + signing C ABI</i>"]
+    PY["POSSIBLE: Python host + binding adapter<br/><i>not implemented or tested</i>"]
+    CAPI["c2pa-c-api<br/><i>C ABI for FFI</i>"]
 
     RD --> SM & PR
     BD --> SM & PR
@@ -42,35 +51,46 @@ flowchart BT
     FR --> RD & FM
     FB --> BD & FM
     RSC --> FR & RG
-    JSC --> FR & JP
-    NDC --> FR & JSC
+    JSC --> FR & BR
+    BR --> FR & FB & JP & SB & RD
     SB --> BD
     RSS --> SB & FB & JP
     JSS --> SB & FB & JSC
-    NDS --> SB & FB & JSC
+    HOST -.-> PW & PN & PNS
+    PW -.-> BR
+    PN -.-> BR
+    PNS -.-> BR
+    CPP -->|"read/build bridges"| BR
+    PY -.->|"could drive same bridge protocol"| BR
+    CAPI --> FR & FB & RG & JSC & SB
 
     classDef engine fill:#dbeafe,stroke:#2563eb,color:#000
     classDef core fill:#dcfce7,stroke:#16a34a,color:#000
     classDef fmt fill:#fef9c3,stroke:#ca8a04,color:#000
     classDef glue fill:#fae8ff,stroke:#a21caf,color:#000
     classDef bind fill:#fee2e2,stroke:#dc2626,color:#000
+    classDef proposed fill:#fff,stroke:#64748b,stroke-dasharray:5 5,color:#000
     class SM,PR engine
     class RD,BD core
     class FM,JP,TF,RG fmt
     class FR,FB glue
-    class RSC,JSC,NDC,SB,RSS,JSS,NDS bind
+    class RSC,JSC,BR,CPP,SB,RSS,JSS,CAPI bind
+    class PY proposed
 ```
 
 (Edges to `primitives` and `state-machine` from most crates are omitted
 where they would only add noise; every session crate depends on both.)
+The C API's `read` feature enables its file-reader and JS-compat edges;
+`build` enables its file-builder and sign-baseline edges. Both are on by
+default, but a downstream client can select either workflow independently.
 
 ## Layers
 
 ```mermaid
 flowchart TB
-    subgraph L5["Bindings — c2pa-rs / c2pa-wasm / c2pa-node shaped APIs"]
+    subgraph L5["Bindings — c2pa-rs / c2pa-wasm / c2pa-node shaped APIs and C ABI"]
         direction LR
-        b1[rs-compat] ~~~ b2[js-compat] ~~~ b3[node-compat] ~~~ b4["*-compat-sign"]
+        b1[rs-compat] ~~~ b2["js-compat: alternative async host"] ~~~ b3["session-bridge + Wasm/Neon + JS host"] ~~~ b4["*-compat-sign"] ~~~ b5[c-api]
     end
     subgraph L4["Orchestration — compose a format with a session"]
         direction LR
@@ -106,12 +126,37 @@ flowchart TB
 | `…-format-registry` | Format (host side) | Detect by content / extension / MIME; type-erased `AnyFormat`. |
 | `…-file-reader` | Orchestration | `FileReadSession`: `locate` + `ReadSession`; plus a blocking `Read + Seek` host. |
 | `…-file-builder` | Orchestration | `FileBuilderSession`: `plan_embed`/`commit` + `BuilderSession`, never buffering the asset; plus blocking hosts. |
-| `…-rs-compat` | Binding | c2pa-rs `Context` + `Reader::with_file` slice; one of two crates with a network dependency (`reqwest` OCSP). |
-| `…-js-compat` | Binding | c2pa-wasm `WasmReader` slice; async host with `Blob`/`Platform` traits; `web` feature for `wasm-bindgen`. |
-| `…-node-compat` (+ `c2pa-node-compat-addon`) | Binding | Purely synchronous `NodeSession`; Node owns all async. Addon is a separate Neon workspace. |
+| `…-rs-compat` | Binding | c2pa-rs `Context` + `Reader::with_file` slice; default `http` feature enables `reqwest` OCSP, otherwise uses the local-only file host. |
+| `…-js-compat` | Alternative host | Earlier c2pa-wasm `WasmReader` slice; Rust async host with `Blob`/`Platform`, retaining its `web` exports and tests. Imports shared compatibility vocabulary from the neutral bridge. |
+| `…-session-bridge` | Binding | `read::ReadSessionBridge`, `build::BuildSessionBridge` and explicit `compat` conversions; no runtime, Wasm or Neon dependencies. Replaces both former Node-named Rust crates. |
 | `…-sign-baseline` | Binding | The baseline signing case (JSON definition → `BuilderSettings`) every write binding is held to. |
-| `…-rs/js/node-compat-sign` (+ `c2pa-node-sign-addon`) | Binding | The baseline case through each binding. `rs-compat-sign` is the other crate with a network dependency (`reqwest` for RFC 3161 timestamps). |
+| `…-rs/js-compat-sign` | Binding / alternative host | Blocking and Rust async baseline signing hosts retained. `rs-compat-sign`'s default `http` feature enables `reqwest` for RFC 3161; without it, the signer supplies the transport. |
+| `c2pa-node-compat-addon`, `c2pa-node-sign-addon` | Binding | Separate Neon workspaces over the neutral read/build bridges. Existing JavaScript facades retain broader file/OCSP/timestamp behavior. |
+| `…-c-api` | Binding | Thread-free, callback-free C ABI (`c2pa_sm_*`); independently selectable `read`/`build` features, cimpl-tracked handles and a cbindgen-generated header declaring both APIs. |
 | `c2pa-rs-compat-conformance` | Test | Separate workspace; differential tests against the real `c2pa` crate. |
+| `contentauth-c2pa-wasm` + `js/` | Binding / preferred JS host | Standalone synchronous Wasm boundary and private JS package with shared host, browser and Node entry points. Offline JPEG read/baseline ES256 sign; caller-owned async callbacks. |
+| `contentauth-c2pa-cpp` | Binding | C++17/20 reader and signing drivers over the neutral read/build bridges; cimpl-tracked signing C ABI, blocking memory/stream/POSIX-file hosts, pooled/future/parallel drivers and C++20 coroutines. A public-header ES256 signing example reads its output back as Trusted. Does not depend on the JS driver. |
+
+The read/build bridges have been extracted and renamed, not copied. The
+preferred JavaScript direction is the [shared host](../../js/README.md); the
+older Rust async browser hosts remain alternatives until their useful behavior
+is preserved by shared-host compatibility facades.
+
+The merged [C++ binding](../../contentauth-c2pa-cpp/README.md) now consumes the
+read/build bridges through its C ABI, independently of the JS host. Python remains
+prospective. The [read wrapper](../../contentauth-c2pa-session-bridge/src/read/mod.rs)
+exposes numeric handles, byte vectors, strings and synchronous
+`advance`/`fulfill`/`finish` methods; its
+[crate dependencies](../../contentauth-c2pa-session-bridge/Cargo.toml) contain no
+Neon or Node runtime dependency. The
+[build wrapper](../../contentauth-c2pa-session-bridge/src/build/mod.rs) follows
+the same host-driven pattern. C++ supplies a C ABI adapter;
+Python could supply an extension-module adapter. Both must
+translate Rust types/errors and define session and buffer ownership. The Rust
+enums are not directly a stable foreign ABI, and neither consumer needs to use
+the shared JavaScript driver or Workers. The current wrappers still reuse
+JavaScript-oriented compatibility settings/results in Rust, now owned by the
+explicit `compat` module. They are not generic engine requirements.
 
 ## Rules of the road
 

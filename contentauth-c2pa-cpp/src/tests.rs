@@ -47,7 +47,7 @@ fn take_error(err: *mut C2paSmError) -> (c_int, String, String) {
     out
 }
 
-fn new_session(format: &str, settings: Option<&str>) -> *mut C2paSmSession {
+pub(super) fn new_session(format: &str, settings: Option<&str>) -> *mut C2paSmSession {
     let format = cstr(format);
     let settings = settings.map(cstr);
     let mut session = ptr::null_mut();
@@ -124,7 +124,7 @@ fn answer(session: *mut C2paSmSession, request: &C2paSmRequest, asset: &[u8]) {
 
 /// Drives a read to completion; returns the finish status, the reader
 /// (null if none) and the error (null if none).
-fn drive(
+pub(super) fn drive(
     session: *mut C2paSmSession,
     asset: &[u8],
 ) -> (c_int, *mut C2paSmReader, *mut C2paSmError) {
@@ -168,6 +168,10 @@ fn a_signed_jpeg_reads_through_the_c_abi() {
             owned
         };
         assert!(json.contains("\"validation_state\": \"Valid\""), "{json}");
+        assert_eq!(
+            c2pa_sm_reader_validation_state(reader),
+            C2paSmValidationState::C2PA_SM_VALIDATION_VALID
+        );
 
         let label = c2pa_sm_reader_active_label(reader);
         assert!(!label.is_null());
@@ -325,6 +329,10 @@ fn null_and_malformed_arguments_are_errors_not_undefined_behavior() {
         c2pa_sm_string_free(ptr::null_mut());
         c2pa_sm_error_free(ptr::null_mut());
         assert!(c2pa_sm_reader_json(ptr::null()).is_null());
+        assert_eq!(
+            c2pa_sm_reader_validation_state(ptr::null()),
+            C2paSmValidationState::C2PA_SM_VALIDATION_UNAVAILABLE
+        );
         assert!(c2pa_sm_reader_active_label(ptr::null()).is_null());
         assert!(!c2pa_sm_reader_is_embedded(ptr::null()));
         assert_eq!(
@@ -382,9 +390,9 @@ fn misanswered_requests_are_rejected_and_stay_outstanding() {
 fn every_request_kind_is_described() {
     // The engine never issues an OCSP request for this repository's
     // fixtures, so the description of one is checked on the fixture
-    // directly, as `contentauth-c2pa-node-compat` does for its own.
+    // directly, as `contentauth-c2pa-session-bridge` does for its own.
     let mut session = C2paSmSession {
-        inner: NodeSession::new("image/jpeg", None).unwrap(),
+        inner: ReadSessionBridge::new("image/jpeg", None).unwrap(),
         fresh: vec![
             PendingRequest::Read {
                 id: 1,

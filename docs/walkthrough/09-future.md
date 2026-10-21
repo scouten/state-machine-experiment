@@ -12,9 +12,11 @@ flowchart LR
         d1["Read + validate: integrity, signature,<br/>trust, RFC 3161, OCSP, v1+v2 claims"]
         d2["Write: v2 claim, data hash, any signing alg,<br/>timestamp"]
         d3["Formats: JPEG, TIFF/BigTIFF/DNG, registry"]
-        d4["Bindings: rs / wasm / node, read and sign"]
+        d4["Bindings: rs / wasm / node, read and sign<br/>C++ reader: C ABI + blocking / threaded / coroutine hosts"]
         d5["Differential tests vs c2pa-rs"]
-        d6["Engine: async-fn workflows, no runtime<br/>(builder ported)"]
+        d6["Shared JS Worker read + baseline sign<br/>browser Wasm / Node Neon, async signer callbacks"]
+        d7["C++ read + sign; blocking / pool / future / coroutine<br/>atomic file signing + Trusted read-back example"]
+        d8["Experimental alternate reader workflow<br/>async-fn, no runtime"]
     end
     subgraph next["Next"]
         direction TB
@@ -23,7 +25,6 @@ flowchart LR
         n3["Write-side breadth"]
         n4["Bindings and hosts"]
         n5["Proof at scale"]
-        n6["Engine ergonomics"]
     end
     done --> next
 ```
@@ -72,14 +73,38 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 
 ## 4. Bindings and hosts
 
+* **C++ host integrations:** production private-key providers and real TSA HTTP
+  transport remain host responsibilities, as do atomic publication on non-POSIX
+  systems and packaging (`install`/`find_package`, vcpkg, Conan). The baseline
+  JPEG/ES256 case already has blocking, async/pool/future and coroutine drivers,
+  atomic file failure tests and a runnable signing/read-back example included
+  in the coverage and sanitizer CI matrix. Concurrent destruction of a running
+  coroutine is not supported; its documented host-lifetime rules still apply.
 * **`Builder` surface parity** for the c2pa-rs shape beyond the baseline
   case; `from_stream` and other constructors.
 * **c2pa-node:** `fromManifestDataAndAsset`, `resourceToAsset`, signers,
   CAWG identity assertions (the X.509 type is done on the core read and
   write paths; this is the bindings), Trustmark.
-* **Browser:** a `fetch`-backed OCSP `Platform`; actually *running* the
-  `web` modules (there's no browser in CI today); a Worker-hosted session
-  for hashing off the main thread.
+* **Worker-hosted shared JS loop:** the
+  [private JavaScript package](../../js/README.md) now runs the same facade,
+  protocol and session drivers over browser Wasm and Node Neon. Local
+  Chromium/Firefox/WebKit and Node tests establish complete-report/request
+  equality and application task progress for signed 64 MiB reads.
+  Baseline ES256 signing also proves caller-owned async callbacks, failure and
+  disposal handling, queued operation routing and trusted read-back.
+  No new core features or Tokio are involved. A paired JSON/binary Wasm
+  write-payload comparison preserves both contracts and reduces median local
+  large-build time by about 6.7–8.5 times; binary is now the browser default.
+  Streaming sources/outputs, measured peak memory and production distribution
+  remain unproven.
+  The neutral read/build bridges and compatibility vocabulary now live in
+  `contentauth-c2pa-session-bridge`; Wasm and Neon are consumers. Node and all
+  three browser contracts are wired into CI. Next, migrate the older host
+  capabilities behind compatibility facades with preservation tests before
+  removing their separate loops.
+* **Browser:** a `fetch`-backed OCSP `Platform`; the existing async `web`
+  modules still have no browser CI coverage. The shared-host browser CI runs
+  the synchronous Wasm session boundary, not those alternative modules.
 * **Other host languages** — Python, Swift, Kotlin, .NET: the Node binding
   shows the minimal shape (a handful of synchronous functions plus a host
   loop). Each is a good test of whether the flattened `PendingRequest`/
