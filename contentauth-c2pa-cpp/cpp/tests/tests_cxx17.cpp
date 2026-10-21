@@ -471,7 +471,7 @@ TEST(Core, blocking_signing_round_trips_trusted_with_owned_report) {
 
 TEST(Core, build_session_moves_consumes_and_preserves_owned_pending_values) {
     BuildSession original(signing_settings());
-    const auto first = original.advance();
+    auto first = original.advance();
     EXPECT_TRUE(!first.done);
     EXPECT_TRUE(!first.requests.empty());
     EXPECT_TRUE(original.advance().requests.empty());
@@ -485,17 +485,17 @@ TEST(Core, build_session_moves_consumes_and_preserves_owned_pending_values) {
     EXPECT_THROW_CODE(assigned.fulfill(id, Signature{{}}), ErrorCode::InvalidArgument);
     EXPECT_THROW_CODE(assigned.fulfill(UINT64_MAX, Length{0}), ErrorCode::InvalidArgument);
     MemoryBuildHost host(fixture_bytes(), fixture_sign);
-    for (const auto &pending : first.requests) assigned.fulfill(request_id(pending), answer(host, pending));
+    for (auto &pending : first.requests) assigned.fulfill(request_id(pending), answer(host, pending));
     EXPECT_THROW_CODE(assigned.fulfill(id, Length{0}), ErrorCode::InvalidArgument);
     std::vector<BuildRequest> retained;
     for (;;) {
-        const auto step = assigned.advance();
+        auto step = assigned.advance();
         if (step.done) break;
         EXPECT_TRUE(!step.requests.empty());
         if (step.requests.empty()) throw std::runtime_error("unexpected stalled build");
-        for (const auto &pending : step.requests) {
-            retained.push_back(pending);
+        for (auto &pending : step.requests) {
             assigned.fulfill(request_id(pending), answer(host, pending));
+            retained.push_back(std::move(pending));
         }
     }
     const auto report = std::move(assigned).finish();
@@ -524,15 +524,76 @@ TEST(Core, premature_finish_consumes_build_and_moved_from_finish_is_safe) {
     EXPECT_THROW_CODE(session.advance(), ErrorCode::InvalidArgument);
 }
 
+TEST(Core, signing_read_leases_are_move_only_and_survive_session_destruction) {
+    static_assert(!std::is_copy_constructible_v<ReadBuffer>);
+    static_assert(!std::is_copy_constructible_v<CompletedRead>);
+    ReadBuffer retained;
+    {
+        BuildSession session(signing_settings());
+        MemoryBuildHost host(fixture_bytes(), fixture_sign);
+        bool acquired = false;
+        while (!acquired) {
+            auto step = session.advance();
+            ASSERT_FALSE(step.done);
+            ASSERT_FALSE(step.requests.empty());
+            for (auto &pending : step.requests) {
+                if (auto *read = std::get_if<BuildReadRequest>(&pending)) {
+                    retained = std::move(read->destination);
+                    acquired = true;
+                } else {
+                    session.fulfill(request_id(pending), answer(host, pending));
+                }
+            }
+        }
+    }
+    const auto bytes = retained.writable();
+    ASSERT_GT(bytes.size, size_t{0});
+    std::fill_n(bytes.data, bytes.size, uint8_t{42});
+    ReadBuffer moved(std::move(retained));
+    EXPECT_THROW(retained.writable(), std::runtime_error);
+    EXPECT_EQ(moved.writable().data, bytes.data);
+    EXPECT_THROW_CODE(std::move(moved).seal(bytes.size - 1), ErrorCode::InvalidArgument);
+    EXPECT_EQ(moved.writable().data, bytes.data);
+    ReadBuffer assigned;
+    assigned = std::move(moved);
+    EXPECT_THROW(moved.writable(), std::runtime_error);
+    auto completed = std::move(assigned).seal(bytes.size);
+    EXPECT_THROW(assigned.writable(), std::runtime_error);
+    CompletedRead sealed(std::move(completed));
+    completed = std::move(sealed);
+    EXPECT_THROW_CODE(std::move(assigned).seal(bytes.size), ErrorCode::InvalidArgument);
+}
+
+TEST(Core, sealed_read_wrong_routing_does_not_consume_the_completion) {
+    BuildSession session(signing_settings());
+    MemoryBuildHost host(fixture_bytes(), fixture_sign);
+    for (;;) {
+        auto step = session.advance();
+        ASSERT_FALSE(step.done);
+        ASSERT_FALSE(step.requests.empty());
+        for (auto &pending : step.requests) {
+            const auto id = request_id(pending);
+            auto reply = answer(host, pending);
+            if (std::holds_alternative<CompletedRead>(reply)) {
+                EXPECT_THROW_CODE(session.fulfill(UINT64_MAX, std::move(reply)), ErrorCode::InvalidArgument);
+                EXPECT_NO_THROW(session.fulfill(id, std::move(reply)));
+                EXPECT_THROW_CODE(session.fulfill(id, std::move(reply)), ErrorCode::InvalidArgument);
+                return;
+            }
+            session.fulfill(id, std::move(reply));
+        }
+    }
+}
+
 TEST(Core, memory_build_host_keeps_streams_distinct_and_checks_bounds) {
     MemoryBuildHost host({1, 2, 3});
     EXPECT_EQ(host.length(BuildStream::Source), uint64_t(3));
     EXPECT_EQ(host.length(BuildStream::Output), uint64_t(0));
     host.write(BuildStream::Output, 1, {9, 8});
-    EXPECT_EQ(host.read(BuildStream::Source, 1, 2), (std::vector<uint8_t>{2, 3}));
-    EXPECT_EQ(host.read(BuildStream::Output, 0, 3), (std::vector<uint8_t>{0, 9, 8}));
-    EXPECT_TRUE(std::holds_alternative<Failed>(answer(host, BuildReadRequest{1, BuildStream::Source, 2, 2})));
-    EXPECT_TRUE(std::holds_alternative<Failed>(answer(host, BuildReadRequest{1, BuildStream::Output, UINT64_MAX, 1})));
+    EXPECT_EQ(read_build_host(host, BuildStream::Source, 1, 2), (std::vector<uint8_t>{2, 3}));
+    EXPECT_EQ(read_build_host(host, BuildStream::Output, 0, 3), (std::vector<uint8_t>{0, 9, 8}));
+    EXPECT_TRUE(std::holds_alternative<Failed>(read_build_reply(host, BuildStream::Source, 2, 2)));
+    EXPECT_TRUE(std::holds_alternative<Failed>(read_build_reply(host, BuildStream::Output, UINT64_MAX, 1)));
     EXPECT_TRUE(std::holds_alternative<Failed>(answer(host, WriteRequest{1, BuildStream::Output, UINT64_MAX, {1}})));
     EXPECT_TRUE(std::holds_alternative<Failed>(answer(host, WriteRequest{1, BuildStream::Source, 0, {1}})));
     EXPECT_TRUE(std::holds_alternative<Written>(answer(host, WriteRequest{1, BuildStream::Output, 0, {1}})));
@@ -546,7 +607,7 @@ TEST(Core, build_request_conversion_rejects_unknown_abi_values) {
     C2paSmBuildRequest pending{};
     pending.kind = 99;
     rejected = false;
-    try { detail::describe(pending); } catch (const std::runtime_error &) { rejected = true; }
+    try { detail::describe(nullptr, pending); } catch (const std::runtime_error &) { rejected = true; }
     EXPECT_TRUE(rejected);
 }
 
@@ -556,18 +617,18 @@ TEST(Core, build_request_conversion_accepts_empty_buffers_without_dereferencing_
     C2paSmBuildRequest pending{};
     pending.id = 42;
     pending.kind = C2PA_SM_BUILD_REQUEST_SIGN;
-    const auto sign = std::get<SignRequest>(detail::describe(pending));
+    const auto sign = std::get<SignRequest>(detail::describe(nullptr, pending));
     EXPECT_EQ(sign.id, uint64_t(42));
     EXPECT_TRUE(sign.algorithm.empty());
     EXPECT_TRUE(sign.data.empty());
     pending.kind = C2PA_SM_BUILD_REQUEST_TIMESTAMP;
-    const auto timestamp = std::get<TimestampRequest>(detail::describe(pending));
+    const auto timestamp = std::get<TimestampRequest>(detail::describe(nullptr, pending));
     EXPECT_EQ(timestamp.id, uint64_t(42));
     EXPECT_TRUE(timestamp.url.empty());
     EXPECT_TRUE(timestamp.body.empty());
     pending.kind = C2PA_SM_BUILD_REQUEST_WRITE;
     pending.stream = C2PA_SM_BUILD_OUTPUT;
-    const auto write = std::get<WriteRequest>(detail::describe(pending));
+    const auto write = std::get<WriteRequest>(detail::describe(nullptr, pending));
     EXPECT_EQ(write.id, uint64_t(42));
     EXPECT_TRUE(write.stream == BuildStream::Output);
     EXPECT_TRUE(write.bytes.empty());
@@ -582,9 +643,9 @@ TEST(Core, build_request_conversion_copies_nonempty_payloads_without_terminators
     pending.algorithm = {reinterpret_cast<const uint8_t *>(text.data()), text.size()};
     pending.url = pending.algorithm;
     pending.kind = C2PA_SM_BUILD_REQUEST_SIGN;
-    const auto sign = std::get<SignRequest>(detail::describe(pending));
+    const auto sign = std::get<SignRequest>(detail::describe(nullptr, pending));
     pending.kind = C2PA_SM_BUILD_REQUEST_TIMESTAMP;
-    const auto timestamp = std::get<TimestampRequest>(detail::describe(pending));
+    const auto timestamp = std::get<TimestampRequest>(detail::describe(nullptr, pending));
     bytes.assign(bytes.size(), 0);
     text.assign(text.size(), 'x');
     EXPECT_EQ(sign.algorithm, "es256");
@@ -599,11 +660,11 @@ TEST(Core, build_hosts_accept_empty_io_at_eof_without_changing_output) {
     std::stringstream output;
     IOStreamBuildHost streams(source, output);
     for (SyncBuildHost *host : {static_cast<SyncBuildHost *>(&memory), static_cast<SyncBuildHost *>(&streams)}) {
-        EXPECT_TRUE(std::get<Bytes>(answer(*host, BuildReadRequest{1, BuildStream::Source, 3, 0})).data.empty());
-        EXPECT_TRUE(std::get<Bytes>(answer(*host, BuildReadRequest{2, BuildStream::Output, 0, 0})).data.empty());
+        EXPECT_TRUE(read_build_host(*host, BuildStream::Source, 3, 0).empty());
+        EXPECT_TRUE(read_build_host(*host, BuildStream::Output, 0, 0).empty());
         EXPECT_TRUE(std::holds_alternative<Written>(answer(*host, WriteRequest{3, BuildStream::Output, 0, {}})));
         EXPECT_EQ(host->length(BuildStream::Output), uint64_t(0));
-        EXPECT_TRUE(std::holds_alternative<Failed>(answer(*host, BuildReadRequest{4, BuildStream::Source, 4, 0})));
+        EXPECT_TRUE(std::holds_alternative<Failed>(read_build_reply(*host, BuildStream::Source, 4, 0)));
     }
     EXPECT_TRUE(memory.output().empty());
     EXPECT_TRUE(output.str().empty());
@@ -630,14 +691,14 @@ TEST(Core, stream_host_rejects_alias_nonempty_failed_and_short_io) {
     try { IOStreamBuildHost host(output, input); } catch (const std::exception &) { rejected = true; }
     EXPECT_TRUE(rejected);
     IOStreamBuildHost host(input, output);
-    EXPECT_TRUE(std::holds_alternative<Failed>(answer(host, BuildReadRequest{1, BuildStream::Source, 2, 2})));
+    EXPECT_TRUE(std::holds_alternative<Failed>(read_build_reply(host, BuildStream::Source, 2, 2)));
     EXPECT_TRUE(std::holds_alternative<Failed>(answer(host, WriteRequest{1, BuildStream::Source, 0, {1}})));
     output.setstate(std::ios::badbit);
     EXPECT_TRUE(std::holds_alternative<Failed>(answer(host, WriteRequest{1, BuildStream::Output, 0, {1}})));
     EXPECT_TRUE(std::holds_alternative<Failed>(answer(host, BuildLengthRequest{1, BuildStream::Output})));
     input.exceptions(std::ios::badbit);
     try { input.setstate(std::ios::badbit); } catch (const std::exception &) {}
-    EXPECT_TRUE(std::holds_alternative<Failed>(answer(host, BuildReadRequest{1, BuildStream::Source, 0, 1})));
+    EXPECT_TRUE(std::holds_alternative<Failed>(read_build_reply(host, BuildStream::Source, 0, 1)));
 }
 
 TEST(Core, stream_host_detects_short_reads_short_writes_flush_and_seek_failures) {
@@ -658,7 +719,7 @@ TEST(Core, stream_host_detects_short_reads_short_writes_flush_and_seek_failures)
     std::istream source(&short_read);
     std::stringstream output;
     IOStreamBuildHost reader(source, output);
-    EXPECT_TRUE(std::holds_alternative<Failed>(answer(reader, BuildReadRequest{1, BuildStream::Source, 0, 3})));
+    EXPECT_TRUE(std::holds_alternative<Failed>(read_build_reply(reader, BuildStream::Source, 0, 3)));
     std::istringstream input("abc");
     std::iostream short_output(&short_write);
     IOStreamBuildHost writer(input, short_output);
@@ -716,7 +777,7 @@ TEST(Core, stream_host_converts_exceptions_from_each_io_operation_into_failures)
         IOStreamBuildHost host(source, output);
         if (operation != ThrowingBuffer::Operation::Write && operation != ThrowingBuffer::Operation::Flush) {
             source_buffer.operation = operation;
-            EXPECT_TRUE(std::holds_alternative<Failed>(answer(host, BuildReadRequest{1, BuildStream::Source, 0, 1})));
+            EXPECT_TRUE(std::holds_alternative<Failed>(read_build_reply(host, BuildStream::Source, 0, 1)));
         }
         if (operation != ThrowingBuffer::Operation::Read && operation != ThrowingBuffer::Operation::Tell) {
             output_buffer.operation = operation;
@@ -781,9 +842,9 @@ TEST(Core, timestamp_callback_receives_url_and_der_and_failures_fail_closed) {
 TEST(Core, short_reads_and_host_failures_fail_without_spinning) {
     struct Broken : MemoryBuildHost {
         explicit Broken(int failure) : MemoryBuildHost(fixture_bytes(), fixture_sign), failure_(failure) {}
-        std::vector<uint8_t> read(BuildStream stream, uint64_t start, uint64_t len) override {
-            if (failure_ == 0) return {};
-            return MemoryBuildHost::read(stream, start, len);
+        void read_into(BuildStream stream, uint64_t start, MutableBytes destination) override {
+            if (failure_ == 0) throw std::runtime_error("short read");
+            MemoryBuildHost::read_into(stream, start, destination);
         }
         uint64_t length(BuildStream stream) override {
             if (failure_ == 1) throw std::runtime_error("length failed");
@@ -823,7 +884,7 @@ TEST(Core, file_build_read_reports_source_truncation_after_length_check) {
     };
     {
         TruncatingHost host(source, cleanup.path / "output.jpg");
-        const auto reply = answer(host, BuildReadRequest{1, BuildStream::Source, 0, 3});
+        const auto reply = read_build_reply(host, BuildStream::Source, 0, 3);
         EXPECT_TRUE(std::holds_alternative<Failed>(reply));
         EXPECT_EQ(std::get<Failed>(reply).message, "build file read failed");
     }
@@ -886,19 +947,19 @@ TEST(Core, file_signing_publishes_only_success_and_cleans_temporaries) {
         EXPECT_TRUE(std::holds_alternative<Failed>(reply));
         EXPECT_EQ(std::get<Failed>(reply).message, "build file write failed");
         EXPECT_EQ(host.length(BuildStream::Output), uint64_t(3));
-        EXPECT_EQ(host.read(BuildStream::Output, 0, 3), (std::vector<uint8_t>{1, 2, 3}));
+        EXPECT_EQ(read_build_host(host, BuildStream::Output, 0, 3), (std::vector<uint8_t>{1, 2, 3}));
     }
     EXPECT_TRUE(std::filesystem::is_empty(cleanup.path));
     {
         FileBuildHost host(C2PA_SM_FIXTURE, destination);
         const auto source_length = host.length(BuildStream::Source);
         EXPECT_TRUE(source_length > 0);
-        EXPECT_TRUE(std::get<Bytes>(answer(host, BuildReadRequest{1, BuildStream::Source, source_length, 0})).data.empty());
-        EXPECT_TRUE(std::get<Bytes>(answer(host, BuildReadRequest{2, BuildStream::Output, 0, 0})).data.empty());
+        EXPECT_TRUE(read_build_host(host, BuildStream::Source, source_length, 0).empty());
+        EXPECT_TRUE(read_build_host(host, BuildStream::Output, 0, 0).empty());
         EXPECT_TRUE(std::holds_alternative<Written>(answer(host, WriteRequest{3, BuildStream::Output, 0, {}})));
         EXPECT_EQ(host.length(BuildStream::Output), uint64_t(0));
-        EXPECT_TRUE(std::holds_alternative<Failed>(answer(host, BuildReadRequest{4, BuildStream::Source, source_length, 1})));
-        EXPECT_TRUE(std::holds_alternative<Failed>(answer(host, BuildReadRequest{5, BuildStream::Output, UINT64_MAX, 1})));
+        EXPECT_TRUE(std::holds_alternative<Failed>(read_build_reply(host, BuildStream::Source, source_length, 1)));
+        EXPECT_TRUE(std::holds_alternative<Failed>(read_build_reply(host, BuildStream::Output, UINT64_MAX, 1)));
         EXPECT_TRUE(std::holds_alternative<Failed>(answer(host, WriteRequest{6, BuildStream::Source, 0, {1}})));
         EXPECT_TRUE(std::holds_alternative<Failed>(answer(host, WriteRequest{7, BuildStream::Output, UINT64_MAX, {1}})));
         EXPECT_EQ(host.length(BuildStream::Source), source_length);
@@ -1062,24 +1123,21 @@ TEST(Core, signing_settings_keep_certificates_and_definition_as_owned_values) {
 
 TEST(Core, signing_requests_identify_streams_and_own_their_payloads) {
     static_assert(std::variant_size_v<BuildRequest> == 5);
-    std::vector<BuildRequest> requests{
-        BuildReadRequest{10, BuildStream::Source, 20, 30},
-        BuildLengthRequest{11, BuildStream::Source},
-        WriteRequest{12, BuildStream::Output, 40, {1, 2}},
-        SignRequest{13, "es256", {3, 4}},
-        TimestampRequest{14, "https://tsa.example", {5, 6}},
-        BuildReadRequest{15, BuildStream::Output, 50, 60},
-        BuildLengthRequest{16, BuildStream::Output},
-    };
+    static_assert(!std::is_copy_constructible_v<BuildRequest>);
+    std::vector<BuildRequest> requests;
+    requests.emplace_back(BuildReadRequest{10, BuildStream::Source, 20, 30});
+    requests.emplace_back(BuildLengthRequest{11, BuildStream::Source});
+    requests.emplace_back(WriteRequest{12, BuildStream::Output, 40, {1, 2}});
+    requests.emplace_back(SignRequest{13, "es256", {3, 4}});
+    requests.emplace_back(TimestampRequest{14, "https://tsa.example", {5, 6}});
+    requests.emplace_back(BuildReadRequest{15, BuildStream::Output, 50, 60});
+    requests.emplace_back(BuildLengthRequest{16, BuildStream::Output});
     uint64_t expected_id = 10;
     for (const auto &request : requests) {
         EXPECT_EQ(std::visit([](const auto &pending) { return pending.id; }, request), expected_id);
         ++expected_id;
     }
-    const auto copied = requests;
-    std::get<WriteRequest>(requests[2]).bytes.clear();
-    std::get<SignRequest>(requests[3]).data.clear();
-    std::get<TimestampRequest>(requests[4]).body.clear();
+    const auto copied = std::move(requests);
     EXPECT_TRUE(std::get<BuildReadRequest>(copied[0]).stream == BuildStream::Source);
     EXPECT_EQ(std::get<BuildReadRequest>(copied[0]).start, uint64_t(20));
     EXPECT_EQ(std::get<BuildReadRequest>(copied[0]).len, uint64_t(30));
@@ -1096,8 +1154,9 @@ TEST(Core, signing_requests_identify_streams_and_own_their_payloads) {
 
 TEST(Core, signing_replies_and_report_hold_plain_values) {
     static_assert(std::variant_size_v<BuildReply> == 6);
-    BuildReply reply = Bytes{{1, 2}};
-    EXPECT_EQ(std::get<Bytes>(reply).data.size(), size_t(2));
+    static_assert(!std::is_copy_constructible_v<BuildReply>);
+    BuildReply reply = CompletedRead{};
+    EXPECT_TRUE(std::holds_alternative<CompletedRead>(reply));
     reply = Length{42};
     EXPECT_EQ(std::get<Length>(reply).value, uint64_t(42));
     reply = Written{};

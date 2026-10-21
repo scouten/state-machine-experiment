@@ -305,7 +305,7 @@ Neither a session nor its ABI starts host work or invokes host callbacks.
 
 | Request | Required reply | Host obligation |
 |---|---|---|
-| `BuildReadRequest` | `Bytes` | Read exactly `len` bytes at `start` of `stream` |
+| `BuildReadRequest` | `CompletedRead` | Fill its Rust-owned `destination` with exactly `len` bytes at `start` of `stream`, then seal it |
 | `BuildLengthRequest` | `Length` | Return the selected stream's length |
 | `WriteRequest` | `Written` | Write all `bytes` at `offset`; acknowledge only once subsequent reads see them |
 | `SignRequest` | `Signature` | Sign the complete COSE `Sig_structure` in `data` using `algorithm`; ES256 returns 64-byte raw `r \|\| s`, not DER |
@@ -313,9 +313,44 @@ Neither a session nor its ABI starts host work or invokes host callbacks.
 
 `Failed` is valid for every request and fails the build. A host must finish
 partial reads/writes itself or report failure, never acknowledge a short
-operation as successful. `BuildReply` reuses the reader's `Bytes`, `Length`,
-and `Failed`; signing has its own request variant because it has two streams.
-All C++ payloads own their strings and bytes, not pointers into the session.
+operation as successful. `BuildReply` reuses the reader's `Length` and
+`Failed`; read replies instead own a move-only `CompletedRead`.
+`BuildRequest` and `BuildReply` are move-only. Write, sign, and timestamp
+payloads still own their C++ strings and vectors; read destinations own
+independent Rust allocations, not borrows into the session.
+
+### Zero-copy signing reads
+
+`BuildSession::advance()` acquires a Rust-owned `ReadBuffer` for each new
+read. Its `writable()` method returns `MutableBytes { data, size }`.
+`SyncBuildHost::read_into(stream, start, destination)` fills the entire
+destination or throws. The file host uses `pread` directly into this
+storage; the stream host reads into it, and the memory host copies from
+its asset into it. `answer` seals the filled buffer and returns a
+`CompletedRead`; `fulfill(id, std::move(reply))` moves that allocation into
+the existing Rust byte reply without copying its contents.
+
+The signing C ABI exposes `c2pa_sm_build_read_acquire`,
+`c2pa_sm_read_seal`, `c2pa_sm_build_fulfill_read`, and independent free
+functions for writable and completed buffers. All handles are cimpl-tracked.
+Sealing validates the exact byte count. Fulfillment validates the session,
+request ID, and lease identity before transferring storage. Invalid
+operations preserve caller ownership; successful transfers null the input
+handle. A read may acquire only one lease; another byte reply cannot bypass
+it. The original copying C byte-reply API remains available for reads that
+have not acquired a lease.
+
+Read storage survives session destruction. Async hosts must retain each
+writable lease until I/O has stopped, then seal and move its completion
+into `done`. Failure also requires stopping I/O first; it does not free an
+outstanding lease. Cancelled mailboxes discard late completed buffers
+through RAII. Never access a saved writable pointer after sealing or
+freeing its lease. Dropping a lease does not answer its pending request.
+
+Only read-buffer ingestion is zero-copy: write/sign/timestamp payload copies
+remain unchanged. No I/O or networking moves into Rust. See the
+[zero-copy walkthrough](../docs/walkthrough/10-zerocopy.md) for ownership
+rules, verification, and the deferred immutable-write-lease phase.
 
 `BuildStream::Source` is read-only. `BuildStream::Output` must start empty,
 must not alias the source, and must support random-access writes and reads:

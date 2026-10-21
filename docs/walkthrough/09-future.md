@@ -15,6 +15,7 @@ flowchart LR
         d4["Bindings: rs / wasm / node, read and sign"]
         d5["Differential tests vs c2pa-rs"]
         d6["C++ read + sign; blocking / pool / future / coroutine<br/>atomic file signing + Trusted read-back example"]
+        d7["C++ signing read leases: host I/O directly into Rust-owned buffers"]
     end
     subgraph next["Next"]
         direction TB
@@ -78,6 +79,9 @@ changes. Choose formats for *what they exercise*, as TIFF did:
   atomic file failure tests and a runnable signing/read-back example included
   in the coverage and sanitizer CI matrix. Concurrent destruction of a running
   coroutine is not supported; its documented host-lifetime rules still apply.
+* **Zero-copy writes:** signing read-buffer leases are implemented across
+  the C++ drivers; immutable write leases and shared payload storage through
+  forwarding layers remain deferred. See [Zero-copy buffers](10-zerocopy.md).
 * **`Builder` surface parity** for the c2pa-rs shape beyond the baseline
   case; `from_stream` and other constructors.
 * **c2pa-node:** `fromManifestDataAndAsset`, `resourceToAsset`, signers,

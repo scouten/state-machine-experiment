@@ -75,6 +75,46 @@ impl Build {
         result(code, error)
     }
 
+    fn acquire(&self, id: u64) -> AbiResult<Lease> {
+        let mut raw = ptr::null_mut();
+        let mut view = C2paSmMutableBytes::default();
+        let mut error = ptr::null_mut();
+        let code =
+            unsafe { c2pa_sm_build_read_acquire(self.0, id, &mut raw, &mut view, &mut error) };
+        result(code, error)?;
+        Ok(Lease { raw, view })
+    }
+
+    fn fulfill_read(&self, id: u64, completed: &mut Completed) -> AbiResult<()> {
+        let mut error = ptr::null_mut();
+        let code = unsafe { c2pa_sm_build_fulfill_read(self.0, id, &mut completed.0, &mut error) };
+        result(code, error)
+    }
+
+    fn first_read(&self) -> C2paSmBuildRequest {
+        loop {
+            let (done, count) = self.advance().unwrap();
+            assert!(!done);
+            for index in 0..count {
+                let request = self.request(index).unwrap();
+                if request.kind == C2paSmBuildRequestKind::C2PA_SM_BUILD_REQUEST_READ as c_int {
+                    return request;
+                }
+                assert_eq!(
+                    request.kind,
+                    C2paSmBuildRequestKind::C2PA_SM_BUILD_REQUEST_LENGTH as c_int
+                );
+                self.fulfill(C2paSmBuildReply {
+                    id: request.id,
+                    kind: C2paSmBuildReplyKind::C2PA_SM_BUILD_REPLY_LENGTH as c_int,
+                    value: SOURCE_JPEG.len() as u64,
+                    ..Default::default()
+                })
+                .unwrap();
+            }
+        }
+    }
+
     fn finish(&mut self) -> AbiResult<Report> {
         let mut report = ptr::null_mut();
         let mut error = ptr::null_mut();
@@ -88,6 +128,41 @@ impl Build {
 impl Drop for Build {
     fn drop(&mut self) {
         unsafe { c2pa_sm_build_session_free(self.0, ptr::null_mut()) };
+    }
+}
+
+struct Lease {
+    raw: *mut C2paSmReadBuffer,
+    view: C2paSmMutableBytes,
+}
+
+impl Lease {
+    fn seal(&mut self, count: usize) -> AbiResult<Completed> {
+        let mut completed = ptr::null_mut();
+        let mut error = ptr::null_mut();
+        let code = unsafe { c2pa_sm_read_seal(&mut self.raw, count, &mut completed, &mut error) };
+        result(code, error)?;
+        Ok(Completed(completed))
+    }
+}
+
+impl Drop for Lease {
+    fn drop(&mut self) {
+        assert_eq!(
+            unsafe { c2pa_sm_read_buffer_free(&mut self.raw, ptr::null_mut()) },
+            C2PA_SM_OK
+        );
+    }
+}
+
+struct Completed(*mut C2paSmCompletedRead);
+
+impl Drop for Completed {
+    fn drop(&mut self) {
+        assert_eq!(
+            unsafe { c2pa_sm_completed_read_free(&mut self.0, ptr::null_mut()) },
+            C2PA_SM_OK
+        );
     }
 }
 
@@ -116,6 +191,9 @@ struct Host {
     seen: [usize; 5],
     fail: Option<c_int>,
     timestamp: Vec<u8>,
+    leased: bool,
+    source: Option<Vec<u8>>,
+    max_reads: usize,
 }
 
 impl Host {
@@ -135,6 +213,14 @@ impl Host {
                     (request, data, algorithm, url)
                 })
                 .collect::<Vec<_>>();
+            self.max_reads = self.max_reads.max(
+                requests
+                    .iter()
+                    .filter(|(request, ..)| {
+                        request.kind == C2paSmBuildRequestKind::C2PA_SM_BUILD_REQUEST_READ as c_int
+                    })
+                    .count(),
+            );
             for (request, data, algorithm, url) in requests.into_iter().rev() {
                 self.seen[request.kind as usize] += 1;
                 let mut reply = C2paSmBuildReply {
@@ -155,7 +241,7 @@ impl Host {
                                     if stream
                                         == C2paSmBuildStream::C2PA_SM_BUILD_SOURCE as c_int =>
                                 {
-                                    SOURCE_JPEG
+                                    self.source.as_deref().unwrap_or(SOURCE_JPEG)
                                 }
                                 stream
                                     if stream
@@ -165,9 +251,20 @@ impl Host {
                                 }
                                 _ => panic!("unknown stream"),
                             };
-                            payload = bytes
-                                [request.offset as usize..(request.offset + request.len) as usize]
-                                .to_vec();
+                            let bytes = &bytes
+                                [request.offset as usize..(request.offset + request.len) as usize];
+                            if self.leased {
+                                let mut lease = build.acquire(request.id)?;
+                                unsafe {
+                                    std::slice::from_raw_parts_mut(lease.view.data, lease.view.len)
+                                        .copy_from_slice(bytes);
+                                }
+                                let mut completed = lease.seal(bytes.len())?;
+                                build.fulfill_read(request.id, &mut completed)?;
+                                assert!(completed.0.is_null());
+                                continue;
+                            }
+                            payload = bytes.to_vec();
                             reply.kind = C2paSmBuildReplyKind::C2PA_SM_BUILD_REPLY_BYTES as c_int;
                         }
                         kind if kind
@@ -179,7 +276,7 @@ impl Host {
                                     if stream
                                         == C2paSmBuildStream::C2PA_SM_BUILD_SOURCE as c_int =>
                                 {
-                                    SOURCE_JPEG.len() as u64
+                                    self.source.as_deref().unwrap_or(SOURCE_JPEG).len() as u64
                                 }
                                 stream
                                     if stream
@@ -241,67 +338,73 @@ impl Host {
 
 #[test]
 fn signing_abi_round_trips_a_jpeg_through_the_existing_reader_as_trusted() {
-    let mut build = Build::new(BASELINE_DEFINITION);
-    let mut host = Host::default();
-    let report = host.drive(&mut build).unwrap();
-    assert!(build.0.is_null());
-    assert_eq!(host.seen[3], 1);
-    assert_eq!(host.seen[4], 0);
-    let view = report.view();
-    let manifest = unsafe { view.manifest.bytes().unwrap() };
-    assert!(!manifest.is_empty());
-    let exclusions = unsafe { std::slice::from_raw_parts(view.exclusions, view.exclusion_count) };
-    assert!(!exclusions.is_empty());
-    assert!(exclusions.iter().map(|range| range.len).sum::<u64>() >= manifest.len() as u64);
-    assert!(exclusions
-        .windows(2)
-        .all(|pair| pair[0].start <= pair[1].start));
-    assert!(exclusions
-        .iter()
-        .all(|range| range.start + range.len <= host.output.len() as u64));
+    for leased in [false, true] {
+        let mut build = Build::new(BASELINE_DEFINITION);
+        let mut host = Host {
+            leased,
+            ..Default::default()
+        };
+        let report = host.drive(&mut build).unwrap();
+        assert!(build.0.is_null());
+        assert_eq!(host.seen[3], 1);
+        assert_eq!(host.seen[4], 0);
+        let view = report.view();
+        let manifest = unsafe { view.manifest.bytes().unwrap() };
+        assert!(!manifest.is_empty());
+        let exclusions =
+            unsafe { std::slice::from_raw_parts(view.exclusions, view.exclusion_count) };
+        assert!(!exclusions.is_empty());
+        assert!(exclusions.iter().map(|range| range.len).sum::<u64>() >= manifest.len() as u64);
+        assert!(exclusions
+            .windows(2)
+            .all(|pair| pair[0].start <= pair[1].start));
+        assert!(exclusions
+            .iter()
+            .all(|range| range.start + range.len <= host.output.len() as u64));
 
-    let pem = format!(
-        "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----",
-        base64_certificate()
-    );
-    let settings = format!(r#"{{"trust":{{"trust_anchors":{pem:?}}}}}"#);
-    let mut reader = crate::NodeSession::new("image/jpeg", Some(&settings)).unwrap();
-    loop {
-        match reader.advance().unwrap() {
-            crate::Step::Complete => break,
-            crate::Step::Pending(requests) => {
-                for request in requests {
-                    let reply = match &request {
-                        crate::PendingRequest::Read { start, len, .. } => crate::Reply::Bytes(
-                            host.output[*start as usize..(*start + *len) as usize].to_vec(),
-                        ),
-                        crate::PendingRequest::Length { .. } => {
-                            crate::Reply::Length(host.output.len() as u64)
-                        }
-                        crate::PendingRequest::CurrentDateTime { .. } => {
-                            crate::Reply::Time(1_800_000_000)
-                        }
-                        crate::PendingRequest::Ocsp { .. } => {
-                            crate::Reply::Failed("offline".into())
-                        }
-                        _ => panic!("unexpected reader request"),
-                    };
-                    reader.fulfill(request.id(), reply).unwrap();
+        let pem = format!(
+            "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----",
+            base64_certificate()
+        );
+        let settings = format!(r#"{{"trust":{{"trust_anchors":{pem:?}}}}}"#);
+        let mut reader = crate::NodeSession::new("image/jpeg", Some(&settings)).unwrap();
+        loop {
+            match reader.advance().unwrap() {
+                crate::Step::Complete => break,
+                crate::Step::Pending(requests) => {
+                    for request in requests {
+                        let reply = match &request {
+                            crate::PendingRequest::Read { start, len, .. } => crate::Reply::Bytes(
+                                host.output[*start as usize..(*start + *len) as usize].to_vec(),
+                            ),
+                            crate::PendingRequest::Length { .. } => {
+                                crate::Reply::Length(host.output.len() as u64)
+                            }
+                            crate::PendingRequest::CurrentDateTime { .. } => {
+                                crate::Reply::Time(1_800_000_000)
+                            }
+                            crate::PendingRequest::Ocsp { .. } => {
+                                crate::Reply::Failed("offline".into())
+                            }
+                            _ => panic!("unexpected reader request"),
+                        };
+                        reader.fulfill(request.id(), reply).unwrap();
+                    }
                 }
             }
         }
+        let reader = crate::C2paSmReader {
+            inner: reader.finish().unwrap().unwrap(),
+        };
+        assert_eq!(
+            unsafe { crate::c2pa_sm_reader_validation_state(&reader) },
+            crate::C2paSmValidationState::C2PA_SM_VALIDATION_TRUSTED
+        );
+        let json = reader.inner.json();
+        assert!(json.contains("Trusted"), "{json}");
+        assert!(json.contains("baseline.jpg"));
+        assert!(json.contains("c2pa.actions.v2"));
     }
-    let reader = crate::C2paSmReader {
-        inner: reader.finish().unwrap().unwrap(),
-    };
-    assert_eq!(
-        unsafe { crate::c2pa_sm_reader_validation_state(&reader) },
-        crate::C2paSmValidationState::C2PA_SM_VALIDATION_TRUSTED
-    );
-    let json = reader.inner.json();
-    assert!(json.contains("Trusted"), "{json}");
-    assert!(json.contains("baseline.jpg"));
-    assert!(json.contains("c2pa.actions.v2"));
 }
 
 fn base64_certificate() -> String {
@@ -865,4 +968,193 @@ fn cimpl_handles_are_exclusive_typed_and_consumable() {
     assert!(cimpl::checkout_exclusive(handle).is_err());
     assert!(cimpl::untrack_owned(handle).is_err());
     assert!(cimpl::checkout_exclusive::<u64>(std::ptr::null_mut()).is_err());
+}
+
+#[test]
+fn read_lease_sealing_and_reply_conversion_preserve_the_allocation() {
+    let build = Build::new(BASELINE_DEFINITION);
+    let request = build.first_read();
+    let mut lease = build.acquire(request.id).unwrap();
+    assert_eq!(lease.view.len as u64, request.len);
+    let pointer = lease.view.data;
+    unsafe { std::slice::from_raw_parts_mut(pointer, lease.view.len).fill(42) };
+    let completed = lease.seal(lease.view.len).unwrap();
+    assert!(lease.raw.is_null());
+    let mut checked = cimpl::checkout_exclusive(completed.0).unwrap();
+    let buffer = checked.buffer.as_mut().unwrap();
+    assert_eq!(buffer.bytes.as_ptr(), pointer);
+    let Reply::Bytes(bytes) = buffer.take_reply() else {
+        panic!("not bytes")
+    };
+    assert_eq!(bytes.as_ptr(), pointer);
+    assert!(bytes.iter().all(|byte| *byte == 42));
+}
+
+#[test]
+fn read_leases_validate_counts_ids_and_sessions_without_consuming_on_error() {
+    let build = Build::new(BASELINE_DEFINITION);
+    let request = build.first_read();
+    let other = Build::new(BASELINE_DEFINITION);
+    let other_request = other.first_read();
+    let mut lease = build.acquire(request.id).unwrap();
+    let original = lease.raw;
+    assert!(build.acquire(request.id).is_err());
+    assert!(build.acquire(u64::MAX).is_err());
+    assert!(lease.seal(lease.view.len + 1).is_err());
+    assert!(lease.seal(lease.view.len - 1).is_err());
+    assert_eq!(lease.raw, original);
+    assert!(!build.advance().unwrap().0);
+    unsafe {
+        std::slice::from_raw_parts_mut(lease.view.data, lease.view.len).copy_from_slice(
+            &SOURCE_JPEG[request.offset as usize..(request.offset + request.len) as usize],
+        );
+    }
+    let bytes = vec![0; lease.view.len];
+    assert!(build
+        .fulfill(C2paSmBuildReply {
+            id: request.id,
+            kind: C2paSmBuildReplyKind::C2PA_SM_BUILD_REPLY_BYTES as c_int,
+            data: C2paSmBuffer::borrowed(&bytes),
+            ..Default::default()
+        })
+        .is_err());
+    let mut completed = lease.seal(lease.view.len).unwrap();
+    let handle = completed.0;
+    assert!(other
+        .fulfill_read(other_request.id, &mut completed)
+        .is_err());
+    assert!(build.fulfill_read(u64::MAX, &mut completed).is_err());
+    assert_eq!(completed.0, handle);
+    build.fulfill_read(request.id, &mut completed).unwrap();
+    assert!(completed.0.is_null());
+    assert!(build.fulfill_read(request.id, &mut completed).is_err());
+    assert!(build.acquire(request.id).is_err());
+}
+
+#[test]
+fn writable_and_completed_leases_survive_their_session() {
+    let mut lease = {
+        let build = Build::new(BASELINE_DEFINITION);
+        build.acquire(build.first_read().id).unwrap()
+    };
+    unsafe { std::slice::from_raw_parts_mut(lease.view.data, lease.view.len).fill(7) };
+    let completed = lease.seal(lease.view.len).unwrap();
+    let checked = cimpl::checkout_exclusive(completed.0).unwrap();
+    assert!(checked
+        .buffer
+        .as_ref()
+        .unwrap()
+        .bytes
+        .iter()
+        .all(|byte| *byte == 7));
+    drop(checked);
+    drop(completed);
+}
+
+#[test]
+fn abandoning_or_failing_a_read_does_not_reissue_its_lease() {
+    for seal in [false, true] {
+        let build = Build::new(BASELINE_DEFINITION);
+        let request = build.first_read();
+        let mut lease = build.acquire(request.id).unwrap();
+        let mut completed = if seal {
+            Some(lease.seal(lease.view.len).unwrap())
+        } else {
+            None
+        };
+        drop(lease);
+        assert!(build.acquire(request.id).is_err());
+        build
+            .fulfill(C2paSmBuildReply {
+                id: request.id,
+                kind: C2paSmBuildReplyKind::C2PA_SM_BUILD_REPLY_FAILED as c_int,
+                data: C2paSmBuffer::borrowed(b"read cancelled"),
+                ..Default::default()
+            })
+            .unwrap();
+        if let Some(completed) = &mut completed {
+            let handle = completed.0;
+            assert!(build.fulfill_read(request.id, completed).is_err());
+            assert_eq!(completed.0, handle);
+        }
+        assert!(build.advance().is_err());
+    }
+}
+
+#[test]
+fn leased_hash_reads_complete_out_of_order_for_a_large_asset() {
+    let mut source = SOURCE_JPEG.to_vec();
+    source.resize(512 * 1024, 0);
+    let mut host = Host {
+        leased: true,
+        source: Some(source),
+        ..Default::default()
+    };
+    let mut build = Build::new(BASELINE_DEFINITION);
+    assert!(host.drive(&mut build).unwrap().view().manifest.len > 0);
+    assert!(host.max_reads > 1);
+    let session = crate::tests::new_session("image/jpeg", None);
+    let (status, reader, error) = crate::tests::drive(session, &host.output);
+    assert_eq!(status, C2PA_SM_OK);
+    assert!(error.is_null());
+    unsafe {
+        assert_eq!(
+            crate::c2pa_sm_reader_validation_state(reader),
+            crate::C2paSmValidationState::C2PA_SM_VALIDATION_VALID
+        );
+        crate::c2pa_sm_reader_free(reader);
+    }
+}
+
+#[test]
+fn read_lease_abi_rejects_invalid_outputs_busy_and_wrong_type_handles() {
+    let build = Build::new(BASELINE_DEFINITION);
+    let request = build.first_read();
+    let mut raw = ptr::null_mut();
+    let mut view = C2paSmMutableBytes::default();
+    let mut completed = ptr::null_mut();
+    unsafe {
+        invalid(|error| {
+            c2pa_sm_build_read_acquire(build.0, request.id, ptr::null_mut(), &mut view, error)
+        });
+        invalid(|error| {
+            c2pa_sm_build_read_acquire(build.0, request.id, &mut raw, ptr::null_mut(), error)
+        });
+        invalid(|error| c2pa_sm_read_seal(ptr::null_mut(), 0, &mut completed, error));
+        invalid(|error| c2pa_sm_read_seal(&mut raw, 0, ptr::null_mut(), error));
+        invalid(|error| c2pa_sm_build_fulfill_read(build.0, request.id, ptr::null_mut(), error));
+        invalid(|error| c2pa_sm_read_buffer_free(ptr::null_mut(), error));
+        invalid(|error| c2pa_sm_completed_read_free(ptr::null_mut(), error));
+        let mut wrong = build.0.cast::<C2paSmReadBuffer>();
+        invalid(|error| c2pa_sm_read_buffer_free(&mut wrong, error));
+        assert_eq!(wrong, build.0.cast());
+    }
+    let mut lease = build.acquire(request.id).unwrap();
+    let checked = cimpl::checkout_exclusive(lease.raw).unwrap();
+    assert!(lease.seal(lease.view.len).is_err());
+    unsafe { invalid(|error| c2pa_sm_read_buffer_free(&mut lease.raw, error)) };
+    drop(checked);
+    let mut completed = lease.seal(lease.view.len).unwrap();
+    let checked = cimpl::checkout_exclusive(completed.0).unwrap();
+    assert!(build.fulfill_read(request.id, &mut completed).is_err());
+    unsafe { invalid(|error| c2pa_sm_completed_read_free(&mut completed.0, error)) };
+    drop(checked);
+}
+
+#[test]
+fn read_allocation_overflow_is_reported_without_leasing_the_request() {
+    let build = Build::new(BASELINE_DEFINITION);
+    let request = build.first_read();
+    cimpl::checkout_exclusive(build.0)
+        .unwrap()
+        .reads
+        .get_mut(&request.id)
+        .unwrap()
+        .0 = u64::MAX;
+    assert!(build.acquire(request.id).is_err());
+    assert!(
+        cimpl::checkout_exclusive(build.0).unwrap().reads[&request.id]
+            .1
+            .is_none()
+    );
 }

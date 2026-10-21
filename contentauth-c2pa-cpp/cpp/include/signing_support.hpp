@@ -9,6 +9,22 @@
 
 namespace support {
 
+inline std::vector<uint8_t> read_build_host(
+    c2pa::sm::SyncBuildHost &host, c2pa::sm::BuildStream stream, uint64_t start, size_t len) {
+    std::vector<uint8_t> bytes(len);
+    host.read_into(stream, start, {bytes.data(), bytes.size()});
+    return bytes;
+}
+
+inline c2pa::sm::Reply read_build_reply(
+    c2pa::sm::SyncBuildHost &host, c2pa::sm::BuildStream stream, uint64_t start, size_t len) {
+    try {
+        return c2pa::sm::Bytes{read_build_host(host, stream, start, len)};
+    } catch (const std::exception &error) {
+        return c2pa::sm::Failed{error.what()};
+    }
+}
+
 inline std::vector<uint8_t> signing_certificate() {
     std::ifstream input(signing_cert_path, std::ios::binary);
     if (!input) throw std::runtime_error("missing signing certificate");

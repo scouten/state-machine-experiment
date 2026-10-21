@@ -15,6 +15,48 @@
 
 namespace c2pa::sm {
 
+CompletedRead::~CompletedRead() { (void)c2pa_sm_completed_read_free(&raw_, nullptr); }
+CompletedRead::CompletedRead(CompletedRead &&other) noexcept
+    : raw_(std::exchange(other.raw_, nullptr)) {}
+CompletedRead &CompletedRead::operator=(CompletedRead &&other) noexcept {
+    if (this != &other) {
+        (void)c2pa_sm_completed_read_free(&raw_, nullptr);
+        raw_ = std::exchange(other.raw_, nullptr);
+    }
+    return *this;
+}
+
+ReadBuffer::ReadBuffer(C2paSmBuildSession *session, uint64_t id) {
+    C2paSmMutableBytes bytes{};
+    C2paSmError *error = nullptr;
+    const int result = c2pa_sm_build_read_acquire(session, id, &raw_, &bytes, &error);
+    detail::check(result, error);
+    bytes_ = {bytes.data, bytes.len};
+}
+ReadBuffer::~ReadBuffer() { (void)c2pa_sm_read_buffer_free(&raw_, nullptr); }
+ReadBuffer::ReadBuffer(ReadBuffer &&other) noexcept
+    : raw_(std::exchange(other.raw_, nullptr)), bytes_(std::exchange(other.bytes_, {nullptr, 0})) {}
+ReadBuffer &ReadBuffer::operator=(ReadBuffer &&other) noexcept {
+    if (this != &other) {
+        (void)c2pa_sm_read_buffer_free(&raw_, nullptr);
+        raw_ = std::exchange(other.raw_, nullptr);
+        bytes_ = std::exchange(other.bytes_, {nullptr, 0});
+    }
+    return *this;
+}
+MutableBytes ReadBuffer::writable() const {
+    if (!raw_) throw std::runtime_error("read buffer has been moved or sealed");
+    return bytes_;
+}
+CompletedRead ReadBuffer::seal(size_t bytes_read) && {
+    CompletedRead completed;
+    C2paSmError *error = nullptr;
+    const int result = c2pa_sm_read_seal(&raw_, bytes_read, &completed.raw_, &error);
+    detail::check(result, error);
+    bytes_ = {nullptr, 0};
+    return completed;
+}
+
 uint64_t request_id(const BuildRequest &request) {
     return std::visit([](const auto &pending) { return pending.id; }, request);
 }
@@ -45,11 +87,11 @@ BuildStream build_stream(int stream) {
     throw std::runtime_error("unknown build stream");
 }
 
-BuildRequest describe(const C2paSmBuildRequest &pending) {
+BuildRequest describe(C2paSmBuildSession *session, const C2paSmBuildRequest &pending) {
     switch (pending.kind) {
         case C2PA_SM_BUILD_REQUEST_READ:
             return BuildReadRequest{pending.id, build_stream(pending.stream), pending.offset,
-                                    pending.len};
+                                    pending.len, ReadBuffer(session, pending.id)};
         case C2PA_SM_BUILD_REQUEST_LENGTH:
             return BuildLengthRequest{pending.id, build_stream(pending.stream)};
         case C2PA_SM_BUILD_REQUEST_WRITE:
@@ -106,12 +148,20 @@ BuildStep BuildSession::advance() {
         C2paSmBuildRequest pending{};
         result = c2pa_sm_build_session_request(raw_.get(), index, &pending, &error);
         detail::check(result, error);
-        step.requests.push_back(detail::describe(pending));
+        step.requests.push_back(detail::describe(raw_.get(), pending));
     }
     return step;
 }
 
-void BuildSession::fulfill(uint64_t id, const BuildReply &reply) {
+void BuildSession::fulfill(uint64_t id, BuildReply &&reply) {
+    if (auto *read = std::get_if<CompletedRead>(&reply)) {
+        // The sealed handle carries its original request ID. Validate the
+        // driver's routing ID as well before handing over ownership.
+        C2paSmError *error = nullptr;
+        const int result = c2pa_sm_build_fulfill_read(raw_.get(), id, &read->raw_, &error);
+        detail::check(result, error);
+        return;
+    }
     C2paSmBuildReply response{};
     response.id = id;
     std::visit([&response](const auto &value) {
@@ -125,8 +175,7 @@ void BuildSession::fulfill(uint64_t id, const BuildReply &reply) {
             response.kind = C2PA_SM_BUILD_REPLY_FAILED;
             response.data = {reinterpret_cast<const uint8_t *>(value.message.data()),
                              value.message.size()};
-        } else {
-            if constexpr (std::is_same_v<Value, Bytes>) response.kind = C2PA_SM_BUILD_REPLY_BYTES;
+        } else if constexpr (!std::is_same_v<Value, CompletedRead>) {
             if constexpr (std::is_same_v<Value, Signature>) response.kind = C2PA_SM_BUILD_REPLY_SIGNATURE;
             if constexpr (std::is_same_v<Value, TimestampResponse>) response.kind = C2PA_SM_BUILD_REPLY_TIMESTAMP;
             response.data = {value.data.data(), value.data.size()};
@@ -170,14 +219,15 @@ std::vector<uint8_t> SyncBuildHost::timestamp(const std::string &url, const std:
     return timestamp_(url, body);
 }
 
-BuildReply answer(SyncBuildHost &host, const BuildRequest &request) {
+BuildReply answer(SyncBuildHost &host, BuildRequest &request) {
     try {
-        return std::visit([&host](const auto &pending) -> BuildReply {
+        return std::visit([&host](auto &pending) -> BuildReply {
             using Pending = std::decay_t<decltype(pending)>;
             if constexpr (std::is_same_v<Pending, BuildReadRequest>) {
-                auto bytes = host.read(pending.stream, pending.start, pending.len);
-                if (bytes.size() != pending.len) throw std::runtime_error("short build read");
-                return Bytes{std::move(bytes)};
+                auto lease = std::move(pending.destination);
+                auto destination = lease.writable();
+                host.read_into(pending.stream, pending.start, destination);
+                return std::move(lease).seal(destination.size);
             } else if constexpr (std::is_same_v<Pending, BuildLengthRequest>) {
                 return Length{host.length(pending.stream)};
             } else if constexpr (std::is_same_v<Pending, WriteRequest>) {
@@ -201,7 +251,7 @@ SignReport build_and_sign(BuildSession session, SyncBuildHost &host) {
         auto step = session.advance();
         if (step.done) return std::move(session).finish();
         detail::require_progress(!step.requests.empty());
-        for (const auto &pending : step.requests) {
+        for (auto &pending : step.requests) {
             session.fulfill(request_id(pending), answer(host, pending));
         }
     }
@@ -214,10 +264,11 @@ const std::vector<uint8_t> &MemoryBuildHost::output() const noexcept {
     return output_;
 }
 
-std::vector<uint8_t> MemoryBuildHost::read(BuildStream stream, uint64_t start, uint64_t len) {
+void MemoryBuildHost::read_into(BuildStream stream, uint64_t start, MutableBytes destination) {
+    const auto len = destination.size;
     const auto &bytes = stream == BuildStream::Source ? source_ : output_;
     detail::build_range(start, len, bytes.size());
-    return {bytes.begin() + static_cast<size_t>(start), bytes.begin() + static_cast<size_t>(start + len)};
+    if (len != 0) std::copy_n(bytes.data() + static_cast<size_t>(start), len, destination.data);
 }
 
 uint64_t MemoryBuildHost::length(BuildStream stream) {
@@ -237,18 +288,15 @@ IOStreamBuildHost::IOStreamBuildHost(std::istream &source, std::iostream &output
     if (length(BuildStream::Output) != 0) throw std::runtime_error("build output must start empty");
 }
 
-std::vector<uint8_t> IOStreamBuildHost::read(BuildStream stream, uint64_t start, uint64_t len) {
+void IOStreamBuildHost::read_into(BuildStream stream, uint64_t start, MutableBytes destination) {
+    const auto len = destination.size;
     detail::build_range(start, len, length(stream));
     detail::build_range(start, len, static_cast<uint64_t>(std::numeric_limits<std::streamoff>::max()));
     detail::build_range(0, len, static_cast<uint64_t>(std::numeric_limits<std::streamsize>::max()));
     auto &input = stream == BuildStream::Source ? source_ : output_;
-    std::vector<uint8_t> bytes;
-    detail::build_range(0, len, bytes.max_size());
-    bytes.resize(static_cast<size_t>(len));
     input.seekg(static_cast<std::streamoff>(start));
-    input.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(len));
+    input.read(reinterpret_cast<char *>(destination.data), static_cast<std::streamsize>(len));
     if (!input || static_cast<uint64_t>(input.gcount()) != len) throw std::runtime_error("build stream read failed");
-    return bytes;
 }
 
 uint64_t IOStreamBuildHost::length(BuildStream stream) {
@@ -291,22 +339,19 @@ FileBuildHost::~FileBuildHost() {
     if (!published_) ::unlink(temporary_.c_str());
 }
 
-std::vector<uint8_t> FileBuildHost::read(BuildStream stream, uint64_t start, uint64_t len) {
+void FileBuildHost::read_into(BuildStream stream, uint64_t start, MutableBytes destination) {
+    const auto len = destination.size;
     detail::build_range(start, len, length(stream));
     detail::build_range(start, len, static_cast<uint64_t>(std::numeric_limits<off_t>::max()));
-    std::vector<uint8_t> bytes;
-    detail::build_range(0, len, bytes.max_size());
-    bytes.resize(static_cast<size_t>(len));
     size_t completed = 0;
-    while (completed < bytes.size()) {
-        const auto count = ::pread(descriptor(stream), bytes.data() + completed,
-            std::min(bytes.size() - completed, static_cast<size_t>(std::numeric_limits<ssize_t>::max())),
+    while (completed < len) {
+        const auto count = ::pread(descriptor(stream), destination.data + completed,
+            std::min(len - completed, static_cast<size_t>(std::numeric_limits<ssize_t>::max())),
             static_cast<off_t>(start + completed));
         if (count < 0 && errno == EINTR) continue;
         if (count <= 0) throw std::runtime_error("build file read failed");
         completed += static_cast<size_t>(count);
     }
-    return bytes;
 }
 
 uint64_t FileBuildHost::length(BuildStream stream) {

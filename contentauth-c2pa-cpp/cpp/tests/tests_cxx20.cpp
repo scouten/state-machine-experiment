@@ -313,7 +313,7 @@ public:
 
     void start(BuildRequest request, BuildCompletion done) override {
         auto reply = answer(backing, request);
-        done(reply);
+        done(std::move(reply));
         done(std::move(reply));
     }
 };
@@ -525,7 +525,7 @@ private:
                 first = false;
                 first_delivery.set_value();
             }
-            request.second(reply);
+            request.second(std::move(reply));
             request.second(std::move(reply));
         }
     }

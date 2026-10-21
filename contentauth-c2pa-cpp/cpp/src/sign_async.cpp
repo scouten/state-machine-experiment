@@ -136,7 +136,7 @@ bool Building::step() {
     try {
         for (auto &[id, reply] : current.mailbox->drain()) {
             if (!current.pending.count(id)) invalid_build("unknown or duplicate build reply ID");
-            current.session.fulfill(id, reply);
+            current.session.fulfill(id, std::move(reply));
             current.pending.erase(id);
         }
         auto next = current.session.advance();

@@ -2,11 +2,30 @@
 #include "scope_exit.hpp"
 #include "signing_support.hpp"
 
+#include <algorithm>
 #include <memory>
 #include <type_traits>
 
 using namespace c2pa::sm;
 using namespace support;
+
+TEST(AsyncSigning, cancelled_driver_keeps_read_storage_alive_until_late_io_finishes) {
+    ManualBuildHost host;
+    {
+        Building building(BuildSession(signing_settings()), host);
+        for (;;) {
+            ASSERT_FALSE(building.step());
+            ASSERT_FALSE(host.pending.empty());
+            const bool reading = std::any_of(host.pending.begin(), host.pending.end(),
+                [](const auto &entry) { return std::holds_alternative<BuildReadRequest>(entry.first); });
+            if (reading) break;
+            host.deliver();
+        }
+    }
+    std::thread late([&host] { host.deliver(); });
+    late.join();
+    EXPECT_TRUE(host.pending.empty());
+}
 
 TEST(AsyncSigning, scope_exit_runs_once_after_normal_exit_and_early_return) {
     int calls = 0;
@@ -214,10 +233,10 @@ TEST(AsyncSigning, parallel_and_future_builds_drain_a_failed_hash_window_before_
                 done(Written{});
                 return;
             }
-            workers.emplace_back([this, request = std::move(request), done = std::move(done)] {
+            workers.emplace_back([this, request = std::move(request), done = std::move(done)]() mutable {
                 release.wait();
                 auto reply = answer(backing, request);
-                done(reply);
+                done(std::move(reply));
                 done(std::move(reply));
             });
             if (!signalled) {

@@ -1,6 +1,6 @@
 //! cimpl-tracked signing sessions and immutable reports.
 
-use std::{ffi::c_char, os::raw::c_int};
+use std::{collections::BTreeMap, ffi::c_char, os::raw::c_int, sync::Arc};
 
 use contentauth_c2pa_node_compat_sign::{
     Error, NodeBuildSession, PendingRequest, Reply, Step, Stream,
@@ -114,6 +114,37 @@ pub struct C2paSmBuildSession {
     inner: NodeBuildSession,
     fresh: Vec<PendingRequest>,
     done: bool,
+    identity: Arc<()>,
+    reads: BTreeMap<u64, (u64, Option<Arc<()>>)>,
+}
+
+/// Writable storage owned independently of a signing session.
+pub struct C2paSmReadBuffer {
+    identity: Arc<()>,
+    id: u64,
+    bytes: Vec<u8>,
+    token: Arc<()>,
+}
+
+impl C2paSmReadBuffer {
+    fn take_reply(&mut self) -> Reply {
+        Reply::Bytes(std::mem::take(&mut self.bytes))
+    }
+}
+
+/// Sealed read storage; no writable pointer may be used after sealing.
+pub struct C2paSmCompletedRead {
+    buffer: Option<C2paSmReadBuffer>,
+}
+
+/// Exclusive initialized storage, valid until seal or free.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct C2paSmMutableBytes {
+    /// Writable first byte. Never retain this pointer after sealing.
+    pub data: *mut u8,
+    /// Exact requested byte count.
+    pub len: usize,
 }
 
 /// A request view, valid until the session's next advance, fulfill, finish, or free.
@@ -255,6 +286,8 @@ pub unsafe extern "C" fn c2pa_sm_build_session_new(
                 inner,
                 fresh: Vec::new(),
                 done: false,
+                identity: Arc::new(()),
+                reads: BTreeMap::new(),
             })?;
             Ok(())
         })
@@ -292,6 +325,18 @@ pub unsafe extern "C" fn c2pa_sm_build_session_advance(
                 Step::Complete => session.done = true,
                 Step::Pending(requests) => session.fresh = requests,
             }
+            let reads: Vec<_> = session
+                .fresh
+                .iter()
+                .filter_map(|request| {
+                    if let PendingRequest::Read { id, len, .. } = request {
+                        Some((*id, (*len, None)))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            session.reads.extend(reads);
             *out_done = c_int::from(session.done);
             *out_count = session.fresh.len();
             Ok(())
@@ -408,6 +453,8 @@ unsafe fn reply_value(reply: &C2paSmBuildReply) -> Result<Reply, Failure> {
 /// # Safety
 /// reply must address an initialized reply with readable payload bytes;
 /// out_error must be null or writable. No session payload borrow may be in use.
+/// Failure replies for leased reads require the host to stop accessing their
+/// writable buffers first; the independent leases still require explicit free.
 #[no_mangle]
 pub unsafe extern "C" fn c2pa_sm_build_session_fulfill(
     session: *mut C2paSmBuildSession,
@@ -422,11 +469,221 @@ pub unsafe extern "C" fn c2pa_sm_build_session_fulfill(
                 .ok_or_else(|| Failure::invalid("reply is null"))?;
             let converted = reply_value(reply)?;
             let mut session = cimpl::checkout_exclusive(session).map_err(handle_error)?;
+            if let Some((_, Some(_))) = session.reads.get(&reply.id) {
+                if !matches!(converted, Reply::Failed(_)) {
+                    return Err(Failure::invalid("read has an outstanding lease"));
+                }
+            }
             session.fresh.clear();
             session
                 .inner
                 .fulfill(reply.id, converted)
                 .map_err(|error| Failure::invalid(error.to_string()))?;
+            session.reads.remove(&reply.id);
+            Ok(())
+        })
+    }
+}
+
+/// Acquires initialized, fallibly allocated storage for one outstanding read.
+/// A request can acquire only one lease, even after that lease is abandoned.
+///
+/// # Safety
+/// Outputs must be writable and distinct; out_error may be null. Serialize
+/// session calls. Only the caller may access the returned bytes until sealing.
+#[no_mangle]
+pub unsafe extern "C" fn c2pa_sm_build_read_acquire(
+    session: *mut C2paSmBuildSession,
+    id: u64,
+    out_buffer: *mut *mut C2paSmReadBuffer,
+    out_bytes: *mut C2paSmMutableBytes,
+    out_error: *mut *mut C2paSmError,
+) -> c_int {
+    unsafe {
+        clear(out_buffer);
+        clear(out_error);
+        if !out_bytes.is_null() {
+            *out_bytes = C2paSmMutableBytes::default();
+        }
+        guard(out_error, || {
+            if out_buffer.is_null() || out_bytes.is_null() {
+                return Err(Failure::invalid("read acquisition output is null"));
+            }
+            let mut session = cimpl::checkout_exclusive(session).map_err(handle_error)?;
+            let (len, leased) = session
+                .reads
+                .get(&id)
+                .ok_or_else(|| Failure::invalid("not an outstanding read"))?;
+            if leased.is_some() {
+                return Err(Failure::invalid("read already leased"));
+            }
+            let len = usize::try_from(*len).map_err(|_| Failure::invalid("read too large"))?;
+            let mut bytes = Vec::new();
+            bytes
+                .try_reserve_exact(len)
+                .map_err(|_| Failure::invalid("read allocation failed"))?;
+            bytes.resize(len, 0);
+            let view = C2paSmMutableBytes {
+                data: bytes.as_mut_ptr(),
+                len,
+            };
+            let token = Arc::new(());
+            let buffer = tracked(C2paSmReadBuffer {
+                identity: Arc::clone(&session.identity),
+                id,
+                bytes,
+                token: Arc::clone(&token),
+            })?;
+            session.reads.insert(id, (len as u64, Some(token)));
+            *out_buffer = buffer;
+            *out_bytes = view;
+            Ok(())
+        })
+    }
+}
+
+/// Seals a read after all I/O has stopped, consuming and nulling it on success.
+/// A wrong count or invalid handle leaves ownership with the caller.
+///
+/// # Safety
+/// Pointer slots must be writable and distinct; out_error may be null.
+/// No access to the writable bytes, including from other threads, may remain.
+#[no_mangle]
+pub unsafe extern "C" fn c2pa_sm_read_seal(
+    buffer: *mut *mut C2paSmReadBuffer,
+    bytes_read: usize,
+    out_completed: *mut *mut C2paSmCompletedRead,
+    out_error: *mut *mut C2paSmError,
+) -> c_int {
+    unsafe {
+        clear(out_completed);
+        clear(out_error);
+        guard(out_error, || {
+            if buffer.is_null() || out_completed.is_null() {
+                return Err(Failure::invalid("seal output is null"));
+            }
+            {
+                let lease = cimpl::checkout_exclusive(*buffer).map_err(handle_error)?;
+                if bytes_read != lease.bytes.len() {
+                    return Err(Failure::invalid("short read"));
+                }
+            }
+            // Allocate the destination handle before consuming the source.
+            let completed = tracked(C2paSmCompletedRead { buffer: None })?;
+            let lease = match cimpl::untrack_owned(*buffer) {
+                Ok(lease) => lease,
+                Err(error) => {
+                    drop(cimpl::untrack_owned(completed).map_err(handle_error)?);
+                    return Err(handle_error(error));
+                }
+            };
+            cimpl::checkout_exclusive(completed)
+                .map_err(handle_error)?
+                .buffer = Some(lease);
+            *buffer = std::ptr::null_mut();
+            *out_completed = completed;
+            Ok(())
+        })
+    }
+}
+
+/// Moves sealed storage into its original read request, without copying bytes.
+/// Invalid sessions or requests leave the completed handle owned by the caller.
+///
+/// # Safety
+/// completed must be a writable pointer slot; out_error may be null.
+/// Serialize session calls and ownership transitions of this handle.
+#[no_mangle]
+pub unsafe extern "C" fn c2pa_sm_build_fulfill_read(
+    session: *mut C2paSmBuildSession,
+    id: u64,
+    completed: *mut *mut C2paSmCompletedRead,
+    out_error: *mut *mut C2paSmError,
+) -> c_int {
+    unsafe {
+        clear(out_error);
+        guard(out_error, || {
+            if completed.is_null() {
+                return Err(Failure::invalid("completed is null"));
+            }
+            let mut session = cimpl::checkout_exclusive(session).map_err(handle_error)?;
+            let mut read = cimpl::checkout_exclusive(*completed).map_err(handle_error)?;
+            let lease = read
+                .buffer
+                .as_mut()
+                .ok_or_else(|| Failure::invalid("empty completion"))?;
+            let (_, marker) = session
+                .reads
+                .get(&lease.id)
+                .ok_or_else(|| Failure::invalid("read is no longer outstanding"))?;
+            if id != lease.id
+                || !Arc::ptr_eq(&session.identity, &lease.identity)
+                || !marker
+                    .as_ref()
+                    .is_some_and(|state| Arc::ptr_eq(state, &lease.token))
+            {
+                return Err(Failure::invalid("read belongs to another session"));
+            }
+            // The retained request and lease marker guarantee an outstanding read
+            // of this exact length; Bytes cannot fail the engine's kind validation.
+            session
+                .inner
+                .fulfill(lease.id, lease.take_reply())
+                .map_err(|error| Failure::invalid(error.to_string()))?;
+            session.reads.remove(&lease.id);
+            session.fresh.clear();
+            drop(read);
+            drop(cimpl::untrack_owned(*completed).map_err(handle_error)?);
+            *completed = std::ptr::null_mut();
+            Ok(())
+        })
+    }
+}
+
+/// Frees an abandoned writable lease independently of session lifetime.
+///
+/// # Safety
+/// buffer must be a writable pointer slot; out_error may be null.
+/// All I/O using the bytes must have stopped before this call.
+#[no_mangle]
+pub unsafe extern "C" fn c2pa_sm_read_buffer_free(
+    buffer: *mut *mut C2paSmReadBuffer,
+    out_error: *mut *mut C2paSmError,
+) -> c_int {
+    unsafe {
+        clear(out_error);
+        guard(out_error, || {
+            if buffer.is_null() {
+                return Err(Failure::invalid("buffer is null"));
+            }
+            if !(*buffer).is_null() {
+                drop(cimpl::untrack_owned(*buffer).map_err(handle_error)?);
+                *buffer = std::ptr::null_mut();
+            }
+            Ok(())
+        })
+    }
+}
+
+/// Frees sealed storage independently of session lifetime, nulling on success.
+///
+/// # Safety
+/// completed must be a writable pointer slot; out_error may be null.
+#[no_mangle]
+pub unsafe extern "C" fn c2pa_sm_completed_read_free(
+    completed: *mut *mut C2paSmCompletedRead,
+    out_error: *mut *mut C2paSmError,
+) -> c_int {
+    unsafe {
+        clear(out_error);
+        guard(out_error, || {
+            if completed.is_null() {
+                return Err(Failure::invalid("completed is null"));
+            }
+            if !(*completed).is_null() {
+                drop(cimpl::untrack_owned(*completed).map_err(handle_error)?);
+                *completed = std::ptr::null_mut();
+            }
             Ok(())
         })
     }

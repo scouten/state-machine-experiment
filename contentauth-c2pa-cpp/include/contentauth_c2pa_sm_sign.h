@@ -96,6 +96,16 @@ typedef enum C2paSmBuildStream {
 typedef struct C2paSmBuildSession C2paSmBuildSession;
 
 /**
+ * Sealed read storage; no writable pointer may be used after sealing.
+ */
+typedef struct C2paSmCompletedRead C2paSmCompletedRead;
+
+/**
+ * Writable storage owned independently of a signing session.
+ */
+typedef struct C2paSmReadBuffer C2paSmReadBuffer;
+
+/**
  * A cimpl-tracked, immutable report, independent of the consumed session.
  */
 typedef struct C2paSmSignReport C2paSmSignReport;
@@ -173,6 +183,20 @@ typedef struct C2paSmBuildReply {
    */
   struct C2paSmBuffer data;
 } C2paSmBuildReply;
+
+/**
+ * Exclusive initialized storage, valid until seal or free.
+ */
+typedef struct C2paSmMutableBytes {
+  /**
+   * Writable first byte. Never retain this pointer after sealing.
+   */
+  uint8_t *data;
+  /**
+   * Exact requested byte count.
+   */
+  size_t len;
+} C2paSmMutableBytes;
 
 /**
  * One hard-binding exclusion in the completed output asset.
@@ -258,10 +282,69 @@ int c2pa_sm_build_session_request(struct C2paSmBuildSession *session,
  * # Safety
  * reply must address an initialized reply with readable payload bytes;
  * out_error must be null or writable. No session payload borrow may be in use.
+ * Failure replies for leased reads require the host to stop accessing their
+ * writable buffers first; the independent leases still require explicit free.
  */
 int c2pa_sm_build_session_fulfill(struct C2paSmBuildSession *session,
                                   const struct C2paSmBuildReply *reply,
                                   C2paSmError **out_error);
+
+/**
+ * Acquires initialized, fallibly allocated storage for one outstanding read.
+ * A request can acquire only one lease, even after that lease is abandoned.
+ *
+ * # Safety
+ * Outputs must be writable and distinct; out_error may be null. Serialize
+ * session calls. Only the caller may access the returned bytes until sealing.
+ */
+int c2pa_sm_build_read_acquire(struct C2paSmBuildSession *session,
+                               uint64_t id,
+                               struct C2paSmReadBuffer **out_buffer,
+                               struct C2paSmMutableBytes *out_bytes,
+                               C2paSmError **out_error);
+
+/**
+ * Seals a read after all I/O has stopped, consuming and nulling it on success.
+ * A wrong count or invalid handle leaves ownership with the caller.
+ *
+ * # Safety
+ * Pointer slots must be writable and distinct; out_error may be null.
+ * No access to the writable bytes, including from other threads, may remain.
+ */
+int c2pa_sm_read_seal(struct C2paSmReadBuffer **buffer,
+                      size_t bytes_read,
+                      struct C2paSmCompletedRead **out_completed,
+                      C2paSmError **out_error);
+
+/**
+ * Moves sealed storage into its original read request, without copying bytes.
+ * Invalid sessions or requests leave the completed handle owned by the caller.
+ *
+ * # Safety
+ * completed must be a writable pointer slot; out_error may be null.
+ * Serialize session calls and ownership transitions of this handle.
+ */
+int c2pa_sm_build_fulfill_read(struct C2paSmBuildSession *session,
+                               uint64_t id,
+                               struct C2paSmCompletedRead **completed,
+                               C2paSmError **out_error);
+
+/**
+ * Frees an abandoned writable lease independently of session lifetime.
+ *
+ * # Safety
+ * buffer must be a writable pointer slot; out_error may be null.
+ * All I/O using the bytes must have stopped before this call.
+ */
+int c2pa_sm_read_buffer_free(struct C2paSmReadBuffer **buffer, C2paSmError **out_error);
+
+/**
+ * Frees sealed storage independently of session lifetime, nulling on success.
+ *
+ * # Safety
+ * completed must be a writable pointer slot; out_error may be null.
+ */
+int c2pa_sm_completed_read_free(struct C2paSmCompletedRead **completed, C2paSmError **out_error);
 
 /**
  * Consumes a valid session on success or failure, returning an owned report.

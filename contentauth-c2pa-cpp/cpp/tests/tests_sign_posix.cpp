@@ -130,11 +130,11 @@ TEST(PosixSigning, interrupted_reads_and_writes_retry_without_losing_bytes) {
     Faults faults;
     faults.read_interrupts = 2;
     faults.write_interrupts = 2;
-    EXPECT_EQ(host.read(BuildStream::Source, 0, expected.size()), expected);
+    EXPECT_EQ(read_build_host(host, BuildStream::Source, 0, expected.size()), expected);
     EXPECT_EQ(faults.reads, 3);
     host.write(BuildStream::Output, 0, expected);
     EXPECT_EQ(faults.writes, 3);
-    EXPECT_EQ(host.read(BuildStream::Output, 0, expected.size()), expected);
+    EXPECT_EQ(read_build_host(host, BuildStream::Output, 0, expected.size()), expected);
 }
 
 TEST(PosixSigning, partial_reads_and_writes_advance_the_buffer_and_file_offset) {
@@ -143,11 +143,11 @@ TEST(PosixSigning, partial_reads_and_writes_advance_the_buffer_and_file_offset) 
     const std::vector<uint8_t> expected{0xff, 0xd8, 0xff};
     Faults faults;
     faults.chunk = 1;
-    EXPECT_EQ(host.read(BuildStream::Source, 0, expected.size()), expected);
+    EXPECT_EQ(read_build_host(host, BuildStream::Source, 0, expected.size()), expected);
     EXPECT_EQ(faults.reads, 3);
     host.write(BuildStream::Output, 0, expected);
     EXPECT_EQ(faults.writes, 3);
-    EXPECT_EQ(host.read(BuildStream::Output, 0, expected.size()), expected);
+    EXPECT_EQ(read_build_host(host, BuildStream::Output, 0, expected.size()), expected);
     EXPECT_EQ(faults.reads, 6);
 }
 
@@ -157,7 +157,7 @@ TEST(PosixSigning, non_interrupt_io_errors_are_reported_without_retrying) {
     {
         Faults faults;
         faults.read_error = EIO;
-        const auto reply = answer(host, BuildReadRequest{1, BuildStream::Source, 0, 3});
+        const auto reply = read_build_reply(host, BuildStream::Source, 0, 3);
         ASSERT_TRUE(std::holds_alternative<Failed>(reply));
         EXPECT_EQ(std::get<Failed>(reply).message, "build file read failed");
         EXPECT_EQ(faults.reads, 1);
@@ -171,7 +171,7 @@ TEST(PosixSigning, non_interrupt_io_errors_are_reported_without_retrying) {
         EXPECT_EQ(faults.writes, 1);
     }
     EXPECT_EQ(host.length(BuildStream::Output), uint64_t{0});
-    EXPECT_EQ(host.read(BuildStream::Source, 0, 3), (std::vector<uint8_t>{0xff, 0xd8, 0xff}));
+    EXPECT_EQ(read_build_host(host, BuildStream::Source, 0, 3), (std::vector<uint8_t>{0xff, 0xd8, 0xff}));
 }
 
 TEST(PosixSigning, failed_or_invalid_file_metadata_is_reported) {

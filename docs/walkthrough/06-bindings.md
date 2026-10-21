@@ -82,4 +82,13 @@ flowchart LR
 * An optional `tsa_url` opts into an RFC 3161 timestamp; each binding
   leaves only the HTTP `POST` to its host.
 
+The C++ signing binding also avoids copying host read buffers back into
+Rust: each read owns a Rust-allocated writable lease, and C++ performs I/O
+directly into it. Sealing and fulfilling transfer the same allocation into
+the existing Rust byte reply. Blocking, pooled, and coroutine drivers use
+this path; I/O and networking remain entirely host-owned. Read leases can
+outlive session cancellation, so outstanding I/O retains valid storage.
+Write/sign/timestamp payload copies remain unchanged. See
+[Zero-copy buffers](10-zerocopy.md) for the ownership contract and tests.
+
 **Next:** [Proof and CI →](07-proof-and-ci.md)
