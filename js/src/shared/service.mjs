@@ -54,13 +54,20 @@ export function serve(port, adapter, open = openSource) {
                 reject(error);
               }
             }), source);
-        await source.close();
+        const completedSource = source;
         source = undefined;
+        await completedSource.close();
         port.post({ protocol, id: message.id, ok: true,
           value: { ...result, workerMs: performance.now() - started } });
       } catch (error) {
-        // Preserve the operation's failure even if cleanup also fails.
-        try { await source?.close() } catch {}
+        const failedSource = source;
+        source = undefined;
+        try { await failedSource?.close() }
+        catch (cleanup) {
+          // The wire retains only name/message, not AggregateError.errors.
+          error = new AggregateError([error, cleanup],
+            `${String(error)}; source cleanup failed: ${String(cleanup)}`);
+        }
         port.post({ protocol, id: message.id, ok: false, error: failure(error) });
       }
     });

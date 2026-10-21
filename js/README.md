@@ -164,7 +164,12 @@ flowchart TB
   inside the Worker. Neither client nor Worker converts the whole Blob to bytes.
   Node additionally accepts `{path: "/absolute/input.jpg"}` and opens the file
   when its queued operation begins, using positioned exact reads and closing it
-  on success/failure. Keep that file unchanged until the call settles: unlike
+  on success/failure. Every source `Length` request re-stats the open handle and
+  rejects any size change from its initial bounds, including the builder's fresh
+  plan-validation length request. Same-size content changes are not tracked.
+  If an operation and cleanup both fail, an `AggregateError` message carries
+  both failures across the Worker wire; a failed close is never retried.
+  Keep that file unchanged until the call settles: unlike
   byte snapshots or Blobs, paths do not promise an invocation-time snapshot.
 - Signing also snapshots the definition and public certificates. The signer
   function and private key stay in the application realm. Only the COSE signing

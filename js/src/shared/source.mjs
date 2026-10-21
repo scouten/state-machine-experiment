@@ -20,6 +20,7 @@ export function openSource(asset) {
   const length = blob ? asset.size : asset.length;
   return {
     length,
+    getLength: () => length,
     async read(start, len) {
       range(start, len, length);
       const bytes = blob

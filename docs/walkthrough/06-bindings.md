@@ -54,8 +54,11 @@ paired large-build measurements isolate a major avoidable boundary cost
 without changing the Rust builder. Browser Blob/File inputs now use exact
 validated `slice().arrayBuffer()` reads inside the Worker without a whole-input
 snapshot; Node `{path}` inputs use positioned file reads with operation-scoped
-handles. Files must remain unchanged until the operation settles. Real-browser
-and Node proofs log actual source bytes and maximum read bounds, not RSS.
+handles. Files must remain unchanged until the operation settles.
+Node source lengths are re-statted on every `Length` request; a size change fails
+explicitly rather than defeating the builder's fresh plan-length validation.
+Combined operation/cleanup failures are reported together, without retrying close.
+Real-browser and Node proofs log actual source bytes and maximum read bounds, not RSS.
 Output still grows in a single array; neither language boundaries nor Blob
 internals are claimed to be physically zero-copy.
 

@@ -10,14 +10,19 @@ export function snapshotNodeAsset(asset) {
 }
 
 /** Opens only when its queued operation starts, and closes when it settles. */
-export async function openNodeSource(asset) {
+export async function openNodeSource(asset, openFile = open) {
   if (!asset || typeof asset.path !== "string") return openSource(asset);
-  const file = await open(asset.path, "r");
+  const file = await openFile(asset.path, "r");
   try {
     const stat = await file.stat();
     if (!stat.isFile() || !Number.isSafeInteger(stat.size)) throw new Error("invalid asset file");
     return {
       length: stat.size,
+      async getLength() {
+        const current = await file.stat();
+        if (current.size !== stat.size) throw new Error("asset file length changed");
+        return current.size;
+      },
       async read(start, len) {
         range(start, len, stat.size);
         const bytes = new Uint8Array(len);
@@ -32,7 +37,11 @@ export async function openNodeSource(asset) {
       close: () => file.close(),
     };
   } catch (error) {
-    await file.close();
+    try { await file.close() }
+    catch (cleanup) {
+      throw new AggregateError([error, cleanup],
+        `${String(error)}; source cleanup failed: ${String(cleanup)}`);
+    }
     throw error;
   }
 }

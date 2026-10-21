@@ -45,7 +45,7 @@ export async function read(adapter, asset, settings, now, source = openSource(as
             session.fulfill(request.id, "bytes", bytes);
             break;
           }
-          case "length": session.fulfill(request.id, "length", source.length); break;
+          case "length": session.fulfill(request.id, "length", await source.getLength()); break;
           case "time": session.fulfill(request.id, "time", now); break;
           default: throw new Error(`unsupported host request: ${request.kind}`);
         }
@@ -111,7 +111,10 @@ export async function build(adapter, asset, definition, certs, sign, source = op
             session.fulfill(request.id, "bytes", bytes);
             break;
           }
-          case "length": session.fulfill(request.id, "length", stream(request.stream).length); break;
+          case "length":
+            session.fulfill(request.id, "length", request.stream === "source"
+              ? await source.getLength() : stream(request.stream).length);
+            break;
           case "write": {
             if (request.stream !== "output" || !(request.bytes instanceof Uint8Array))
               throw new Error("invalid output write");
