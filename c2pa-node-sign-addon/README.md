@@ -12,7 +12,9 @@ The addon emits metadata-only `copyRange` requests (`start`, `len`, `offset`)
 for unchanged source bytes. Both JavaScript drivers copy those bytes within
 Node and return `"copied"` only after output reads can see the entire range.
 Source reads are exact and writes are awaited; short sources and rejected
-writes fail the build. The existing 1 MiB copy bound is unchanged. This avoids
+writes fail the build. File writes retry partial progress but reject a zero-byte
+write rather than hanging or acknowledging incomplete output. The existing
+1 MiB copy bound is unchanged. This avoids
 Node → Rust → Node payload forwarding, not the output reads Rust needs for
 hard-binding hashing, nor host-local memory/file copying.
 

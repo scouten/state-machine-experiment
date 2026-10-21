@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { createPrivateKey, sign as cryptoSign, X509Certificate } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -99,6 +100,32 @@ before(() => {
   dir = mkdtempSync(join(tmpdir(), "c2pa-sign-test-"));
 });
 after(() => rmSync(dir, { recursive: true, force: true }));
+
+test("copyRange rejects a file write that stops making progress", async (t) => {
+  const probe = await open(SOURCE, "r");
+  const prototype = Object.getPrototypeOf(probe);
+  const originalWrite = prototype.write;
+  await probe.close();
+  let calls = 0;
+  t.mock.method(prototype, "write", async function (bytes, offset, length, position) {
+    calls += 1;
+    if (calls === 1) return originalWrite.call(this, bytes, offset, 1, position);
+    if (calls === 2) return { bytesWritten: 0 };
+    throw new Error("unexpected retry after zero-byte write");
+  });
+  const out = await openOutput({ path: join(dir, "zero-progress.jpg") });
+  try {
+    await assert.rejects(answerRequest(
+      { id: 1, kind: "copyRange", start: 0, len: 2, offset: 0 },
+      { source: { async read() { return Buffer.from([2, 3]); } }, out: out.target },
+    ), /zero-byte write at 1/);
+    assert.equal(calls, 2);
+    assert.deepEqual(await out.target.read(0, 1), Buffer.from([2]));
+  } finally {
+    await out.discard();
+  }
+  assert.equal(existsSync(join(dir, "zero-progress.jpg")), false);
+});
 
 function assertBaseline(reader) {
   const json = reader.json();

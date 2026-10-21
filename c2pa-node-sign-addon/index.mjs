@@ -290,6 +290,7 @@ export async function openOutput(output) {
       async write(offset, bytes) {
         for (let done = 0; done < bytes.length; ) {
           const { bytesWritten } = await handle.write(bytes, done, bytes.length - done, offset + done);
+          if (bytesWritten === 0) throw new Error(`zero-byte write at ${offset + done}`);
           done += bytesWritten;
         }
       },
