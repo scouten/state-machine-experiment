@@ -7,6 +7,13 @@ through [Wasm](../contentauth-c2pa-wasm/) and the existing Neon addons.
 - `build::BuildSessionBridge` wraps `FileBuilderSession`.
 - `compat` owns shared SDK-shaped settings, format selection, errors and reports.
 
+Build hosts must implement `PendingRequest::CopyRange { id, start, len, offset }`:
+copy exactly `len` source bytes at `start` to output at `offset`, then return
+`Reply::Copied` only once output reads see the entire range. Requests retain the
+file builder's 1 MiB bound; no source payload crosses this bridge for copying.
+Short sources and host I/O failures must return `Failed`. Output reads for
+hard-binding hashing still cross the bridge; hashing remains in Rust.
+
 These are the existing implementations formerly owned by
 `contentauth-c2pa-node-compat` and `contentauth-c2pa-node-compat-sign`, moved and
 renamed rather than copied. The browser async host now imports the same

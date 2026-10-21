@@ -44,6 +44,10 @@ typedef enum C2paSmBuildRequestKind {
    * POST the encoded RFC 3161 request to the supplied URL.
    */
   C2PA_SM_BUILD_REQUEST_TIMESTAMP = 4,
+  /**
+   * Copy the full source range to output, without a payload.
+   */
+  C2PA_SM_BUILD_REQUEST_COPY_RANGE = 5,
 } C2paSmBuildRequestKind;
 
 /**
@@ -74,6 +78,10 @@ typedef enum C2paSmBuildReplyKind {
    * Reply payload is a UTF-8 host failure message.
    */
   C2PA_SM_BUILD_REPLY_FAILED = 5,
+  /**
+   * Every copied byte is visible to subsequent output reads.
+   */
+  C2PA_SM_BUILD_REPLY_COPIED = 6,
 } C2paSmBuildReplyKind;
 
 /**
@@ -131,11 +139,15 @@ typedef struct C2paSmBuildRequest {
    */
   int stream;
   /**
-   * Read start or write offset.
+   * Read start or output offset for WRITE/COPY_RANGE.
    */
   uint64_t offset;
   /**
-   * Read length.
+   * Source offset for COPY_RANGE; offset is its output destination.
+   */
+  uint64_t source_offset;
+  /**
+   * Byte length for READ/COPY_RANGE.
    */
   uint64_t len;
   /**

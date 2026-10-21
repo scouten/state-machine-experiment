@@ -52,6 +52,15 @@ fn sign_and_timestamp_with(
         for request in requests {
             let id = request.id();
             let reply = match request {
+                PendingRequest::CopyRange {
+                    start, len, offset, ..
+                } => {
+                    let bytes = &SOURCE_JPEG[start as usize..(start + len) as usize];
+                    let end = offset as usize + bytes.len();
+                    output.resize(output.len().max(end), 0);
+                    output[offset as usize..end].copy_from_slice(bytes);
+                    Reply::Copied
+                }
                 PendingRequest::Read {
                     stream, start, len, ..
                 } => {

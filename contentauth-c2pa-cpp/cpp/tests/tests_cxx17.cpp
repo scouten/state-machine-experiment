@@ -1061,7 +1061,7 @@ TEST(Core, signing_settings_keep_certificates_and_definition_as_owned_values) {
 }
 
 TEST(Core, signing_requests_identify_streams_and_own_their_payloads) {
-    static_assert(std::variant_size_v<BuildRequest> == 5);
+    static_assert(std::variant_size_v<BuildRequest> == 6);
     std::vector<BuildRequest> requests{
         BuildReadRequest{10, BuildStream::Source, 20, 30},
         BuildLengthRequest{11, BuildStream::Source},
@@ -1070,6 +1070,7 @@ TEST(Core, signing_requests_identify_streams_and_own_their_payloads) {
         TimestampRequest{14, "https://tsa.example", {5, 6}},
         BuildReadRequest{15, BuildStream::Output, 50, 60},
         BuildLengthRequest{16, BuildStream::Output},
+        CopyRangeRequest{17, 20, 30, 40},
     };
     uint64_t expected_id = 10;
     for (const auto &request : requests) {
@@ -1094,14 +1095,25 @@ TEST(Core, signing_requests_identify_streams_and_own_their_payloads) {
     EXPECT_EQ(std::get<TimestampRequest>(copied[4]).body, (std::vector<uint8_t>{5, 6}));
 }
 
+TEST(Core, copy_ranges_are_host_local_exact_and_visible_before_ack) {
+    MemoryBuildHost host({1, 2, 3});
+    EXPECT_TRUE(std::holds_alternative<Copied>(answer(host, CopyRangeRequest{1, 1, 2, 4})));
+    EXPECT_EQ(host.output(), (std::vector<uint8_t>{0, 0, 0, 0, 2, 3}));
+    EXPECT_TRUE(std::holds_alternative<Failed>(answer(host, CopyRangeRequest{2, 1, 3, 0})));
+    EXPECT_TRUE(std::holds_alternative<Failed>(
+        answer(host, CopyRangeRequest{3, 0, 3, std::numeric_limits<uint64_t>::max()})));
+}
+
 TEST(Core, signing_replies_and_report_hold_plain_values) {
-    static_assert(std::variant_size_v<BuildReply> == 6);
+    static_assert(std::variant_size_v<BuildReply> == 7);
     BuildReply reply = Bytes{{1, 2}};
     EXPECT_EQ(std::get<Bytes>(reply).data.size(), size_t(2));
     reply = Length{42};
     EXPECT_EQ(std::get<Length>(reply).value, uint64_t(42));
     reply = Written{};
     EXPECT_TRUE(std::holds_alternative<Written>(reply));
+    reply = Copied{};
+    EXPECT_TRUE(std::holds_alternative<Copied>(reply));
     reply = Signature{{3, 4}};
     EXPECT_EQ(std::get<Signature>(reply).data, (std::vector<uint8_t>{3, 4}));
     reply = TimestampResponse{{5, 6}};

@@ -190,6 +190,23 @@ pub unsafe extern "C" fn c2pa_sm_build_fulfill_written(
     })
 }
 
+/// Confirms every requested copy byte is visible to subsequent output reads.
+///
+/// # Safety
+/// `session` must be live. A non-null `err_out` must point to writable storage.
+#[no_mangle]
+pub unsafe extern "C" fn c2pa_sm_build_fulfill_copied(
+    session: *mut C2paSmBuildSession,
+    id: u64,
+    err_out: *mut *mut c_char,
+) -> i32 {
+    ffi_call(err_out, -1, || {
+        let mut session = cimpl::deref_mut_or_return_int!(session, C2paSmBuildSession);
+        cimpl::ok_or_return_int!(session.inner.fulfill_copied(id));
+        0
+    })
+}
+
 /// Fulfills a signing request with a COSE-format signature over the full message
 /// bytes in the request's `data`. ECDSA uses fixed-width `r || s`, not DER.
 ///

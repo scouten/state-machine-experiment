@@ -45,6 +45,8 @@ pub const C2PA_SM_BUILD_REQ_WRITE: u32 = 2;
 pub const C2PA_SM_BUILD_REQ_SIGN: u32 = 3;
 /// Request for RFC 3161 TSA timestamp over token request.
 pub const C2PA_SM_BUILD_REQ_TIMESTAMP: u32 = 4;
+/// Copy source_offset/len from source to output offset; no data payload.
+pub const C2PA_SM_BUILD_REQ_COPY_RANGE: u32 = 5;
 
 /// C exclusion structure.
 #[repr(C)]
@@ -65,9 +67,11 @@ pub struct C2paSmBuildRequest {
     pub kind: u32,
     /// Stream: `C2PA_SM_STREAM_*`.
     pub stream: u32,
-    /// Offset for `READ` or `WRITE`.
+    /// Read start or output offset for WRITE/COPY_RANGE.
     pub offset: u64,
-    /// Byte length for `READ`.
+    /// Source offset for COPY_RANGE; offset is the output destination.
+    pub source_offset: u64,
+    /// Byte length for READ/COPY_RANGE.
     pub len: u64,
     /// Data payload for `WRITE`, `SIGN`, or `TIMESTAMP`.
     /// For `SIGN`, these are the full COSE Sig_structure message bytes, not a digest.
@@ -90,6 +94,7 @@ struct PendingRequestData {
     kind: u32,
     stream: u32,
     offset: u64,
+    source_offset: u64,
     len: u64,
     data: Option<Bytes>,
     alg: Option<CString>,
@@ -165,6 +170,7 @@ impl BuildSession {
                         kind: item.kind,
                         stream: item.stream,
                         offset: item.offset,
+                        source_offset: item.source_offset,
                         len: item.len,
                         data: item
                             .data
@@ -225,6 +231,11 @@ impl BuildSession {
         self.fulfill_reply(id, FileBuilderReply::Written)
     }
 
+    /// Confirms the entire copy is visible to subsequent output reads.
+    pub fn fulfill_copied(&mut self, id: u64) -> Result<(), Error> {
+        self.fulfill_reply(id, FileBuilderReply::Copied)
+    }
+
     /// Fulfills a sign request with COSE-format signature bytes.
     /// ECDSA signatures must be fixed-width `r || s`, not DER.
     pub fn fulfill_signature(&mut self, id: u64, sig: &[u8]) -> Result<(), Error> {
@@ -271,11 +282,26 @@ fn describe_request(
     tsa_url: Option<&str>,
 ) -> Result<PendingRequestData, Error> {
     match req {
+        FileBuilderRequest::CopyRange {
+            source_range,
+            output_offset,
+        } => Ok(PendingRequestData {
+            id: handle,
+            kind: C2PA_SM_BUILD_REQ_COPY_RANGE,
+            stream: C2PA_SM_STREAM_OUTPUT,
+            offset: *output_offset,
+            source_offset: source_range.start,
+            len: source_range.len,
+            data: None,
+            alg: None,
+            url: None,
+        }),
         FileBuilderRequest::Read { stream, range } => Ok(PendingRequestData {
             id: handle,
             kind: C2PA_SM_BUILD_REQ_READ,
             stream: map_stream(*stream),
             offset: range.start,
+            source_offset: 0,
             len: range.len,
             data: None,
             alg: None,
@@ -286,6 +312,7 @@ fn describe_request(
             kind: C2PA_SM_BUILD_REQ_LENGTH,
             stream: map_stream(*stream),
             offset: 0,
+            source_offset: 0,
             len: 0,
             data: None,
             alg: None,
@@ -300,6 +327,7 @@ fn describe_request(
             kind: C2PA_SM_BUILD_REQ_WRITE,
             stream: map_stream(*stream),
             offset: *offset,
+            source_offset: 0,
             len: bytes.len() as u64,
             data: Some(bytes.clone()),
             alg: None,
@@ -314,6 +342,7 @@ fn describe_request(
             kind: C2PA_SM_BUILD_REQ_SIGN,
             stream: C2PA_SM_STREAM_OUTPUT,
             offset: 0,
+            source_offset: 0,
             len: 0,
             data: Some(Bytes::copy_from_slice(data)),
             alg: Some(CString::new(alg_name(*alg)?)?),
@@ -333,6 +362,7 @@ fn describe_request(
                 kind: C2PA_SM_BUILD_REQ_TIMESTAMP,
                 stream: C2PA_SM_STREAM_OUTPUT,
                 offset: 0,
+                source_offset: 0,
                 len: 0,
                 data: Some(request.into()),
                 alg: None,

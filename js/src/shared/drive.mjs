@@ -80,7 +80,7 @@ export async function build(adapter, asset, definition, certs, sign) {
   let output = new Uint8Array(0);
   /** Logical output length; `output` may be larger (geometric growth). */
   let length = 0;
-  const stats = { reads: 0, bytes: 0, writes: 0, writtenBytes: 0, signs: 0, advances: 0 };
+  const stats = { reads: 0, bytes: 0, writes: 0, writtenBytes: 0, copies: 0, copiedBytes: 0, signs: 0, advances: 0 };
   /** Maps a request's stream name to its backing bytes. */
   function stream(name) {
     if (name === "source") return asset;
@@ -107,21 +107,30 @@ export async function build(adapter, asset, definition, certs, sign) {
             break;
           }
           case "length": session.fulfill(request.id, "length", stream(request.stream).length); break;
+          case "copyRange":
           case "write": {
-            if (request.stream !== "output" || !(request.bytes instanceof Uint8Array))
+            const copying = request.kind === "copyRange";
+            if (copying) range(request.start, request.len, asset.length);
+            const bytes = copying ? asset.subarray(request.start, request.start + request.len) : request.bytes;
+            if ((!copying && request.stream !== "output") || !(bytes instanceof Uint8Array))
               throw new Error("invalid output write");
-            range(request.offset, request.bytes.length, Number.MAX_SAFE_INTEGER);
-            const end = request.offset + request.bytes.length;
+            range(request.offset, bytes.length, Number.MAX_SAFE_INTEGER);
+            const end = request.offset + bytes.length;
             if (end > output.length) {
               const next = new Uint8Array(Math.max(end, output.length * 2, 4096));
               next.set(output);
               output = next;
             }
-            output.set(request.bytes, request.offset);
+            output.set(bytes, request.offset);
             length = Math.max(length, end);
-            stats.writes++;
-            stats.writtenBytes += request.bytes.length;
-            session.fulfill(request.id, "written");
+            if (copying) {
+              stats.copies++;
+              stats.copiedBytes += bytes.length;
+            } else {
+              stats.writes++;
+              stats.writtenBytes += bytes.length;
+            }
+            session.fulfill(request.id, copying ? "copied" : "written");
             break;
           }
           case "sign": {

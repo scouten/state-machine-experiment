@@ -114,6 +114,34 @@ fn answer<S: Read + Seek, O: Read + Write + Seek>(
     request: &FileBuilderRequest,
 ) -> FileBuilderReply {
     match request {
+        FileBuilderRequest::CopyRange {
+            source_range,
+            output_offset,
+        } => {
+            let result = (|| -> std::io::Result<()> {
+                source_range
+                    .start
+                    .checked_add(source_range.len)
+                    .and_then(|_| output_offset.checked_add(source_range.len))
+                    .ok_or_else(|| {
+                        std::io::Error::new(std::io::ErrorKind::InvalidInput, "copy range overflow")
+                    })?;
+                source.seek(SeekFrom::Start(source_range.start))?;
+                output.seek(SeekFrom::Start(*output_offset))?;
+                let copied = std::io::copy(&mut source.take(source_range.len), output)?;
+                if copied != source_range.len {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "short copy source",
+                    ));
+                }
+                output.flush()
+            })();
+            match result {
+                Ok(()) => FileBuilderReply::Copied,
+                Err(err) => FileBuilderReply::Failed(HostError::new(err.to_string())),
+            }
+        }
         FileBuilderRequest::Read { stream, range } => {
             let read = if *stream == source_stream {
                 read_range(source, *range)
@@ -401,6 +429,65 @@ mod tests {
         );
 
         assert!(matches!(reply, FileBuilderReply::Failed(_)), "{reply:?}");
+    }
+
+    #[test]
+    fn copy_range_is_exact_visible_and_rejects_short_or_overflowing_ranges() {
+        for (range, offset, succeeds) in [
+            (ByteRange { start: 1, len: 2 }, 3, true),
+            (ByteRange { start: 1, len: 3 }, 0, false),
+            (
+                ByteRange {
+                    start: u64::MAX,
+                    len: 2,
+                },
+                0,
+                false,
+            ),
+            (ByteRange { start: 0, len: 2 }, u64::MAX, false),
+        ] {
+            let mut source = Cursor::new(vec![1u8, 2, 3]);
+            let mut output = Cursor::new(Vec::new());
+            let reply = answer(
+                source_stream(),
+                output_stream(),
+                &mut source,
+                &mut output,
+                &mut Signers::new(never_signs, None),
+                &mut never_timestamps,
+                &FileBuilderRequest::CopyRange {
+                    source_range: range,
+                    output_offset: offset,
+                },
+            );
+            assert_eq!(
+                matches!(reply, FileBuilderReply::Copied),
+                succeeds,
+                "{reply:?}"
+            );
+            if succeeds {
+                assert_eq!(output.into_inner(), vec![0, 0, 0, 2, 3]);
+            } else {
+                assert!(matches!(reply, FileBuilderReply::Failed(_)));
+            }
+        }
+    }
+
+    #[test]
+    fn a_copy_write_failure_is_reported_as_failed() {
+        let reply = answer(
+            source_stream(),
+            output_stream(),
+            &mut Cursor::new(vec![1u8, 2, 3]),
+            &mut FailsAfterSeek,
+            &mut Signers::new(never_signs, None),
+            &mut never_timestamps,
+            &FileBuilderRequest::CopyRange {
+                source_range: ByteRange { start: 0, len: 3 },
+                output_offset: 0,
+            },
+        );
+        assert!(matches!(reply, FileBuilderReply::Failed(_)));
     }
 
     #[test]

@@ -69,6 +69,16 @@ The package layout is `js/src/{shared,browser,node}`, with contracts under
 The old addon JavaScript drivers remain intentional alternative hosts, not
 silently replaced by the narrower Worker implementation: they support file and
 custom sources, OCSP, timestamp transport and transactional file output.
+All build surfaces now expose explicit host-side `CopyRange` requests and
+`Copied` acknowledgements. The shared JavaScript host and legacy Node driver
+keep unchanged payloads outside Rust; Wasm and Neon carry only range metadata.
+The C ABI and C++ variant expose source offset, length and output offset;
+blocking Rust/C++ hosts perform bounded, exact host-local stream copying.
+The retained Rust async host still buffers `Blob::bytes` in Rust, but answers
+the same copy operation without routing a payload through the session.
+No host may acknowledge until output reads see the complete range. Output
+hashing remains in Rust; neither exclusion lists nor logical output lengths
+change. This optimization introduces no Blob host or chunk tuning.
 Retiring their loops or the Rust async hosts requires preservation tests for
 those capabilities. No full c2pa-js facade migration is claimed here.
 Platform adapters and transports are optional within the bindings. Both

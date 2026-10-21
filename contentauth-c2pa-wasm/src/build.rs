@@ -84,6 +84,11 @@ impl BuildSession {
         self.reply(id, Reply::Written)
     }
 
+    /// Confirms every copied byte is visible to subsequent output reads.
+    pub fn copied(&mut self, id: u32) -> Result<(), JsValue> {
+        self.reply(id, Reply::Copied)
+    }
+
     /// Supplies the caller-produced raw signature.
     pub fn signature(&mut self, id: u32, bytes: Vec<u8>) -> Result<(), JsValue> {
         self.reply(id, Reply::Signature(bytes))
@@ -120,6 +125,14 @@ impl BuildSession {
         binary: bool,
     ) -> Result<serde_json::Value, JsValue> {
         Ok(match request {
+            PendingRequest::CopyRange {
+                id,
+                start,
+                len,
+                offset,
+            } => {
+                json!({ "id": id, "kind": "copyRange", "start": start, "len": len, "offset": offset })
+            }
             PendingRequest::Read {
                 id,
                 stream,
@@ -182,6 +195,31 @@ mod tests {
             stream: Stream::Output,
             offset: 9,
             bytes,
+        }
+    }
+
+    #[test]
+    fn copy_ranges_have_only_metadata_in_both_transports() {
+        for binary in [false, true] {
+            let mut session = session();
+            let request = session
+                .describe(
+                    PendingRequest::CopyRange {
+                        id: 7,
+                        start: 10,
+                        len: 100,
+                        offset: 30,
+                    },
+                    binary,
+                )
+                .unwrap();
+            assert_eq!(
+                request,
+                json!({
+                    "id": 7, "kind": "copyRange", "start": 10, "len": 100, "offset": 30,
+                })
+            );
+            assert!(session.payloads.is_empty());
         }
     }
 

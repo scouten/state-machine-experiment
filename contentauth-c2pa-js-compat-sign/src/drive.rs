@@ -59,6 +59,19 @@ where
 
         for request in session.outstanding_requests().to_vec() {
             let reply = match &request.kind {
+                FileBuilderRequest::CopyRange {
+                    source_range,
+                    output_offset,
+                } => match source.bytes(*source_range).await {
+                    Ok(bytes) if bytes.len() as u64 == source_range.len => {
+                        match write(&mut output, *output_offset, &bytes) {
+                            Ok(()) => FileBuilderReply::Copied,
+                            Err(err) => FileBuilderReply::Failed(err),
+                        }
+                    }
+                    Ok(_) => FileBuilderReply::Failed(HostError::new("short copy source")),
+                    Err(err) => FileBuilderReply::Failed(err),
+                },
                 FileBuilderRequest::Read { stream, range } if *stream == source_stream => {
                     match source.bytes(*range).await {
                         Ok(bytes) if bytes.len() as u64 == range.len => {
@@ -303,6 +316,38 @@ mod tests {
     fn a_short_read_from_the_blob_fails_the_build_rather_than_being_hashed() {
         let err = block_on(build(JpegFormat, &Short, &NeverSigns, settings(), None)).unwrap_err();
         assert!(err.to_string().contains("blob returned"), "{err}");
+    }
+
+    struct ShortCopy(Vec<u8>);
+
+    impl Blob for ShortCopy {
+        fn size(&self) -> u64 {
+            self.0.len() as u64
+        }
+
+        async fn bytes(&self, range: ByteRange) -> Result<Vec<u8>, HostError> {
+            let mut bytes =
+                self.0[range.start as usize..(range.start + range.len) as usize].to_vec();
+            if range.len > 4096 {
+                bytes.pop();
+            }
+            Ok(bytes)
+        }
+    }
+
+    #[test]
+    fn a_short_copy_from_the_blob_fails_before_signing() {
+        let mut source = vec![0xff, 0xd8, 0xff, 0xd9];
+        source.resize(8192, 0);
+        let err = block_on(build(
+            JpegFormat,
+            &ShortCopy(source),
+            &NeverSigns,
+            settings(),
+            None,
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("short copy source"), "{err}");
     }
 
     /// A signer with an authority that answers with a canned response and

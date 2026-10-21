@@ -57,6 +57,9 @@ export async function signingContract(createClient, fixture, pkcs8) {
   async function validate(client, result, name) {
     check(result.asset instanceof Uint8Array, "missing signed output bytes");
     check(result.manifest instanceof Uint8Array, "missing manifest bytes");
+    check(result.stats.copies > 0, "unchanged source did not use copyRange");
+    check(result.stats.copiedBytes === baseline.files[name].sourceBytes,
+      "copyRange byte accounting differs from the unsigned source length");
     check(result.asset.length === fixture.files[name].bytes, "signed output length differs");
     check(result.manifest.length === baseline.files[name].manifestBytes, "manifest length differs");
     equal(result.exclusions.map(({ start, len }) => ({ start, len })),

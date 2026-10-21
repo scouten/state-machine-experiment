@@ -69,6 +69,18 @@ impl Stream {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum PendingRequest {
+    /// Copy exactly `len` source bytes at `start` to output at `offset`.
+    /// Answer with [`Reply::Copied`] after the full range is readable.
+    CopyRange {
+        /// Fulfillment handle.
+        id: u64,
+        /// Source offset.
+        start: u64,
+        /// Byte count.
+        len: u64,
+        /// Output offset.
+        offset: u64,
+    },
     /// Read exactly `len` bytes of `stream` starting at `start`.
     /// Answer with [`Reply::Bytes`].
     Read {
@@ -137,6 +149,7 @@ impl PendingRequest {
     pub fn id(&self) -> u64 {
         match self {
             Self::Read { id, .. }
+            | Self::CopyRange { id, .. }
             | Self::Length { id, .. }
             | Self::Write { id, .. }
             | Self::Sign { id, .. }
@@ -148,6 +161,8 @@ impl PendingRequest {
 /// The host's answer to one [`PendingRequest`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Reply {
+    /// The entire copy range is visible to subsequent output reads.
+    Copied,
     /// The bytes a [`PendingRequest::Read`] asked for.
     Bytes(Vec<u8>),
     /// A stream's length in bytes.
@@ -178,7 +193,7 @@ pub enum Step {
 }
 
 /// What a finished build reports. The signed asset itself is not here:
-/// every byte of it already went to the host as a [`PendingRequest::Write`].
+/// every byte of it was already written or copied by the host.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SignReport {
     /// The manifest store's bytes, as embedded.
@@ -356,6 +371,15 @@ fn describe(
             id: handle,
             stream: Stream::from_engine(*stream)?,
         },
+        FileBuilderRequest::CopyRange {
+            source_range,
+            output_offset,
+        } => PendingRequest::CopyRange {
+            id: handle,
+            start: source_range.start,
+            len: source_range.len,
+            offset: *output_offset,
+        },
         FileBuilderRequest::Write {
             stream,
             offset,
@@ -407,6 +431,7 @@ fn engine_reply(reply: Reply) -> Result<FileBuilderReply, Error> {
         Reply::Bytes(bytes) => FileBuilderReply::Bytes(bytes.into()),
         Reply::Length(len) => FileBuilderReply::Length(len),
         Reply::Written => FileBuilderReply::Written,
+        Reply::Copied => FileBuilderReply::Copied,
         Reply::Signature(bytes) => FileBuilderReply::Signature(bytes),
         Reply::Failed(message) => FileBuilderReply::Failed(HostError::new(message)),
     })

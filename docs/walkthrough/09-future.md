@@ -5,6 +5,12 @@ READMEs; none of it is committed work. Grouped by what it would teach us.
 
 ## Where we are
 
+Host-side `CopyRange` is complete across the file builder, bridges, Wasm,
+Neon and native consumers: unchanged payloads no longer need a session
+`Read` → `Write` round trip. Domain hashing still reads output in Rust.
+Blob-native browser output, owned-input options, native leases and copy chunk
+tuning remain separate experiments, not part of this result.
+
 ```mermaid
 flowchart LR
     subgraph done["Done"]
@@ -16,6 +22,7 @@ flowchart LR
         d5["Differential tests vs c2pa-rs"]
         d6["Shared JS Worker read + baseline sign<br/>browser Wasm / Node Neon, async signer callbacks"]
         d7["C++ read + sign; blocking / pool / future / coroutine<br/>atomic file signing + Trusted read-back example"]
+        d8["Bounded host CopyRange for unchanged bytes<br/>metadata-only acknowledgements; Rust domain hashing"]
     end
     subgraph next["Next"]
         direction TB

@@ -22,11 +22,9 @@
 //! against its own [`EmbedPlan::check`] before trusting it — a
 //! `FormatHandler` answers only through [`EmbedPlan::new`], not
 //! necessarily [`EmbedPlan::splice`]'s own validation — then walks its
-//! [`Edit`]s, issuing a [`FileBuilderRequest::Read`] against
-//! [`FileBuilderSession::SOURCE_STREAM`] for each [`Edit::Copy`] (in
-//! bounded chunks for a single large range) and a
-//! [`FileBuilderRequest::Write`] against
-//! [`FileBuilderSession::OUTPUT_STREAM`] for every byte it produces —
+//! [`Edit`]s, issuing a metadata-only [`FileBuilderRequest::CopyRange`]
+//! for each bounded chunk of an [`Edit::Copy`] and a
+//! [`FileBuilderRequest::Write`] for generated framing and manifest bytes —
 //! never holding the source or the output it is assembling in memory.
 //! `BuilderSession`'s own `AssetBytes` (needed to hash the output for the
 //! hard binding) is forwarded the same way, as a plain read against the
@@ -72,11 +70,21 @@ const OUTPUT: StreamId = StreamId::new(1);
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum FileBuilderRequest {
+    /// Copy exactly `source_range.len` bytes from `SOURCE_STREAM` to
+    /// `OUTPUT_STREAM` at `output_offset`, without returning the payload.
+    /// Reply with [`FileBuilderReply::Copied`] only after every byte is
+    /// visible to subsequent output reads. Short reads/writes must fail.
+    CopyRange {
+        /// Range in the source asset.
+        source_range: ByteRange,
+        /// Destination offset in the output asset.
+        output_offset: u64,
+    },
     /// Read a range of bytes from `stream`. Reply with
     /// [`FileBuilderReply::Bytes`], carrying exactly `range.len` bytes.
     ///
-    /// Issued against [`FileBuilderSession::SOURCE_STREAM`] while copying
-    /// source bytes through to the output, and against
+    /// Issued against [`FileBuilderSession::SOURCE_STREAM`] while planning
+    /// the embedding, and against
     /// [`FileBuilderSession::OUTPUT_STREAM`] while hashing the output for
     /// the hard binding — so an [`FileBuilderSession::OUTPUT_STREAM`] host
     /// must be able to read back what it has already been asked to write.
@@ -99,9 +107,8 @@ pub enum FileBuilderRequest {
     /// Reply with [`FileBuilderReply::Written`] once durable enough to be
     /// read back by a later [`Self::Read`].
     ///
-    /// Every byte of the output this session assembles arrives through
-    /// exactly one of these — nothing here is ever collected into a
-    /// complete in-memory asset.
+    /// Generated framing and manifest bytes arrive through these; unchanged
+    /// source ranges use [`Self::CopyRange`].
     Write {
         /// The stream to write to — always
         /// [`FileBuilderSession::OUTPUT_STREAM`] today, but named
@@ -155,6 +162,7 @@ impl Request for FileBuilderRequest {
             Self::Read { .. } => "Bytes",
             Self::Length { .. } => "Length",
             Self::Write { .. } => "Written",
+            Self::CopyRange { .. } => "Copied",
             Self::Sign { .. } => "Signature",
             Self::Timestamp { .. } => "Timestamp",
         }
@@ -167,6 +175,7 @@ impl Request for FileBuilderRequest {
                 | (Self::Read { .. }, FileBuilderReply::Bytes(_))
                 | (Self::Length { .. }, FileBuilderReply::Length(_))
                 | (Self::Write { .. }, FileBuilderReply::Written)
+                | (Self::CopyRange { .. }, FileBuilderReply::Copied)
                 | (Self::Sign { .. }, FileBuilderReply::Signature(_))
                 | (Self::Timestamp { .. }, FileBuilderReply::Timestamp(_))
         )
@@ -177,6 +186,8 @@ impl Request for FileBuilderRequest {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum FileBuilderReply {
+    /// The entire [`FileBuilderRequest::CopyRange`] is visible in output.
+    Copied,
     /// Answers [`FileBuilderRequest::Read`]: the requested bytes.
     Bytes(Bytes),
 
@@ -203,8 +214,7 @@ pub enum FileBuilderReply {
 /// The result of a completed [`FileBuilderSession`] workflow.
 ///
 /// The output asset itself is not here: every byte of it was already
-/// delivered to the host through [`FileBuilderRequest::Write`] as it was
-/// produced.
+/// written or copied by the host as it was produced.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct FileBuilderReport {
@@ -220,10 +230,9 @@ pub struct FileBuilderReport {
 }
 
 /// One pending unit of output: bytes to place at `output_offset`, either
-/// already in hand or still to be read from the source.
+/// already in hand or to be copied within the host.
 enum WriteTask {
-    /// Read `source_range` from [`FileBuilderSession::SOURCE_STREAM`],
-    /// then write it at `output_offset`.
+    /// Copy `source_range` to `output_offset`, entirely within the host.
     CopyFromSource {
         output_offset: u64,
         source_range: ByteRange,
@@ -236,12 +245,8 @@ enum WriteTask {
 /// A request this session has issued to its own host on a [`Sub::Writing`]
 /// task's behalf, awaiting a reply.
 enum Inflight {
-    /// Reading `source_range` before the write it feeds can be issued.
-    Read {
-        id: RequestId,
-        output_offset: u64,
-        source_range: ByteRange,
-    },
+    /// Copying source bytes entirely within the host.
+    Copy { id: RequestId },
 
     /// Writing bytes already in hand.
     Write { id: RequestId },
@@ -259,7 +264,7 @@ enum WriteThen {
 
 /// An internal sub-operation a [`FileBuilderSession`] is driving on behalf
 /// of one outstanding [`BuilderRequest`], without surfacing it to its own
-/// host as anything but the plain `Read`/`Length`/`Write` requests that
+/// host as anything but the plain `Read`/`Length`/`CopyRange`/`Write` requests that
 /// sub-operation actually needs.
 enum Sub<H: FormatHandler> {
     /// Driving `handler.plan_embed`, forwarding its [`IoRequest`]s to this
@@ -323,9 +328,9 @@ enum Phase<H: FormatHandler> {
 /// A [`BuilderSession`] runs underneath, but never speaks to this
 /// session's host directly: `ReservePlaceholder` and `CommitManifest` are
 /// resolved by walking an [`EmbedPlan`]'s edits and issuing
-/// `Read`/`Write` requests for each; `AssetLength` and `AssetBytes` are
-/// forwarded as plain reads of the output stream once it has been
-/// written. Only `Sign` and `Timestamp` — the two things nothing in this
+/// `CopyRange`/`Write` requests for each; `AssetLength` comes from the plan
+/// and `AssetBytes` is forwarded as reads of the output stream once it has
+/// been written. Only `Sign` and `Timestamp` — the two things nothing in this
 /// workspace can do on a host's behalf — are forwarded, as
 /// [`FileBuilderRequest::Sign`] and [`FileBuilderRequest::Timestamp`].
 ///
@@ -876,40 +881,21 @@ fn step_writing<H: FormatHandler>(
     then: WriteThen,
 ) -> Result<WritingStep<H>, Error> {
     match inflight {
-        // A task's `Read` has resolved: issue the `Write` it feeds and
-        // await that instead — the next queued task, if any, waits its
-        // turn.
-        Some(Inflight::Read {
-            id,
-            output_offset,
-            source_range,
-        }) => {
-            return match take_bytes(core, id, source_range)? {
-                None => Ok(WritingStep::AwaitHost(Sub::Writing {
+        Some(Inflight::Copy { id }) => match core.take_reply(id) {
+            None => {
+                return Ok(WritingStep::AwaitHost(Sub::Writing {
                     tasks,
-                    inflight: Some(Inflight::Read {
-                        id,
-                        output_offset,
-                        source_range,
-                    }),
+                    inflight: Some(Inflight::Copy { id }),
                     request,
                     then,
-                })),
-                Some(bytes) => {
-                    let write_id = core.issue(FileBuilderRequest::Write {
-                        stream: OUTPUT,
-                        offset: output_offset,
-                        bytes,
-                    });
-                    Ok(WritingStep::AwaitHost(Sub::Writing {
-                        tasks,
-                        inflight: Some(Inflight::Write { id: write_id }),
-                        request,
-                        then,
-                    }))
-                }
-            };
-        }
+                }))
+            }
+            Some(FileBuilderReply::Copied) => {}
+            Some(FileBuilderReply::Failed(source)) => {
+                return Err(Error::HostFailure { id, source })
+            }
+            Some(_) => return Err(Error::Invariant("unexpected copy reply")),
+        },
 
         // A task's `Write` is still outstanding: await it before moving
         // on to the next task.
@@ -934,17 +920,13 @@ fn step_writing<H: FormatHandler>(
             output_offset,
             source_range,
         }) => {
-            let id = core.issue(FileBuilderRequest::Read {
-                stream: SOURCE,
-                range: source_range,
+            let id = core.issue(FileBuilderRequest::CopyRange {
+                source_range,
+                output_offset,
             });
             Ok(WritingStep::AwaitHost(Sub::Writing {
                 tasks,
-                inflight: Some(Inflight::Read {
-                    id,
-                    output_offset,
-                    source_range,
-                }),
+                inflight: Some(Inflight::Copy { id }),
                 request,
                 then,
             }))
@@ -969,11 +951,8 @@ fn step_writing<H: FormatHandler>(
     }
 }
 
-/// The most this session ever asks a host to read from the source (or
-/// write to the output) in one [`WriteTask`] — bounding how much of a
-/// single, arbitrarily large [`Edit::Copy`] it holds in memory at once,
-/// the same way every other range this session reads is already bounded
-/// by the plan's own framing.
+/// The maximum host-local copy request length. The chunk policy is
+/// unchanged from the former Read/Write forwarding path.
 const COPY_CHUNK_LEN: u64 = 1 << 20;
 
 /// Lays out `edits` — a freshly planned embedding — as a sequence of
@@ -1125,7 +1104,8 @@ fn to_io_reply(reply: FileBuilderReply) -> IoReply {
         // `FileBuilderRequest::accepts` before this function ever sees
         // it, and only `Read`/`Length` requests are ever forwarded to
         // `plan_embed`'s operation — kept for exhaustiveness.
-        FileBuilderReply::Written
+        FileBuilderReply::Copied
+        | FileBuilderReply::Written
         | FileBuilderReply::Signature(_)
         | FileBuilderReply::Timestamp(_) => {
             IoReply::Failed(HostError::new("unexpected reply shape"))
@@ -1148,7 +1128,7 @@ fn to_builder_host_reply(reply: FileBuilderReply) -> BuilderHostReply {
         // `advance`), and `ReservePlaceholder`/`CommitManifest` are
         // answered once their own `Sub::Writing` finishes, not through
         // this path — kept for exhaustiveness.
-        FileBuilderReply::Length(_) | FileBuilderReply::Written => {
+        FileBuilderReply::Length(_) | FileBuilderReply::Written | FileBuilderReply::Copied => {
             BuilderHostReply::Failed(HostError::new("unexpected reply shape"))
         }
     }
@@ -1171,35 +1151,6 @@ fn take_length(
         Some(_) => Err(ProtocolError::ReplyMismatch {
             id,
             expected: "Length",
-        }
-        .into()),
-    }
-}
-
-/// Consumes the reply to a [`FileBuilderRequest::Read`] for `range`, if
-/// the host has provided one.
-fn take_bytes(
-    core: &mut SessionCore<FileBuilderRequest>,
-    id: RequestId,
-    range: ByteRange,
-) -> Result<Option<Bytes>, Error> {
-    match core.take_reply(id) {
-        None => Ok(None),
-        Some(FileBuilderReply::Bytes(bytes)) => {
-            let actual = bytes.len() as u64;
-            if actual != range.len {
-                return Err(Error::ReadLengthMismatch { range, actual });
-            }
-            Ok(Some(bytes))
-        }
-        Some(FileBuilderReply::Failed(source)) => Err(Error::HostFailure { id, source }),
-
-        // `RequestTracker::fulfill` rejects a reply that does not match
-        // `FileBuilderRequest::accepts` before it is ever stored, so this
-        // arm is unreachable in practice; kept as defense in depth.
-        Some(_) => Err(ProtocolError::ReplyMismatch {
-            id,
-            expected: "Bytes",
         }
         .into()),
     }
@@ -1251,6 +1202,10 @@ mod tests {
                 range: range(),
             },
             FileBuilderRequest::Length { stream: stream() },
+            FileBuilderRequest::CopyRange {
+                source_range: range(),
+                output_offset: 0,
+            },
             FileBuilderRequest::Write {
                 stream: stream(),
                 offset: 0,
@@ -1273,6 +1228,7 @@ mod tests {
             (FileBuilderReply::Bytes(vec![1].into()), "Bytes"),
             (FileBuilderReply::Length(4), "Length"),
             (FileBuilderReply::Written, "Written"),
+            (FileBuilderReply::Copied, "Copied"),
             (FileBuilderReply::Signature(vec![0; 64]), "Signature"),
             (FileBuilderReply::Timestamp(vec![9; 8]), "Timestamp"),
             (FileBuilderReply::Failed(HostError::new("nope")), ""),
@@ -1404,7 +1360,7 @@ mod tests {
     }
 
     /// A single `Edit::Copy` larger than [`COPY_CHUNK_LEN`] must still
-    /// move through this session in bounded pieces — never one `Read`
+    /// move through this session in bounded pieces — never one `CopyRange`
     /// sized to the whole range, which would undo the point of streaming
     /// for exactly the assets large enough to matter.
     #[test]
@@ -1641,12 +1597,12 @@ mod tests {
         assert!(session.core.is_failed());
     }
 
-    /// A source read a `CopyFromSource` task needs must not be reissued
+    /// A copy a `CopyFromSource` task needs must not be reissued
     /// while it is still outstanding — the same "no duplicate requests"
     /// property this crate's session-level tests prove end to end, here
     /// isolated to `step_writing` itself.
     #[test]
-    fn step_writing_does_not_reissue_a_still_pending_source_read() {
+    fn step_writing_does_not_reissue_a_still_pending_copy() {
         let mut core = SessionCore::default();
         let outer_request = core.issue(FileBuilderRequest::Sign {
             purpose: SignPurpose::Claim,
@@ -1668,7 +1624,7 @@ mod tests {
         .unwrap();
         let sub = match step {
             WritingStep::AwaitHost(sub) => sub,
-            WritingStep::Done { .. } => panic!("expected to await the source read"),
+            WritingStep::Done { .. } => panic!("expected to await the copy"),
         };
         let Sub::Writing {
             tasks, inflight, ..
@@ -1677,8 +1633,8 @@ mod tests {
             panic!("expected Sub::Writing");
         };
         let first_id = match &inflight {
-            Some(Inflight::Read { id, .. }) => *id,
-            _ => panic!("expected a pending source read"),
+            Some(Inflight::Copy { id }) => *id,
+            _ => panic!("expected a pending copy"),
         };
 
         let step = step_writing::<JpegFormat>(
@@ -1691,10 +1647,10 @@ mod tests {
         .unwrap();
         match step {
             WritingStep::AwaitHost(Sub::Writing {
-                inflight: Some(Inflight::Read { id, .. }),
+                inflight: Some(Inflight::Copy { id }),
                 ..
             }) => assert_eq!(id, first_id),
-            _ => panic!("expected the same read still pending, unchanged"),
+            _ => panic!("expected the same copy still pending, unchanged"),
         }
     }
 
@@ -1801,52 +1757,7 @@ mod tests {
         ));
     }
 
-    /// Mirrors `contentauth_c2pa_format::request`'s own tests of its
-    /// identical `take_bytes`: outstanding, a wrong-length reply, and a
-    /// host failure.
-    #[test]
-    fn take_bytes_reports_outstanding_wrong_length_and_failure() {
-        let mut core = SessionCore::default();
-        let range = ByteRange { start: 4, len: 3 };
-
-        let id = core.issue(FileBuilderRequest::Read {
-            stream: stream(),
-            range,
-        });
-        assert!(take_bytes(&mut core, id, range).unwrap().is_none());
-
-        core.fulfill(id, FileBuilderReply::Bytes(vec![0; 2].into()))
-            .unwrap();
-        assert!(matches!(
-            take_bytes(&mut core, id, range),
-            Err(Error::ReadLengthMismatch { actual: 2, .. })
-        ));
-
-        let id = core.issue(FileBuilderRequest::Read {
-            stream: stream(),
-            range,
-        });
-        core.fulfill(id, FileBuilderReply::Failed(HostError::new("unreadable")))
-            .unwrap();
-        assert!(matches!(
-            take_bytes(&mut core, id, range),
-            Err(Error::HostFailure { .. })
-        ));
-
-        let id = core.issue(FileBuilderRequest::Read {
-            stream: stream(),
-            range,
-        });
-        core.fulfill(id, FileBuilderReply::Bytes(vec![7; 3].into()))
-            .unwrap();
-        assert_eq!(
-            take_bytes(&mut core, id, range).unwrap(),
-            Some(vec![7; 3]).map(Into::into)
-        );
-    }
-
-    /// Mirrors `take_bytes_reports_outstanding_wrong_length_and_failure`
-    /// for `take_write_ack`.
+    /// Pending writes and host failures are never treated as success.
     #[test]
     fn take_write_ack_reports_outstanding_and_failure() {
         let mut core = SessionCore::default();

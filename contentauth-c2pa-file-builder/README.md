@@ -27,10 +27,14 @@ speaks a small request vocabulary, `FileBuilderRequest`, to whatever host
 drives it. It never buffers the source or output asset itself — it never
 calls `EmbedPlan::materialize` (the in-memory reference implementation
 for turning a plan into bytes); instead it walks a plan's edits directly,
-issuing a `FileBuilderRequest::Read` against `SOURCE_STREAM` for each
-range it needs to copy through (in bounded chunks, for a single large
-range) and a `FileBuilderRequest::Write` against `OUTPUT_STREAM` for
-every byte it produces. `AssetBytes` — needed to hash the output for the
+issuing a metadata-only `FileBuilderRequest::CopyRange` from `SOURCE_STREAM`
+to `OUTPUT_STREAM` for unchanged ranges (in the existing bounded 1 MiB
+chunks), and `FileBuilderRequest::Write` for generated framing and manifest
+bytes. A host must copy the **entire** range and make it visible to subsequent
+output reads before returning `Copied`; a short source, failed write, or
+unsupported operation must return `Failed`, never a success acknowledgement.
+The synchronous drive host uses exact-length bounded stream copying; this
+is not a promise of kernel zero-copy. `AssetBytes` — needed to hash the output for the
 hard binding — is forwarded the same way, as a plain read of the output
 stream once it has been written; `AssetLength` is answered from the
 plan's own known output length instead of asking the host, so a reused
@@ -103,6 +107,22 @@ future orchestrator crate able to juggle more than the two streams
 (source, output) this one already does.
 
 ## Building
+
+Copy-boundary evidence and preservation regressions:
+
+```sh
+cargo test -p contentauth-c2pa-file-builder copies_replace -- --nocapture
+cargo test -p contentauth-c2pa-file-builder tiff_copies
+```
+
+The first test signs the JPEG fixture plus 3 MiB of opaque bytes and reads it
+back `Trusted`: five bounded copy requests move 3,232,362 bytes without a
+session payload. Data-I/O request count is 71 instead of the former path's 76;
+payload is 3,281,362 instead of 9,746,086 bytes. The former counts are explicitly
+reconstructed from the same copy ranges (two payloads and two requests per
+range), **not** wall-clock measurements or a claim of zero host-local copying.
+The TIFF regression preserves two nonadjacent exclusions and proves hashing
+ignores stale bytes after the plan's logical output length.
 
 ```sh
 cargo test

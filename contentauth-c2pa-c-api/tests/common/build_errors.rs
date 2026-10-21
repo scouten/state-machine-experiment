@@ -123,7 +123,7 @@ fn every_build_entry_point_rejects_a_null_session() {
     let mut len = 0;
     let mut exclusions = ptr::null_mut();
     let message = CString::new("host failed").unwrap();
-    for case in 0..8 {
+    for case in 0..9 {
         let mut err = ptr::null_mut();
         let rc = unsafe {
             match case {
@@ -131,6 +131,7 @@ fn every_build_entry_point_rejects_a_null_session() {
                 1 => c2pa_sm_build_fulfill_bytes(ptr::null_mut(), 0, [0].as_ptr(), 1, &mut err),
                 2 => c2pa_sm_build_fulfill_length(ptr::null_mut(), 0, 1, &mut err),
                 3 => c2pa_sm_build_fulfill_written(ptr::null_mut(), 0, &mut err),
+                8 => c2pa_sm_build_fulfill_copied(ptr::null_mut(), 0, &mut err),
                 4 => c2pa_sm_build_fulfill_signature(ptr::null_mut(), 0, [0].as_ptr(), 1, &mut err),
                 5 => c2pa_sm_build_fulfill_timestamp(ptr::null_mut(), 0, [0].as_ptr(), 1, &mut err),
                 6 => c2pa_sm_build_fulfill_failed(ptr::null_mut(), 0, message.as_ptr(), &mut err),
@@ -284,13 +285,14 @@ fn invalid_build_payloads_preserve_the_outstanding_request() {
 fn unknown_build_ids_are_rejected_by_every_fulfillment() {
     let session = new_session();
     let message = CString::new("host failed").unwrap();
-    for case in 0..6 {
+    for case in 0..7 {
         let mut err = ptr::null_mut();
         let rc = unsafe {
             match case {
                 0 => c2pa_sm_build_fulfill_bytes(session, u64::MAX, [0].as_ptr(), 1, &mut err),
                 1 => c2pa_sm_build_fulfill_length(session, u64::MAX, 1, &mut err),
                 2 => c2pa_sm_build_fulfill_written(session, u64::MAX, &mut err),
+                6 => c2pa_sm_build_fulfill_copied(session, u64::MAX, &mut err),
                 3 => c2pa_sm_build_fulfill_signature(session, u64::MAX, [0].as_ptr(), 1, &mut err),
                 4 => c2pa_sm_build_fulfill_timestamp(session, u64::MAX, [0].as_ptr(), 1, &mut err),
                 5 => c2pa_sm_build_fulfill_failed(session, u64::MAX, message.as_ptr(), &mut err),

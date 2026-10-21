@@ -7,6 +7,13 @@ asynchronous thing the host has — in a browser, a `Promise` from WebCrypto
 (a non-extractable `CryptoKey` never enters Wasm memory), a remote signing
 service, a hardware token.
 
+The file builder now issues bounded `CopyRange` requests for unchanged source
+bytes. This retained **Rust-owned** async host answers them by awaiting
+`Blob::bytes`, checking the exact length, then writing its Rust output vector
+before acknowledging `Copied`. It avoids session-level payload forwarding, but
+does not keep Blob bytes outside Wasm: that requires a different host and is
+not part of this optimization. The preferred JavaScript host copies locally.
+
 **Status:** retained alternative Rust-owned async host, not the signing host
 used by the preferred [`shared JavaScript package`](../js/). That package drives
 [`BuildSessionBridge`](../contentauth-c2pa-session-bridge/) through synchronous
