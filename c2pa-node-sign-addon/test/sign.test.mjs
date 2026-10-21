@@ -10,6 +10,33 @@ import test, { after, before } from "node:test";
 
 import { _native as native, answerRequest, Builder, openOutput, openSource, signAsset } from "../index.mjs";
 
+test("copyRange stays in Node, waits for output visibility, and propagates failures", async () => {
+  const request = { id: 1, kind: "copyRange", start: 1, len: 2, offset: 4 };
+  let written = false;
+  const source = { async read(start, len) {
+    assert.equal(start, 1);
+    assert.equal(len, 2);
+    return Buffer.from([2, 3]);
+  } };
+  const out = { async write(offset, bytes) {
+    await Promise.resolve();
+    assert.equal(offset, 4);
+    assert.deepEqual(bytes, Buffer.from([2, 3]));
+    written = true;
+  } };
+  assert.deepEqual(await answerRequest(request, { source, out }), ["copied"]);
+  assert.ok(written);
+  await assert.rejects(answerRequest(request, {
+    source: { async read() { return Buffer.from([2]) } }, out,
+  }), /short copy source/);
+  await assert.rejects(answerRequest(request, {
+    source, out: { async write() { throw new Error("disk full") } },
+  }), /disk full/);
+  for (const bad of [{ start: -1 }, { len: 1.5 }, { offset: Number.MAX_SAFE_INTEGER }]) {
+    await assert.rejects(answerRequest({ ...request, ...bad }, { source, out }), /invalid copy range/);
+  }
+});
+
 // The read-back uses the *existing* reader addon. Its native module is a
 // build product (`index.node`, git-ignored): build it here if it is
 // missing, so `npm test` works from a clean checkout. CI's job builds it

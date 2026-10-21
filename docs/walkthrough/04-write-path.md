@@ -48,7 +48,7 @@ needs two ([formats](05-formats.md)).
 
 The host's asset I/O is not a single stream. `FileBuilderSession` composes
 a handler's `plan_embed`/`commit` with `BuilderSession` and speaks
-`FileBuilderRequest::{Read(SOURCE), Write(OUTPUT), Sign, Timestamp}`.
+`FileBuilderRequest::{Read, Length, CopyRange, Write, Sign, Timestamp}`.
 
 ```mermaid
 flowchart TB
@@ -56,20 +56,25 @@ flowchart TB
         direction TB
         PE["handler.plan_embed(len)<br/>→ EmbedPlan"]
         CK["EmbedPlan::check<br/><i>re-verify, don't trust the handler</i>"]
-        W["walk plan edits:<br/>Copy ranges → Read SOURCE, Write OUTPUT<br/>Emit framing → Write OUTPUT<br/>Placeholder → Write OUTPUT"]
+        W["walk plan edits:<br/>Copy ranges → host CopyRange SOURCE to OUTPUT<br/>Emit framing → Write OUTPUT<br/>Placeholder → Write OUTPUT"]
         BS["BuilderSession<br/><i>ReservePlaceholder, CommitManifest,<br/>AssetBytes, AssetLength</i>"]
         CM["handler.commit(plan, store)<br/>→ Patches"]
         PE --> CK --> W
         BS <--> W
         BS --> CM
     end
-    Host["Host: Read, Write, Sign, Timestamp"] <--> FBS
+    Host["Host: Read, Length, CopyRange, Write, Sign, Timestamp"] <--> FBS
 ```
 
 Design decisions worth discussing:
 
 * **Never buffers the asset.** It never calls `EmbedPlan::materialize`
   (the in-memory reference implementation); large `Copy` edits are chunked.
+  Each unchanged chunk now becomes one metadata-only `CopyRange`, rather than
+  a `Read` payload followed by a `Write` payload. The host acknowledges
+  `Copied` only after the entire range is readable in output. Short sources,
+  failed writes and unsupported requests fail closed. Hashing still happens in
+  Rust from ordinary output reads; the 1 MiB copy policy is unchanged.
 * **Doesn't trust the handler.** The plan is re-checked against a freshly
   asked source length.
 * **`AssetLength` is answered from the plan**, not the host, so a reused,

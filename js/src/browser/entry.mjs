@@ -65,6 +65,7 @@ serve({
         if (kind === "bytes") session.bytes(id, value);
         else if (kind === "length") session.length(id, value);
         else if (kind === "written") session.written(id);
+        else if (kind === "copied") session.copied(id);
         else if (kind === "signature") session.signature(id, value);
         else throw new Error(`unsupported build reply: ${kind}`);
       },

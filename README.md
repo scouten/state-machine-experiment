@@ -75,7 +75,9 @@ where it could go next — written in Markdown with Mermaid diagrams.
 * [`contentauth-c2pa-file-builder`](contentauth-c2pa-file-builder) — the
   write-side mirror: a sans-I/O session gluing a `contentauth-c2pa-format`
   handler to the builder above, plus a `Read + Seek` / `Read + Write +
-  Seek` and signing-function host for the common case.
+  Seek` and signing-function host for the common case. Unchanged ranges use
+  bounded host-side `CopyRange` requests, without forwarding their payload
+  through Rust; output hashing remains in the Rust domain session.
 * [`contentauth-c2pa-rs-compat`](contentauth-c2pa-rs-compat) — an experimental
   compatibility layer reproducing a slice of [c2pa-rs]'s own `Reader` API
   (reading a manifest store from a file and reporting it as JSON) on top

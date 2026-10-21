@@ -7,6 +7,14 @@ environments. Run that loop in a browser module Worker over Wasm, or a Node
 `worker_threads.Worker` over Neon. Rust remains synchronous and sans-I/O.
 Neither Tokio nor a custom scheduler is required for this example.
 
+Unchanged build ranges use `copyRange { start, len, offset }`: the shared
+JavaScript host copies directly from its source buffer into output, then sends
+the metadata-only `"copied"` acknowledgement. Neither Neon nor Wasm carries
+the copy payload. Rust still reads output bytes to hash them. Copy requests
+retain their 1 MiB bound; this is not a Blob host, chunk-policy change, or
+end-to-end zero-copy API. Build stats include `copies` and `copiedBytes`
+separately from boundary `reads`/`bytes` and `writes`/`writtenBytes`.
+
 This is a **read and baseline-signing architecture proof**, not a replacement
 SDK or a legacy API migration. Reading exercises validation, settings and
 reporting; signing exercises source/output I/O requests and an asynchronous

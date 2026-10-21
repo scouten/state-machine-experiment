@@ -113,7 +113,7 @@ impl Drop for Report {
 #[derive(Default)]
 struct Host {
     output: Vec<u8>,
-    seen: [usize; 5],
+    seen: [usize; 6],
     fail: Option<c_int>,
     timestamp: Vec<u8>,
 }
@@ -189,6 +189,20 @@ impl Host {
                                 }
                                 _ => panic!("unknown stream"),
                             };
+                            payload = Vec::new();
+                        }
+                        kind if kind
+                            == C2paSmBuildRequestKind::C2PA_SM_BUILD_REQUEST_COPY_RANGE
+                                as c_int =>
+                        {
+                            assert!(data.is_empty());
+                            let bytes = &SOURCE_JPEG[request.source_offset as usize
+                                ..(request.source_offset + request.len) as usize];
+                            let offset = request.offset as usize;
+                            self.output
+                                .resize(self.output.len().max(offset + bytes.len()), 0);
+                            self.output[offset..offset + bytes.len()].copy_from_slice(bytes);
+                            reply.kind = C2paSmBuildReplyKind::C2PA_SM_BUILD_REPLY_COPIED as c_int;
                             payload = Vec::new();
                         }
                         kind if kind
@@ -397,7 +411,7 @@ fn finish_consumes_incomplete_sessions_and_rejects_stale_handles() {
 
 #[test]
 fn host_failure_in_each_operation_fails_the_build_not_the_process() {
-    for kind in 0..=4 {
+    for kind in 0..=5 {
         let definition = timestamp_definition();
         let mut build = Build::new(&definition);
         let mut host = Host {
@@ -839,10 +853,11 @@ fn reply_kind_conversion_accepts_only_declared_variants() {
         C2PA_SM_BUILD_REPLY_SIGNATURE,
         C2PA_SM_BUILD_REPLY_TIMESTAMP,
         C2PA_SM_BUILD_REPLY_FAILED,
+        C2PA_SM_BUILD_REPLY_COPIED,
     ] {
         assert_eq!(C2paSmBuildReplyKind::try_from(kind as c_int), Ok(kind));
     }
-    for value in [c_int::MIN, -1, 6, 99, c_int::MAX] {
+    for value in [c_int::MIN, -1, 7, 99, c_int::MAX] {
         assert_eq!(
             C2paSmBuildReplyKind::try_from(value),
             Err("unknown build reply kind")

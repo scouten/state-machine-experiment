@@ -186,6 +186,15 @@ async function drive(session, io, options) {
  */
 export async function answerRequest(request, { source, out, signer }) {
   switch (request.kind) {
+    case "copyRange": {
+      for (const value of [request.start, request.len, request.offset, request.start + request.len, request.offset + request.len]) {
+        if (!Number.isSafeInteger(value) || value < 0) throw new RangeError("invalid copy range");
+      }
+      const bytes = await source.read(request.start, request.len);
+      if (bytes.length !== request.len) throw new Error("short copy source");
+      await out.write(request.offset, bytes);
+      return ["copied"];
+    }
     case "read":
       return ["bytes", await (request.stream === "source" ? source : out).read(request.start, request.len)];
     case "length":

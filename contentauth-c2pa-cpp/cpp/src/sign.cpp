@@ -55,6 +55,8 @@ BuildRequest describe(const C2paSmBuildRequest &pending) {
         case C2PA_SM_BUILD_REQUEST_WRITE:
             return WriteRequest{pending.id, build_stream(pending.stream), pending.offset,
                                 build_bytes(pending.data)};
+        case C2PA_SM_BUILD_REQUEST_COPY_RANGE:
+            return CopyRangeRequest{pending.id, pending.source_offset, pending.len, pending.offset};
         case C2PA_SM_BUILD_REQUEST_SIGN:
             return SignRequest{pending.id, build_string(pending.algorithm), build_bytes(pending.data)};
         case C2PA_SM_BUILD_REQUEST_TIMESTAMP:
@@ -121,6 +123,8 @@ void BuildSession::fulfill(uint64_t id, const BuildReply &reply) {
             response.value = value.value;
         } else if constexpr (std::is_same_v<Value, Written>) {
             response.kind = C2PA_SM_BUILD_REPLY_WRITTEN;
+        } else if constexpr (std::is_same_v<Value, Copied>) {
+            response.kind = C2PA_SM_BUILD_REPLY_COPIED;
         } else if constexpr (std::is_same_v<Value, Failed>) {
             response.kind = C2PA_SM_BUILD_REPLY_FAILED;
             response.data = {reinterpret_cast<const uint8_t *>(value.message.data()),
@@ -160,6 +164,20 @@ SyncBuildHost::SyncBuildHost(BuildSigner signer, BuildTimestamp timestamp)
 
 SyncBuildHost::~SyncBuildHost() = default;
 
+void SyncBuildHost::copy_range(uint64_t start, uint64_t len, uint64_t offset) {
+    detail::build_range(start, len, length(BuildStream::Source));
+    detail::build_range(offset, len, std::numeric_limits<uint64_t>::max());
+    while (len != 0) {
+        const auto chunk = std::min<uint64_t>(len, 1u << 20);
+        auto bytes = read(BuildStream::Source, start, chunk);
+        if (bytes.size() != chunk) throw std::runtime_error("short copy source");
+        write(BuildStream::Output, offset, bytes);
+        start += chunk;
+        offset += chunk;
+        len -= chunk;
+    }
+}
+
 std::vector<uint8_t> SyncBuildHost::sign(const std::string &algorithm, const std::vector<uint8_t> &data) {
     if (!signer_) throw std::runtime_error("no signer configured");
     return signer_(algorithm, data);
@@ -183,6 +201,9 @@ BuildReply answer(SyncBuildHost &host, const BuildRequest &request) {
             } else if constexpr (std::is_same_v<Pending, WriteRequest>) {
                 host.write(pending.stream, pending.offset, pending.bytes);
                 return Written{};
+            } else if constexpr (std::is_same_v<Pending, CopyRangeRequest>) {
+                host.copy_range(pending.start, pending.len, pending.offset);
+                return Copied{};
             } else if constexpr (std::is_same_v<Pending, SignRequest>) {
                 return Signature{host.sign(pending.algorithm, pending.data)};
             } else {

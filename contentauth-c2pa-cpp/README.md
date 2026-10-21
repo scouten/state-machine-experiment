@@ -4,6 +4,15 @@ An experimental C++ binding for the sans-I/O C2PA reader and builder, written to
 one question: **can the session model express asynchronous and threaded
 behavior that a callback-based C++ API cannot?**
 
+Signing now exposes `CopyRangeRequest { id, start, len, offset }` and `Copied`:
+unchanged source bytes move entirely within the host, never through Rust
+request/reply payloads. `SyncBuildHost::copy_range` performs checked, bounded
+host-local reads/writes; hosts may override it for their own transport. Async
+hosts receive the same explicit request. Acknowledgement means the **whole**
+copy is visible to output reads; exceptions/short reads fail the build.
+Hashing remains in Rust. The signing C ABI adds `COPY_RANGE`, `COPIED` and
+`source_offset`; rebuild consumers with the regenerated signing header.
+
 It is a Rust static library behind a small C ABI (`src/lib.rs`,
 `include/contentauth_c2pa_sm.h`) and **C++** on top (`include/contentauth/`),
 header-only except for signing and the thread pools (`cpp/src/`, built as `c2pa_sm_cpp`):

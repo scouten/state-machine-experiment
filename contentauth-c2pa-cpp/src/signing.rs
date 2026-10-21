@@ -33,6 +33,8 @@ pub enum C2paSmBuildRequestKind {
     C2PA_SM_BUILD_REQUEST_SIGN = 3,
     /// POST the encoded RFC 3161 request to the supplied URL.
     C2PA_SM_BUILD_REQUEST_TIMESTAMP = 4,
+    /// Copy the full source range to output, without a payload.
+    C2PA_SM_BUILD_REQUEST_COPY_RANGE = 5,
 }
 
 /// Host reply payload kinds; unknown incoming integers are rejected.
@@ -52,6 +54,8 @@ pub enum C2paSmBuildReplyKind {
     C2PA_SM_BUILD_REPLY_TIMESTAMP = 4,
     /// Reply payload is a UTF-8 host failure message.
     C2PA_SM_BUILD_REPLY_FAILED = 5,
+    /// Every copied byte is visible to subsequent output reads.
+    C2PA_SM_BUILD_REPLY_COPIED = 6,
 }
 
 /// Host-owned streams addressed by signing I/O requests.
@@ -76,6 +80,7 @@ impl TryFrom<c_int> for C2paSmBuildReplyKind {
             Self::C2PA_SM_BUILD_REPLY_SIGNATURE,
             Self::C2PA_SM_BUILD_REPLY_TIMESTAMP,
             Self::C2PA_SM_BUILD_REPLY_FAILED,
+            Self::C2PA_SM_BUILD_REPLY_COPIED,
         ]
         .into_iter()
         .find(|kind| *kind as c_int == value)
@@ -127,9 +132,11 @@ pub struct C2paSmBuildRequest {
     pub id: u64,
     /// A C2paSmBuildStream value for reads, lengths, and writes.
     pub stream: c_int,
-    /// Read start or write offset.
+    /// Read start or output offset for WRITE/COPY_RANGE.
     pub offset: u64,
-    /// Read length.
+    /// Source offset for COPY_RANGE; offset is its output destination.
+    pub source_offset: u64,
+    /// Byte length for READ/COPY_RANGE.
     pub len: u64,
     /// Write bytes, signing input, or encoded TimeStampReq.
     pub data: C2paSmBuffer,
@@ -329,6 +336,14 @@ fn describe(request: &PendingRequest) -> Result<C2paSmBuildRequest, Failure> {
             view.offset = *offset;
             view.data = C2paSmBuffer::borrowed(bytes);
         }
+        PendingRequest::CopyRange {
+            start, len, offset, ..
+        } => {
+            view.kind = C2paSmBuildRequestKind::C2PA_SM_BUILD_REQUEST_COPY_RANGE as c_int;
+            view.source_offset = *start;
+            view.offset = *offset;
+            view.len = *len;
+        }
         PendingRequest::Sign { alg, data, .. } => {
             view.kind = C2paSmBuildRequestKind::C2PA_SM_BUILD_REQUEST_SIGN as c_int;
             view.algorithm = C2paSmBuffer::borrowed(alg.as_bytes());
@@ -391,6 +406,7 @@ unsafe fn reply_value(reply: &C2paSmBuildReply) -> Result<Reply, Failure> {
         C2PA_SM_BUILD_REPLY_BYTES => Reply::Bytes(unsafe { reply.data.bytes()? }.to_vec()),
         C2PA_SM_BUILD_REPLY_LENGTH => Reply::Length(reply.value),
         C2PA_SM_BUILD_REPLY_WRITTEN => Reply::Written,
+        C2PA_SM_BUILD_REPLY_COPIED => Reply::Copied,
         C2PA_SM_BUILD_REPLY_SIGNATURE => Reply::Signature(unsafe { reply.data.bytes()? }.to_vec()),
         C2PA_SM_BUILD_REPLY_TIMESTAMP => {
             Reply::TimestampResponse(unsafe { reply.data.bytes()? }.to_vec())

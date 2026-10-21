@@ -76,6 +76,18 @@ fn build_advance(mut cx: FunctionContext) -> JsResult<JsObject> {
                 let id = cx.number(request.id() as f64);
                 obj.set(&mut cx, "id", id)?;
                 match request {
+                    PendingRequest::CopyRange {
+                        start, len, offset, ..
+                    } => {
+                        let kind = cx.string("copyRange");
+                        let start = cx.number(*start as f64);
+                        let len = cx.number(*len as f64);
+                        let offset = cx.number(*offset as f64);
+                        obj.set(&mut cx, "kind", kind)?;
+                        obj.set(&mut cx, "start", start)?;
+                        obj.set(&mut cx, "len", len)?;
+                        obj.set(&mut cx, "offset", offset)?;
+                    }
                     PendingRequest::Read {
                         stream, start, len, ..
                     } => {
@@ -150,6 +162,7 @@ fn build_fulfill(mut cx: FunctionContext) -> JsResult<JsUndefined> {
         }
         "length" => Reply::Length(cx.argument::<JsNumber>(3)?.value(&mut cx) as u64),
         "written" => Reply::Written,
+        "copied" => Reply::Copied,
         "failed" => Reply::Failed(cx.argument::<JsString>(3)?.value(&mut cx)),
         other => return cx.throw_error(format!("unknown reply kind {other:?}")),
     };

@@ -16,7 +16,7 @@
 
 use std::path::PathBuf;
 
-use contentauth_c2pa_primitives::{ByteRange, HostError};
+use contentauth_c2pa_primitives::HostError;
 use contentauth_state_machine::RequestId;
 
 /// Errors surfaced by [`crate::FileBuilderSession`],
@@ -60,21 +60,6 @@ pub enum Error {
 
         /// Failure description reported by the host.
         source: HostError,
-    },
-
-    /// The host returned a different number of bytes than the range it
-    /// was asked for, while this session was reading the whole source
-    /// asset into memory.
-    #[error(
-        "host returned {actual} bytes for a request of {} at offset {}",
-        range.len, range.start
-    )]
-    ReadLengthMismatch {
-        /// The range that was requested.
-        range: ByteRange,
-
-        /// How many bytes the host actually returned.
-        actual: u64,
     },
 
     /// An internal invariant this session relies on did not hold.

@@ -5,6 +5,14 @@ with [`cimpl`](https://github.com/contentauth/cimpl) for tracked handles,
 pointer validation, error conversion, and allocation ownership. Its header
 is generated from the Rust API by cbindgen.
 
+Build hosts must handle `C2PA_SM_BUILD_REQ_COPY_RANGE`: `source_offset` and `len`
+select source bytes; `offset` selects their output destination. There is no
+`data` payload. Call `c2pa_sm_build_fulfill_copied` only after the exact range is
+visible to output reads; report short copies and I/O failures via the failure
+reply, not `fulfill_written`. Each copy request is bounded to 1 MiB. Hashing
+still reads output bytes into Rust. The request struct layout changed: rebuild
+C consumers against the regenerated header and library together.
+
 ## Features
 
 The default build enables both `read` and `build`. Downstream Cargo users

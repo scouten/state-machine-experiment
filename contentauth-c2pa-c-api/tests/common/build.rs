@@ -17,12 +17,13 @@ use std::{ffi::CString, ptr, slice};
 
 use contentauth_c2pa_c_api::{
     c2pa_sm_build_advance, c2pa_sm_build_finish, c2pa_sm_build_free, c2pa_sm_build_fulfill_bytes,
-    c2pa_sm_build_fulfill_length, c2pa_sm_build_fulfill_signature, c2pa_sm_build_fulfill_timestamp,
-    c2pa_sm_build_fulfill_written, c2pa_sm_build_new, c2pa_sm_bytes_free, c2pa_sm_exclusions_data,
-    c2pa_sm_exclusions_free, C2paSmBuildRequest, C2paSmExclusion, C2paSmExclusionList,
-    C2PA_SM_BUILD_REQ_LENGTH, C2PA_SM_BUILD_REQ_READ, C2PA_SM_BUILD_REQ_SIGN,
-    C2PA_SM_BUILD_REQ_TIMESTAMP, C2PA_SM_BUILD_REQ_WRITE, C2PA_SM_STEP_COMPLETE,
-    C2PA_SM_STEP_PENDING, C2PA_SM_STREAM_OUTPUT, C2PA_SM_STREAM_SOURCE,
+    c2pa_sm_build_fulfill_copied, c2pa_sm_build_fulfill_length, c2pa_sm_build_fulfill_signature,
+    c2pa_sm_build_fulfill_timestamp, c2pa_sm_build_fulfill_written, c2pa_sm_build_new,
+    c2pa_sm_bytes_free, c2pa_sm_exclusions_data, c2pa_sm_exclusions_free, C2paSmBuildRequest,
+    C2paSmExclusion, C2paSmExclusionList, C2PA_SM_BUILD_REQ_COPY_RANGE, C2PA_SM_BUILD_REQ_LENGTH,
+    C2PA_SM_BUILD_REQ_READ, C2PA_SM_BUILD_REQ_SIGN, C2PA_SM_BUILD_REQ_TIMESTAMP,
+    C2PA_SM_BUILD_REQ_WRITE, C2PA_SM_STEP_COMPLETE, C2PA_SM_STEP_PENDING, C2PA_SM_STREAM_OUTPUT,
+    C2PA_SM_STREAM_SOURCE,
 };
 use contentauth_c2pa_sign_baseline::{fixtures::*, BASELINE_DEFINITION};
 
@@ -119,6 +120,21 @@ pub fn build_with_definition(
                         )
                     };
                     assert_eq!(rc, 0);
+                    assert!(err_out.is_null());
+                }
+                C2PA_SM_BUILD_REQ_COPY_RANGE => {
+                    assert!(req.data.is_null());
+                    let bytes = &SOURCE_JPEG
+                        [req.source_offset as usize..(req.source_offset + req.len) as usize];
+                    let start = req.offset as usize;
+                    output_bytes.resize(output_bytes.len().max(start + bytes.len()), 0);
+                    output_bytes[start..start + bytes.len()].copy_from_slice(bytes);
+                    assert_eq!(
+                        unsafe {
+                            c2pa_sm_build_fulfill_copied(build_session, req.id, &mut err_out)
+                        },
+                        0
+                    );
                     assert!(err_out.is_null());
                 }
                 C2PA_SM_BUILD_REQ_WRITE => {

@@ -15,6 +15,13 @@ for a JavaScript host running in a browser Worker.
 Nothing here performs I/O, async work or threading, and nothing here knows
 what a Worker is: the host owns the event loop, the asset and the key.
 
+Both transports expose unchanged source ranges as metadata-only `copyRange`
+requests (`start`, `len`, `offset`). The JavaScript host performs the full copy
+to output and calls `copied(id)` only after those bytes are readable.
+No Wasm payload is transferred for this operation. Hashing still consumes
+ordinary output `read` replies in Rust. This does not introduce a Blob host or
+remove whole-asset host buffering.
+
 The builder's `advance(true)` keeps shared engine write buffers until the host
 consumes them with `payload(index)`, avoiding both an intermediate Rust payload
 copy and JSON byte arrays. `payload` copies directly from shared storage into a

@@ -41,6 +41,14 @@ struct WriteRequest {
     std::vector<uint8_t> bytes;
 };
 
+/// Copy source bytes to output entirely within the host; answer with Copied.
+struct CopyRangeRequest {
+    uint64_t id;
+    uint64_t start;
+    uint64_t len;
+    uint64_t offset;
+};
+
 /// Sign the complete COSE Sig_structure, not a precomputed digest.
 struct SignRequest {
     uint64_t id;
@@ -56,10 +64,12 @@ struct TimestampRequest {
 };
 
 using BuildRequest =
-    std::variant<BuildReadRequest, BuildLengthRequest, WriteRequest, SignRequest, TimestampRequest>;
+    std::variant<BuildReadRequest, BuildLengthRequest, WriteRequest, CopyRangeRequest, SignRequest, TimestampRequest>;
 
 /// The complete write is visible to subsequent output reads.
 struct Written {};
+/// Every copied byte is visible to output reads.
+struct Copied {};
 
 /// ES256 uses the 64-byte raw r || s representation, not DER.
 struct Signature {
@@ -71,7 +81,7 @@ struct TimestampResponse {
     std::vector<uint8_t> data;
 };
 
-using BuildReply = std::variant<Bytes, Length, Written, Signature, TimestampResponse, Failed>;
+using BuildReply = std::variant<Bytes, Length, Written, Copied, Signature, TimestampResponse, Failed>;
 
 /// A range omitted from the output asset's hard-binding hash.
 struct Exclusion {
@@ -154,6 +164,9 @@ public:
     virtual uint64_t length(BuildStream stream) = 0;
     /// Returns only after the entire write is visible to output reads.
     virtual void write(BuildStream stream, uint64_t offset, const std::vector<uint8_t> &bytes) = 0;
+    /// Host-local bounded read/write copy; override for an optimized transport.
+    /// Short reads throw; completion means output reads can see the entire range.
+    virtual void copy_range(uint64_t start, uint64_t len, uint64_t offset);
     /// Calls the host signer without storing or accessing a key.
     virtual std::vector<uint8_t> sign(const std::string &algorithm, const std::vector<uint8_t> &data);
     /// Calls the host TSA transport; no implicit networking or fallback.

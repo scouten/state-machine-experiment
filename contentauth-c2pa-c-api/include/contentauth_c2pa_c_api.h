@@ -61,6 +61,11 @@
 #define C2PA_SM_BUILD_REQ_TIMESTAMP 4
 
 /**
+ * Copy source_offset/len from source to output offset; no data payload.
+ */
+#define C2PA_SM_BUILD_REQ_COPY_RANGE 5
+
+/**
  * Request to read bytes from asset.
  */
 #define C2PA_SM_READ_REQ_READ 0
@@ -115,11 +120,15 @@ typedef struct C2paSmBuildRequest {
    */
   uint32_t stream;
   /**
-   * Offset for `READ` or `WRITE`.
+   * Read start or output offset for WRITE/COPY_RANGE.
    */
   uint64_t offset;
   /**
-   * Byte length for `READ`.
+   * Source offset for COPY_RANGE; offset is the output destination.
+   */
+  uint64_t source_offset;
+  /**
+   * Byte length for READ/COPY_RANGE.
    */
   uint64_t len;
   /**
@@ -269,6 +278,16 @@ int32_t c2pa_sm_build_fulfill_length(struct C2paSmBuildSession *session,
 int32_t c2pa_sm_build_fulfill_written(struct C2paSmBuildSession *session,
                                       uint64_t id,
                                       char **err_out);
+
+/**
+ * Confirms every requested copy byte is visible to subsequent output reads.
+ *
+ * # Safety
+ * `session` must be live. A non-null `err_out` must point to writable storage.
+ */
+int32_t c2pa_sm_build_fulfill_copied(struct C2paSmBuildSession *session,
+                                     uint64_t id,
+                                     char **err_out);
 
 /**
  * Fulfills a signing request with a COSE-format signature over the full message
