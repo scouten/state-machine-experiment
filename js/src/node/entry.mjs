@@ -4,6 +4,6 @@ import { adapter } from "./adapter.mjs";
 import { serve } from "../shared/service.mjs";
 
 serve({
-  post: (message) => parentPort.postMessage(message),
+  post: (message, transfer) => parentPort.postMessage(message, transfer),
   onMessage: (callback) => parentPort.on("message", callback),
 }, adapter);

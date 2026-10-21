@@ -56,6 +56,7 @@ export async function signingContract(createClient, fixture, pkcs8) {
   }
   async function validate(client, result, name) {
     check(result.asset instanceof Uint8Array, "missing signed output bytes");
+    check(result.asset.buffer.byteLength === result.asset.length, "output retained spare capacity");
     check(result.manifest instanceof Uint8Array, "missing manifest bytes");
     check(result.asset.length === fixture.files[name].bytes, "signed output length differs");
     check(result.manifest.length === baseline.files[name].manifestBytes, "manifest length differs");

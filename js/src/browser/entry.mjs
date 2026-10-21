@@ -10,7 +10,7 @@ await init();
 // The JSON control is retained only for the boundary experiment.
 const binary = new URL(self.location.href).searchParams.get("transport") !== "json";
 serve({
-  post: (message) => self.postMessage(message),
+  post: (message, transfer) => self.postMessage(message, transfer),
   onMessage: (callback) => { self.onmessage = (event) => callback(event.data) },
 }, {
   /** Read session; the Wasm glue handles JPEG only, so the format is fixed. */

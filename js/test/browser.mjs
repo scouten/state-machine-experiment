@@ -47,6 +47,8 @@ try {
         const { contract } = await import("/test/contract.mjs");
         const { signingContract } = await import("/test/signing.mjs");
         const { boundaryComparison } = await import("/benchmarks/boundary.mjs");
+        const { resultOwnershipContract } = await import("/test/result-ownership.mjs");
+        const resultOwnership = await resultOwnershipContract();
         const fixture = await (await fetch("/generated/fixtures.json")).json();
         const load = async (name) => new Uint8Array(await (await fetch(`/generated/${name}.jpg`)).arrayBuffer());
         const pkcs8 = await (await fetch("/generated/test-signer.pk8")).arrayBuffer();
@@ -59,7 +61,7 @@ try {
           transports[transport] = { ...(await contract(create, small, large, fixture)), signing };
         }
         const comparison = await boundaryComparison(createClient, fixture, pkcs8);
-        return { ...transports.binary, transports, comparison,
+        return { ...transports.binary, resultOwnership, transports, comparison,
           userAgent: navigator.userAgent };
       });
       assert.deepEqual(errors, [], `${name}: unhandled application error`);

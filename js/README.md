@@ -161,8 +161,15 @@ flowchart TB
 - Signing also snapshots the definition and public certificates. The signer
   function and private key stay in the application realm. Only the COSE signing
   input and raw signature/error cross the Worker protocol.
-- Build output is buffered in a growable in-memory array inside the Worker,
-  then copied and cloned back. This is not file-backed or constant-memory.
+- Build output is buffered in a growable in-memory array inside the Worker.
+  `ArrayBuffer.transferToFixedLength` moves/shrinks it to the exact logical
+  length, then the Worker transfers its backing buffer rather than cloning its
+  payload. No spare capacity is exposed and callers receive the same Uint8Array
+  result type. This requires that API (Node 22+ and the tested browsers).
+  The VM may copy while shrinking; this is not a physical zero-copy guarantee.
+  For N output bytes, the change removes N structured-clone payload-copy bytes
+  and the explicit JS trim copy, not necessarily N or 2N of peak memory.
+  Geometric output growth still copies; this is not file-backed/constant-memory.
 - This proof accepts in-memory JPEG bytes only. It does not promise streaming
   input, constant memory, zero-copy transfer or free result transport.
 - Successful `finish` consumes the Rust session. Wasm wrappers are explicitly

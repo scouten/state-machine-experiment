@@ -52,7 +52,8 @@ export function serve(port, adapter) {
               }
             }));
         port.post({ protocol, id: message.id, ok: true,
-          value: { ...result, workerMs: performance.now() - started } });
+          value: { ...result, workerMs: performance.now() - started } },
+          message.method === "build" ? [result.asset.buffer] : []);
       } catch (error) {
         port.post({ protocol, id: message.id, ok: false, error: failure(error) });
       }
