@@ -72,6 +72,11 @@ as binary byte arrays through wasm-bindgen. Each payload is consumed once
 before the next advance; byte storage remains owned/copied, not an unsafe view
 into Wasm memory. Neon returns objects and expects Buffers for byte replies.
 Adapters normalize those differences without changing the shared host.
+The Node reader and builder wrap byte replies in exact-range `Buffer` views,
+including nonzero-offset subarrays, instead of making an extra JavaScript
+payload copy. Neon still copies synchronously into Rust-owned storage; this
+is not a native read lease or zero-copy FFI. Small certificate inputs retain
+their existing snapshot behavior.
 Small signing-input and final manifest arrays still use JSON in the Wasm
 adapter. The original all-JSON path remains only as an experiment control.
 

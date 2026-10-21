@@ -7,6 +7,45 @@ import { contract } from "./contract.mjs";
 import { signingContract } from "./signing.mjs";
 import { fingerprints } from "./evidence.mjs";
 
+test("build byte replies borrow the exact Buffer range before the native copy", async () => {
+  const fixture = JSON.parse(await readFile(new URL("../generated/fixtures.json", import.meta.url), "utf8"));
+  const { adapter } = await import("../src/node/adapter.mjs");
+  const session = adapter.createBuild(JSON.stringify(fixture.signing.definition),
+    fixture.signing.certs.map((cert) => new Uint8Array(cert)));
+  const source = new Uint8Array([255, 216, 255, 217]);
+  try {
+    for (let turn = 0; turn < 20; turn++) {
+      const step = session.advance();
+      for (const request of step.requests ?? []) {
+        if (request.kind === "length") session.fulfill(request.id, "length", source.length);
+        else if (request.kind === "read") {
+          assert.equal(request.stream, "source");
+          const storage = new Uint8Array(request.len + 32).fill(0xaa);
+          const bytes = storage.subarray(17, 17 + request.len);
+          bytes.set(source.subarray(request.start, request.start + request.len));
+          let received;
+          const from = Buffer.from;
+          try {
+            Buffer.from = function (...args) {
+              const result = Reflect.apply(from, Buffer, args);
+              if (args[0] === bytes || args[0] === bytes.buffer) received = result;
+              return result;
+            };
+            session.fulfill(request.id, "bytes", bytes);
+          } finally { Buffer.from = from }
+          assert.ok(Buffer.isBuffer(received));
+          assert.equal(received.buffer, bytes.buffer, "adapter allocated a second payload buffer");
+          assert.equal(received.byteOffset, bytes.byteOffset);
+          assert.equal(received.byteLength, bytes.byteLength);
+          assert.deepEqual(Array.from(received), Array.from(bytes));
+          return;
+        } else assert.fail(`unexpected request before source read: ${request.kind}`);
+      }
+    }
+    assert.fail("build did not request source bytes");
+  } finally { session.close() }
+});
+
 test("Node Worker + Neon runs shared read/signing contracts end to end", async () => {
   const folder = new URL("../generated/", import.meta.url);
   const fixture = JSON.parse(await readFile(new URL("fixtures.json", folder), "utf8"));

@@ -91,6 +91,9 @@ changes. Choose formats for *what they exercise*, as TIFF did:
   equality and application task progress for signed 64 MiB reads.
   Baseline ES256 signing also proves caller-owned async callbacks, failure and
   disposal handling, queued operation routing and trusted read-back.
+  Node read/build replies now use exact-range `Buffer` views rather than an
+  additional JavaScript payload copy; Neon's required Rust-ownership copy
+  remains. Native read leases and their alias/sealing rules remain unproven.
   No new core features or Tokio are involved. A paired JSON/binary Wasm
   write-payload comparison preserves both contracts and reduces median local
   large-build time by about 6.7–8.5 times; binary is now the browser default.

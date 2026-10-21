@@ -2,7 +2,8 @@
  * Node session adapter over the two Neon addons (reader and signer).
  * Same shape as the Wasm adapter in browser/entry.mjs, so the shared drive
  * loops run unchanged. Neon needs `Buffer`s, so Uint8Array replies are
- * wrapped here (a view for `bytes`, a copy for the small signer inputs).
+ * wrapped here as exact-range views. Native fulfill copies synchronously into
+ * Rust-owned storage; these views do not become immutable Rust allocations.
  */
 import { createRequire } from "node:module";
 
@@ -27,7 +28,8 @@ export const adapter = {
     return {
       advance: () => signing.buildAdvance(session),
       fulfill: (id, kind, value) => signing.buildFulfill(session, id, kind,
-        kind === "bytes" || kind === "signature" ? Buffer.from(value) : value),
+        kind === "bytes" || kind === "signature"
+          ? Buffer.from(value.buffer, value.byteOffset, value.byteLength) : value),
       finish: () => signing.buildFinish(session),
       close() { session = undefined },
     };
