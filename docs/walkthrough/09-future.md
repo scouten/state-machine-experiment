@@ -5,6 +5,13 @@ READMEs; none of it is committed work. Grouped by what it would teach us.
 
 ## Where we are
 
+The independent [chunk/boundary experiment](../../js/benchmarks/CHUNKS.md)
+measures real Node/Neon read-validation and signing-build paths with private
+compile-time chunk variants, preserving bytes and complete trusted reports.
+This adds evidence, not production chunk settings or pooling. Browser Wasm,
+allocator/peak-memory profiling and representative-asset policy selection
+remain future work; summed copy accounting is not peak memory.
+
 ```mermaid
 flowchart LR
     subgraph done["Done"]

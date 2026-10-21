@@ -369,6 +369,12 @@ No peak memory or frame-deadline guarantee is established.
 
 ## Deliberate non-goals and next trigger
 
+For a separately runnable, Node/Neon compile-time chunk sweep, see
+[`benchmarks/CHUNKS.md`](benchmarks/CHUNKS.md). It measures real read-validation
+and build boundary calls plus selected copy/allocation proxies without adding
+production knobs. It preserves signed bytes and trusted reports, does not time
+Worker transport, and makes no browser or peak-memory claim.
+
 No new domain validation, formats, compatibility shims, identity/timestamp
 support, network hosts, worker pools, custom schedulers, public cancellation
 API or streaming-storage abstraction. No production publication.

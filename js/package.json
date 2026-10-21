@@ -7,7 +7,8 @@
     "build:bindings": "npm --prefix ../c2pa-node-compat-addon run build && npm --prefix ../c2pa-node-sign-addon run build && cargo build --manifest-path ../contentauth-c2pa-wasm/Cargo.toml --release --target wasm32-unknown-unknown && wasm-bindgen ../contentauth-c2pa-wasm/target/wasm32-unknown-unknown/release/contentauth_c2pa_wasm.wasm --target web --out-dir generated",
     "fixtures": "npm --prefix ../c2pa-node-sign-addon run build && node test/fixtures.mjs",
     "test": "node --test test/node.test.mjs",
-    "test:browser": "node test/browser.mjs"
+    "test:browser": "node test/browser.mjs",
+    "bench:chunks": "node benchmarks/chunks.mjs"
   },
   "devDependencies": {
     "playwright": "1.60.0"

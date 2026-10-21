@@ -1,0 +1,105 @@
+{
+  "description": "Representative compact extraction; all seven variants passed exact asset/manifest digest, exclusions, signing-input and complete Trusted report comparisons, including real Worker sign/read gates. Accounting is selected source-visible copy/allocation proxies, not allocator or RSS telemetry. Timings are noisy, sequential, same-thread shared-drive/Neon measurements with signature replay, not Worker or browser timings.",
+  "provenance": {
+    "base": "a4469a67a9a6bd1c80951c7362037c6950b3470f",
+    "command": "npm --prefix js run bench:chunks",
+    "node": "v22.22.0",
+    "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "os": "darwin 25.6.0 arm64",
+    "cpu": "Apple M2 Max",
+    "logicalCpus": 12,
+    "started": "2026-10-21T22:23:25.442Z",
+    "finished": "2026-10-21T22:26:00.347Z",
+    "measuredSamplesPerRow": 5,
+    "warmupsPerRow": 1,
+    "harnessSha256": {
+      "chunks.mjs": "1dd439d1ea80313940ae582ae6c701e659a1b3bc2d2408c996ea81099b8a98f7",
+      "chunks-runner.mjs": "aed6ba5f652704b5a635a28764cceeb875b0108e31a96e14ec1426b6ea184ad3"
+    },
+    "cargoLockSha256": {
+      "c2pa-node-compat-addon": "93e45cdc7ac99ad9788996d0e126b118b3a9e7c3362138d58e7274eec01c6a6c",
+      "c2pa-node-sign-addon": "35b43ba5b7627360dd22efc0436e172ba23236a351b2f8f85e7438973194744e"
+    },
+    "baselineAddonSha256": {
+      "c2pa-node-compat-addon": "3b74e366f5190841a9a86ccf10d8327ea2fa472142755ce5ba36b3cee2c3dc72",
+      "c2pa-node-sign-addon": "d3582dec242b4825bb237897adc665455e346f0a57e9639c6edb4251e27a2b4c"
+    },
+    "rawEvidenceSha256": "410b57a52ec428a2079e9c4f91ad6f6309ef016c9f2b7ab1aa5edc3b4f8c5225"
+  },
+  "proof": {
+    "tiny": {
+      "sourceBytes": 4,
+      "outputBytes": 1780,
+      "assetSha256": "a2d1cb35dc7fde6a28430a5c033b5bcf3716bd90cf7c8572d8629df1d47f5ad2",
+      "manifestSha256": "4cbae0bb9dcceb6f1307c5c1459c96512b6a45e8fadd2aea13c6f7f70357e565",
+      "validationState": "Trusted"
+    },
+    "large": {
+      "sourceBytes": 67108881,
+      "outputBytes": 67110657,
+      "assetSha256": "0bcf2e5d0c05fd1d1e8d644637232d89bc3d57e4043c6e3f7828d77553eff093",
+      "manifestSha256": "f4b89a0ca08bcbda84a11d1d8e42a27114d1d85778df71f28d6ccf3f42dc30cd",
+      "validationState": "Trusted"
+    },
+    "requiredCodesObserved": ["claimSignature.validated", "signingCredential.trusted", "assertion.dataHash.match"]
+  },
+  "variantColumns": ["name", "readerAndBuilderHashBytes", "sourceCopyBytes"],
+  "variants": [
+    ["baseline", 65536, 1048576],
+    ["hash16", 16384, 1048576],
+    ["hash256", 262144, 1048576],
+    ["hash1024", 1048576, 1048576],
+    ["copy64", 65536, 65536],
+    ["copy4096", 65536, 4194304],
+    ["baseline-repeat", 65536, 1048576]
+  ],
+  "largeCounterColumns": ["variant", "operation", "advanceCalls", "fulfillCalls", "byteReplies", "replyBytes", "maxReplyBytes", "writeBuffers", "writeBytes", "growthAllocations", "growthAllocatedBytes", "growthCopyBytes", "assetCopyBytes", "assetAllocationEvents"],
+  "largeCounters": [
+    ["baseline", "read", 137, 1033, 1030, 67110663, 65536, 0, 0, 0, 0, 0, 67110663, 1030],
+    ["baseline", "build", 270, 1166, 1094, 134217768, 1048576, 69, 67112421, 8, 133399054, 66176398, 535947433, 2267],
+    ["hash16", "read", 521, 4105, 4102, 67110663, 16384, 0, 0, 0, 0, 0, 67110663, 4102],
+    ["hash16", "build", 654, 4238, 4166, 134217768, 1048576, 69, 67112421, 8, 133399054, 66176398, 535947433, 8411],
+    ["hash256", "read", 41, 265, 262, 67110663, 262144, 0, 0, 0, 0, 0, 67110663, 262],
+    ["hash256", "build", 174, 398, 326, 134217768, 1048576, 69, 67112421, 8, 133399054, 66176398, 535947433, 731],
+    ["hash1024", "read", 17, 73, 70, 67110663, 1048576, 0, 0, 0, 0, 0, 67110663, 70],
+    ["hash1024", "build", 150, 206, 134, 134217768, 1048576, 69, 67112421, 8, 133399054, 66176398, 535947433, 347],
+    ["copy64", "read", 137, 1033, 1030, 67110663, 65536, 0, 0, 0, 0, 0, 67110663, 1030],
+    ["copy64", "build", 2190, 3086, 2054, 134217768, 65536, 1029, 67112421, 12, 137795854, 68866318, 538637353, 5151],
+    ["copy4096", "read", 137, 1033, 1030, 67110663, 65536, 0, 0, 0, 0, 0, 67110663, 1030],
+    ["copy4096", "build", 174, 1070, 1046, 134217768, 4194304, 21, 67112421, 6, 130082638, 62945326, 532716361, 2121],
+    ["baseline-repeat", "read", 137, 1033, 1030, 67110663, 65536, 0, 0, 0, 0, 0, 67110663, 1030],
+    ["baseline-repeat", "build", 270, 1166, 1094, 134217768, 1048576, 69, 67112421, 8, 133399054, 66176398, 535947433, 2267]
+  ],
+  "elapsedColumns": ["variant", "operation", "elapsedMsRoundedToThreeDecimals"],
+  "largeElapsed": [
+    ["baseline", "read", [80.856, 118.215, 119.545, 255.375, 227.646]],
+    ["baseline", "build", [304.424, 156.485, 350.666, 245.444, 126.611]],
+    ["hash16", "read", [45.968, 40.688, 47.919, 50.550, 48.099]],
+    ["hash16", "build", [101.352, 103.295, 148.330, 111.813, 475.382]],
+    ["hash256", "read", [184.872, 181.205, 153.576, 73.247, 218.641]],
+    ["hash256", "build", [122.311, 248.353, 244.057, 94.683, 94.136]],
+    ["hash1024", "read", [78.377, 48.986, 38.813, 33.966, 41.686]],
+    ["hash1024", "build", [183.101, 81.056, 102.081, 90.110, 118.963]],
+    ["copy64", "read", [48.525, 41.749, 160.972, 83.770, 151.718]],
+    ["copy64", "build", [337.392, 147.493, 84.524, 82.206, 77.939]],
+    ["copy4096", "read", [37.545, 38.707, 42.835, 49.483, 73.460]],
+    ["copy4096", "build", [88.516, 68.172, 65.435, 93.257, 111.847]],
+    ["baseline-repeat", "read", [37.335, 36.786, 40.564, 37.334, 37.824]],
+    ["baseline-repeat", "build", [74.247, 88.883, 61.149, 74.008, 74.724]]
+  ],
+  "tinyInvariantColumns": ["operation", "advanceCalls", "fulfillCalls", "byteReplies", "assetAllocationEvents", "assetCopyBytes"],
+  "tinyInvariantsAllVariants": [
+    ["read", 9, 9, 6, 6, 1784],
+    ["build", 14, 14, 6, 20, 8892]
+  ],
+  "tinyMedianColumns": ["variant", "readMs", "buildMs"],
+  "tinyMedians": [
+    ["baseline", 0.362, 0.079],
+    ["hash16", 0.342, 0.078],
+    ["hash256", 0.329, 0.073],
+    ["hash1024", 0.339, 0.076],
+    ["copy64", 0.330, 0.072],
+    ["copy4096", 0.695, 0.072],
+    ["baseline-repeat", 0.335, 0.073]
+  ]
+}
