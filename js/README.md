@@ -303,6 +303,25 @@ replaced on the next call. Indicative Node scaling (12 cores, 32 reads of a
 64 MiB JPEG): 1 Worker 1260 ms, 2: 682, 4: 378, 8: 245. Each Worker holds its
 own Wasm/addon state, so size the pool for memory as well as cores.
 
+### Cancellation and shutdown
+
+Pass an `AbortSignal` to `read(bytes, { signal })` or as the fourth argument
+to `sign(bytes, definition, signer, { signal })`. Aborting rejects that call
+with the signal's reason and sends a cancellation message to its Worker. A
+queued operation is removed before it creates a session. A running session
+closes at a cooperative host boundary; synchronous `session.advance()` calls
+cannot be preempted, so cancellation latency is bounded by the current call
+plus a short host scheduling slice. The signer's Promise runs on the caller's
+thread and cannot itself be canceled; the Worker stops waiting for it and its
+late result is ignored.
+
+`dispose()` keeps its existing immediate behavior: it stops admission and
+terminates Workers, rejecting outstanding work. Use `dispose({ drain: true })`
+to stop admission, wait for every accepted call to settle, and then terminate
+the Workers after each has acknowledged its posted commands. Drain can wait
+indefinitely for an unresponsive signer or host operation; abort those calls
+first when a bounded shutdown is needed.
+
 Run the browser entry through an HTTP server; the acceptance runner supplies a
 loopback-only server. The proof clock is restricted to signed 32-bit Unix
 seconds by its small Wasm bridge; current dates and frozen fixture time fit.
@@ -323,6 +342,9 @@ Wasm. No mocks substitute for the read/build boundaries. The shared read contrac
 8. Application timer progress during three repeated 64 MiB reads.
 9. Disposal rejecting a pending operation and subsequent calls.
 10. A second Worker continuing after the first client is disposed.
+11. `AbortSignal` cancellation and subsequent successful reuse of that Worker.
+12. Queued cancellation before session creation, running cancellation while
+    waiting for a signer, and graceful pool drain before termination.
 
 The [shared signing contract](test/signing.mjs) additionally proves:
 

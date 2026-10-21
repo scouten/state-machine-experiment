@@ -1,3 +1,5 @@
+import { cancellationPoint } from "./cancellation.mjs";
+
 /**
  * Shared host loops that drive the synchronous Rust sessions.
  *
@@ -29,13 +31,16 @@ function range(start, len, length) {
  * @returns {Promise<{report: object|null, stats: object}>} Parsed report
  *   (`null` when the asset has no manifest store) and request counters.
  */
-export async function read(adapter, asset, settings, now) {
+export async function read(adapter, asset, settings, now, signal) {
   const session = adapter.create(settings);
   const stats = { reads: 0, bytes: 0, maxReadBytes: 0, advances: 0 };
+  const checkCancellation = cancellationPoint(signal);
   try {
     for (;;) {
+      await checkCancellation();
       stats.advances++;
       const step = session.advance();
+      await checkCancellation();
       if (step.done) {
         const json = session.finish();
         return { report: json == null ? null : JSON.parse(json), stats };
@@ -43,6 +48,7 @@ export async function read(adapter, asset, settings, now) {
       if (!step.requests.length) throw new Error("session stalled without host requests");
       // The same host loop and byte-range policy run in both environments.
       await Promise.all(step.requests.map(async (request) => {
+        await checkCancellation();
         switch (request.kind) {
           case "read": {
             const { start, len } = request;
@@ -75,12 +81,13 @@ export async function read(adapter, asset, settings, now) {
  *   Produces a raw ES256 signature over `request.data`.
  * @returns {Promise<object>} Builder report plus the signed `asset` and `stats`.
  */
-export async function build(adapter, asset, definition, certs, sign) {
+export async function build(adapter, asset, definition, certs, sign, signal) {
   const session = adapter.createBuild(definition, certs);
   let output = new Uint8Array(0);
   /** Logical output length; `output` may be larger (geometric growth). */
   let length = 0;
   const stats = { reads: 0, bytes: 0, writes: 0, writtenBytes: 0, signs: 0, advances: 0 };
+  const checkCancellation = cancellationPoint(signal);
   /** Maps a request's stream name to its backing bytes. */
   function stream(name) {
     if (name === "source") return asset;
@@ -89,14 +96,17 @@ export async function build(adapter, asset, definition, certs, sign) {
   }
   try {
     for (;;) {
+      await checkCancellation();
       stats.advances++;
       const step = session.advance();
+      await checkCancellation();
       if (step.done) {
         const report = session.finish();
         return { ...report, asset: output.slice(0, length), stats }; // trimmed copy: no stale tail
       }
       if (!step.requests.length) throw new Error("session stalled without host requests");
       for (const request of step.requests) {
+        await checkCancellation();
         switch (request.kind) {
           case "read": {
             const bytes = stream(request.stream);
@@ -129,6 +139,7 @@ export async function build(adapter, asset, definition, certs, sign) {
             if (request.alg !== "es256") throw new Error(`unsupported signing algorithm: ${request.alg}`);
             stats.signs++;
             const signature = await sign(request);
+            await checkCancellation();
             session.fulfill(request.id, "signature", signature);
             break;
           }

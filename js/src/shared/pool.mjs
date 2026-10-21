@@ -17,7 +17,10 @@ export class ClientPool {
   #clients = [];
   /** Calls in flight per client, for least-loaded dispatch. */
   #load = new Map();
+  /** Public calls accepted before shutdown began. */
+  #active = new Set();
   #disposed = false;
+  #disposal;
 
   /**
    * @param {() => import("./client.mjs").Client} create Starts one Worker client.
@@ -60,8 +63,15 @@ export class ClientPool {
   async #run(call) {
     const client = this.#pick();
     this.#load.set(client, this.#load.get(client) + 1);
-    try { return await call(client) }
-    finally { if (this.#load.has(client)) this.#load.set(client, this.#load.get(client) - 1) }
+    let operation;
+    try { operation = Promise.resolve(call(client)) }
+    catch (error) { operation = Promise.reject(error) }
+    this.#active.add(operation);
+    try { return await operation }
+    finally {
+      this.#active.delete(operation);
+      if (this.#load.has(client)) this.#load.set(client, this.#load.get(client) - 1);
+    }
   }
 
   /** See {@link Client#read}. The asset is captured synchronously by the chosen client. */
@@ -74,9 +84,21 @@ export class ClientPool {
     return this.#run((client) => client.sign(...args));
   }
 
-  /** Terminates every Worker; outstanding calls reject. */
-  async dispose() {
+  /**
+   * Stops accepting calls and terminates every Worker.
+   * @param {{drain?: boolean}} [options] When true, wait for accepted calls to
+   *   finish before terminating Workers; otherwise pending calls are rejected.
+   */
+  dispose({ drain = false } = {}) {
+    if (this.#disposal) return this.#disposal;
     this.#disposed = true;
-    await Promise.all(this.#clients.map((client) => client.dispose()));
+    this.#disposal = (async () => {
+      if (drain) {
+        await Promise.allSettled([...this.#active]);
+        await Promise.all(this.#clients.map((client) => client.whenIdle?.()));
+      }
+      await Promise.all(this.#clients.map((client) => client.dispose()));
+    })();
+    return this.#disposal;
   }
 }
