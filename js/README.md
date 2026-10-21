@@ -67,10 +67,11 @@ read bridge, and its [signing boundary](../contentauth-c2pa-wasm/src/build.rs)
 consumes the build bridge. Both remain synchronous; neither duplicates C2PA
 logic or adds a Rust async runtime.
 
-Wasm serializes request metadata as JSON but passes bulk build write payloads
-as binary byte arrays through wasm-bindgen. Each payload is consumed once
-before the next advance; byte storage remains owned/copied, not an unsafe view
-into Wasm memory. Neon returns objects and expects Buffers for byte replies.
+Wasm serializes request metadata as JSON and retains write payloads as shared
+Rust `Bytes`. The trusted adapter reads each through a synchronous immutable
+Wasm-memory view, copies directly into output and releases before any Wasm call
+or await. No view escapes the adapter. Copied binary and JSON are experiment
+controls. Neon returns objects and expects Buffers for byte replies.
 Adapters normalize those differences without changing the shared host.
 Small signing-input and final manifest arrays still use JSON in the Wasm
 adapter. The original all-JSON path remains only as an experiment control.
@@ -316,35 +317,51 @@ Both adapters use the same pre-existing Rust sessions and the same JS host.
 The 64 MiB asset needs 1,029 reads totaling 67,110,652 bytes, at most 64 KiB per
 read, and 137 advances, identically across all four environments.
 
-### Binary write-payload experiment
+### Immutable write leases and copied controls
 
-The browser adapter defaults to binary bulk write payloads.
+The browser adapter defaults to synchronous immutable write leases over Rust
+`Bytes` (`transport: "leased"`). Each write borrows a fresh Wasm-memory view,
+copies directly into host output, and releases before another Wasm call or await.
+No view can escape the adapter or be mutated. Growth invalidates old memory
+views, so the adapter reacquires the buffer per write. Session disposal releases
+abandoned leases; unconsumed payloads block advancement.
+
+`createClient({ transport: "binary" })` retains copied binary payloads as a
+control. `copiedPayloadBytes` must be zero for leases and exactly `writtenBytes`
+for both copied controls; this excludes required output writes, JS-to-Wasm reads,
+output growth and VM-internal work. A 64 MiB source eliminates 67,112,416 temporary
+copied payload bytes in the baseline fixture. This is copy volume, not peak RSS
+or a guaranteed end-to-end speedup. Input/result transport remains unchanged.
+
+The browser adapter also retains the original JSON control.
 `createClient({ transport: "json" })` selects the original boundary solely for
-the experiment; it is not a proposed SDK configuration surface. Both paths use
+the experiment; it is not a proposed SDK configuration surface. All three paths use
 the same Wasm binary, Rust session, JS driver, signer and fixtures.
 
 `npm run test:browser` now runs the unchanged read/signing contracts against
-**both** boundaries in all three engines, then runs
+**all three** boundaries in all three engines, then runs
 [the paired comparison](benchmarks/boundary.mjs): one warmup per size/transport and
-four measured pairs per size, alternating which transport goes first.
-Small and 64 MiB inputs yield 16 measured builds per browser, 48 total. Every
+four measured iterations per size, reversing transport order.
+Small and 64 MiB inputs yield 24 measured builds per browser, 72 total. Every
 sample checks direct-host signing inputs, read-back report, output/manifest
 lengths, exclusion ranges and identical request accounting outside the timed
 build interval. Node remains the unchanged native reference.
 
-Results include `transports` (both contract runs) and `comparison.samples`
+Results include `transports` (all three contract runs) and `comparison.samples`
 (paired measurements). Browser build results expose a proof-only `boundary`
 measurement:
 
 - `wasmAdvanceMs`: Rust advancement, JSON construction/serialization and string
   transfer together, not isolated serialization time.
 - `parseMs`: JavaScript `JSON.parse`.
-- `payloadMs`: payload conversion/copy plus request normalization; binary uses
-  an additional wasm-bindgen byte retrieval call.
+- `payloadMs`: payload conversion/copy, request normalization and output writes;
+  copied binary uses an additional wasm-bindgen byte retrieval call, while leases
+  acquire and release retained payloads around the direct output write.
+- `copiedPayloadBytes`: temporary payload copies, excluding output assembly.
 - `metadataChars`, `writePayloadBytes`, `writes`: transport/accounting checks.
 
 The local comparison reduced median large-build caller duration by about
-6.7–8.5 times in all browsers; binary is retained as the default. Small builds
+6.7–8.5 times in all browsers in the original JSON/binary experiment. Small builds
 were too short/timer-quantized for strong performance claims.
 
 ### Performance interpretation
@@ -376,6 +393,7 @@ API or streaming-storage abstraction. No production publication.
 The binary experiment identifies a large avoidable binding cost, not the cause
 of every remaining native/browser difference. Next, measure peak memory and
 copying across input sizes before selecting file/Blob-backed sources/outputs.
-The proof still buffers entire assets and wasm-bindgen still copies payload
-bytes. No core async conversion is needed. Do not add cooperative Worker
+The proof still buffers entire assets and wasm-bindgen still copies read-reply
+bytes. Output writes and geometric growth also copy. No core async conversion
+is needed. Do not add cooperative Worker
 scheduling without a required message/progress behavior that fails a test.

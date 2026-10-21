@@ -2,11 +2,11 @@
 import { Client } from "../shared/client.mjs";
 
 /**
- * @param {{transport?: "binary"|"json"}} [options] `json` is only a control
- *   for the boundary-cost experiment; `binary` is the default.
+ * @param {{transport?: "leased"|"binary"|"json"}} [options] `binary` and `json`
+ *   are controls for the boundary-cost experiment; `leased` is the default.
  */
-export function createClient({ transport = "binary" } = {}) {
-  if (transport !== "binary" && transport !== "json") throw new Error("invalid proof transport");
+export function createClient({ transport = "leased" } = {}) {
+  if (!["leased", "binary", "json"].includes(transport)) throw new Error("invalid proof transport");
   const url = new URL("./entry.mjs", import.meta.url);
   url.searchParams.set("transport", transport);
   const worker = new Worker(url, { type: "module" });

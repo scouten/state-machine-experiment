@@ -15,10 +15,18 @@ for a JavaScript host running in a browser Worker.
 Nothing here performs I/O, async work or threading, and nothing here knows
 what a Worker is: the host owns the event loop, the asset and the key.
 
-The builder's `advance(true)` keeps shared engine write buffers until the host
-consumes them with `payload(index)`, avoiding both an intermediate Rust payload
-copy and JSON byte arrays. `payload` copies directly from shared storage into a
-JavaScript `Uint8Array`. Incoming read bytes and signatures move wasm-bindgen's
+The builder's `advance(true)` keeps shared engine write buffers until the trusted
+host consumes them. The default host borrows `payload_ptr(index)` through a fresh
+view of Wasm memory, copies directly into output, then `release_payload(index)`
+ends the immutable lease. No temporary JavaScript payload copy is needed.
+Never mutate the view, retain it across a Wasm call or await, or access it after
+release/session disposal. Reacquire `memory.buffer` per write: growth can detach
+an old view. Unconsumed leases block advance; disposal releases abandoned ones.
+Native tests prove allocation sharing/release; three-browser tests exercise
+memory growth and invalid/double release.
+
+The experiment control `payload(index)` copies into a JavaScript `Uint8Array`.
+Incoming read bytes and signatures move wasm-bindgen's
 owned vectors into the bridge rather than copying them again in Rust. Crossing
 the Wasm/JavaScript memory boundary still copies bytes; this is not an end-to-end
 zero-copy API. `advance(false)` retains JSON arrays as the experiment's control

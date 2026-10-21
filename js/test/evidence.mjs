@@ -7,7 +7,7 @@ export async function fingerprints() {
     "src/browser/client.mjs", "src/browser/entry.mjs", "src/node/client.mjs", "src/node/entry.mjs", "src/node/adapter.mjs",
     "../contentauth-c2pa-wasm/src/lib.rs", "../contentauth-c2pa-wasm/src/build.rs",
     "../contentauth-c2pa-wasm/Cargo.toml", "../contentauth-c2pa-wasm/Cargo.lock",
-    "test/contract.mjs", "test/signing.mjs", "benchmarks/boundary.mjs", "test/fixtures.mjs", "test/node.test.mjs",
+    "test/contract.mjs", "test/signing.mjs", "test/leases.mjs", "benchmarks/boundary.mjs", "test/fixtures.mjs", "test/node.test.mjs",
     "test/browser.mjs", "package.json", "package-lock.json",
     "generated/fixtures.json", "generated/contentauth_c2pa_wasm_bg.wasm",
     "../c2pa-node-compat-addon/index.node", "../c2pa-node-sign-addon/index.node"];
