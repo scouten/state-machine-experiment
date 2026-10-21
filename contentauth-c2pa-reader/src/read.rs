@@ -315,7 +315,7 @@ enum State {
 ///
 /// Named lists come first, so an anchor present both in one and in the
 /// anonymous list is reported under the name.
-fn decode_anchors(
+pub(crate) fn decode_anchors(
     lists: &[TrustList],
     anonymous: &[Vec<u8>],
     kind: AnchorKind,
@@ -354,7 +354,7 @@ fn decode_anchors(
 /// manifest's hard binding covers the asset *it* described, which is not
 /// the asset being read, so checking it here would compare unrelated
 /// bytes.
-fn plan_hard_binding(
+pub(crate) fn plan_hard_binding(
     active: &Manifest,
     statuses: &mut Vec<ValidationStatus>,
 ) -> Option<PendingBinding> {
@@ -391,11 +391,11 @@ fn plan_hard_binding(
 
 /// What this crate needs to remember while it verifies a hard binding.
 #[derive(Debug)]
-struct PendingBinding {
-    algorithm: HashAlgorithm,
-    expected: Vec<u8>,
-    exclusions: Vec<ByteRange>,
-    url: String,
+pub(crate) struct PendingBinding {
+    pub(crate) algorithm: HashAlgorithm,
+    pub(crate) expected: Vec<u8>,
+    pub(crate) exclusions: Vec<ByteRange>,
+    pub(crate) url: String,
 }
 
 /// One claim signer chain's outstanding OCSP checks, and enough about the

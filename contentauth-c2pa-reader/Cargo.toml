@@ -12,8 +12,15 @@ keywords = ["c2pa", "content-credentials", "sans-io"]
 categories = ["api-bindings"]
 publish = false
 
+[features]
+# Experimental: the same read workflow written as an `async fn` on
+# `sans-io-engine` (`read_workflow.rs`), beside the hand-written
+# `ReadSession`. Off by default; the engine lives in a sibling checkout.
+engine = ["dep:sans-io-engine"]
+
 [dependencies]
 contentauth-state-machine = { path = "../contentauth-state-machine" }
+sans-io-engine = { path = "../../sans-io-engine", optional = true }
 
 # Shared C2PA vocabulary (StreamId, ByteRange, HashAlgorithm, SigningAlg,
 # HostError) and the deterministic Sig_structure encoder, held in common

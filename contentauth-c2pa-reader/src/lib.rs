@@ -94,6 +94,8 @@ pub mod identity;
 pub mod manifest_store;
 pub(crate) mod ocsp;
 pub mod read;
+#[cfg(feature = "engine")]
+pub mod read_workflow;
 pub mod request;
 pub(crate) mod timestamp;
 pub mod validation;

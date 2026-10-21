@@ -57,12 +57,12 @@ use crate::{
 };
 
 /// Bytes requested per chunk.
-const CHUNK_SIZE: u64 = 64 * 1024;
+pub(crate) const CHUNK_SIZE: u64 = 64 * 1024;
 
 /// Maximum chunks in play (outstanding or buffered) at any moment.
 ///
 /// This is what lets the host overlap reads while keeping memory bounded.
-const WINDOW: usize = 8;
+pub(crate) const WINDOW: usize = 8;
 
 /// Accumulates a digest over host-streamed chunks of an asset.
 #[derive(Debug)]
