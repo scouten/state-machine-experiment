@@ -443,11 +443,12 @@ jobs:
     name: C++ binding (${{ matrix.name }})
     runs-on: ubuntu-latest
 
-    # `contentauth-c2pa-cpp` is a Rust static library behind a C ABI plus
-    # C++17 readers, compiled signing/thread pools and C++20 coroutines.
-    # Its Rust half is an ordinary workspace member, tested by
-    # the jobs above; this job builds the C++ half against it with CMake
-    # and runs the C++ tests and examples three ways:
+    # `contentauth-c2pa-cpp` is C++17 readers, compiled signing/thread pools
+    # and C++20 coroutines over the canonical `contentauth-c2pa-c-api` C
+    # library and header. Its Rust half is an ordinary workspace member,
+    # tested by the jobs above; this job builds the C++ half against it
+    # with CMake (including a plain C client of the same library) and runs
+    # the C++ tests and examples three ways:
     #   - plain, with coverage of C++ headers and sources (uploaded to Codecov);
     #   - under AddressSanitizer (leaks, use-after-free on cancellation);
     #   - under ThreadSanitizer (the session handed between threads, and

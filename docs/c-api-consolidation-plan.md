@@ -510,7 +510,55 @@ were not run, and the C++ sanitizers do not instrument Rust.
 
 C++ still links its original Rust library and uses its existing header.
 No CMake rerouting, workspace removal, or duplicate-FFI deletion has been
-performed: those remain Phases 3 and 4.
+performed in Phase 2: those are Phases 3 and 4.
+
+## Phase 3 results
+
+The C++ binding now builds and tests against the canonical C API with no
+dependency on its former Rust ABI.
+
+- [`CMakeLists.txt`](../contentauth-c2pa-cpp/CMakeLists.txt) builds
+  `contentauth-c2pa-c-api` with cargo and links `libcontentauth_c2pa_c_api.a`;
+  the `c2pa_sm` target's include path is the C API's `include/` directory.
+  Nothing in CMake builds, links or includes `contentauth-c2pa-cpp`'s own
+  Rust crate, `include/contentauth_c2pa_sm.h` or
+  `include/contentauth_c2pa_sm_sign.h`.
+- The four C++ sites that included those headers now include the generated
+  `contentauth_c2pa_c_api.h`: `c2pa_sm.hpp`, `c2pa_sm_sign.hpp`, the C++17
+  compile check and the C++17 test. No wrapper, driver, host, executor or
+  test body needed to change, because the canonical ABI keeps the proven
+  names, struct layouts and ownership rules. Public C++ APIs, including the
+  read/write buffer interfaces, are unchanged.
+- The CMake project now enables C. A new plain C11 program,
+  [`cpp/tests/c_link_smoke.c`](../contentauth-c2pa-cpp/cpp/tests/c_link_smoke.c),
+  runs as CTest `c_api.c_link_smoke`. It links only the canonical library,
+  drives a read session by hand over an in-memory JPEG, and checks the
+  no-manifest result, owned errors, `jpeg`/`image/jpg`/`tif`/`image/tiff`/`dng`
+  selection and a rejected signing definition.
+- [CI](../.github/workflows/ci.yml) needs no new steps: its Linux
+  (coverage, ASan, TSan) and macOS jobs configure, build and run `ctest`,
+  which now includes the smoke test. Its comment describing the job was
+  updated.
+- README and walkthrough pages describe the new relationship and mark the old
+  Rust crate and headers as pending removal.
+
+| Validation | Result |
+|---|---|
+| Fresh build directory, normal | Built; 111 tests/examples passed (110 existing + C smoke) |
+| AddressSanitizer | 111 passed |
+| ThreadSanitizer | 111 passed |
+| Only the canonical static library built under the C++ build's cargo directory | Confirmed; no `libcontentauth_c2pa_cpp.a` produced |
+| Generated header after the C++ build | Unmodified (no diff) |
+| C++17 compile/link check | Built with `-Werror` and linked |
+
+Not run locally: the Linux-only POSIX fault-injection tests
+(`tests_sign_posix.cpp`) and the gcovr coverage report, because this machine
+has no running Docker daemon or Linux toolchain; the CI Linux jobs run both.
+The sanitizers instrument the C++ only, not the Rust library.
+
+The old Rust ABI crate, its tests, its hand-written headers and its
+`cbindgen.toml` remain in the tree, unused by the C++ build, until Phase 4
+deletes them after confirming each useful test has a canonical replacement.
 
 ## Execution
 
@@ -525,6 +573,6 @@ until its targeted tests pass and the results and any platform-specific
 validation gaps are reported. Do not defer testing to the end of the
 consolidation.
 
-Phase 1 is committed as `b222b96`; Phase 2 replaces the canonical ABI.
-This document continues to be the execution plan for Phases 3 and 4.
-C++ rerouting and duplicate-FFI deletion have not occurred yet.
+Phase 1 is committed as `b222b96` and Phase 2 as `62e1324`; Phase 3 routes
+the C++ build to the canonical C API. This document continues to be the
+execution plan for Phase 4. Deleting the duplicate Rust ABI has not occurred yet.

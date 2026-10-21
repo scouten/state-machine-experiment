@@ -125,11 +125,10 @@ uses cimpl for tracked handles, pointer validation, error conversion, and
 memory ownership; cbindgen generates its C header. It now hosts the canonical
 reader/signing boundary, including independently owned read/write leases
 and typed result handles, over the neutral session bridge.
-The experimental [`contentauth-c2pa-cpp`](contentauth-c2pa-cpp) binding uses
-cimpl for its signing ABI and retains a hand-written reader ABI over the
-neutral read bridge. It still builds its own ABI during consolidation;
-switching C++ to the canonical C API and removing that duplicate are the
-remaining phases of the [consolidation plan](docs/c-api-consolidation-plan.md).
+The experimental [`contentauth-c2pa-cpp`](contentauth-c2pa-cpp) binding now
+builds against that canonical library and header through CMake; its own Rust
+ABI crate is unused and awaits removal in the final phase of the
+[consolidation plan](docs/c-api-consolidation-plan.md).
 
 ## Building
 

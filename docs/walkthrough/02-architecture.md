@@ -38,7 +38,7 @@ flowchart BT
     PW["contentauth-c2pa-wasm<br/><i>standalone synchronous Wasm boundary</i>"]
     PN["c2pa-node-compat-addon<br/><i>existing Neon boundary</i>"]
     PNS["c2pa-node-sign-addon<br/><i>existing signing Neon boundary</i>"]
-    CPP["contentauth-c2pa-cpp<br/><i>reader + signing C ABI</i>"]
+    CPP["contentauth-c2pa-cpp<br/><i>C++ over the canonical C API</i>"]
     PY["POSSIBLE: Python host + binding adapter<br/><i>not implemented or tested</i>"]
     CAPI["c2pa-c-api<br/><i>canonical C ABI + buffer leases</i>"]
 
@@ -60,7 +60,8 @@ flowchart BT
     PW -.-> BR
     PN -.-> BR
     PNS -.-> BR
-    CPP -->|"read/build bridges"| BR
+    CPP -->|"links (CMake)"| CAPI
+    CPP -.->|"unused duplicate Rust ABI, to be removed"| BR
     PY -.->|"could drive same bridge protocol"| BR
     CAPI --> BR
 
@@ -82,8 +83,10 @@ flowchart BT
 where they would only add noise; every session crate depends on both.)
 The C API's `read` and `build` features independently select its exported
 workflows; either enables its shared session-bridge backend. Both are on
-by default. C++ still builds its original ABI until the next consolidation
-phase; there is not yet a C++-to-C-API dependency.
+by default. The C++ binding links the C API's static library and generated
+header (through CMake, not a Cargo edge); its own duplicate Rust ABI crate
+still builds in the workspace but is no longer linked, pending removal in the
+final consolidation phase.
 
 ## Layers
 
@@ -136,7 +139,7 @@ flowchart TB
 | `…-c-api` | Binding | Canonical thread-free, callback-free C ABI over the neutral bridge (`c2pa_sm_*`); selectable `read`/`build` exports, cimpl-tracked handles, typed readers/signing results, independent zero-copy signing read/write leases and a generated header. |
 | `c2pa-rs-compat-conformance` | Test | Separate workspace; differential tests against the real `c2pa` crate. |
 | `contentauth-c2pa-wasm` + `js/` | Binding / preferred JS host | Standalone synchronous Wasm boundary and private JS package with shared host, browser and Node entry points. Offline JPEG read/baseline ES256 sign; caller-owned async callbacks. |
-| `contentauth-c2pa-cpp` | Binding | C++17/20 reader and signing drivers over the neutral read/build bridges; cimpl-tracked signing C ABI, blocking memory/stream/POSIX-file hosts, pooled/future/parallel drivers and C++20 coroutines. A public-header ES256 signing example reads its output back as Trusted. Does not depend on the JS driver. |
+| `contentauth-c2pa-cpp` | Binding | C++17/20 reader and signing drivers over the canonical `contentauth-c2pa-c-api` C library and generated header (linked by CMake); blocking memory/stream/POSIX-file hosts, pooled/future/parallel drivers and C++20 coroutines, plus a plain-C link smoke test. Its former duplicate Rust ABI remains only until the final consolidation phase. A public-header ES256 signing example reads its output back as Trusted. Does not depend on the JS driver. |
 
 The read/build bridges have been extracted and renamed, not copied. The
 preferred JavaScript direction is the [shared host](../../js/README.md); the
@@ -144,7 +147,7 @@ older Rust async browser hosts remain alternatives until their useful behavior
 is preserved by shared-host compatibility facades.
 
 The merged [C++ binding](../../contentauth-c2pa-cpp/README.md) now consumes the
-read/build bridges through its C ABI, independently of the JS host. Python remains
+read/build bridges through the canonical C ABI, independently of the JS host. Python remains
 prospective. The [read wrapper](../../contentauth-c2pa-session-bridge/src/read/mod.rs)
 exposes numeric handles, byte vectors, strings and synchronous
 `advance`/`fulfill`/`finish` methods; its

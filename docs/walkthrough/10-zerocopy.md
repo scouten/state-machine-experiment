@@ -86,7 +86,7 @@ I/O operation is still using.
 ## C ABI
 
 The signing ABI exposes the following ownership transitions (see the
-[generated header](../../contentauth-c2pa-cpp/include/contentauth_c2pa_sm_sign.h)
+[generated header](../../contentauth-c2pa-c-api/include/contentauth_c2pa_c_api.h)
 for the authoritative declarations):
 
 ```c

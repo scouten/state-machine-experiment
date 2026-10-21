@@ -6,8 +6,7 @@
 #include "contentauth/c2pa_sm_sign.hpp"
 #include "contentauth/c2pa_sm_sign_async.hpp"
 #include "contentauth/thread_pool.hpp"
-#include "contentauth_c2pa_sm.h"
-#include "contentauth_c2pa_sm_sign.h"
+#include "contentauth_c2pa_c_api.h"
 
 static_assert(__cplusplus == 201703L, "The compatibility check must compile as C++17");
 

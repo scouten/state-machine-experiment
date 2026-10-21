@@ -2,7 +2,7 @@
 #define CONTENTAUTH_C2PA_SM_SIGN_HPP
 
 #include "c2pa_sm.hpp"
-#include "contentauth_c2pa_sm_sign.h"
+#include "contentauth_c2pa_c_api.h"
 
 #include <functional>
 

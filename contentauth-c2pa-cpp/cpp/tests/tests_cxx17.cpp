@@ -19,7 +19,7 @@
 
 #include "contentauth/c2pa_sm_sign.hpp"
 #include "contentauth/c2pa_sm_sign_async.hpp"
-#include "contentauth_c2pa_sm_sign.h"
+#include "contentauth_c2pa_c_api.h"
 #include "fixtures.hpp"
 #include "support.hpp"
 #include "signing_support.hpp"
