@@ -198,7 +198,7 @@ fn a_host_that_cannot_read_the_asset_is_an_error_not_a_hang() {
 
 #[test]
 fn the_phase_says_where_a_fresh_session_starts() {
-    let session = NodeSession::new("image/jpeg", None).unwrap();
+    let session = ReadSessionBridge::new("image/jpeg", None).unwrap();
     assert_eq!(session.phase(), "Locating > Scanning > Start");
 }
 

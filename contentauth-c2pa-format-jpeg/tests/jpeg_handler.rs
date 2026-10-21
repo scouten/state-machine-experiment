@@ -321,7 +321,7 @@ fn a_malformed_marker_is_blamed_on_the_offset_it_was_read_from() {
                 IoRequest::Length { .. } => IoReply::Length(asset.len() as u64),
                 IoRequest::Read { range, .. } => {
                     let start = range.start as usize;
-                    IoReply::Bytes(asset[start..start + range.len as usize].to_vec())
+                    IoReply::Bytes(asset[start..start + range.len as usize].to_vec().into())
                 }
                 other => panic!("unexpected request {other:?}"),
             };
