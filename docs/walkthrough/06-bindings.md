@@ -139,7 +139,11 @@ directly into it. Sealing and fulfilling transfer the same allocation into
 the existing Rust byte reply. Blocking, pooled, and coroutine drivers use
 this path; I/O and networking remain entirely host-owned. Read leases can
 outlive session cancellation, so outstanding I/O retains valid storage.
-Write/sign/timestamp payload copies remain unchanged. See
+Writes also own immutable leases: the Rust layers share `bytes::Bytes`,
+and C++ writes from a `ConstBytes` pointer/length view without constructing
+a payload vector. A write lease survives acknowledgment and session
+destruction; the host retains its owner until I/O really stops.
+Sign/signature/timestamp payload copies remain outside these changes. See
 [Zero-copy buffers](10-zerocopy.md) for the ownership contract and tests.
 
 **Next:** [Proof and CI →](07-proof-and-ci.md)

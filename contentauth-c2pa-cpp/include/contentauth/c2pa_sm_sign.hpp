@@ -25,6 +25,28 @@ struct MutableBytes {
     size_t size;
 };
 
+/// A read-only byte view; the caller must retain its owning buffer during I/O.
+struct ConstBytes {
+    const uint8_t *data;
+    size_t size;
+};
+
+/// Move-only immutable write storage, independent of its original session.
+class WriteBuffer {
+public:
+    WriteBuffer() = default;
+    WriteBuffer(C2paSmBuildSession *session, uint64_t id);
+    ~WriteBuffer();
+    WriteBuffer(WriteBuffer &&other) noexcept;
+    WriteBuffer &operator=(WriteBuffer &&other) noexcept;
+    WriteBuffer(const WriteBuffer &) = delete;
+    WriteBuffer &operator=(const WriteBuffer &) = delete;
+    ConstBytes view() const;
+private:
+    C2paSmWriteBuffer *raw_ = nullptr;
+    ConstBytes bytes_{nullptr, 0};
+};
+
 /// Move-only sealed storage, freed independently of its original session.
 class CompletedRead {
 public:
@@ -77,7 +99,7 @@ struct WriteRequest {
     uint64_t id;
     BuildStream stream;
     uint64_t offset;
-    std::vector<uint8_t> bytes;
+    WriteBuffer bytes;
 };
 
 /// Sign the complete COSE Sig_structure, not a precomputed digest.
@@ -192,7 +214,7 @@ public:
     /// Reports the selected stream's current length.
     virtual uint64_t length(BuildStream stream) = 0;
     /// Returns only after the entire write is visible to output reads.
-    virtual void write(BuildStream stream, uint64_t offset, const std::vector<uint8_t> &bytes) = 0;
+    virtual void write(BuildStream stream, uint64_t offset, ConstBytes bytes) = 0;
     /// Calls the host signer without storing or accessing a key.
     virtual std::vector<uint8_t> sign(const std::string &algorithm, const std::vector<uint8_t> &data);
     /// Calls the host TSA transport; no implicit networking or fallback.
@@ -220,7 +242,7 @@ public:
     const std::vector<uint8_t> &output() const noexcept;
     void read_into(BuildStream stream, uint64_t start, MutableBytes destination) override;
     uint64_t length(BuildStream stream) override;
-    void write(BuildStream stream, uint64_t offset, const std::vector<uint8_t> &bytes) override;
+    void write(BuildStream stream, uint64_t offset, ConstBytes bytes) override;
 private:
     std::vector<uint8_t> source_;
     std::vector<uint8_t> output_;
@@ -233,7 +255,7 @@ public:
     IOStreamBuildHost(std::istream &source, std::iostream &output, BuildSigner signer = {}, BuildTimestamp timestamp = {});
     void read_into(BuildStream stream, uint64_t start, MutableBytes destination) override;
     uint64_t length(BuildStream stream) override;
-    void write(BuildStream stream, uint64_t offset, const std::vector<uint8_t> &bytes) override;
+    void write(BuildStream stream, uint64_t offset, ConstBytes bytes) override;
 private:
     std::istream &source_;
     std::iostream &output_;
@@ -252,7 +274,7 @@ public:
     FileBuildHost &operator=(const FileBuildHost &) = delete;
     void read_into(BuildStream stream, uint64_t start, MutableBytes destination) override;
     uint64_t length(BuildStream stream) override;
-    void write(BuildStream stream, uint64_t offset, const std::vector<uint8_t> &bytes) override;
+    void write(BuildStream stream, uint64_t offset, ConstBytes bytes) override;
 private:
     friend SignReport build_and_sign_file(const BuildSettings &, const std::filesystem::path &,
                                           const std::filesystem::path &, BuildSigner, BuildTimestamp);

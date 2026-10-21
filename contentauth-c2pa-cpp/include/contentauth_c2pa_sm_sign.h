@@ -111,6 +111,11 @@ typedef struct C2paSmReadBuffer C2paSmReadBuffer;
 typedef struct C2paSmSignReport C2paSmSignReport;
 
 /**
+ * Immutable write storage, retained independently of its signing session.
+ */
+typedef struct C2paSmWriteBuffer C2paSmWriteBuffer;
+
+/**
  * A borrowed byte range. Null is permitted only when len is zero.
  */
 typedef struct C2paSmBuffer {
@@ -288,6 +293,31 @@ int c2pa_sm_build_session_request(struct C2paSmBuildSession *session,
 int c2pa_sm_build_session_fulfill(struct C2paSmBuildSession *session,
                                   const struct C2paSmBuildReply *reply,
                                   C2paSmError **out_error);
+
+/**
+ * Retains an outstanding write's immutable bytes without copying the payload.
+ * Multiple leases may share a write. Storage survives acknowledgment and
+ * session destruction, and must be freed after the host stops using its view.
+ *
+ * # Safety
+ * Outputs must be writable and distinct; out_error may be null. Serialize
+ * session calls. Never modify the returned bytes or use them after buffer_free.
+ */
+int c2pa_sm_build_write_acquire(struct C2paSmBuildSession *session,
+                                uint64_t id,
+                                struct C2paSmWriteBuffer **out_buffer,
+                                struct C2paSmBuffer *out_bytes,
+                                C2paSmError **out_error);
+
+/**
+ * Frees a retained write buffer independently of session lifetime.
+ * Null handles are a no-op; invalid or busy handles remain caller-owned.
+ *
+ * # Safety
+ * buffer must be a writable pointer slot; out_error may be null.
+ * All I/O using the view must have stopped before freeing its storage.
+ */
+int c2pa_sm_write_buffer_free(struct C2paSmWriteBuffer **buffer, C2paSmError **out_error);
 
 /**
  * Acquires initialized, fallibly allocated storage for one outstanding read.

@@ -166,6 +166,68 @@ impl Drop for Completed {
     }
 }
 
+struct WriteLease {
+    raw: *mut C2paSmWriteBuffer,
+    view: C2paSmBuffer,
+}
+
+impl WriteLease {
+    fn acquire(build: &Build, id: u64) -> AbiResult<Self> {
+        let mut raw = ptr::null_mut();
+        let mut view = C2paSmBuffer::default();
+        let mut error = ptr::null_mut();
+        let code =
+            unsafe { c2pa_sm_build_write_acquire(build.0, id, &mut raw, &mut view, &mut error) };
+        result(code, error)?;
+        Ok(Self { raw, view })
+    }
+}
+
+impl Drop for WriteLease {
+    fn drop(&mut self) {
+        assert_eq!(
+            unsafe { c2pa_sm_write_buffer_free(&mut self.raw, ptr::null_mut()) },
+            C2PA_SM_OK
+        );
+    }
+}
+
+fn first_write(build: &Build) -> C2paSmBuildRequest {
+    loop {
+        let (done, count) = build.advance().unwrap();
+        assert!(!done);
+        assert!(count > 0);
+        let requests = (0..count)
+            .map(|index| build.request(index).unwrap())
+            .collect::<Vec<_>>();
+        for request in requests {
+            if request.kind == C2paSmBuildRequestKind::C2PA_SM_BUILD_REQUEST_WRITE as c_int {
+                return request;
+            }
+            let mut reply = C2paSmBuildReply {
+                id: request.id,
+                ..Default::default()
+            };
+            let data;
+            if request.kind == C2paSmBuildRequestKind::C2PA_SM_BUILD_REQUEST_LENGTH as c_int {
+                reply.kind = C2paSmBuildReplyKind::C2PA_SM_BUILD_REPLY_LENGTH as c_int;
+                reply.value = SOURCE_JPEG.len() as u64;
+                data = &[][..];
+            } else {
+                assert_eq!(
+                    request.kind,
+                    C2paSmBuildRequestKind::C2PA_SM_BUILD_REQUEST_READ as c_int
+                );
+                reply.kind = C2paSmBuildReplyKind::C2PA_SM_BUILD_REPLY_BYTES as c_int;
+                data =
+                    &SOURCE_JPEG[request.offset as usize..(request.offset + request.len) as usize];
+            }
+            reply.data = C2paSmBuffer::borrowed(data);
+            build.fulfill(reply).unwrap();
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Report(*mut C2paSmSignReport);
 
@@ -194,6 +256,10 @@ struct Host {
     leased: bool,
     source: Option<Vec<u8>>,
     max_reads: usize,
+    leased_writes: bool,
+    write_leases: Vec<WriteLease>,
+    source_buffer: Option<(usize, usize)>,
+    shared_source_writes: usize,
 }
 
 impl Host {
@@ -207,7 +273,14 @@ impl Host {
             let requests = (0..count)
                 .map(|index| {
                     let request = build.request(index).unwrap();
-                    let data = unsafe { request.data.bytes().unwrap().to_vec() };
+                    let data = if self.leased_writes
+                        && request.kind
+                            == C2paSmBuildRequestKind::C2PA_SM_BUILD_REQUEST_WRITE as c_int
+                    {
+                        Vec::new()
+                    } else {
+                        unsafe { request.data.bytes().unwrap().to_vec() }
+                    };
                     let algorithm = unsafe { request.algorithm.bytes().unwrap().to_vec() };
                     let url = unsafe { request.url.bytes().unwrap().to_vec() };
                     (request, data, algorithm, url)
@@ -255,6 +328,12 @@ impl Host {
                                 [request.offset as usize..(request.offset + request.len) as usize];
                             if self.leased {
                                 let mut lease = build.acquire(request.id)?;
+                                if request.stream
+                                    == C2paSmBuildStream::C2PA_SM_BUILD_SOURCE as c_int
+                                {
+                                    self.source_buffer =
+                                        Some((lease.view.data as usize, lease.view.len));
+                                }
                                 unsafe {
                                     std::slice::from_raw_parts_mut(lease.view.data, lease.view.len)
                                         .copy_from_slice(bytes);
@@ -296,9 +375,26 @@ impl Host {
                                 C2paSmBuildStream::C2PA_SM_BUILD_OUTPUT as c_int
                             );
                             let offset = request.offset as usize;
-                            self.output
-                                .resize(self.output.len().max(offset + data.len()), 0);
-                            self.output[offset..offset + data.len()].copy_from_slice(&data);
+                            if self.leased_writes {
+                                let lease = WriteLease::acquire(build, request.id)?;
+                                assert_eq!(lease.view.data, request.data.data);
+                                assert_eq!(lease.view.len, request.data.len);
+                                if let Some((pointer, len)) = self.source_buffer {
+                                    if len >= 64 * 1024 && len == lease.view.len {
+                                        assert_eq!(lease.view.data as usize, pointer);
+                                        self.shared_source_writes += 1;
+                                    }
+                                }
+                                let bytes = unsafe { lease.view.bytes().unwrap() };
+                                self.output
+                                    .resize(self.output.len().max(offset + bytes.len()), 0);
+                                self.output[offset..offset + bytes.len()].copy_from_slice(bytes);
+                                self.write_leases.push(lease);
+                            } else {
+                                self.output
+                                    .resize(self.output.len().max(offset + data.len()), 0);
+                                self.output[offset..offset + data.len()].copy_from_slice(&data);
+                            }
                             reply.kind = C2paSmBuildReplyKind::C2PA_SM_BUILD_REPLY_WRITTEN as c_int;
                             payload = Vec::new();
                         }
@@ -1157,4 +1253,143 @@ fn read_allocation_overflow_is_reported_without_leasing_the_request() {
             .1
             .is_none()
     );
+}
+
+#[test]
+fn write_leases_share_storage_and_survive_acknowledgment_and_session_destruction() {
+    let (lease, another, expected) = {
+        let build = Build::new(BASELINE_DEFINITION);
+        let request = first_write(&build);
+        let lease = WriteLease::acquire(&build, request.id).unwrap();
+        assert_eq!(lease.view.data, request.data.data);
+        let expected = unsafe { lease.view.bytes().unwrap().to_vec() };
+        assert!(!build.advance().unwrap().0);
+        let another = WriteLease::acquire(&build, request.id).unwrap();
+        assert_eq!(lease.view.data, another.view.data);
+        assert!(build
+            .fulfill(C2paSmBuildReply {
+                id: request.id,
+                kind: C2paSmBuildReplyKind::C2PA_SM_BUILD_REPLY_LENGTH as c_int,
+                ..Default::default()
+            })
+            .is_err());
+        assert!(WriteLease::acquire(&build, request.id).is_ok());
+        build
+            .fulfill(C2paSmBuildReply {
+                id: request.id,
+                kind: C2paSmBuildReplyKind::C2PA_SM_BUILD_REPLY_WRITTEN as c_int,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(WriteLease::acquire(&build, request.id).is_err());
+        build.advance().unwrap();
+        (lease, another, expected)
+    };
+    assert_eq!(unsafe { lease.view.bytes().unwrap() }, expected);
+    drop(lease);
+    assert_eq!(unsafe { another.view.bytes().unwrap() }, expected);
+}
+
+#[test]
+fn large_source_read_storage_is_reused_for_writes_through_the_bridge_and_abi() {
+    let mut source = SOURCE_JPEG.to_vec();
+    source.resize(2 * 1024 * 1024 + 17, 0);
+    let mut host = Host {
+        leased: true,
+        leased_writes: true,
+        source: Some(source),
+        ..Default::default()
+    };
+    let mut build = Build::new(BASELINE_DEFINITION);
+    assert!(host.drive(&mut build).unwrap().view().manifest.len > 0);
+    assert!(build.0.is_null());
+    assert!(host.shared_source_writes >= 2);
+    for lease in &host.write_leases {
+        let checked = cimpl::checkout_shared(lease.raw).unwrap();
+        assert_eq!(checked._bytes.as_ptr(), lease.view.data);
+        assert_eq!(checked._bytes.as_ref(), unsafe {
+            lease.view.bytes().unwrap()
+        });
+    }
+    let session = crate::tests::new_session("image/jpeg", None);
+    let (status, reader, error) = crate::tests::drive(session, &host.output);
+    assert_eq!(status, C2PA_SM_OK);
+    assert!(error.is_null());
+    unsafe {
+        assert_eq!(
+            crate::c2pa_sm_reader_validation_state(reader),
+            crate::C2paSmValidationState::C2PA_SM_VALIDATION_VALID
+        );
+        crate::c2pa_sm_reader_free(reader);
+    }
+}
+
+#[test]
+fn write_acquisition_and_release_validate_outputs_types_and_borrows() {
+    let build = Build::new(BASELINE_DEFINITION);
+    assert!(WriteLease::acquire(&build, u64::MAX).is_err());
+    let read = build.first_read();
+    assert!(WriteLease::acquire(&build, read.id).is_err());
+    let other = Build::new(BASELINE_DEFINITION);
+    let request = first_write(&other);
+    let mut raw = ptr::null_mut();
+    let mut view = C2paSmBuffer::default();
+    unsafe {
+        invalid(|error| {
+            c2pa_sm_build_write_acquire(other.0, request.id, ptr::null_mut(), &mut view, error)
+        });
+        invalid(|error| {
+            c2pa_sm_build_write_acquire(other.0, request.id, &mut raw, ptr::null_mut(), error)
+        });
+        invalid(|error| {
+            c2pa_sm_build_write_acquire(ptr::null_mut(), request.id, &mut raw, &mut view, error)
+        });
+        invalid(|error| c2pa_sm_write_buffer_free(ptr::null_mut(), error));
+        let mut wrong = other.0.cast::<C2paSmWriteBuffer>();
+        invalid(|error| c2pa_sm_write_buffer_free(&mut wrong, error));
+        assert_eq!(wrong, other.0.cast());
+        assert_eq!(
+            c2pa_sm_write_buffer_free(&mut raw, ptr::null_mut()),
+            C2PA_SM_OK
+        );
+    }
+    let checked = cimpl::checkout_exclusive(other.0).unwrap();
+    assert!(WriteLease::acquire(&other, request.id).is_err());
+    drop(checked);
+    let mut lease = WriteLease::acquire(&other, request.id).unwrap();
+    let handle = lease.raw;
+    let checked = cimpl::checkout_shared(handle).unwrap();
+    unsafe { invalid(|error| c2pa_sm_write_buffer_free(&mut lease.raw, error)) };
+    assert_eq!(lease.raw, handle);
+    drop(checked);
+    unsafe {
+        assert_eq!(
+            c2pa_sm_write_buffer_free(&mut lease.raw, ptr::null_mut()),
+            C2PA_SM_OK
+        );
+        assert!(lease.raw.is_null());
+        let mut stale = handle;
+        invalid(|error| c2pa_sm_write_buffer_free(&mut stale, error));
+        assert_eq!(stale, handle);
+    }
+}
+
+#[test]
+fn failed_writes_release_session_ownership_without_revoking_host_storage() {
+    let build = Build::new(BASELINE_DEFINITION);
+    let request = first_write(&build);
+    let lease = WriteLease::acquire(&build, request.id).unwrap();
+    let expected = unsafe { lease.view.bytes().unwrap().to_vec() };
+    build
+        .fulfill(C2paSmBuildReply {
+            id: request.id,
+            kind: C2paSmBuildReplyKind::C2PA_SM_BUILD_REPLY_FAILED as c_int,
+            data: C2paSmBuffer::borrowed(b"write failed"),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(WriteLease::acquire(&build, request.id).is_err());
+    assert!(build.advance().is_err());
+    drop(build);
+    assert_eq!(unsafe { lease.view.bytes().unwrap() }, expected);
 }

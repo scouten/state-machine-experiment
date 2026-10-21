@@ -25,6 +25,19 @@ inline c2pa::sm::Reply read_build_reply(
     }
 }
 
+inline c2pa::sm::BuildReply write_build_reply(
+    c2pa::sm::SyncBuildHost &host, c2pa::sm::BuildStream stream, uint64_t offset,
+    const std::vector<uint8_t> &bytes) {
+    try {
+        host.write(stream, offset, {bytes.data(), bytes.size()});
+        return c2pa::sm::Written{};
+    } catch (const std::exception &error) {
+        return c2pa::sm::Failed{error.what()};
+    } catch (...) {
+        return c2pa::sm::Failed{"unknown build host error"};
+    }
+}
+
 inline std::vector<uint8_t> signing_certificate() {
     std::ifstream input(signing_cert_path, std::ios::binary);
     if (!input) throw std::runtime_error("missing signing certificate");
@@ -78,6 +91,26 @@ inline std::string signing_trust_settings() {
 inline std::string trusted_signing_json(const std::vector<uint8_t> &bytes) {
     c2pa::sm::MemoryHost host(bytes, kNow);
     return json_of(read(c2pa::sm::Session("image/jpeg", signing_trust_settings()), host));
+}
+
+inline c2pa::sm::WriteRequest retained_write_request(
+    uint64_t id, c2pa::sm::BuildStream stream, uint64_t offset) {
+    using namespace c2pa::sm;
+    BuildSession session(signing_settings());
+    MemoryBuildHost host(fixture_bytes(), fixture_sign);
+    for (;;) {
+        auto step = session.advance();
+        if (step.done || step.requests.empty()) throw std::runtime_error("no write request");
+        for (auto &pending : step.requests) {
+            if (auto *write = std::get_if<WriteRequest>(&pending)) {
+                write->id = id;
+                write->stream = stream;
+                write->offset = offset;
+                return std::move(*write);
+            }
+            session.fulfill(request_id(pending), answer(host, pending));
+        }
+    }
 }
 
 class ManualBuildHost : public c2pa::sm::AsyncBuildHost {

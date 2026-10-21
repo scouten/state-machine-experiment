@@ -315,11 +315,11 @@ Neither a session nor its ABI starts host work or invokes host callbacks.
 partial reads/writes itself or report failure, never acknowledge a short
 operation as successful. `BuildReply` reuses the reader's `Length` and
 `Failed`; read replies instead own a move-only `CompletedRead`.
-`BuildRequest` and `BuildReply` are move-only. Write, sign, and timestamp
-payloads still own their C++ strings and vectors; read destinations own
-independent Rust allocations, not borrows into the session.
+`BuildRequest` and `BuildReply` are move-only. Read destinations and write
+payloads own independent Rust buffer leases, not borrows into the session.
+Sign and timestamp payloads still own their C++ strings and vectors.
 
-### Zero-copy signing reads
+### Zero-copy signing reads and writes
 
 `BuildSession::advance()` acquires a Rust-owned `ReadBuffer` for each new
 read. Its `writable()` method returns `MutableBytes { data, size }`.
@@ -347,10 +347,23 @@ outstanding lease. Cancelled mailboxes discard late completed buffers
 through RAII. Never access a saved writable pointer after sealing or
 freeing its lease. Dropping a lease does not answer its pending request.
 
-Only read-buffer ingestion is zero-copy: write/sign/timestamp payload copies
-remain unchanged. No I/O or networking moves into Rust. See the
+Each `WriteRequest::bytes` owns a move-only `WriteBuffer`. Its `view()`
+returns `ConstBytes { const uint8_t *data, size_t size }`;
+`SyncBuildHost::write(stream, offset, view)` writes directly from those
+Rust-owned immutable bytes. The file builder, session bridge, and ABI
+share `bytes::Bytes` ownership without copying the payload.
+The C ABI exposes `c2pa_sm_build_write_acquire` and
+`c2pa_sm_write_buffer_free`; multiple immutable leases are allowed.
+
+Write storage survives acknowledgment and session destruction. Async hosts
+must retain the owning request or buffer until I/O actually stops, including
+after cancellation. A pointer/length view alone does not retain storage.
+Releasing the lease and answering `Written` are independent operations.
+Sign/signature/timestamp payload copies remain outside this change, and
+memory-host reads/writes still copy as their actual I/O operation.
+No I/O or networking moves into Rust. See the
 [zero-copy walkthrough](../docs/walkthrough/10-zerocopy.md) for ownership
-rules, verification, and the deferred immutable-write-lease phase.
+rules and verification of both implemented lease phases.
 
 `BuildStream::Source` is read-only. `BuildStream::Output` must start empty,
 must not alias the source, and must support random-access writes and reads:
@@ -479,9 +492,11 @@ or busy handles are rejected without consuming another operation's handle.
 
 The ABI consists of `c2pa_sm_build_session_new/advance/request/fulfill/finish/free`
 and `c2pa_sm_sign_report_view/free`. `advance` returns completion and the count
-of new requests. Request views borrow session storage; callers must copy all
-payloads before advancing or fulfilling. Reports are immutable, independently
-owned handles; report views borrow their storage until the report is freed.
+of new requests. Raw request views borrow session storage; callers must copy
+needed metadata and unleased payloads before advancing or fulfilling.
+Acquired read/write buffers instead own independent storage. Reports are
+immutable, independently owned handles; report views borrow their storage
+until the report is freed.
 Do not free a session/report concurrently with use of its borrowed storage.
 
 Generate the signing-only header from the repository root with cbindgen 0.29.2:

@@ -15,6 +15,29 @@
 
 namespace c2pa::sm {
 
+WriteBuffer::WriteBuffer(C2paSmBuildSession *session, uint64_t id) {
+    C2paSmBuffer bytes{};
+    C2paSmError *error = nullptr;
+    const int result = c2pa_sm_build_write_acquire(session, id, &raw_, &bytes, &error);
+    detail::check(result, error);
+    bytes_ = {bytes.data, bytes.len};
+}
+WriteBuffer::~WriteBuffer() { (void)c2pa_sm_write_buffer_free(&raw_, nullptr); }
+WriteBuffer::WriteBuffer(WriteBuffer &&other) noexcept
+    : raw_(std::exchange(other.raw_, nullptr)), bytes_(std::exchange(other.bytes_, {nullptr, 0})) {}
+WriteBuffer &WriteBuffer::operator=(WriteBuffer &&other) noexcept {
+    if (this != &other) {
+        (void)c2pa_sm_write_buffer_free(&raw_, nullptr);
+        raw_ = std::exchange(other.raw_, nullptr);
+        bytes_ = std::exchange(other.bytes_, {nullptr, 0});
+    }
+    return *this;
+}
+ConstBytes WriteBuffer::view() const {
+    if (!raw_) throw std::runtime_error("write buffer has been moved or is empty");
+    return bytes_;
+}
+
 CompletedRead::~CompletedRead() { (void)c2pa_sm_completed_read_free(&raw_, nullptr); }
 CompletedRead::CompletedRead(CompletedRead &&other) noexcept
     : raw_(std::exchange(other.raw_, nullptr)) {}
@@ -96,7 +119,7 @@ BuildRequest describe(C2paSmBuildSession *session, const C2paSmBuildRequest &pen
             return BuildLengthRequest{pending.id, build_stream(pending.stream)};
         case C2PA_SM_BUILD_REQUEST_WRITE:
             return WriteRequest{pending.id, build_stream(pending.stream), pending.offset,
-                                build_bytes(pending.data)};
+                                WriteBuffer(session, pending.id)};
         case C2PA_SM_BUILD_REQUEST_SIGN:
             return SignRequest{pending.id, build_string(pending.algorithm), build_bytes(pending.data)};
         case C2PA_SM_BUILD_REQUEST_TIMESTAMP:
@@ -231,7 +254,7 @@ BuildReply answer(SyncBuildHost &host, BuildRequest &request) {
             } else if constexpr (std::is_same_v<Pending, BuildLengthRequest>) {
                 return Length{host.length(pending.stream)};
             } else if constexpr (std::is_same_v<Pending, WriteRequest>) {
-                host.write(pending.stream, pending.offset, pending.bytes);
+                host.write(pending.stream, pending.offset, pending.bytes.view());
                 return Written{};
             } else if constexpr (std::is_same_v<Pending, SignRequest>) {
                 return Signature{host.sign(pending.algorithm, pending.data)};
@@ -275,11 +298,11 @@ uint64_t MemoryBuildHost::length(BuildStream stream) {
     return stream == BuildStream::Source ? source_.size() : output_.size();
 }
 
-void MemoryBuildHost::write(BuildStream stream, uint64_t offset, const std::vector<uint8_t> &bytes) {
+void MemoryBuildHost::write(BuildStream stream, uint64_t offset, ConstBytes bytes) {
     if (stream != BuildStream::Output) throw std::runtime_error("source is read-only");
-    detail::build_range(offset, bytes.size(), output_.max_size());
-    output_.resize(std::max(output_.size(), static_cast<size_t>(offset + bytes.size())));
-    std::copy(bytes.begin(), bytes.end(), output_.begin() + static_cast<size_t>(offset));
+    detail::build_range(offset, bytes.size, output_.max_size());
+    output_.resize(std::max(output_.size(), static_cast<size_t>(offset + bytes.size)));
+    if (bytes.size != 0) std::copy_n(bytes.data, bytes.size, output_.begin() + static_cast<size_t>(offset));
 }
 
 IOStreamBuildHost::IOStreamBuildHost(std::istream &source, std::iostream &output, BuildSigner signer, BuildTimestamp timestamp)
@@ -307,12 +330,12 @@ uint64_t IOStreamBuildHost::length(BuildStream stream) {
     return static_cast<uint64_t>(end);
 }
 
-void IOStreamBuildHost::write(BuildStream stream, uint64_t offset, const std::vector<uint8_t> &bytes) {
+void IOStreamBuildHost::write(BuildStream stream, uint64_t offset, ConstBytes bytes) {
     if (stream != BuildStream::Output) throw std::runtime_error("source is read-only");
-    detail::build_range(offset, bytes.size(), static_cast<uint64_t>(std::numeric_limits<std::streamoff>::max()));
-    detail::build_range(0, bytes.size(), static_cast<uint64_t>(std::numeric_limits<std::streamsize>::max()));
+    detail::build_range(offset, bytes.size, static_cast<uint64_t>(std::numeric_limits<std::streamoff>::max()));
+    detail::build_range(0, bytes.size, static_cast<uint64_t>(std::numeric_limits<std::streamsize>::max()));
     output_.seekp(static_cast<std::streamoff>(offset));
-    output_.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    if (bytes.size != 0) output_.write(reinterpret_cast<const char *>(bytes.data), static_cast<std::streamsize>(bytes.size));
     output_.flush();
     if (!output_) throw std::runtime_error("build stream write failed");
 }
@@ -361,13 +384,13 @@ uint64_t FileBuildHost::length(BuildStream stream) {
     return static_cast<uint64_t>(info.st_size);
 }
 
-void FileBuildHost::write(BuildStream stream, uint64_t offset, const std::vector<uint8_t> &bytes) {
+void FileBuildHost::write(BuildStream stream, uint64_t offset, ConstBytes bytes) {
     if (stream != BuildStream::Output) throw std::runtime_error("source is read-only");
-    detail::build_range(offset, bytes.size(), static_cast<uint64_t>(std::numeric_limits<off_t>::max()));
+    detail::build_range(offset, bytes.size, static_cast<uint64_t>(std::numeric_limits<off_t>::max()));
     size_t completed = 0;
-    while (completed < bytes.size()) {
-        const auto count = ::pwrite(output_, bytes.data() + completed,
-            std::min(bytes.size() - completed, static_cast<size_t>(std::numeric_limits<ssize_t>::max())),
+    while (completed < bytes.size) {
+        const auto count = ::pwrite(output_, bytes.data + completed,
+            std::min(bytes.size - completed, static_cast<size_t>(std::numeric_limits<ssize_t>::max())),
             static_cast<off_t>(offset + completed));
         if (count < 0 && errno == EINTR) continue;
         if (count <= 0) throw std::runtime_error("build file write failed");

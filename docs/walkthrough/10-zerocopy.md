@@ -1,19 +1,20 @@
 # Zero-copy buffers across the Rust/C++ boundary
 
-> **Status: phase 1 implemented and verified.** Signing reads use independent
-> Rust-owned buffer leases while C++ retains all I/O. Immutable write leases
-> remain a separate, deferred phase.
+> **Status: phases 1 and 2 implemented.** Signing reads use independent
+> Rust-owned writable leases; writes use immutable shared leases.
+> C++ retains all I/O and networking.
 
 ## Implementation phases
 
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Independent writable read leases, C ABI ownership transfer, C++ `read_into`, blocking/pooled/coroutine drivers, and lifecycle tests | Implemented |
-| 2 | Immutable write leases and shared payload storage through forwarding layers | Deferred |
+| 2 | Immutable write leases and shared payload storage through forwarding layers | Implemented |
 
 Phase 1 targets the signing workflow's read replies, including output reads
-used for hashing. It does not change reader/validator bindings, transfer
-I/O to Rust, or claim to eliminate write-payload copies.
+used for hashing. Phase 2 removes the Rust-to-C++ write-payload copy and
+reuses shared storage through the Rust forwarding layers. Neither phase
+changes reader/validator bindings or transfers I/O to Rust.
 
 ## Goal
 
@@ -28,8 +29,9 @@ synchronous, sans-I/O state machines.
 Here, "zero-copy" means avoiding the extra application-level payload copy,
 not eliminating the operating system's file-read copy.
 
-Zero-copy read replies use the engine's existing `Vec<u8>` reply types.
-Immutable write leases can follow separately.
+Read leases move a `Vec<u8>` into the session bridge; the bridge converts it
+to the engine's immutable `bytes::Bytes` without copying its payload.
+Writes retain that shared storage through an independent lease.
 
 ## Previous read path
 
@@ -230,9 +232,9 @@ the existing reply types:
 ```text
 ReadBuffer's Vec
     -> Reply::Bytes(vec)
-    -> FileBuilderReply::Bytes(vec)
-    -> BuilderHostReply::AssetBytes(vec)
-    -> hasher.update(&vec)
+    -> FileBuilderReply::Bytes(Bytes::from(vec))
+    -> BuilderHostReply::AssetBytes(bytes)
+    -> hasher.update(&bytes)
 ```
 
 These are ownership moves, not payload copies. The existing forwarding in
@@ -296,35 +298,42 @@ the correct lifecycle the default, including retaining a lease until
 asynchronous I/O has actually stopped, not merely until cancellation
 has been requested.
 
-## Optional second phase: immutable write leases
+## Implemented phase 2: immutable write leases
 
-Read leases eliminate the hashing-input copy. They do not eliminate the
-source-to-output write-payload copies.
-
-To address those, expose immutable owned leases rather than copying Rust
-request payloads into C++ vectors in
-[`describe`](../../contentauth-c2pa-cpp/cpp/src/sign.cpp):
+[`describe`](../../contentauth-c2pa-cpp/cpp/src/sign.cpp) acquires a
+`WriteBuffer` rather than copying a Rust write payload into a C++ vector:
 
 ```text
 Rust-owned immutable buffer
     -> C++ pointer/length lease
     -> pwrite()
-    -> release lease and acknowledge Written
+    -> acknowledge Written and release lease independently
 ```
 
-Storage must be shared between outstanding Rust requests and external
-leases. One suitable representation is `Arc<Vec<u8>>`, constructed by
-moving the existing vector into the shared owner. Cloning this owner
-copies only ownership metadata, not the byte payload. Mutation must be
-prohibited once published.
+The file builder and session bridge already use immutable `bytes::Bytes`;
+phase 2 reuses that representation rather than introducing `Arc<Vec<u8>>`.
+A source-copy read moves its allocation into a write request. Forwarding,
+the ABI's outstanding-write map, and each lease clone only shared ownership,
+not payload bytes.
 
-Propagate shared storage through forwarding layers too; otherwise their
-existing deep clones remain. In particular, audit the file-builder and
-flat session adapter, not just the C++ wrapper.
+The C ABI exposes `c2pa_sm_build_write_acquire` and
+`c2pa_sm_write_buffer_free`. Any outstanding write may have multiple
+immutable leases, including after a later `advance` clears the fresh-request
+batch. Accepted `Written` or failure replies remove the session's retained
+entry; incorrect replies leave it available. Existing leases remain valid
+after acknowledgment, failure, or session destruction.
 
-This is broader than the first-phase read change. Keep the phases
-separate so that removing the read-to-hasher copy does not depend on
-redesigning every payload type.
+In C++, `WriteRequest::bytes` owns a move-only `WriteBuffer`.
+`bytes.view()` returns `ConstBytes { const uint8_t *data, size_t size }`.
+`SyncBuildHost::write(stream, offset, view)` uses that pointer directly:
+the POSIX host calls `pwrite`, the stream host writes from it, and the
+memory host copies it into its output storage as its actual I/O operation.
+
+An asynchronous host must retain the owning request or buffer, not just
+the view, until actual I/O has stopped. Cancellation alone is not I/O
+completion. Releasing a lease does not acknowledge a write; acknowledging
+a write does not release the host's lease. Immutable bytes may be read
+concurrently, but session calls and ownership transfers remain serialized.
 
 ## Verification and acceptance criteria
 
@@ -343,6 +352,15 @@ for a 512 KiB asset, invalid ownership transitions, and completed reads
 after session destruction. Blocking, pooled, and coroutine signing still
 read back as `Trusted`.
 
+Phase 2 validation on macOS passes 126 Rust tests across the ABI, session
+bridge, and file-builder suites, plus all 110 CTest tests/examples in
+plain, ASan, and TSan builds. ABI line coverage is 98.54% overall
+(98.35% for the signing module); all newly added write-lease ABI lines
+are exercised. The 105-test C++ coverage run covers 99.73% of `sign.cpp`
+lines and 99.11% of `sign_async.cpp` lines, with every function in both
+files executed. Formatting, Clippy, rustdoc, and generated-header
+verification pass. Linux-only fault injection remains unrun on macOS.
+
 * **Allocation identity:** the pointer filled by C++ is the allocation
   consumed by Rust before hashing; merely measuring throughput is not
   proof of copy elimination.
@@ -360,7 +378,7 @@ read back as `Trusted`.
 * Signed output still reads back as `Trusted`.
 * ASan and TSan cover lifetime and completion races in the C++ binding;
   Rust tests exercise handle validation and allocation transfer.
-* If immutable write leases land, a large source-copy operation retains
+* A large source-copy operation retains
   its payload allocation through Rust forwarding and the C++ write.
 
 ## Delivered scope and stopping point
@@ -370,5 +388,12 @@ blocking, pooled, and coroutine drivers. This removes the file-read-to-
 hasher copy while preserving the engine's existing owned byte replies
 and the host's control over all I/O and networking.
 
-Implementation stops here. Immutable write leases remain deferred; phase 1
-does not eliminate payload copies throughout the full signing pipeline.
+Phase 2 adds immutable write leases to the same drivers. Tests verify a
+multi-megabyte source's read allocations survive forwarding into writes,
+multiple leases share a pointer, acknowledgment does not revoke storage,
+and delayed C++ writes remain safe after driver cancellation.
+
+Signing input, signature replies, timestamps, certificate/settings data,
+and report serialization remain outside these phases. Operating-system
+I/O and memory-host read/write copies also remain; this is not a claim
+that the entire signing pipeline is copy-free.

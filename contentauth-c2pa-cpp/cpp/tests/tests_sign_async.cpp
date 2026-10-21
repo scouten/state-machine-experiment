@@ -27,6 +27,37 @@ TEST(AsyncSigning, cancelled_driver_keeps_read_storage_alive_until_late_io_finis
     EXPECT_TRUE(host.pending.empty());
 }
 
+TEST(AsyncSigning, cancelled_driver_keeps_write_storage_alive_until_late_io_finishes) {
+    ManualBuildHost host;
+    const uint8_t *pointer = nullptr;
+    std::vector<uint8_t> expected;
+    {
+        Building building(BuildSession(signing_settings()), host);
+        for (;;) {
+            ASSERT_FALSE(building.step());
+            ASSERT_FALSE(host.pending.empty());
+            auto write = std::find_if(host.pending.begin(), host.pending.end(),
+                [](const auto &entry) { return std::holds_alternative<WriteRequest>(entry.first); });
+            if (write != host.pending.end()) {
+                const auto view = std::get<WriteRequest>(write->first).bytes.view();
+                pointer = view.data;
+                expected.assign(view.data, view.data + view.size);
+                break;
+            }
+            host.deliver();
+        }
+    }
+    std::thread late([&] {
+        auto &write = std::get<WriteRequest>(host.pending.front().first);
+        const auto view = write.bytes.view();
+        EXPECT_EQ(view.data, pointer);
+        EXPECT_EQ(std::vector<uint8_t>(view.data, view.data + view.size), expected);
+        host.deliver();
+    });
+    late.join();
+    EXPECT_TRUE(host.pending.empty());
+}
+
 TEST(AsyncSigning, scope_exit_runs_once_after_normal_exit_and_early_return) {
     int calls = 0;
     auto cleanup = [&calls]() noexcept { ++calls; };

@@ -117,6 +117,12 @@ pub struct C2paSmBuildSession {
     done: bool,
     identity: Arc<()>,
     reads: BTreeMap<u64, (u64, Option<Arc<()>>)>,
+    writes: BTreeMap<u64, Bytes>,
+}
+
+/// Immutable write storage, retained independently of its signing session.
+pub struct C2paSmWriteBuffer {
+    _bytes: Bytes,
 }
 
 /// Writable storage owned independently of a signing session.
@@ -289,6 +295,7 @@ pub unsafe extern "C" fn c2pa_sm_build_session_new(
                 done: false,
                 identity: Arc::new(()),
                 reads: BTreeMap::new(),
+                writes: BTreeMap::new(),
             })?;
             Ok(())
         })
@@ -338,6 +345,18 @@ pub unsafe extern "C" fn c2pa_sm_build_session_advance(
                 })
                 .collect();
             session.reads.extend(reads);
+            let writes: Vec<_> = session
+                .fresh
+                .iter()
+                .filter_map(|request| {
+                    if let PendingRequest::Write { id, bytes, .. } = request {
+                        Some((*id, bytes.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            session.writes.extend(writes);
             *out_done = c_int::from(session.done);
             *out_count = session.fresh.len();
             Ok(())
@@ -481,6 +500,72 @@ pub unsafe extern "C" fn c2pa_sm_build_session_fulfill(
                 .fulfill(reply.id, converted)
                 .map_err(|error| Failure::invalid(error.to_string()))?;
             session.reads.remove(&reply.id);
+            session.writes.remove(&reply.id);
+            Ok(())
+        })
+    }
+}
+
+/// Retains an outstanding write's immutable bytes without copying the payload.
+/// Multiple leases may share a write. Storage survives acknowledgment and
+/// session destruction, and must be freed after the host stops using its view.
+///
+/// # Safety
+/// Outputs must be writable and distinct; out_error may be null. Serialize
+/// session calls. Never modify the returned bytes or use them after buffer_free.
+#[no_mangle]
+pub unsafe extern "C" fn c2pa_sm_build_write_acquire(
+    session: *mut C2paSmBuildSession,
+    id: u64,
+    out_buffer: *mut *mut C2paSmWriteBuffer,
+    out_bytes: *mut C2paSmBuffer,
+    out_error: *mut *mut C2paSmError,
+) -> c_int {
+    unsafe {
+        clear(out_buffer);
+        clear(out_error);
+        if !out_bytes.is_null() {
+            *out_bytes = C2paSmBuffer::default();
+        }
+        guard(out_error, || {
+            if out_buffer.is_null() || out_bytes.is_null() {
+                return Err(Failure::invalid("write acquisition output is null"));
+            }
+            let session = cimpl::checkout_exclusive(session).map_err(handle_error)?;
+            let bytes = session
+                .writes
+                .get(&id)
+                .ok_or_else(|| Failure::invalid("not an outstanding write"))?
+                .clone();
+            let view = C2paSmBuffer::borrowed(&bytes);
+            *out_buffer = tracked(C2paSmWriteBuffer { _bytes: bytes })?;
+            *out_bytes = view;
+            Ok(())
+        })
+    }
+}
+
+/// Frees a retained write buffer independently of session lifetime.
+/// Null handles are a no-op; invalid or busy handles remain caller-owned.
+///
+/// # Safety
+/// buffer must be a writable pointer slot; out_error may be null.
+/// All I/O using the view must have stopped before freeing its storage.
+#[no_mangle]
+pub unsafe extern "C" fn c2pa_sm_write_buffer_free(
+    buffer: *mut *mut C2paSmWriteBuffer,
+    out_error: *mut *mut C2paSmError,
+) -> c_int {
+    unsafe {
+        clear(out_error);
+        guard(out_error, || {
+            if buffer.is_null() {
+                return Err(Failure::invalid("buffer is null"));
+            }
+            if !(*buffer).is_null() {
+                drop(cimpl::untrack_owned(*buffer).map_err(handle_error)?);
+                *buffer = std::ptr::null_mut();
+            }
             Ok(())
         })
     }

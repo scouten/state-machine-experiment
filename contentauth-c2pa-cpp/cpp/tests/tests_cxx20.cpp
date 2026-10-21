@@ -384,7 +384,7 @@ TEST(Coroutines, coroutine_signing_cancellation_keeps_owned_requests_and_late_ca
         EXPECT_TRUE(std::holds_alternative<WriteRequest>(host.pending.front().first));
     }
     const auto &write = std::get<WriteRequest>(host.pending.front().first);
-    EXPECT_TRUE(!write.bytes.empty());
+    EXPECT_TRUE(write.bytes.view().size != 0);
     host.deliver();
     EXPECT_TRUE(host.pending.empty());
 }
