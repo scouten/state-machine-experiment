@@ -79,6 +79,13 @@ unreachable authority fails the build.
 
 ## Try it
 
+The [five-platform native CI baseline](../c2pa-node-compat-addon/README.md#five-platform-baseline-ci)
+builds this addon and the reader with Rust 1.96.0 and exercises the same binaries
+under Node 22 and 24, including sign/read-back as Trusted and failure cleanup.
+Set `CARGO_BUILD_TARGET` for an explicit target build; the copy step follows
+Cargo's target-triple output directory. Full SDK parity, npm distribution and
+minimum-OS support certification are outside this baseline.
+
 ```sh
 npm run build   # cargo build --release, then copies the cdylib to index.node
 npm test        # 10 tests under node:test

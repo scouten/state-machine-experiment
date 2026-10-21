@@ -1,5 +1,11 @@
 # 2. Architecture
 
+The two compatibility Neon addons have separate Cargo workspaces and are not
+covered by root workspace tests. [Native Node platform CI](../../.github/workflows/node-platforms.yml)
+builds both on Linux x64/ARM64, macOS Intel/Apple Silicon, and Windows x64,
+then loads and exercises the same binaries under Node 22 and 24. This is a
+read/sign platform baseline, not full SDK parity or distribution certification.
+
 About twenty crates sounds like a lot. They fall into layers, and the rule
 that organizes them is: **each layer knows nothing about the ones above it,
 and the reader, builder and format handlers know nothing about each other.**
