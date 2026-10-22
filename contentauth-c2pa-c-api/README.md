@@ -80,7 +80,8 @@ String cleanup rejects non-string handles without destroying their owners.
 
 Sessions may move between threads, but a host must serialize operations on
 each session and all use of borrowed request views. Request borrows end at the
-next advance, fulfill, finish or free. Immutable readers/reports support shared
+next advance, fulfill, finish or free; read/write lease acquisition preserves
+these views. Immutable readers/reports support shared
 access, but their storage must not be freed while borrowed views are in use.
 Panics in fallible boundary operations become owned panic errors.
 
@@ -93,7 +94,9 @@ I/O and writable access stops, `c2pa_sm_read_seal` consumes/nulls the lease and
 returns a completed read. `c2pa_sm_build_fulfill_read` moves that allocation into
 its original session/request without copying. Rejected counts, IDs, wrong
 sessions or busy handles preserve ownership; successful transitions null the
-input handle. Abandoned and completed storage can be freed after cancellation.
+input handle. Fulfillment rejected after session failure also preserves the
+completed handle and its payload. Abandoned and completed storage can be freed
+after cancellation.
 
 `c2pa_sm_build_write_acquire` retains an outstanding write's **immutable** bytes.
 Multiple leases share the same storage. They survive write acknowledgment,

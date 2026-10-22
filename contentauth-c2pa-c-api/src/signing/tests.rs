@@ -1027,6 +1027,9 @@ fn read_leases_validate_counts_ids_and_sessions_without_consuming_on_error() {
     let other_r = other.first_read();
     let mut l = b.acquire(r.id).unwrap();
     let h = l.raw;
+    let view = b.request(0).unwrap();
+    assert_eq!(view.id, r.id);
+    assert_eq!(view.len, r.len);
     assert!(b.acquire(r.id).is_err());
     assert!(b.acquire(u64::MAX).is_err());
     for n in [l.view.len + 1, l.view.len - 1] {
@@ -1100,6 +1103,88 @@ fn abandoning_or_failing_a_read_does_not_reissue_its_lease() {
     }
 }
 #[test]
+fn failed_advance_preserves_a_sealed_sibling_read() {
+    let b = Build::new(BASELINE_DEFINITION);
+    let mut source = SOURCE_JPEG.to_vec();
+    source.resize(512 * 1024, 0);
+    let mut output = Vec::new();
+    let (r, sibling) = loop {
+        let (done, count) = b.advance().unwrap();
+        assert!(!done);
+        assert!(count > 0);
+        let batch: Vec<_> = (0..count)
+            .map(|index| {
+                let request = b.request(index).unwrap();
+                let data = unsafe { request.data.bytes().unwrap() }.to_vec();
+                (request, data)
+            })
+            .collect();
+        let reads: Vec<_> = batch
+            .iter()
+            .filter(|(request, _)| request.kind == 0)
+            .collect();
+        if reads.len() > 1 {
+            break (reads[0].0, reads[1].0.id);
+        }
+        for (request, data) in batch {
+            let mut reply = C2paSmBuildReply {
+                id: request.id,
+                ..Default::default()
+            };
+            match request.kind {
+                0 => {
+                    let bytes = if request.stream == 0 {
+                        &source
+                    } else {
+                        &output
+                    };
+                    reply.kind = 0;
+                    reply.data = C2paSmBuffer::borrowed(
+                        &bytes[request.offset as usize..(request.offset + request.len) as usize],
+                    );
+                }
+                1 => {
+                    reply.kind = 1;
+                    reply.value = source.len() as u64;
+                }
+                2 => {
+                    let start = request.offset as usize;
+                    output.resize(output.len().max(start + data.len()), 0);
+                    output[start..start + data.len()].copy_from_slice(&data);
+                    reply.kind = 2;
+                }
+                _ => panic!("expected concurrent reads before signing"),
+            }
+            b.fulfill(reply).unwrap();
+        }
+    };
+    let mut lease = b.acquire(r.id).unwrap();
+    let allocation = lease.view.data;
+    let len = lease.view.len;
+    unsafe { std::slice::from_raw_parts_mut(allocation, len) }.fill(42);
+    let mut completed = lease.seal(len).unwrap();
+    let handle = completed.0;
+    b.fulfill(C2paSmBuildReply {
+        kind: C2paSmBuildReplyKind::C2PA_SM_BUILD_REPLY_FAILED as c_int,
+        id: sibling,
+        data: C2paSmBuffer::borrowed(b"host unavailable"),
+        ..Default::default()
+    })
+    .unwrap();
+    assert!(b.advance().is_err());
+    for _ in 0..2 {
+        let (code, message) = b.fulfill_read(r.id, &mut completed).unwrap_err();
+        assert_eq!(code, C2PA_SM_ERR_INVALID_ARGUMENT);
+        assert!(message.contains("session failed"));
+        assert_eq!(completed.0, handle);
+        let read = cimpl::checkout_exclusive(completed.0).unwrap();
+        let bytes = &read.buffer.as_ref().unwrap().bytes;
+        assert_eq!(bytes.as_ptr(), allocation);
+        assert_eq!(bytes.len(), len);
+        assert!(bytes.iter().all(|&byte| byte == 42));
+    }
+}
+#[test]
 fn leased_hash_reads_complete_out_of_order_for_a_large_asset() {
     let mut source = SOURCE_JPEG.to_vec();
     source.resize(512 * 1024, 0);
@@ -1169,9 +1254,10 @@ fn write_leases_share_storage_and_survive_acknowledgment_and_session_destruction
     let (l, another, expected) = {
         let b = Build::new(BASELINE_DEFINITION);
         let r = first_write(&b);
+        let expected = unsafe { r.data.bytes().unwrap() }.to_vec();
         let l = WriteLease::acquire(&b, r.id).unwrap();
         assert_eq!(l.view.data, r.data.data);
-        let expected = unsafe { l.view.bytes().unwrap() }.to_vec();
+        assert_eq!(unsafe { r.data.bytes().unwrap() }, expected);
         assert!(!b.advance().unwrap().0);
         let another = WriteLease::acquire(&b, r.id).unwrap();
         assert_eq!(l.view.data, another.view.data);

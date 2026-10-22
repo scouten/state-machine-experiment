@@ -116,6 +116,7 @@ pub struct C2paSmBuildSession {
     inner: BuildSessionBridge,
     fresh: Vec<PendingRequest>,
     done: bool,
+    failed: bool,
     identity: Arc<()>,
     reads: BTreeMap<u64, (u64, Option<Arc<()>>)>,
     writes: BTreeMap<u64, Bytes>,
@@ -260,6 +261,7 @@ pub unsafe extern "C" fn c2pa_sm_build_session_new(
             let algorithm = utf8(algorithm, "algorithm")?;
             if cert_count == 0
                 || certs.is_null()
+                || !certs.is_aligned()
                 || cert_count > isize::MAX as usize / std::mem::size_of::<C2paSmBuffer>()
             {
                 return Err(Failure::invalid("invalid certificate array"));
@@ -278,6 +280,7 @@ pub unsafe extern "C" fn c2pa_sm_build_session_new(
                 inner,
                 fresh: Vec::new(),
                 done: false,
+                failed: false,
                 identity: Arc::new(()),
                 reads: BTreeMap::new(),
                 writes: BTreeMap::new(),
@@ -314,7 +317,14 @@ pub unsafe extern "C" fn c2pa_sm_build_session_advance(
             }
             let mut session = cimpl::checkout_exclusive(session).map_err(handle_error)?;
             session.fresh.clear();
-            match session.inner.advance()? {
+            let step = match session.inner.advance() {
+                Ok(step) => step,
+                Err(error) => {
+                    session.failed = true;
+                    return Err(error.into());
+                }
+            };
+            match step {
                 Step::Complete => session.done = true,
                 Step::Pending(requests) => session.fresh = requests,
             }
@@ -399,7 +409,8 @@ fn stream_id(stream: Stream) -> c_int {
     }
 }
 
-/// Copies a descriptor. Copy borrowed payloads before mutating the session.
+/// Copies a descriptor. Borrowed payloads remain valid until the next advance,
+/// fulfill, finish or free. Read/write lease acquisition preserves these views.
 ///
 /// # Safety
 /// out writable, out_error null or writable; serialize session mutations
@@ -489,6 +500,7 @@ pub unsafe extern "C" fn c2pa_sm_build_session_fulfill(
 
 /// Retains immutable write bytes without copying. Multiple leases may share
 /// storage; each survives acknowledgment and session destruction.
+/// Preserves borrowed request views.
 ///
 /// # Safety
 /// Outputs writable and distinct; out_error null or writable. Serialize session
@@ -551,6 +563,7 @@ pub unsafe extern "C" fn c2pa_sm_write_buffer_free(
 
 /// Acquires fallibly allocated, initialized storage for an outstanding read.
 /// Each request can acquire only one lease, even after abandonment.
+/// Preserves borrowed request views.
 ///
 /// # Safety
 /// Outputs writable and distinct, out_error null or writable. Serialize session
@@ -651,7 +664,8 @@ pub unsafe extern "C" fn c2pa_sm_read_seal(
 }
 
 /// Moves sealed storage into its original request without copying.
-/// Invalid sessions/requests preserve the completed handle.
+/// Rejected fulfillment, including after session failure, preserves the completed
+/// handle and its payload.
 ///
 /// # Safety
 /// completed writable, out_error null or writable. Serialize session operations
@@ -670,6 +684,9 @@ pub unsafe extern "C" fn c2pa_sm_build_fulfill_read(
                 return Err(Failure::invalid("completed is null"));
             }
             let mut session = cimpl::checkout_exclusive(session).map_err(handle_error)?;
+            if session.failed {
+                return Err(Failure::invalid("session failed on an earlier call"));
+            }
             let mut read = cimpl::checkout_exclusive(*completed).map_err(handle_error)?;
             let lease = read
                 .buffer

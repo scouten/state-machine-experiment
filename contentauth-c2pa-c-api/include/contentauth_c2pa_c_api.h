@@ -604,7 +604,8 @@ int c2pa_sm_build_session_advance(struct C2paSmBuildSession *session,
                                   struct C2paSmError **out_error);
 
 /**
- * Copies a descriptor. Copy borrowed payloads before mutating the session.
+ * Copies a descriptor. Borrowed payloads remain valid until the next advance,
+ * fulfill, finish or free. Read/write lease acquisition preserves these views.
  *
  * # Safety
  * out writable, out_error null or writable; serialize session mutations
@@ -630,6 +631,7 @@ int c2pa_sm_build_session_fulfill(struct C2paSmBuildSession *session,
 /**
  * Retains immutable write bytes without copying. Multiple leases may share
  * storage; each survives acknowledgment and session destruction.
+ * Preserves borrowed request views.
  *
  * # Safety
  * Outputs writable and distinct; out_error null or writable. Serialize session
@@ -652,6 +654,7 @@ int c2pa_sm_write_buffer_free(struct C2paSmWriteBuffer **buffer, struct C2paSmEr
 /**
  * Acquires fallibly allocated, initialized storage for an outstanding read.
  * Each request can acquire only one lease, even after abandonment.
+ * Preserves borrowed request views.
  *
  * # Safety
  * Outputs writable and distinct, out_error null or writable. Serialize session
@@ -678,7 +681,8 @@ int c2pa_sm_read_seal(struct C2paSmReadBuffer **buffer,
 
 /**
  * Moves sealed storage into its original request without copying.
- * Invalid sessions/requests preserve the completed handle.
+ * Rejected fulfillment, including after session failure, preserves the completed
+ * handle and its payload.
  *
  * # Safety
  * completed writable, out_error null or writable. Serialize session operations

@@ -60,6 +60,34 @@ fn build_format_aliases_select_registered_handlers() {
     }
 }
 #[test]
+fn certificate_arrays_reject_null_misaligned_and_oversized_inputs() {
+    let definition = CString::new(BASELINE_DEFINITION).unwrap();
+    let storage = [C2paSmBuffer::borrowed(TEST_SIGNER_CERT); 2];
+    let misaligned = unsafe { storage.as_ptr().cast::<u8>().add(1) }.cast::<C2paSmBuffer>();
+    assert!(!misaligned.is_aligned());
+    for (certs, count) in [
+        (ptr::null(), 1),
+        (misaligned, 1),
+        (storage.as_ptr(), usize::MAX),
+    ] {
+        let mut session = ptr::dangling_mut();
+        unsafe {
+            invalid(|error| {
+                c2pa_sm_build_session_new(
+                    definition.as_ptr(),
+                    c"jpeg".as_ptr(),
+                    c"es256".as_ptr(),
+                    certs,
+                    count,
+                    &mut session,
+                    error,
+                )
+            })
+        };
+        assert!(session.is_null());
+    }
+}
+#[test]
 fn empty_certificate_chain_and_entries_are_rejected_at_construction() {
     let def = CString::new(BASELINE_DEFINITION).unwrap();
     for (cert, count) in [
