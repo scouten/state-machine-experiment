@@ -79,6 +79,8 @@ changes. Choose formats for *what they exercise*, as TIFF did:
   atomic file failure tests and a runnable signing/read-back example included
   in the coverage and sanitizer CI matrix. Concurrent destruction of a running
   coroutine is not supported; its documented host-lifetime rules still apply.
+  The threading, cancellation and future claims for both workflows are
+  measured on this binding in [C++ workflow evaluation](10-cpp-evaluation.md).
 * **`Builder` surface parity** for the c2pa-rs shape beyond the baseline
   case; `from_stream` and other constructors.
 * **c2pa-node:** `fromManifestDataAndAsset`, `resourceToAsset`, signers,
@@ -110,8 +112,13 @@ changes. Choose formats for *what they exercise*, as TIFF did:
   `Reply` data model is the right wire format.
 * **A WIT / Wasm component** exposing `advance`/`fulfill`/`finish` as the
   language-neutral form of the contract.
-* **Cancellation and progress** — c2pa-rs's `Context` has them; here they'd
-  be natural (stop calling `advance`; observe requests) but untested.
+* **Cancellation and progress** — the no-callback model (cancel = destruction,
+  progress = observe between steps) is now exercised for both workflows in
+  [C++ workflow evaluation](10-cpp-evaluation.md), where c2pa-rs's `Context`
+  callbacks become host observation between `advance` steps. Two caveats
+  remain open: the engine offers no *structured* progress (percent / phase),
+  and cancellation granularity is the request boundary (a dispatched read or
+  OCSP/timestamp round trip still completes in the host).
 
 ## 5. Proof at scale
 
