@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=77", "cffi>=1.17.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "contentauth-c2pa-python"
+version = "0.1.0"
+description = "Experimental Python bindings for the sans-I/O C2PA sessions"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT OR Apache-2.0"
+dependencies = ["cffi>=1.17.1"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-cov>=6", "mypy>=1.14", "setuptools>=77"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+contentauth_c2pa = ["py.typed", "*.pyi"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-config --strict-markers"
+
+[tool.coverage.run]
+branch = true
+source = ["contentauth_c2pa", "_build", "_package_setup"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 100
+
+[tool.mypy]
+strict = true
+files = ["src/contentauth_c2pa"]

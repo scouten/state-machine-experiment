@@ -33,6 +33,11 @@ New here? [`docs/walkthrough`](docs/walkthrough/README.md) is a guided tour —
 how this differs from c2pa-rs and its bindings, the architecture, and
 where it could go next — written in Markdown with Mermaid diagrams.
 
+For the Python binding foundation, see
+[`contentauth-c2pa-python`](contentauth-c2pa-python/README.md). Its compiled CFFI
+adapter links the canonical C API and exposes a native-version smoke test;
+Python session, reading and signing APIs are not implemented yet.
+
 ## Crates
 
 * [`contentauth-state-machine`](contentauth-state-machine) — the

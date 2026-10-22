@@ -117,7 +117,13 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 * **Browser:** a `fetch`-backed OCSP `Platform`; the existing async `web`
   modules still have no browser CI coverage. The shared-host browser CI runs
   the synchronous Wasm session boundary, not those alternative modules.
-* **Other host languages** — Python, Swift, Kotlin, .NET: the Node binding
+* **Python foundation:** the standalone
+  [`contentauth-c2pa-python`](../../contentauth-c2pa-python/) package now builds a
+  compiled CFFI adapter over the canonical C API, with a typed native-version
+  function and install/import smoke tests. Next: read/build sessions, blocking
+  hosts, asyncio and cancellation, buffer leases, and distribution CI. No Python
+  reading or signing workflow is implemented yet.
+* **Other host languages** — Swift, Kotlin, .NET: the Node binding
   shows the minimal shape (a handful of synchronous functions plus a host
   loop). Each is a good test of whether the flattened `PendingRequest`/
   `Reply` data model is the right wire format.

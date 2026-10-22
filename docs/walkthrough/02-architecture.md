@@ -9,7 +9,8 @@ and the reader, builder and format handlers know nothing about each other.**
 Arrows point from a crate to what it depends on. Dashed edges include the
 standalone Wasm and Neon bindings, plus the standalone JavaScript package.
 The C++ reader/signing binding is a consumer of the canonical C API, which wraps the bridges. The outlined
-Python node and its dotted edge indicate prospective reuse only.
+Python node indicates a compiled CFFI foundation only; session APIs remain
+prospective.
 
 ```mermaid
 flowchart BT
@@ -39,7 +40,7 @@ flowchart BT
     PN["c2pa-node-compat-addon<br/><i>existing Neon boundary</i>"]
     PNS["c2pa-node-sign-addon<br/><i>existing signing Neon boundary</i>"]
     CPP["contentauth-c2pa-cpp<br/><i>C++ over the canonical C API</i>"]
-    PY["POSSIBLE: Python host + binding adapter<br/><i>not implemented or tested</i>"]
+    PY["Python CFFI foundation<br/><i>native version only; sessions prospective</i>"]
     CAPI["c2pa-c-api<br/><i>canonical C ABI + buffer leases</i>"]
 
     RD --> SM & PR
@@ -61,7 +62,7 @@ flowchart BT
     PN -.-> BR
     PNS -.-> BR
     CPP -->|"links (CMake)"| CAPI
-    PY -.->|"could drive same bridge protocol"| BR
+    PY -.->|"links (CFFI); native version only"| CAPI
     CAPI --> BR
 
     classDef engine fill:#dbeafe,stroke:#2563eb,color:#000
@@ -117,6 +118,7 @@ flowchart TB
 
 | Crate | Layer | What it is |
 |---|---|---|
+| `contentauth-c2pa-python` | Binding foundation | Standalone Python package; compiled CFFI over the C API, currently exposing only the native version. Session APIs remain prospective. |
 | `contentauth-state-machine` | Foundation | The engine: `Session`, `SessionCore`, request tracking, protocol errors. Domain-agnostic. |
 | `contentauth-c2pa-primitives` | Foundation | The narrow shared slice: `StreamId`, `ByteRange`, hash/signing algorithms, `HostError`, COSE `Sig_structure`, RFC 3161 encode/unwrap. |
 | `contentauth-c2pa-reader` | Workflow | `ReadSession`: JUMBF, claims (v1+v2), integrity, signature, trust, timestamps, OCSP, CAWG identity assertions (X.509). |
