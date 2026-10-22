@@ -35,3 +35,24 @@ fail_under = 100
 [tool.mypy]
 strict = true
 files = ["src/contentauth_c2pa"]
+
+# Wheels are built from the *repository root* (`cibuildwheel` with `package-dir`), because
+# the build compiles the workspace's C API with cargo. See `.github/workflows/python-wheels.yml`.
+[tool.cibuildwheel]
+build = "cp311-* cp312-* cp313-*"
+build-verbosity = 1
+test-requires = ["pytest>=8", "cryptography>=44"]
+# The tests read fixtures from sibling crates, which the build containers mount whole.
+test-command = "cd {package} && python -m pytest -q -p no:cacheprovider"
+
+[tool.cibuildwheel.linux]
+before-all = "curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal"
+environment = { PATH = "$HOME/.cargo/bin:$PATH" }
+
+[tool.cibuildwheel.macos]
+environment = { MACOSX_DEPLOYMENT_TARGET = "11.0" }
+
+[[tool.cibuildwheel.overrides]]
+select = "*-macosx_x86_64"
+inherit.environment = "append"
+environment = { MACOSX_DEPLOYMENT_TARGET = "10.15" }

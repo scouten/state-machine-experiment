@@ -1,0 +1,86 @@
+# Builds and tests the Python binding's wheels across the platform matrix.
+#
+# This is the distribution half of the Python story: `ci.yml`'s `python-binding` job
+# proves the package on every PR; this workflow produces the wheels a user would install
+# and runs the test suite against each *installed* wheel inside its own build environment
+# (the manylinux/musllinux containers, or the runner for macOS). Nothing is published: the
+# wheels are uploaded as workflow artifacts for a maintainer to inspect.
+#
+# Linux wheels are built natively on x86_64 and aarch64 runners (no emulation), against
+# manylinux_2_28 and musllinux_1_2. macOS covers Apple silicon and Intel. Windows is not
+# supported yet: the file hosts use POSIX calls (see the package README).
+
+name: Python wheels
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "python-v*"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/python-wheels.yml"
+      - "contentauth-c2pa-python/pyproject.toml"
+      - "contentauth-c2pa-python/setup.py"
+      - "contentauth-c2pa-python/_build.py"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wheels:
+    name: Wheels (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            os: ubuntu-latest
+            platform: linux
+            archs: x86_64
+          - name: Linux aarch64
+            os: ubuntu-24.04-arm
+            platform: linux
+            archs: aarch64
+          - name: macOS arm64
+            os: macos-latest
+            platform: macos
+            archs: arm64
+          - name: macOS x86_64
+            os: macos-15-intel
+            platform: macos
+            archs: x86_64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust toolchain
+        if: matrix.platform == 'macos'
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master@2026-06-30
+        with:
+          toolchain: stable
+
+      # Run from the repository root: the build compiles the workspace's C API, so the
+      # whole checkout must be visible to it. `before-all` installs Rust in Linux containers.
+      - name: Build and test wheels
+        uses: pypa/cibuildwheel@b9e566a2b284570af229f6c2a33673410d0389a3 # v4.3.4
+        with:
+          package-dir: contentauth-c2pa-python
+          output-dir: wheelhouse
+        env:
+          CIBW_PLATFORM: ${{ matrix.platform }}
+          CIBW_ARCHS: ${{ matrix.archs }}
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wheels-${{ matrix.platform }}-${{ matrix.archs }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
