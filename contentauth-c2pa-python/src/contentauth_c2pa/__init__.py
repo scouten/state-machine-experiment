@@ -7,7 +7,29 @@ and `finish()` consumes the session for its result. Sessions never perform I/O.
 
 from ._native import ffi as _ffi, lib as _lib
 from .build import BuildSession
+from .drive import (
+    ReadSource,
+    answer_build,
+    answer_read,
+    drive_build,
+    drive_read,
+    read_asset,
+    sign_file,
+)
 from .errors import C2paError, ClosedError, ErrorCode
+from .hosts import (
+    BuildHost,
+    BytesReadHost,
+    Clock,
+    FileBuildHost,
+    MemoryBuildHost,
+    OcspTransport,
+    ReadHost,
+    Signer,
+    StreamBuildHost,
+    StreamReadHost,
+    Timestamper,
+)
 from .read import Reader, ReadSession, ValidationState
 from .vocab import (
     Buffer,
@@ -41,6 +63,7 @@ from .vocab import (
 
 __all__ = [
     "Buffer",
+    "BuildHost",
     "BuildLengthRequest",
     "BuildReadRequest",
     "BuildReply",
@@ -49,32 +72,49 @@ __all__ = [
     "BuildStep",
     "BuildStream",
     "Bytes",
+    "BytesReadHost",
     "C2paError",
+    "Clock",
     "ClosedError",
     "ErrorCode",
     "Exclusion",
     "Failed",
+    "FileBuildHost",
     "Length",
     "LengthRequest",
+    "MemoryBuildHost",
     "Ocsp",
     "OcspRequest",
+    "OcspTransport",
+    "ReadHost",
     "ReadRequest",
     "ReadSession",
+    "ReadSource",
     "Reader",
     "Reply",
     "Request",
     "SignReport",
     "SignRequest",
     "Signature",
+    "Signer",
     "Step",
+    "StreamBuildHost",
+    "StreamReadHost",
     "Time",
     "TimeRequest",
     "TimestampRequest",
     "TimestampResponse",
+    "Timestamper",
     "ValidationState",
     "WriteRequest",
     "Written",
+    "answer_build",
+    "answer_read",
+    "drive_build",
+    "drive_read",
     "native_version",
+    "read_asset",
+    "sign_file",
 ]
 
 

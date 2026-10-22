@@ -4,13 +4,81 @@ Experimental Python bindings over the [canonical C API](../contentauth-c2pa-c-ap
 following the [C++ binding](../contentauth-c2pa-cpp/) architecture. This is a
 standalone Python package, not a Cargo workspace member or a C++ wrapper.
 
-## Current scope: phase 2 — low-level sessions
+## Current scope: phase 3 — blocking hosts and file signing
 
 The compiled CFFI adapter statically links the existing Rust C API and exposes its
-two sans-I/O workflows as typed Python sessions, with no host drivers yet. A session
-never performs I/O: `advance()` reports the requests it needs answered, the caller
-services **any subset, in any order**, reports each with `fulfill()`, and `finish()`
-consumes the session for its result.
+two sans-I/O workflows as typed Python sessions, plus blocking drivers for the common
+case of synchronous access. Most callers need only the first two functions below.
+
+### Reading
+
+```python
+import contentauth_c2pa as c2pa
+
+reader = c2pa.read_asset("photo.jpg")          # bytes, a seekable stream, or a path
+if reader is None:
+    print("no Content Credentials")
+else:
+    print(reader.validation_state(), reader.json())
+```
+
+`read_asset(source, format=None, settings_json=None, *, clock=None, ocsp=None)` returns
+`None` for an asset without a manifest store and raises `C2paError` for a malformed one.
+A path's own extension is the default `format`; for bytes or a stream you must say what it
+is, because the caller, not the library, decides that. The **clock is the host's**:
+validation is a function of the asset and the time you supply (the system clock by
+default). With no `ocsp` transport, online revocation checks see an unreachable responder,
+which the engine treats as fail-open; a transport is `(url, request) -> response`.
+Trust anchors go in `settings_json`.
+
+### Signing
+
+```python
+import contentauth_c2pa as c2pa
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+
+key = serialization.load_pem_private_key(open("key.pem", "rb").read(), password=None)
+
+def signer(algorithm: str, data: bytes) -> bytes:   # `data` is the COSE Sig_structure
+    r, s = decode_dss_signature(key.sign(data, ec.ECDSA(hashes.SHA256())))
+    return r.to_bytes(32, "big") + s.to_bytes(32, "big")   # raw r || s, not DER
+
+report = c2pa.sign_file(
+    "in.jpg", "out.jpg",
+    definition_json=open("definition.json").read(),
+    certificates=[open("signer.der", "rb").read()],        # DER chain, leaf first
+    signer=signer,
+)
+```
+
+`sign_file` publishes **atomically**: the output is built in a freshly and exclusively
+created temporary file with an unpredictable name beside the destination, and renamed into
+place only after the build succeeds. A failed or interrupted build never changes an
+existing destination or leaves debris, and `destination` may equal `source`. The output
+takes the source's permission bits, and a symlink destination is replaced rather than
+followed. The key never reaches the native library; `timestamper(url, body)` answers an
+RFC 3161 request with the complete DER `TimeStampResp`, and a definition requesting a
+timestamp fails the build rather than silently omitting it when none is given. When a host
+callback fails, the resulting `C2paError` is chained (`__cause__`) to the real exception.
+Publication is POSIX-only and does not fsync the containing directory.
+
+### Hosts and drivers
+
+| Surface | Purpose |
+|---|---|
+| `drive_read(session, host)`, `drive_build(session, host)` | The blocking drivers: answer every request from a host until done. They stop a session that reports no progress; after a failure the session is yours to close (use `with`) |
+| `ReadHost` → `BytesReadHost`, `StreamReadHost` | The asset, the clock and OCSP. Subclass for other storage; `read` must return *exactly* the bytes asked for |
+| `BuildHost` → `MemoryBuildHost`, `StreamBuildHost`, `FileBuildHost` | Source, output, key and timestamp authority. `StreamBuildHost` needs two distinct seekable streams and an empty output; `FileBuildHost` is the atomic file host |
+| `answer_read`, `answer_build` | Answer one request; any `Exception` from the host becomes a `Failed` reply so the engine decides what that means. `KeyboardInterrupt` and `SystemExit` propagate |
+
+## Low-level sessions
+
+A session never performs I/O: `advance()` reports the requests it needs answered, the
+caller services **any subset, in any order**, reports each with `fulfill()`, and
+`finish()` consumes the session for its result. The drivers above are built on exactly
+this; a host with async, remote or cached access can drive a session directly.
 
 ```python
 from contentauth_c2pa import (
@@ -61,10 +129,10 @@ Contracts preserved from the C API:
 Ownership is deterministic: `close()` or a `with` block releases the native handle,
 and is safe to repeat. A finalizer is only a safety net for sessions that are dropped.
 
-Not implemented yet: blocking/file hosts, asyncio, lease-backed zero-copy buffers
-(replies and write payloads are copied) and production distribution. They remain
-separate, approval-gated phases. `native_version()` still returns the linked native
-library version.
+Not implemented yet: asyncio, lease-backed zero-copy buffers (replies and write
+payloads are copied), Windows support, an HTTP transport for OCSP or timestamps (callbacks
+only) and production distribution. They remain separate, approval-gated phases.
+`native_version()` returns the linked native library version.
 
 ### Known engine behavior
 
@@ -125,7 +193,11 @@ rejected replies; failed signing, writing and timestamping; early finish, reuse
 after finish, repeated close and finalizer cleanup; and threaded use. Native
 request kinds that cannot be provoked offline (OCSP, timestamp) are exercised
 through synthetic descriptors, and the Python enums are checked against the header's
-constants so they cannot drift. The wheel/import tests still import from outside the
+constants so they cannot drift. Host and driver tests cover each host's bounds,
+short-read and partial-write handling; descriptor and temporary-file hygiene when a
+build fails, is interrupted, or cannot publish; a signed asset being byte-identical
+across the memory, stream and file hosts; host-failure chaining; stalled sessions; and
+concurrent file signing. The wheel/import tests still import from outside the
 checkout in isolated Python mode with an empty executable search path (no Cargo or
 compiler available). Build-helper tests cover header extraction, platform selection,
 Cargo invocation/failure propagation, and rejection of unsupported source
@@ -133,7 +205,6 @@ distributions. Test-only dependency: `cryptography`, as the example signer.
 
 ## Next phases
 
-3. Blocking reading/signing hosts, including atomic file output.
 4. Native asyncio drivers and cancellation-safe host operations.
 5. Lease-backed buffer optimizations and measurements.
 6. Broader integration coverage, CI and distributable wheel certification.
