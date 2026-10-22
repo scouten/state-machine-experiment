@@ -387,5 +387,4 @@ pub unsafe extern "C" fn c2pa_sm_reader_is_embedded(reader: *const C2paSmReader)
 }
 
 #[cfg(test)]
-#[path = "tests.rs"]
 pub(crate) mod tests;

@@ -51,7 +51,7 @@ The relevant implementation points are:
   now reads directly into the Rust-owned destination.
 * [`BuildSession::fulfill`](../../contentauth-c2pa-cpp/src/signing/sign.cpp):
   now transfers a completed lease for read replies.
-* [`reply_value`](../../contentauth-c2pa-c-api/src/signing.rs):
+* [`reply_value`](../../contentauth-c2pa-c-api/src/signing/mod.rs):
   still copies incoming bytes on the unleased C reply path.
 * [`HashStream`](../../contentauth-c2pa-builder/src/hash_stream.rs):
   consumes owned chunks and passes borrowed slices to the hasher.
@@ -244,7 +244,7 @@ moves byte replies, and
 borrowed slices.
 
 The new lease fulfillment path bypasses the read-reply `.to_vec()` in
-[`reply_value`](../../contentauth-c2pa-c-api/src/signing.rs), without
+[`reply_value`](../../contentauth-c2pa-c-api/src/signing/mod.rs), without
 requiring a new byte-storage abstraction throughout the engine.
 
 Phase 1 uses initialized storage with fallible allocation and explicit

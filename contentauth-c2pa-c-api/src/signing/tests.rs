@@ -1367,4 +1367,7 @@ fn failed_writes_release_session_ownership_without_revoking_host_storage() {
     assert_eq!(unsafe { l.view.bytes().unwrap() }, expected);
 }
 
-mod consolidation;
+mod constructor;
+mod handles;
+mod replies;
+mod report;

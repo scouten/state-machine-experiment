@@ -224,5 +224,7 @@ pub unsafe extern "C" fn c2pa_sm_error_free(error: *mut C2paSmError) {
     let _ = cimpl::untrack_owned(error);
 }
 
+#[cfg(all(test, feature = "read", feature = "build"))]
+mod roundtrip;
 #[cfg(test)]
-mod common_tests;
+mod tests;

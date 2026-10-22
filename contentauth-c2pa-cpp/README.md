@@ -297,7 +297,7 @@ test runner to flush the child process's profile.
 Phase 1 supplies C++17 value types in `include/contentauth/c2pa_sm_sign.hpp`.
 Phase 2 supplies the signing C ABI, now the canonical
 [`contentauth_c2pa_c_api.h`](../contentauth-c2pa-c-api/include/contentauth_c2pa_c_api.h),
-implemented in [`contentauth-c2pa-c-api`](../contentauth-c2pa-c-api/src/signing.rs)
+implemented in [`contentauth-c2pa-c-api`](../contentauth-c2pa-c-api/src/signing/mod.rs)
 over cimpl 0.4.1. Phase 3 adds the move-only
 C++17 `BuildSession`, blocking `build_and_sign`, and memory, seekable-stream,
 and POSIX atomic-file host declarations in the same C++ header. Their

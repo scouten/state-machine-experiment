@@ -18,8 +18,8 @@ Both `read` and `build` are enabled by default and independently select exports.
 
 | Feature | Exports | Implementation |
 |---|---|---|
-| `read` | `c2pa_sm_session_*`, `c2pa_sm_reader_*`, read request/reply types | `src/reading.rs` |
-| `build` | `c2pa_sm_build_session_*`, lease operations and sign reports | `src/signing.rs` |
+| `read` | `c2pa_sm_session_*`, `c2pa_sm_reader_*`, read request/reply types | `src/reading/` |
+| `build` | `c2pa_sm_build_session_*`, lease operations and sign reports | `src/signing/` |
 | neither | version, owned errors and string cleanup | `src/lib.rs` |
 
 Either workflow enables the optional shared bridge dependency. The bridge
@@ -117,12 +117,18 @@ the OCSP URL/body just like any other request. Tests exercise authenticated
 good/revoked responses, malformed bodies and an unreachable responder without
 network access, and distinguish their exact validation statuses.
 
-The migrated characterization tests live in `src/tests.rs`,
-`src/signing/tests.rs` and `src/signing/tests/consolidation.rs`; common tracked
-ownership/panic tests are in `src/common_tests.rs`. They cover the proven ABI
-scenarios, its explicit canonical constructor differences, busy/stale/wrong-type
-handles, rejected-operation ownership, cross-thread movement, allocation reuse,
-timestamps, exact baseline manifest fields and JPEG/TIFF/DNG round trips.
+Tests that need the crate's internals sit beside the code they test:
+`src/tests.rs` (common tracked ownership and panic behavior),
+`src/reading/tests.rs`, and `src/signing/tests.rs` with topic files under
+`src/signing/tests/` (`constructor`, `replies`, `report`, `handles`). They cover
+the proven ABI scenarios, its explicit canonical constructor differences,
+busy/stale/wrong-type handles, rejected-operation ownership, cross-thread
+movement and allocation reuse. `src/roundtrip/` signs and reads back using only
+exported functions and types, as a C host would, and checks timestamps, exact
+baseline manifest fields, OCSP outcomes and JPEG/TIFF/DNG round trips. It lives
+in the crate rather than `tests/` because an integration-test binary links a
+second instrumented copy of the `#[no_mangle]` exports, which makes
+`cargo llvm-cov` misreport them as uncovered.
 The local public OCSP fixtures in `tests/fixtures` use a test key protecting
 nothing; regenerate with
 `sh contentauth-c2pa-c-api/tests/fixtures/generate-ocsp-chain.sh`.
