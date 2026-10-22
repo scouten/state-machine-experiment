@@ -120,7 +120,7 @@ harness (pinned to c2pa-rs 0.91.3). What exists, by layer:
 | Workflows | `reader`, `builder` | Read: JUMBF, v1 and v2 claims, assertion hashes, `c2pa.hash.data`, claim signature, trust chains and profile, `sigTst`/`sigTst2`, OCSP (stapled, then online), CAWG `cawg.x509.cose`, `trust_list_uri`. Write: v2 claim, `c2pa.hash.data`, every C2PA signing algorithm, RFC 3161, CAWG X.509 identities via `SignPurpose`, caller-supplied assertions. |
 | Formats | `format`, `format-jpeg`, `format-tiff`, `format-registry` | The `FormatHandler` contract (`locate`, `plan_embed`, `commit`, plain-data descriptors, `EmbedPlan` with a *list* of exclusions), two deliberately different handlers, content detection, type-erased `AnyFormat`, conformance kit. |
 | Orchestration | `file-reader`, `file-builder` | Sessions that compose a handler with a reader or builder; blocking `Read + Seek` hosts; atomic file output. |
-| Bindings | `rs-compat`, `rs-compat-sign`, `js-compat`, `js-compat-sign`, `session-bridge`, `wasm` + `js/`, Node addons, `c-api`, `cpp` | A c2pa-rs `Reader` slice, a c2pa-wasm `WasmReader` slice, the neutral read/build bridges, a shared JS Worker host over Wasm and Neon, a cimpl-backed C ABI, and C++17/20 drivers (blocking, pooled, coroutine). |
+| Bindings | `rs-compat`, `rs-compat-sign`, `js-compat`, `js-compat-sign`, `session-bridge`, `wasm` + `js/`, Node addons, `c-api`, `cpp` | A c2pa-rs `Reader` slice, a c2pa-wasm `WasmReader` slice, the neutral read/build bridges, a shared JS Worker host over Wasm and Neon, a cimpl-backed C ABI over the file sessions, and C++17/20 drivers (blocking, pooled, coroutine) over a second C layer of their own. |
 | Proof | `c2pa-rs-compat-conformance`, `docs/security` | Differential tests against the real `c2pa` crate in both directions, a corpus runner, and a running log of c2pa-rs security fixes triaged against this code. |
 
 In flight on `origin` as of this writing, and already shaping the
@@ -246,10 +246,20 @@ feature work, is the point.
    workflows of #46, which poll a future without a runtime. This decides
    how every M2 and M4 slice is written, so it is an M1 decision even
    though it is internal.
-7. **The bridge wire shape.** The flat `PendingRequest` / `Reply` data
-   model in `session-bridge` is what Wasm, Neon, the C ABI and C++ consume.
-   Freeze it, document it, and consider publishing it as a WIT world so
-   the contract has a language-neutral statement.
+7. **The bridge wire shape, and one C ABI over it.** The flat
+   `PendingRequest` / `Reply` data model in `session-bridge` is what Wasm,
+   Neon and the C++ binding consume. It is *not* yet what the C API
+   consumes: `contentauth-c2pa-c-api` wraps `FileReadSession` and
+   `FileBuilderSession` directly and projects their requests into its own
+   `C2paSmReadRequest` / `C2paSmBuildRequest` structs, while
+   `contentauth-c2pa-cpp` exports a second `c2pa_sm_*` C layer over the
+   bridge, so the repository has two C ABIs in one symbol namespace today
+   (both export `c2pa_sm_string_free`). Before the bridge shape is frozen,
+   move the C API onto the bridge and merge the two C layers into one ABI
+   whose request structs are a mechanical projection of the bridge enums;
+   that single ABI is what M6 ships. Then freeze the bridge shape, document
+   it, and consider publishing it as a WIT world so the contract has a
+   language-neutral statement.
 8. **Settings and results as data.** The sessions' settings (`ReadSettings`,
    `BuilderSettings`, trust anchors, hash window) and reports stay plain
    data; the c2pa-rs `Settings` JSON/TOML schema is a *host-layer*
@@ -261,9 +271,10 @@ feature work, is the point.
 
 **Exit criteria.** Each item above is documented with a stability
 statement; the engine, primitives, format contract and session-bridge
-crates are published as `0.x` with the deprecation policy in force; the
-engine has fuzz and property tests (#56) in CI; record/replay round-trips
-every existing test transcript.
+crates are published as `0.x` with the deprecation policy in force; there
+is one C ABI, built on the bridge, and the C++ binding links it rather
+than its own; the engine has fuzz and property tests (#56) in CI;
+record/replay round-trips every existing test transcript.
 
 **Risks.** Over-freezing: the parity work in M2–M4 will discover contract
 gaps (TIFF turned one exclusion into a list; ingredients need a protocol
@@ -553,12 +564,13 @@ needs it.
 
 **Scope.**
 
-1. **The C ABI.** `contentauth-c2pa-c-api` (`c2pa_sm_*`, cimpl-tracked
+1. **The C ABI.** The single `c2pa_sm_*` ABI that M1 consolidates out of
+   `contentauth-c2pa-c-api` and the C++ binding's C layer (cimpl-tracked
    handles, cbindgen header, independently selectable `read` and `build`
-   features) is published from the same place as `c2pa-c-ffi` and shipped
-   in the same release artifacts, side by side. It grows to the full read
-   and build surfaces as M2 and M4 land; its payload ownership follows the
-   M1 lease rules.
+   features, built on the session bridge) is published from the same place
+   as `c2pa-c-ffi` and shipped in the same release artifacts, side by side.
+   It grows to the full read and build surfaces as M2 and M4 land; its
+   payload ownership follows the M1 lease rules.
 2. **Bindings, in the order of what each one gains:**
    * **c2pa-js** — the biggest structural win: the shared JavaScript host
      over Wasm (browser) and Neon (Node) already exists here; moving
