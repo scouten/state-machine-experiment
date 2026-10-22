@@ -2,7 +2,7 @@
 #define CONTENTAUTH_C2PA_SM_SIGN_HPP
 
 #include "c2pa_sm.hpp"
-#include "contentauth_c2pa_sm_sign.h"
+#include "contentauth_c2pa_c_api.h"
 
 #include <functional>
 
@@ -19,12 +19,73 @@ struct BuildSettings {
 /// Separate host-owned assets; source and output must not alias.
 enum class BuildStream { Source, Output };
 
-/// Read exactly len bytes at start; answer with Bytes.
+/// A Rust-owned, exclusive initialized read destination.
+struct MutableBytes {
+    uint8_t *data;
+    size_t size;
+};
+
+/// A read-only byte view; the caller must retain its owning buffer during I/O.
+struct ConstBytes {
+    const uint8_t *data;
+    size_t size;
+};
+
+/// Move-only immutable write storage, independent of its original session.
+class WriteBuffer {
+public:
+    WriteBuffer() = default;
+    WriteBuffer(C2paSmBuildSession *session, uint64_t id);
+    ~WriteBuffer();
+    WriteBuffer(WriteBuffer &&other) noexcept;
+    WriteBuffer &operator=(WriteBuffer &&other) noexcept;
+    WriteBuffer(const WriteBuffer &) = delete;
+    WriteBuffer &operator=(const WriteBuffer &) = delete;
+    ConstBytes view() const;
+private:
+    C2paSmWriteBuffer *raw_ = nullptr;
+    ConstBytes bytes_{nullptr, 0};
+};
+
+/// Move-only sealed storage, freed independently of its original session.
+class CompletedRead {
+public:
+    CompletedRead() = default;
+    ~CompletedRead();
+    CompletedRead(CompletedRead &&other) noexcept;
+    CompletedRead &operator=(CompletedRead &&other) noexcept;
+    CompletedRead(const CompletedRead &) = delete;
+    CompletedRead &operator=(const CompletedRead &) = delete;
+private:
+    friend class ReadBuffer;
+    friend class BuildSession;
+    C2paSmCompletedRead *raw_ = nullptr;
+};
+
+/// Independent writable lease. Stop all I/O before sealing or destroying it.
+class ReadBuffer {
+public:
+    ReadBuffer() = default;
+    ReadBuffer(C2paSmBuildSession *session, uint64_t id);
+    ~ReadBuffer();
+    ReadBuffer(ReadBuffer &&other) noexcept;
+    ReadBuffer &operator=(ReadBuffer &&other) noexcept;
+    ReadBuffer(const ReadBuffer &) = delete;
+    ReadBuffer &operator=(const ReadBuffer &) = delete;
+    MutableBytes writable() const;
+    CompletedRead seal(size_t bytes_read) &&;
+private:
+    C2paSmReadBuffer *raw_ = nullptr;
+    MutableBytes bytes_{nullptr, 0};
+};
+
+/// Read exactly len bytes at start into destination; answer with CompletedRead.
 struct BuildReadRequest {
     uint64_t id;
     BuildStream stream;
     uint64_t start;
     uint64_t len;
+    ReadBuffer destination{};
 };
 
 /// Report the selected stream's length; answer with Length.
@@ -38,7 +99,7 @@ struct WriteRequest {
     uint64_t id;
     BuildStream stream;
     uint64_t offset;
-    std::vector<uint8_t> bytes;
+    WriteBuffer bytes;
 };
 
 /// Sign the complete COSE Sig_structure, not a precomputed digest.
@@ -71,7 +132,7 @@ struct TimestampResponse {
     std::vector<uint8_t> data;
 };
 
-using BuildReply = std::variant<Bytes, Length, Written, Signature, TimestampResponse, Failed>;
+using BuildReply = std::variant<CompletedRead, Length, Written, Signature, TimestampResponse, Failed>;
 
 /// A range omitted from the output asset's hard-binding hash.
 struct Exclusion {
@@ -107,7 +168,7 @@ struct SignReportDeleter {
 std::vector<uint8_t> build_bytes(C2paSmBuffer buffer);
 std::string build_string(C2paSmBuffer buffer);
 BuildStream build_stream(int stream);
-BuildRequest describe(const C2paSmBuildRequest &pending);
+BuildRequest describe(C2paSmBuildSession *session, const C2paSmBuildRequest &pending);
 void build_range(uint64_t start, uint64_t len, uint64_t limit);
 
 }  // namespace detail
@@ -124,11 +185,11 @@ public:
     BuildSession(const BuildSession &) = delete;
     BuildSession &operator=(const BuildSession &) = delete;
 
-    /// Copies the entire new request batch before any session mutation is possible.
+    /// Owns the new request batch, including independent writable read leases.
     BuildStep advance();
 
     /// Answers any outstanding request; invalid IDs or kinds leave it outstanding.
-    void fulfill(uint64_t id, const BuildReply &reply);
+    void fulfill(uint64_t id, BuildReply &&reply);
 
     /// Consumes even on error; copies the report before releasing its ABI storage.
     SignReport finish() &&;
@@ -148,12 +209,12 @@ public:
     /// Missing callbacks fail only if the corresponding request is issued.
     explicit SyncBuildHost(BuildSigner signer = {}, BuildTimestamp timestamp = {});
     virtual ~SyncBuildHost();
-    /// Reads exactly len bytes from the selected independent stream.
-    virtual std::vector<uint8_t> read(BuildStream stream, uint64_t start, uint64_t len) = 0;
+    /// Fills the entire destination or throws; never acknowledges a short read.
+    virtual void read_into(BuildStream stream, uint64_t start, MutableBytes destination) = 0;
     /// Reports the selected stream's current length.
     virtual uint64_t length(BuildStream stream) = 0;
     /// Returns only after the entire write is visible to output reads.
-    virtual void write(BuildStream stream, uint64_t offset, const std::vector<uint8_t> &bytes) = 0;
+    virtual void write(BuildStream stream, uint64_t offset, ConstBytes bytes) = 0;
     /// Calls the host signer without storing or accessing a key.
     virtual std::vector<uint8_t> sign(const std::string &algorithm, const std::vector<uint8_t> &data);
     /// Calls the host TSA transport; no implicit networking or fallback.
@@ -164,7 +225,10 @@ private:
 };
 
 /// Answers one owned request, converting host exceptions and short reads to Failed.
-BuildReply answer(SyncBuildHost &host, const BuildRequest &request);
+BuildReply answer(SyncBuildHost &host, BuildRequest &request);
+inline BuildReply answer(SyncBuildHost &host, BuildRequest &&request) {
+    return answer(host, request);
+}
 
 /// Drives a build on the calling thread; a pending empty batch is never completion.
 SignReport build_and_sign(BuildSession session, SyncBuildHost &host);
@@ -176,9 +240,9 @@ public:
     explicit MemoryBuildHost(std::vector<uint8_t> source, BuildSigner signer = {}, BuildTimestamp timestamp = {});
     /// The written asset, also available after a failed build for inspection.
     const std::vector<uint8_t> &output() const noexcept;
-    std::vector<uint8_t> read(BuildStream stream, uint64_t start, uint64_t len) override;
+    void read_into(BuildStream stream, uint64_t start, MutableBytes destination) override;
     uint64_t length(BuildStream stream) override;
-    void write(BuildStream stream, uint64_t offset, const std::vector<uint8_t> &bytes) override;
+    void write(BuildStream stream, uint64_t offset, ConstBytes bytes) override;
 private:
     std::vector<uint8_t> source_;
     std::vector<uint8_t> output_;
@@ -189,9 +253,9 @@ class IOStreamBuildHost : public SyncBuildHost {
 public:
     /// Streams must outlive the host; failures may leave partial output.
     IOStreamBuildHost(std::istream &source, std::iostream &output, BuildSigner signer = {}, BuildTimestamp timestamp = {});
-    std::vector<uint8_t> read(BuildStream stream, uint64_t start, uint64_t len) override;
+    void read_into(BuildStream stream, uint64_t start, MutableBytes destination) override;
     uint64_t length(BuildStream stream) override;
-    void write(BuildStream stream, uint64_t offset, const std::vector<uint8_t> &bytes) override;
+    void write(BuildStream stream, uint64_t offset, ConstBytes bytes) override;
 private:
     std::istream &source_;
     std::iostream &output_;
@@ -208,9 +272,9 @@ public:
     ~FileBuildHost() override;
     FileBuildHost(const FileBuildHost &) = delete;
     FileBuildHost &operator=(const FileBuildHost &) = delete;
-    std::vector<uint8_t> read(BuildStream stream, uint64_t start, uint64_t len) override;
+    void read_into(BuildStream stream, uint64_t start, MutableBytes destination) override;
     uint64_t length(BuildStream stream) override;
-    void write(BuildStream stream, uint64_t offset, const std::vector<uint8_t> &bytes) override;
+    void write(BuildStream stream, uint64_t offset, ConstBytes bytes) override;
 private:
     friend SignReport build_and_sign_file(const BuildSettings &, const std::filesystem::path &,
                                           const std::filesystem::path &, BuildSigner, BuildTimestamp);

@@ -82,8 +82,8 @@ where it could go next — written in Markdown with Mermaid diagrams.
   of the crates above, for a caller that wants c2pa-rs's existing surface
   rather than this workspace's `Session` contract.
 * [`contentauth-c2pa-cpp`](contentauth-c2pa-cpp) — an exploration of a C++
-  binding: a C ABI over the neutral read/build bridges plus C++ blocking,
-  thread-pool and C++20 coroutine drivers, written to show what the session
+  binding: C++ blocking,
+  thread-pool and C++20 coroutine drivers over the canonical C API, written to show what the session
   model can express — parallel and multiplexed reads and signing, errors as
   values, cancellation by destruction — that a callback-based API cannot.
   See its [README](contentauth-c2pa-cpp/README.md).
@@ -122,10 +122,12 @@ Bindings that expose a C API should be built on the
 [`cimpl`](https://github.com/contentauth/cimpl) crate rather than a
 hand-rolled C FFI. [`contentauth-c2pa-c-api`](contentauth-c2pa-c-api)
 uses cimpl for tracked handles, pointer validation, error conversion, and
-memory ownership; cbindgen generates its C header.
-The experimental [`contentauth-c2pa-cpp`](contentauth-c2pa-cpp) binding uses
-cimpl for its signing ABI and retains a hand-written reader ABI over the
-neutral read bridge. It is separate from `contentauth-c2pa-c-api`.
+memory ownership; cbindgen generates its C header. It now hosts the canonical
+reader/signing boundary, including independently owned read/write leases
+and typed result handles, over the neutral session bridge.
+The experimental [`contentauth-c2pa-cpp`](contentauth-c2pa-cpp) binding builds
+against that canonical library and header through CMake and has no Rust ABI of
+its own.
 
 ## Building
 
