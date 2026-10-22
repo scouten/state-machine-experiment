@@ -40,6 +40,13 @@ from .hosts import (
     StreamReadHost,
     Timestamper,
 )
+from .http_transport import (
+    HttpError,
+    async_http_ocsp,
+    async_http_timestamper,
+    http_ocsp,
+    http_timestamper,
+)
 from .read import Reader, ReadSession, ValidationState
 from .vocab import (
     Buffer,
@@ -95,6 +102,7 @@ __all__ = [
     "Exclusion",
     "Failed",
     "FileBuildHost",
+    "HttpError",
     "Length",
     "LengthRequest",
     "MemoryBuildHost",
@@ -129,10 +137,14 @@ __all__ = [
     "answer_read",
     "async_drive_build",
     "async_drive_read",
+    "async_http_ocsp",
+    "async_http_timestamper",
     "async_read_asset",
     "async_sign_file",
     "drive_build",
     "drive_read",
+    "http_ocsp",
+    "http_timestamper",
     "native_version",
     "read_asset",
     "sign_file",

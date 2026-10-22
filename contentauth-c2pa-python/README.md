@@ -32,6 +32,11 @@ default). With no `ocsp` transport, online revocation checks see an unreachable 
 which the engine treats as fail-open; a transport is `(url, request) -> response`.
 Trust anchors go in `settings_json`.
 
+For a live check, pass `ocsp=c2pa.http_ocsp` (or `c2pa.async_http_ocsp` to the asyncio
+drivers). Because a responder's URL is chosen by a certificate inside the asset, it only
+contacts publicly routable addresses, connects to the address it vetted, and follows no
+redirects. See [HTTP transports](#http-transports).
+
 ### Signing
 
 ```python
@@ -185,10 +190,29 @@ Contracts preserved from the C API:
 Ownership is deterministic: `close()` or a `with` block releases the native handle,
 and is safe to repeat. A finalizer is only a safety net for sessions that are dropped.
 
-Not implemented yet: Windows support, an HTTP transport for OCSP or timestamps (callbacks
-only) and production distribution. Lease-backed buffers were measured and deliberately not
+Not implemented yet: Windows support and production distribution. Lease-backed buffers were measured and deliberately not
 built; see [Copies and leases](#copies-and-leases). `native_version()` returns the linked
 native library version.
+
+## HTTP transports
+
+`http_ocsp(url, request)` and `http_timestamper(url, request)` are standard-library
+callbacks (no new dependency) with `async_` forms that run on a worker thread. Both are
+opt-in: with none given, an OCSP check sees an unreachable responder and a requested
+timestamp fails the build, as before. Both bound the response (1 MiB) and each connect and
+read (30 s), accept only `http`/`https` URLs without credentials, and follow no redirects;
+a failure raises (`HttpError` for a bad status or oversize body, `OSError` for the network)
+and the engine's fail-open OCSP handling does the rest.
+
+They differ in how far the URL is trusted. A timestamp authority's comes from the signing
+party. An OCSP responder's comes from a certificate in the asset being read, so
+`http_ocsp` refuses a host unless **every** address it resolves to is globally routable
+(no loopback, private, link-local, cloud-metadata or multicast, IPv4-mapped forms
+included), then connects to that vetted address rather than resolving again, so a second
+DNS answer cannot redirect it; TLS still verifies the certificate against the URL's name.
+A call already running on a worker thread when its task is cancelled finishes or times
+out, but nothing is delivered to the session afterwards. The timestamp transport is only
+tested against a loopback server, not a real authority.
 
 ## Copies and leases
 
