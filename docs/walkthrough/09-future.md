@@ -53,11 +53,36 @@ changes. Choose formats for *what they exercise*, as TIFF did:
   already anticipates.
 * **PDF, sidecar/`.c2pa`, and others** — non-embedding or very different
   shapes.
-* **XMP remote-reference parsing** in the existing handlers.
 * **Formats in other languages** — the registry README sketches
   `DynFormatHandler` over a Wasm component, a JS generator, or a C ABI.
   The open parts are marshalling `EmbedPlan` safely and a conformance
   corpus that is *data*, loadable from any language.
+
+## 2a. Deepening the JPEG and TIFF handlers
+
+Separate from adding *new* formats: the two handlers we have are deliberately
+minimal — they locate and embed a `c2pa.hash.data` store and nothing else.
+That minimalism is a strength (they splice rather than re-serialize, so they
+stream large assets in bounded memory and are structurally immune to the
+IFD-amplification class c2pa-rs has had to patch; see the format READMEs and
+[`BENCHMARKS.md`](../../c2pa-rs-compat-conformance/BENCHMARKS.md), where the
+state-machine SDK is 1–97× lighter on large DNGs). These are the
+*feature-coverage* gaps that remain, confirmed against c2pa-rs's `jpeg_io.rs`
+and `tiff_io.rs`:
+
+| Item | Formats | What c2pa-rs does | Why it matters / priority |
+|---|---|---|---|
+| **XMP remote-reference reporting** | JPEG (`APP1` XMP), TIFF (tag `0x02bc`) | Reads `dcterms:provenance` → a remote manifest URL | The one piece of *read* coverage both handlers skip. The plumbing exists — `ManifestLocation::remote(url)` — so only the XMP packet needs parsing. Pairs with §1's remote-retrieval item. **High.** |
+| **Re-sign a store not in a trailing IFD** | TIFF/DNG | Writes the store into the first IFD; can replace its own output | The handler *reads* a c2pa-rs-signed TIFF, but `plan_embed` returns `Unsupported` for a store it did not itself place in a trailing IFD — so a c2pa-rs-signed TIFF cannot be re-signed here. Closing this makes the read/write round trip symmetric. **High.** |
+| **Box-hash binding** (`c2pa.hash.boxes`) | JPEG (+ others) | Supported | A second hard-binding type; overlaps §1 "Other hard bindings" and §3 "Box-hash bindings". **Medium.** |
+| **Sub-IFDs** (SubIFD `0x014a`, EXIF, GPS, DNG pages) | TIFF/DNG | Walks them, bounded by `MAX_SUBFILES` | The spec puts the store in the main chain, but locating/tolerating one in a sub-IFD matches c2pa-rs; needs the same bounded guard to stay DoS-safe. **Medium.** |
+| **Large stores** (JUMBF 64-bit length ≥ 4 GiB; classic→BigTIFF upgrade) | JPEG, TIFF | Supported | Both return `Unsupported` today. Rare in practice. **Low.** |
+| **Store placed after `SOS`** | JPEG | Tolerated | The handler scans the header only, which the spec allows; tolerating a misplaced store is a robustness nicety. **Low.** |
+
+Suggested order: XMP remote reporting, then TIFF trailing-IFD re-sign, then
+box hash and sub-IFDs; the large-store and post-`SOS` items are low priority.
+Each is a change to one handler crate (and its conformance tests); nothing in
+the reader, builder, or contract crate moves.
 
 ## 3. Write-side breadth
 
