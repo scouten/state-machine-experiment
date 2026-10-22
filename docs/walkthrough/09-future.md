@@ -134,8 +134,9 @@ changes. Choose formats for *what they exercise*, as TIFF did:
   that is (randomised cancellation of 400 real signings left no debris, no leaked
   descriptors and no partial destination). Opt-in standard-library HTTP
   transports for OCSP (public addresses only, pinned to the vetted address, no redirects)
-  and timestamps are provided. Next: a published-wheel matrix (CI already builds, installs
-  and tests the wheel on Ubuntu and macOS). Finding for the engine: a
+  and timestamps are provided. A `cibuildwheel` workflow builds and tests
+  manylinux/musllinux (x86_64, aarch64) and macOS (arm64, Intel) wheels as artifacts. Next:
+  publication, Windows, and a real-asset corpus compared against c2pa-rs. Finding for the engine: a
   `TimestampResponse` reply to a *length* request is accepted and then fails the build,
   instead of being rejected with the request left outstanding like other mismatched kinds.
 * **Other host languages** — Swift, Kotlin, .NET: the Node binding

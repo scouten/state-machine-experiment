@@ -258,8 +258,17 @@ checkout, installs it into a clean virtual environment, and runs the suite again
 *installed* wheel with the 100% coverage floor and `mypy --strict`. It certifies that the
 wheel builds and works on those runners; it is not a published-wheel matrix.
 
-6. Broader integration coverage, a supported-platform wheel matrix (manylinux/musllinux,
-   Intel macOS, Windows) and publication.
+The `Python wheels` workflow (`.github/workflows/python-wheels.yml`, run by hand, on a
+`python-v*` tag, or when packaging files change) builds wheels with `cibuildwheel` for
+CPython 3.11–3.13 on manylinux_2_28 and musllinux_1_2 (x86_64 and aarch64, on native
+runners) and macOS (arm64 and Intel), and runs the whole suite against each installed
+wheel in its own build environment. It uploads the wheels as workflow artifacts and
+**publishes nothing**. The Linux aarch64 manylinux and musllinux builds were also run
+locally under Docker, with all tests passing; the x86_64 and macOS legs have not been run.
+
+Remaining: publication (where, and under what name and versioning, is undecided), Windows
+(the file hosts use POSIX calls such as `os.pread`), cross-compilation, and a real-asset
+corpus compared against c2pa-rs.
 
 ### Known engine behavior
 
@@ -273,7 +282,8 @@ engine/C-ABI behavior, not changed or masked here.
 Requires Python 3.11 or newer, Cargo/Rust meeting the workspace's MSRV, and a C
 compiler with Python development headers. Initial build support is macOS and
 Linux on the build machine's native architecture; Windows and cross-compilation
-are not supported yet. A supported-platform wheel matrix is not yet certified.
+are not supported yet. The wheel workflow above builds wheels for Linux and macOS but has not
+yet been run on GitHub.
 
 From the **repository root**, using [uv](https://docs.astral.sh/uv/):
 
