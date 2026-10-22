@@ -12,7 +12,7 @@ license = "MIT OR Apache-2.0"
 dependencies = ["cffi>=1.17.1"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-cov>=6", "mypy>=1.14", "setuptools>=77"]
+dev = ["pytest>=8", "pytest-cov>=6", "mypy>=1.14", "setuptools>=77", "cryptography>=44"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

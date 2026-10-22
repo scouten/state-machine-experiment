@@ -1,10 +1,5 @@
-from typing import Protocol
+from typing import Any
 
-class _FFI(Protocol):
-    def string(self, value: object, /) -> bytes: ...
-
-class _Lib(Protocol):
-    def c2pa_sm_version(self) -> object: ...
-
-ffi: _FFI
-lib: _Lib
+# The CFFI-generated module is typed by its C header, not by Python.
+ffi: Any
+lib: Any

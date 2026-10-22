@@ -9,8 +9,8 @@ and the reader, builder and format handlers know nothing about each other.**
 Arrows point from a crate to what it depends on. Dashed edges include the
 standalone Wasm and Neon bindings, plus the standalone JavaScript package.
 The C++ reader/signing binding is a consumer of the canonical C API, which wraps the bridges. The outlined
-Python node indicates a compiled CFFI foundation only; session APIs remain
-prospective.
+Python node and its edge show a compiled CFFI binding with typed low-level read and
+sign sessions; its hosts, asyncio and buffer leases remain prospective.
 
 ```mermaid
 flowchart BT
@@ -40,7 +40,7 @@ flowchart BT
     PN["c2pa-node-compat-addon<br/><i>existing Neon boundary</i>"]
     PNS["c2pa-node-sign-addon<br/><i>existing signing Neon boundary</i>"]
     CPP["contentauth-c2pa-cpp<br/><i>C++ over the canonical C API</i>"]
-    PY["Python CFFI foundation<br/><i>native version only; sessions prospective</i>"]
+    PY["Python CFFI binding<br/><i>low-level sessions; hosts prospective</i>"]
     CAPI["c2pa-c-api<br/><i>canonical C ABI + buffer leases</i>"]
 
     RD --> SM & PR
@@ -62,7 +62,7 @@ flowchart BT
     PN -.-> BR
     PNS -.-> BR
     CPP -->|"links (CMake)"| CAPI
-    PY -.->|"links (CFFI); native version only"| CAPI
+    PY -.->|"links (CFFI)"| CAPI
     CAPI --> BR
 
     classDef engine fill:#dbeafe,stroke:#2563eb,color:#000
@@ -118,7 +118,7 @@ flowchart TB
 
 | Crate | Layer | What it is |
 |---|---|---|
-| `contentauth-c2pa-python` | Binding foundation | Standalone Python package; compiled CFFI over the C API, currently exposing only the native version. Session APIs remain prospective. |
+| `contentauth-c2pa-python` | Binding | Standalone Python package; compiled CFFI over the C API with typed low-level `ReadSession`/`BuildSession`. Hosts, asyncio and buffer leases remain prospective. |
 | `contentauth-state-machine` | Foundation | The engine: `Session`, `SessionCore`, request tracking, protocol errors. Domain-agnostic. |
 | `contentauth-c2pa-primitives` | Foundation | The narrow shared slice: `StreamId`, `ByteRange`, hash/signing algorithms, `HostError`, COSE `Sig_structure`, RFC 3161 encode/unwrap. |
 | `contentauth-c2pa-reader` | Workflow | `ReadSession`: JUMBF, claims (v1+v2), integrity, signature, trust, timestamps, OCSP, CAWG identity assertions (X.509). |
@@ -146,15 +146,16 @@ older Rust async browser hosts remain alternatives until their useful behavior
 is preserved by shared-host compatibility facades.
 
 The merged [C++ binding](../../contentauth-c2pa-cpp/README.md) now consumes the
-read/build bridges through the canonical C ABI, independently of the JS host. Python remains
-prospective. The [read wrapper](../../contentauth-c2pa-session-bridge/src/read/mod.rs)
+read/build bridges through the canonical C ABI, independently of the JS host, and so
+does the [Python package](../../contentauth-c2pa-python/README.md), through compiled
+CFFI. The [read wrapper](../../contentauth-c2pa-session-bridge/src/read/mod.rs)
 exposes numeric handles, byte vectors, strings and synchronous
 `advance`/`fulfill`/`finish` methods; its
 [crate dependencies](../../contentauth-c2pa-session-bridge/Cargo.toml) contain no
 Neon or Node runtime dependency. The
 [build wrapper](../../contentauth-c2pa-session-bridge/src/build/mod.rs) follows
-the same host-driven pattern. The canonical C API is that C ABI adapter, and C++ consumes it;
-Python could supply an extension-module adapter. Both must
+the same host-driven pattern. The canonical C API is that C ABI adapter, and C++ and
+Python consume it. Each consumer must
 translate Rust types/errors and define session and buffer ownership. The Rust
 enums are not directly a stable foreign ABI, and neither consumer needs to use
 the shared JavaScript driver or Workers. The current wrappers still reuse

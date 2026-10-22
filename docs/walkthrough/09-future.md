@@ -117,12 +117,15 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 * **Browser:** a `fetch`-backed OCSP `Platform`; the existing async `web`
   modules still have no browser CI coverage. The shared-host browser CI runs
   the synchronous Wasm session boundary, not those alternative modules.
-* **Python foundation:** the standalone
-  [`contentauth-c2pa-python`](../../contentauth-c2pa-python/) package now builds a
-  compiled CFFI adapter over the canonical C API, with a typed native-version
-  function and install/import smoke tests. Next: read/build sessions, blocking
-  hosts, asyncio and cancellation, buffer leases, and distribution CI. No Python
-  reading or signing workflow is implemented yet.
+* **Python:** the standalone
+  [`contentauth-c2pa-python`](../../contentauth-c2pa-python/) package builds a
+  compiled CFFI adapter over the canonical C API and exposes typed low-level
+  `ReadSession` / `BuildSession` with deterministic ownership, driven by in-memory
+  hosts in tests (a real sign → read-back `Trusted` round trip included). Next:
+  blocking and file hosts, asyncio with cancellation, lease-backed buffers, and
+  distribution CI. Finding for the engine: a `TimestampResponse` reply to a *length*
+  request is accepted and then fails the build, instead of being rejected with the
+  request left outstanding like other mismatched kinds.
 * **Other host languages** — Swift, Kotlin, .NET: the Node binding
   shows the minimal shape (a handful of synchronous functions plus a host
   loop). Each is a good test of whether the flattened `PendingRequest`/

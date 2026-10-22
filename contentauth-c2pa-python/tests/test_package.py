@@ -17,7 +17,8 @@ def test_version_comes_from_native_library() -> None:
 
 def test_package_has_distribution_metadata() -> None:
     assert metadata.version("contentauth-c2pa-python") == "0.1.0"
-    assert contentauth_c2pa.__all__ == ["native_version"]
+    assert contentauth_c2pa.__all__ == sorted(contentauth_c2pa.__all__)
+    assert "native_version" in contentauth_c2pa.__all__
 
 
 def test_native_module_is_a_compiled_extension() -> None:
