@@ -70,8 +70,8 @@ live. Each entry below still verifies the specific mechanism.
 
 | Area | Page | Processed | Needs porting |
 |---|---|---|---|
-| TIFF / BigTIFF / DNG | separate PR (`tiff.md`) | 7 | 0 (1 latent, tracked) |
 | JPEG | [jpeg.md](jpeg.md) | 2 | 0 |
+| TIFF / BigTIFF / DNG | [tiff.md](tiff.md) | 7 | 0 (1 latent, tracked) |
 | COSE / signature / trust | _not started_ | — | — |
 | JUMBF / CBOR / claim parsing | _not started_ | — | — |
 | OCSP / revocation / timestamps | _not started_ | — | — |
@@ -89,7 +89,3 @@ live. Each entry below still verifies the specific mechanism.
   with the feature.
 - Prefer a regression test over prose: it is the proof the verdict is real,
   and it fails loudly if the SDK ever regresses.
-
-> **Note on the TIFF page.** `tiff.md` is produced by a separate PR (the TIFF
-> porting work), kept on its own branch; its row above becomes a live link once
-> both PRs land on `main`.
