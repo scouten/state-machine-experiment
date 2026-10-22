@@ -17,6 +17,7 @@ flowchart LR
         d6["Shared JS Worker read + baseline sign<br/>browser Wasm / Node Neon, async signer callbacks"]
         d7["C++ read + sign; blocking / pool / future / coroutine<br/>atomic file signing + Trusted read-back example"]
         d8["Experimental alternate reader workflow<br/>async-fn, no runtime"]
+        d9["Engine: async-fn workflows, no runtime<br/>(builder ported)"]
     end
     subgraph next["Next"]
         direction TB
