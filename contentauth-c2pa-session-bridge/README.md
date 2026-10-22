@@ -30,8 +30,8 @@ engine concepts.
 The [C++ binding](../contentauth-c2pa-cpp/) also consumes both bridges
 through a C ABI with its own ownership adapter. The
 [Python package](../contentauth-c2pa-python/) links that same C ABI
-through compiled CFFI and exposes typed low-level read/build sessions, blocking hosts
-and an atomic file-signing helper; its async hosts and other bindings remain prospective.
+through compiled CFFI and exposes typed low-level read/build sessions, blocking and
+asyncio hosts, and atomic file signing; other bindings remain prospective.
 Rust enums are not a stable cross-language ABI.
 
 The older browser-shaped async hosts remain in

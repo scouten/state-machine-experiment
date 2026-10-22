@@ -10,8 +10,8 @@ Arrows point from a crate to what it depends on. Dashed edges include the
 standalone Wasm and Neon bindings, plus the standalone JavaScript package.
 The C++ reader/signing binding is a consumer of the canonical C API, which wraps the bridges. The outlined
 Python node and its edge show a compiled CFFI binding with typed low-level read and
-sign sessions, blocking hosts and atomic file signing; asyncio and buffer leases remain
-prospective.
+sign sessions, blocking and asyncio hosts and drivers, and atomic file signing; buffer
+leases remain prospective.
 
 ```mermaid
 flowchart BT
@@ -41,7 +41,7 @@ flowchart BT
     PN["c2pa-node-compat-addon<br/><i>existing Neon boundary</i>"]
     PNS["c2pa-node-sign-addon<br/><i>existing signing Neon boundary</i>"]
     CPP["contentauth-c2pa-cpp<br/><i>C++ over the canonical C API</i>"]
-    PY["Python CFFI binding<br/><i>sessions, blocking hosts, atomic sign_file</i>"]
+    PY["Python CFFI binding<br/><i>sessions, blocking + asyncio drivers, atomic sign_file</i>"]
     CAPI["c2pa-c-api<br/><i>canonical C ABI + buffer leases</i>"]
 
     RD --> SM & PR
@@ -119,7 +119,7 @@ flowchart TB
 
 | Crate | Layer | What it is |
 |---|---|---|
-| `contentauth-c2pa-python` | Binding | Standalone Python package; compiled CFFI over the C API with typed `ReadSession`/`BuildSession`, blocking memory/stream/file hosts, `read_asset` and atomic `sign_file`. Asyncio and buffer leases remain prospective. |
+| `contentauth-c2pa-python` | Binding | Standalone Python package; compiled CFFI over the C API with typed `ReadSession`/`BuildSession`, blocking memory/stream/file hosts and native asyncio drivers, `read_asset`/`sign_file` and their async twins. Lease-backed buffers remain prospective. |
 | `contentauth-state-machine` | Foundation | The engine: `Session`, `SessionCore`, request tracking, protocol errors. Domain-agnostic. |
 | `contentauth-c2pa-primitives` | Foundation | The narrow shared slice: `StreamId`, `ByteRange`, hash/signing algorithms, `HostError`, COSE `Sig_structure`, RFC 3161 encode/unwrap. |
 | `contentauth-c2pa-reader` | Workflow | `ReadSession`: JUMBF, claims (v1+v2), integrity, signature, trust, timestamps, OCSP, CAWG identity assertions (X.509). |

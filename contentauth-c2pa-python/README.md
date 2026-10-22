@@ -4,11 +4,12 @@ Experimental Python bindings over the [canonical C API](../contentauth-c2pa-c-ap
 following the [C++ binding](../contentauth-c2pa-cpp/) architecture. This is a
 standalone Python package, not a Cargo workspace member or a C++ wrapper.
 
-## Current scope: phase 3 — blocking hosts and file signing
+## Current scope: phase 4 — asyncio
 
 The compiled CFFI adapter statically links the existing Rust C API and exposes its
-two sans-I/O workflows as typed Python sessions, plus blocking drivers for the common
-case of synchronous access. Most callers need only the first two functions below.
+two sans-I/O workflows as typed Python sessions, blocking drivers for synchronous access,
+and native `asyncio` drivers for everything else. Most callers need only the first two
+sections below.
 
 ### Reading
 
@@ -73,6 +74,61 @@ Publication is POSIX-only and does not fsync the containing directory.
 | `BuildHost` → `MemoryBuildHost`, `StreamBuildHost`, `FileBuildHost` | Source, output, key and timestamp authority. `StreamBuildHost` needs two distinct seekable streams and an empty output; `FileBuildHost` is the atomic file host |
 | `answer_read`, `answer_build` | Answer one request; any `Exception` from the host becomes a `Failed` reply so the engine decides what that means. `KeyboardInterrupt` and `SystemExit` propagate |
 
+## Asyncio
+
+`async_read_asset` and `async_sign_file` take the same arguments as their blocking
+counterparts and never block the event loop. A **coroutine-function** `signer`,
+`timestamper` or `ocsp` (a remote signing service, say) is awaited on the loop,
+concurrently with the file I/O; anything else is called in a worker thread.
+
+```python
+import asyncio
+import httpx                       # any async HTTP client; not a dependency of this package
+import contentauth_c2pa as c2pa
+
+async def remote_signer(algorithm: str, data: bytes) -> bytes:
+    # The key never leaves the service. `data` is the COSE Sig_structure; return raw r || s.
+    response = await client.post("https://sign.example/es256", content=data)
+    response.raise_for_status()
+    return response.content
+
+async def main() -> None:
+    async with asyncio.timeout(30):                       # bound a slow service
+        await c2pa.async_sign_file(
+            "in.jpg", "out.jpg",
+            definition_json=definition, certificates=[chain], signer=remote_signer,
+        )
+    reader = await c2pa.async_read_asset("out.jpg")
+```
+
+How it works, and what you can rely on:
+
+- **Concurrent, any order.** The session stays synchronous: `advance()` and `fulfill()` are
+  brief calls made on the loop. Each request the engine issues becomes its own task, and
+  replies are reported as they finish, so a slow request never holds up an independent one.
+  Many sessions share one loop and interleave at every request.
+- **Cancellation.** Cancelling (or timing out) stops the driver, cancels and awaits every
+  in-flight host call, and reports nothing more to the session, which your `with` closes.
+  Failures chain to the real exception, as in the blocking drivers.
+- **A worker thread cannot be cancelled.** `ThreadReadHost` / `ThreadBuildHost` (the
+  adapters behind the helpers above) track every call they start. `close_when_idle()`
+  defers releasing a file or temporary output until the last such call has *actually*
+  finished, on whichever thread that is, and `wait_idle()` lets you wait for it. So nothing
+  is ever closed under a running worker, and a cancelled `async_sign_file` removes its
+  temporary output, and closes the files it opened, only after the worker is done with them.
+  A cancellation that lands during the final rename may or may not replace the destination,
+  but whatever it holds is complete.
+- **Thread safety by default.** Blocking-host calls are serialized on one worker thread, so
+  hosts that are not thread-safe (stream hosts) are safe. Raise `max_workers` only for
+  thread-safe ones such as `FileBuildHost`. `inline=True` runs a host that never blocks (an
+  in-memory one) on the loop.
+
+| Surface | Purpose |
+|---|---|
+| `async_drive_read(session, host)`, `async_drive_build(session, host)` | The asyncio drivers; after a failure the session is yours to close |
+| `AsyncReadHost`, `AsyncBuildHost` | Implement these natively (an async file or network client); same contracts as the blocking hosts |
+| `ThreadReadHost(host)`, `ThreadBuildHost(host, signer=, timestamper=)` | Serve any blocking host to the loop; `close_when_idle(release)`, `wait_idle()`, `aclose()`, `async with` |
+
 ## Low-level sessions
 
 A session never performs I/O: `advance()` reports the requests it needs answered, the
@@ -129,7 +185,7 @@ Contracts preserved from the C API:
 Ownership is deterministic: `close()` or a `with` block releases the native handle,
 and is safe to repeat. A finalizer is only a safety net for sessions that are dropped.
 
-Not implemented yet: asyncio, lease-backed zero-copy buffers (replies and write
+Not implemented yet: lease-backed zero-copy buffers (replies and write
 payloads are copied), Windows support, an HTTP transport for OCSP or timestamps (callbacks
 only) and production distribution. They remain separate, approval-gated phases.
 `native_version()` returns the linked native library version.
@@ -197,7 +253,14 @@ constants so they cannot drift. Host and driver tests cover each host's bounds,
 short-read and partial-write handling; descriptor and temporary-file hygiene when a
 build fails, is interrupted, or cannot publish; a signed asset being byte-identical
 across the memory, stream and file hosts; host-failure chaining; stalled sessions; and
-concurrent file signing. The wheel/import tests still import from outside the
+concurrent file signing. Asyncio tests (no `pytest-asyncio`: each runs on a fresh loop that
+fails the test on any stray task or unretrieved exception) check parity with the blocking
+drivers, concurrent in-flight requests, out-of-order completion, two sessions interleaving
+on one loop, and cancellation at *every* request kind, including while a worker thread is
+mid-write, mid-signature, mid-read or mid-rename, with the invariant that nothing is closed
+or removed under a running worker and nothing is delivered to a closed session. Those tests
+were mutation-checked: disabling the deferred release or the in-flight cancellation makes
+them fail. The wheel/import tests still import from outside the
 checkout in isolated Python mode with an empty executable search path (no Cargo or
 compiler available). Build-helper tests cover header extraction, platform selection,
 Cargo invocation/failure propagation, and rejection of unsupported source
@@ -205,6 +268,5 @@ distributions. Test-only dependency: `cryptography`, as the example signer.
 
 ## Next phases
 
-4. Native asyncio drivers and cancellation-safe host operations.
 5. Lease-backed buffer optimizations and measurements.
 6. Broader integration coverage, CI and distributable wheel certification.

@@ -123,7 +123,16 @@ changes. Choose formats for *what they exercise*, as TIFF did:
   `ReadSession` / `BuildSession` with deterministic ownership, blocking memory, stream
   and file hosts, `read_asset`, and `sign_file`, which publishes atomically and leaves no
   debris on failure (a real sign → read-back `Trusted` round trip included, with a
-  caller-owned key). Next: asyncio with cancellation, lease-backed buffers, an HTTP
+  caller-owned key). Its native `asyncio` drivers answer each request as its own task,
+  report replies in any order, interleave many sessions on one loop, and accept a
+  coroutine-function signer, so a remote signing service is awaited concurrently with file
+  I/O. Cancellation is the interesting part, and a direct payoff of the sans-I/O design:
+  stopping a session is just ceasing to drive it, so cancelling cancels the in-flight host
+  calls and nothing is delivered to the session afterwards. What cannot be cancelled is a
+  worker thread already mid-I/O, so the thread adapters defer closing a file or removing a
+  temporary output until the last started call has really finished, on whichever thread
+  that is (randomised cancellation of 400 real signings left no debris, no leaked
+  descriptors and no partial destination). Next: lease-backed buffers, an HTTP
   transport for OCSP/timestamps, and distribution CI. Finding for the engine: a
   `TimestampResponse` reply to a *length* request is accepted and then fails the build,
   instead of being rejected with the request left outstanding like other mismatched kinds.

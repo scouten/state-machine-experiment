@@ -6,6 +6,16 @@ and `finish()` consumes the session for its result. Sessions never perform I/O.
 """
 
 from ._native import ffi as _ffi, lib as _lib
+from .async_drive import async_drive_build, async_drive_read, async_read_asset, async_sign_file
+from .async_hosts import (
+    AsyncBuildHost,
+    AsyncOcspTransport,
+    AsyncReadHost,
+    AsyncSigner,
+    AsyncTimestamper,
+    ThreadBuildHost,
+    ThreadReadHost,
+)
 from .build import BuildSession
 from .drive import (
     ReadSource,
@@ -62,6 +72,11 @@ from .vocab import (
 )
 
 __all__ = [
+    "AsyncBuildHost",
+    "AsyncOcspTransport",
+    "AsyncReadHost",
+    "AsyncSigner",
+    "AsyncTimestamper",
     "Buffer",
     "BuildHost",
     "BuildLengthRequest",
@@ -100,6 +115,8 @@ __all__ = [
     "Step",
     "StreamBuildHost",
     "StreamReadHost",
+    "ThreadBuildHost",
+    "ThreadReadHost",
     "Time",
     "TimeRequest",
     "TimestampRequest",
@@ -110,6 +127,10 @@ __all__ = [
     "Written",
     "answer_build",
     "answer_read",
+    "async_drive_build",
+    "async_drive_read",
+    "async_read_asset",
+    "async_sign_file",
     "drive_build",
     "drive_read",
     "native_version",
