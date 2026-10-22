@@ -41,7 +41,7 @@ files = ["src/contentauth_c2pa"]
 [tool.cibuildwheel]
 build = "cp311-* cp312-* cp313-*"
 build-verbosity = 1
-test-requires = ["pytest>=8", "cryptography>=44"]
+test-requires = ["pytest>=8", "cryptography>=44", "setuptools>=77"]
 # The tests read fixtures from sibling crates, which the build containers mount whole.
 test-command = "cd {package} && python -m pytest -q -p no:cacheprovider"
 
