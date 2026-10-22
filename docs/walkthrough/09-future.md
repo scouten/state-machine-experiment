@@ -133,7 +133,8 @@ changes. Choose formats for *what they exercise*, as TIFF did:
   temporary output until the last started call has really finished, on whichever thread
   that is (randomised cancellation of 400 real signings left no debris, no leaked
   descriptors and no partial destination). Next: lease-backed buffers, an HTTP
-  transport for OCSP/timestamps, and distribution CI. Finding for the engine: a
+  transport for OCSP/timestamps, and a published-wheel matrix (CI already builds, installs
+  and tests the wheel on Ubuntu and macOS). Finding for the engine: a
   `TimestampResponse` reply to a *length* request is accepted and then fails the build,
   instead of being rejected with the request left outstanding like other mismatched kinds.
 * **Other host languages** — Swift, Kotlin, .NET: the Node binding

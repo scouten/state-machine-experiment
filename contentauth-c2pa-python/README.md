@@ -229,7 +229,13 @@ complete read as it is.
 
 ## Next phases
 
-6. Broader integration coverage, CI and distributable wheel certification.
+CI's `python-binding` job (Ubuntu and macOS, Python 3.11 and 3.13) builds the wheel from a
+checkout, installs it into a clean virtual environment, and runs the suite against the
+*installed* wheel with the 100% coverage floor and `mypy --strict`. It certifies that the
+wheel builds and works on those runners; it is not a published-wheel matrix.
+
+6. Broader integration coverage, a supported-platform wheel matrix (manylinux/musllinux,
+   Intel macOS, Windows) and publication.
 
 ### Known engine behavior
 
