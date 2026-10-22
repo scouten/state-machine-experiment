@@ -324,7 +324,9 @@ constants so they cannot drift. Host and driver tests cover each host's bounds,
 short-read and partial-write handling; descriptor and temporary-file hygiene when a
 build fails, is interrupted, or cannot publish; a signed asset being byte-identical
 across the memory, stream and file hosts; host-failure chaining; stalled sessions; and
-concurrent file signing. Asyncio tests (no `pytest-asyncio`: each runs on a fresh loop that
+concurrent file signing. TIFF (little- and big-endian, classic and BigTIFF) is exercised end to end: unsigned, signed
+and read back `Trusted`, tampered, identical across the memory, stream and file hosts, and
+chosen by a path's extension. Asyncio tests (no `pytest-asyncio`: each runs on a fresh loop that
 fails the test on any stray task or unretrieved exception) check parity with the blocking
 drivers, concurrent in-flight requests, out-of-order completion, two sessions interleaving
 on one loop, and cancellation at *every* request kind, including while a worker thread is
