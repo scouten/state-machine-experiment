@@ -38,6 +38,24 @@ def _check_range(start: int, length: int, limit: int) -> None:
         raise ValueError(f"I/O of {length} bytes at {start} is outside the {limit}-byte stream")
 
 
+def _gather(fetch: Callable[[int, int], bytes], length: int, what: str) -> Buffer:
+    """Collect exactly `length` bytes from a source that may answer with fewer at a time.
+
+    `fetch(done, remaining)` returns the next bytes. A complete first answer is returned as
+    it is, because copying every read a second time costs more than the rare short read does.
+    """
+    chunk = fetch(0, length)
+    if len(chunk) == length:
+        return chunk
+    gathered = bytearray(chunk)
+    while len(gathered) < length:
+        chunk = fetch(len(gathered), length - len(gathered))
+        if not chunk:
+            raise EOFError(f"{what} ended after {len(gathered)} of {length} bytes")
+        gathered += chunk
+    return gathered
+
+
 # ---- reading -----------------------------------------------------------------
 
 
@@ -106,13 +124,7 @@ class StreamReadHost(ReadHost):
     def read(self, start: int, length: int) -> Buffer:
         _check_range(start, length, self.length())
         self._stream.seek(start)
-        chunks = bytearray()
-        while len(chunks) < length:
-            chunk = self._stream.read(length - len(chunks))
-            if not chunk:
-                raise EOFError(f"the stream ended after {len(chunks)} of {length} bytes")
-            chunks += chunk
-        return chunks
+        return _gather(lambda done, remaining: self._stream.read(remaining), length, "the stream")
 
     def length(self) -> int:
         return self._stream.seek(0, os.SEEK_END)
@@ -230,13 +242,7 @@ class StreamBuildHost(BuildHost):
         _check_range(start, length, self.length(stream))
         source = self._stream(stream)
         source.seek(start)
-        chunks = bytearray()
-        while len(chunks) < length:
-            chunk = source.read(length - len(chunks))
-            if not chunk:
-                raise EOFError(f"the stream ended after {len(chunks)} of {length} bytes")
-            chunks += chunk
-        return chunks
+        return _gather(lambda done, remaining: source.read(remaining), length, "the stream")
 
     def length(self, stream: BuildStream) -> int:
         return self._stream(stream).seek(0, os.SEEK_END)
@@ -301,13 +307,10 @@ class FileBuildHost(BuildHost):
 
     def read(self, stream: BuildStream, start: int, length: int) -> Buffer:
         _check_range(start, length, self.length(stream))
-        chunks = bytearray()
-        while len(chunks) < length:
-            chunk = os.pread(self._descriptor(stream), length - len(chunks), start + len(chunks))
-            if not chunk:
-                raise EOFError(f"the file ended after {len(chunks)} of {length} bytes")
-            chunks += chunk
-        return chunks
+        descriptor = self._descriptor(stream)
+        return _gather(
+            lambda done, remaining: os.pread(descriptor, remaining, start + done), length, "the file"
+        )
 
     def length(self, stream: BuildStream) -> int:
         info = os.fstat(self._descriptor(stream))

@@ -185,10 +185,51 @@ Contracts preserved from the C API:
 Ownership is deterministic: `close()` or a `with` block releases the native handle,
 and is safe to repeat. A finalizer is only a safety net for sessions that are dropped.
 
-Not implemented yet: lease-backed zero-copy buffers (replies and write
-payloads are copied), Windows support, an HTTP transport for OCSP or timestamps (callbacks
-only) and production distribution. They remain separate, approval-gated phases.
-`native_version()` returns the linked native library version.
+Not implemented yet: Windows support, an HTTP transport for OCSP or timestamps (callbacks
+only) and production distribution. Lease-backed buffers were measured and deliberately not
+built; see [Copies and leases](#copies-and-leases). `native_version()` returns the linked
+native library version.
+
+## Copies and leases
+
+Replies and write payloads are **copied** across the boundary: the engine copies a reply
+before `fulfill()` returns, and a write request is copied into a Python `bytes`. The C API
+can instead lend storage ("leases"): `preadv` straight into engine-owned memory for a read,
+`pwrite` straight from engine-owned memory for a write, as the C++ binding does. Whether
+that is worth its cost was measured rather than assumed, with
+[`benchmarks/copy_cost.py`](benchmarks/copy_cost.py), which signs a large file with the
+shipped driver and with hand-written raw-C-API loops, interleaved and shuffled each round.
+On one Apple-silicon laptop, warm page cache, median of 25 rounds:
+
+| Signing a… | shipped driver | raw loop, no leases (control) | read leases | write leases | both |
+|---|---|---|---|---|---|
+| 134 MB file | 123.7 ms (+5.9%) | 116.8 ms | 108.4 ms (−7.2%) | 112.9 ms (−3.3%) | 105.4 ms (−9.7%) |
+| 17 MB file | 16.2 ms (+4.0%) | 15.6 ms | 14.1 ms (−9.7%) | 15.1 ms (−2.9%) | 13.9 ms (−10.9%) |
+
+What the numbers say:
+
+- Throughput is about 1 GB/s. Where the time goes (profiling `sign_file`): roughly half is
+  the kernel's `pwrite`, a quarter the engine's hashing, and the copies a small remainder.
+  A memcpy of the whole asset costs about 8 ms against ~120 ms for the build.
+- **Write leases buy almost nothing** (≈3%): the cost is the kernel write, not the copy.
+- **Read leases buy about 7–10%** on signing. Reading has no lease API at all, so
+  `read_asset` gains nothing, and an async or network host is dominated by its own latency.
+- The Python driver itself costs about 4–6% over a raw loop, which is what you pay for typed
+  requests, per-session locking and error mapping.
+
+So leases were **not built**. A gain of under a tenth, on one workload, does not justify the
+extra public surface: a writable view onto engine memory is only safe if the library can
+prove no reference outlives the seal that hands the storage back (`memoryview.release()` can
+supply that proof, but every host, the async driver and the thread adapters would have to
+honour it), and a cancelled worker thread could be mid-`preadv` into a lease while its
+session is gone. This is the kind of optimisation to revisit if a workload shows copies
+mattering, not before. One cheap improvement did come out of the measurement: the stream
+and file hosts used to copy every read a second time while gathering it, and now return a
+complete read as it is.
+
+## Next phases
+
+6. Broader integration coverage, CI and distributable wheel certification.
 
 ### Known engine behavior
 
@@ -265,8 +306,3 @@ checkout in isolated Python mode with an empty executable search path (no Cargo 
 compiler available). Build-helper tests cover header extraction, platform selection,
 Cargo invocation/failure propagation, and rejection of unsupported source
 distributions. Test-only dependency: `cryptography`, as the example signer.
-
-## Next phases
-
-5. Lease-backed buffer optimizations and measurements.
-6. Broader integration coverage, CI and distributable wheel certification.

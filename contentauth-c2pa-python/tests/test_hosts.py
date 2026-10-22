@@ -84,6 +84,18 @@ class Truncated(io.BytesIO):
         return b""
 
 
+def test_a_complete_read_is_returned_as_it_is_not_copied_again() -> None:
+    class Marked(io.BytesIO):
+        chunk = b"abcd"
+
+        def read(self, size: int | None = -1) -> bytes:
+            return self.chunk
+
+    stream = Marked(b"xxxx")
+    assert StreamReadHost(stream).read(0, 4) is Marked.chunk
+    assert StreamBuildHost(Marked(b"xxxx"), io.BytesIO()).read(SOURCE, 0, 4) is Marked.chunk
+
+
 def test_stream_host_gathers_partial_reads() -> None:
     assert bytes(StreamReadHost(Trickle(b"abcdef")).read(1, 4)) == b"bcde"
 
