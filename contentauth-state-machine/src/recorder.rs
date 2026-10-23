@@ -462,6 +462,26 @@ mod tests {
     }
 
     #[test]
+    fn a_session_waits_for_partial_replies_and_handles_an_empty_batch() {
+        let mut session = PingSession::new(2);
+        assert_eq!(session.advance().unwrap(), Step::AwaitHost);
+        let requests = session.outstanding_requests();
+        let first = requests[0].id;
+        let second = requests[1].id;
+
+        session.fulfill(first, Pong::Ok).unwrap();
+        assert_eq!(session.advance().unwrap(), Step::AwaitHost);
+        assert_eq!(session.outstanding_requests()[0].id, second);
+        session.fulfill(second, Pong::Ok).unwrap();
+        assert_eq!(session.advance().unwrap(), Step::Complete);
+
+        let mut empty = PingSession::new(0);
+        assert_eq!(empty.advance().unwrap(), Step::AwaitHost);
+        assert!(empty.outstanding_requests().is_empty());
+        assert_eq!(empty.advance().unwrap(), Step::Complete);
+    }
+
+    #[test]
     fn a_transcript_records_every_call_and_reads_as_a_log() {
         let mut recorder = Recorder::new(PingSession::new(2));
         let err = drive(&mut recorder, fails_second_ping).unwrap_err();
@@ -482,6 +502,7 @@ mod tests {
                 ..
             }
         ));
+        assert_eq!(transcript.clone().to_string(), transcript.to_string());
         assert_eq!(
             transcript.to_string(),
             "#0 advance in Start -> AwaitHost, issued RequestId(0): Ping(0); RequestId(1): Ping(1)\n\
@@ -502,6 +523,57 @@ mod tests {
         assert!(transcript
             .to_string()
             .contains("#1 fulfill RequestId(0) with Unrelated -> rejected: "));
+        assert_eq!(transcript.clone().to_string(), transcript.to_string());
+    }
+
+    #[derive(Clone)]
+    struct FailingDebug;
+
+    impl fmt::Debug for FailingDebug {
+        fn fmt(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
+            Err(fmt::Error)
+        }
+    }
+
+    impl Request for FailingDebug {
+        type Reply = Self;
+
+        fn expected_reply(&self) -> &'static str {
+            "FailingDebug"
+        }
+
+        fn accepts(&self, _: &Self::Reply) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn debug_formatting_errors_are_propagated() {
+        assert_eq!(FailingDebug.expected_reply(), "FailingDebug");
+        assert!(FailingDebug.accepts(&FailingDebug));
+        assert!(abbreviated(&FailingDebug).is_err());
+
+        let transcript = Transcript {
+            events: vec![Event::Advanced {
+                phase: "Start".into(),
+                outcome: Outcome::Ok(Step::AwaitHost),
+                issued: vec![HostRequest {
+                    id: RequestId(0),
+                    kind: FailingDebug,
+                }],
+            }],
+        };
+        let mut output = String::new();
+        assert!(write!(&mut output, "{transcript}").is_err());
+
+        let transcript: Transcript<FailingDebug> = Transcript {
+            events: vec![Event::Fulfilled {
+                id: RequestId(0),
+                reply: FailingDebug,
+                outcome: Outcome::Ok(()),
+            }],
+        };
+        assert!(write!(&mut output, "{transcript}").is_err());
     }
 
     #[test]
@@ -520,12 +592,15 @@ mod tests {
 
     #[test]
     fn abbreviation_stops_debug_formatting_at_the_limit() {
-        struct CountingDebug<'a>(&'a std::cell::Cell<usize>);
+        struct CountingDebug<'a> {
+            formatted: &'a std::cell::Cell<usize>,
+            count: usize,
+        }
 
         impl fmt::Debug for CountingDebug<'_> {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                for _ in 0..10_000 {
-                    self.0.set(self.0.get() + 1);
+                for _ in 0..self.count {
+                    self.formatted.set(self.formatted.get() + 1);
                     write!(formatter, "x")?;
                 }
                 Ok(())
@@ -533,10 +608,25 @@ mod tests {
         }
 
         let formatted = std::cell::Cell::new(0);
-        let text = abbreviated(&CountingDebug(&formatted)).unwrap();
+        let text = abbreviated(&CountingDebug {
+            formatted: &formatted,
+            count: 10_000,
+        })
+        .unwrap();
 
         assert_eq!(formatted.get(), SHOWN + 1);
         assert_eq!(text, format!("{}…", "x".repeat(SHOWN)));
+
+        formatted.set(0);
+        assert_eq!(
+            abbreviated(&CountingDebug {
+                formatted: &formatted,
+                count: 4,
+            })
+            .unwrap(),
+            "xxxx"
+        );
+        assert_eq!(formatted.get(), 4);
     }
 
     #[test]

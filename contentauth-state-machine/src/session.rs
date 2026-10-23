@@ -501,6 +501,18 @@ mod tests {
             core.failed_error(),
             ProtocolError::SessionFailed(Failure::default())
         );
+        assert_eq!(core.finish_check(), Err(ProtocolError::SessionNotComplete));
+    }
+
+    #[test]
+    fn unchecked_fulfillment_records_a_reply_without_validation() {
+        let mut core = SessionCore::<Ping>::default();
+        let id = core.issue(Ping::Ping(0));
+
+        core.fulfill_unchecked(id, Pong::Unrelated);
+
+        assert!(core.outstanding_requests().is_empty());
+        assert_eq!(core.take_reply(id), Some(Pong::Unrelated));
     }
 
     #[test]
@@ -520,13 +532,19 @@ mod tests {
         session.fulfill(id, Pong::Failed("lost")).unwrap();
         let err = session.advance().unwrap_err();
         assert_eq!(err.to_string(), "no pong: lost");
+        assert!(matches!(
+            session.advance(),
+            Err(crate::test_session::PingError::Protocol(
+                ProtocolError::SessionFailed(_)
+            ))
+        ));
         assert_eq!(session.phase(), "AwaitingPong");
-        match session.finish() {
-            Err(crate::test_session::PingError::Protocol(ProtocolError::SessionFailed(f))) => {
-                assert_eq!(f.cause, "no pong: lost");
-            }
-            other => panic!("expected SessionFailed, got {other:?}"),
-        }
+        assert!(matches!(
+            session.finish(),
+            Err(crate::test_session::PingError::Protocol(
+                ProtocolError::SessionFailed(f)
+            )) if f.cause == "no pong: lost"
+        ));
     }
 
     // Deliberately not Clone: the helper must borrow the original payload.
@@ -613,6 +631,16 @@ mod tests {
         assert!(session.outstanding_requests().is_empty());
         assert_eq!(session.core.take_reply(first), Some(TestReply::Accepted));
         assert_eq!(session.core.take_reply(second), Some(TestReply::Failed));
+    }
+
+    #[test]
+    fn session_trait_methods_expose_phase_and_running_finish_error() {
+        let mut session = TestSession::default();
+
+        assert_eq!(session.phase(), "Test");
+        assert_eq!(session.advance().unwrap(), Step::AwaitHost);
+        assert_eq!(session.advances, 1);
+        assert_eq!(session.finish(), Err(ProtocolError::SessionNotComplete));
     }
 
     #[test]
