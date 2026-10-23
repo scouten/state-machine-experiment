@@ -17,32 +17,43 @@
 //! c2pa-rs accepts either a MIME type or a bare file extension there, and
 //! resolves it through a registry of handlers; c2pa-web's own
 //! `isSupportedReaderFormat` gate in front of it covers far more
-//! containers than this. This crate has exactly one handler —
-//! [`JpegFormat`] — so today this is a single string match rather than a
-//! registry, and the seam a second `contentauth-c2pa-format-*` crate would
-//! extend, exactly as `contentauth-c2pa-rs-compat`'s `format.rs` is: most
-//! naturally by returning a small enum that itself implements
-//! `FormatHandler`, one variant per handler, since the read host
-//! is generic over the handler type rather than a trait object.
+//! containers than this. Both bridges select from the workspace's standard
+//! registry, including JPEG and TIFF/BigTIFF/DNG. The caller supplies the
+//! format hint; detection and all asset I/O remain host-owned.
 
-use contentauth_c2pa_format_jpeg::JpegFormat;
+use contentauth_c2pa_format_registry::{AnyFormat, Registry};
 
 use super::error::C2paError;
 
 /// The `format` strings this build can locate a manifest store within: a
 /// MIME type or a bare extension, matched without regard to case.
-pub const FORMATS: &[&str] = &["image/jpeg", "jpeg", "jpg"];
+pub const FORMATS: &[&str] = &[
+    "image/jpeg",
+    "image/jpg",
+    "jpeg",
+    "jpg",
+    "image/tiff",
+    "image/dng",
+    "image/x-adobe-dng",
+    "tif",
+    "tiff",
+    "dng",
+];
 
 /// Picks a handler for `format`.
-pub fn for_format(format: &str) -> Result<JpegFormat, C2paError> {
-    if FORMATS
-        .iter()
-        .any(|candidate| format.eq_ignore_ascii_case(candidate))
-    {
-        Ok(JpegFormat)
+pub fn for_format(format: &str) -> Result<AnyFormat, C2paError> {
+    let format = format.trim();
+    let format = if format.eq_ignore_ascii_case("image/jpg") {
+        "image/jpeg"
     } else {
-        Err(C2paError::UnsupportedType)
-    }
+        format
+    };
+    let registry = Registry::standard();
+    registry
+        .by_mime(format)
+        .or_else(|| registry.by_extension(format))
+        .cloned()
+        .ok_or(C2paError::UnsupportedType)
 }
 
 #[cfg(test)]
@@ -51,14 +62,50 @@ mod tests {
 
     #[test]
     fn jpeg_is_recognized_as_a_mime_type_or_an_extension_regardless_of_case() {
-        for format in ["image/jpeg", "IMAGE/JPEG", "jpeg", "jpg", "JPG"] {
+        for format in [
+            "image/jpeg",
+            "IMAGE/JPEG",
+            "jpeg",
+            "jpg",
+            "JPG",
+            "image/jpg",
+        ] {
+            assert!(
+                matches!(for_format(format), Ok(handler) if handler.descriptor().name == "jpeg"),
+                "{format}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_advertised_format_has_a_registered_handler() {
+        for format in FORMATS {
             assert!(for_format(format).is_ok(), "{format}");
         }
     }
 
     #[test]
+    fn tiff_and_dng_hints_select_the_tiff_handler() {
+        for format in [
+            "image/tiff",
+            "image/dng",
+            "image/x-adobe-dng",
+            "tif",
+            "TIFF",
+            "dng",
+            ".DNG",
+            " image/tiff; charset=binary ",
+        ] {
+            assert!(
+                matches!(for_format(format), Ok(handler) if handler.descriptor().name == "tiff"),
+                "{format}"
+            );
+        }
+    }
+
+    #[test]
     fn anything_else_is_unsupported() {
-        for format in ["image/png", "png", "", "jpe", "image/jpg"] {
+        for format in ["image/png", "png", "", "jpe", "application/octet-stream"] {
             assert!(
                 matches!(for_format(format), Err(C2paError::UnsupportedType)),
                 "{format}"

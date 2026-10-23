@@ -11,7 +11,7 @@
 //! [`compat`] owns the existing JavaScript SDK-shaped settings, errors, format
 //! selection and reports. Those are compatibility policy, not generic engine
 //! behavior or a universal foreign-function ABI. The bridges currently use
-//! that policy and support JPEG and the existing baseline definition.
+//! that policy and support JPEG, TIFF/BigTIFF/DNG and the existing baseline definition.
 
 #![deny(clippy::expect_used)]
 #![deny(clippy::panic)]

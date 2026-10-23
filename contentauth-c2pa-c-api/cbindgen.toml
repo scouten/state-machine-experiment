@@ -9,11 +9,6 @@ cpp_compat = true
 parse_deps = false
 
 [export]
-include = [
-    "C2paSmReadRequest",
-    "C2paSmBuildRequest",
-    "C2paSmExclusion",
-    "C2paSmExclusionList",
-    "C2paSmReadSession",
-    "C2paSmBuildSession",
-]
+include = ["C2paSmSession", "C2paSmReader", "C2paSmError", "C2paSmBuildSession",
+    "C2paSmWriteBuffer", "C2paSmReadBuffer", "C2paSmCompletedRead", "C2paSmSignReport",
+    "C2paSmBuildErrorCode", "C2paSmBuildRequestKind", "C2paSmBuildReplyKind", "C2paSmBuildStream"]

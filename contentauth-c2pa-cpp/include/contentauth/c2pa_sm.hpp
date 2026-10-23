@@ -15,7 +15,7 @@
 /// @brief Core of the sans-I/O C++ binding: `Session`, `Reader`, the request
 ///        and reply vocabulary, and the simplest (blocking) driver.
 ///
-/// C++17, header-only over `contentauth_c2pa_sm.h`. See the directory's
+/// C++17, header-only over the canonical `contentauth_c2pa_c_api.h`. See the directory's
 /// README.md for how this differs from c2pa-cpp and why.
 ///
 /// The asynchronous drivers are separate headers, so that including this one
@@ -40,7 +40,7 @@
 #include <variant>
 #include <vector>
 
-#include "contentauth_c2pa_sm.h"
+#include "contentauth_c2pa_c_api.h"
 
 namespace c2pa::sm {
 

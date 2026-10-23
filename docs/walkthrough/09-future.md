@@ -16,7 +16,9 @@ flowchart LR
         d5["Differential tests vs c2pa-rs"]
         d6["Shared JS Worker read + baseline sign<br/>browser Wasm / Node Neon, async signer callbacks"]
         d7["C++ read + sign; blocking / pool / future / coroutine<br/>atomic file signing + Trusted read-back example"]
-        d8["Debuggability: phase(), failure context,<br/>record / replay transcripts"]
+        d8["C++ signing read + write leases:<br/>host I/O directly into/from Rust-owned buffers"]
+        d9["Canonical C API: tracked reader/build/results,<br/>independent signing buffer leases, registry formats"]
+        d10["Debuggability: phase(), failure context,<br/>record / replay transcripts"]
     end
     subgraph next["Next"]
         direction TB
@@ -73,6 +75,13 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 
 ## 4. Bindings and hosts
 
+* **C/C++ FFI consolidation:** the tested C++ Rust boundary has been
+  adopted by the canonical C API with tracked ownership, selectable exports,
+  and registry-backed JPEG/TIFF/DNG, and the C++ binding builds and
+  tests against that library and its generated header; the duplicate Rust ABI
+  crate and hand-written headers are gone. The C++ directory layout is also
+  complete, with implementation code under `src/` and tests under `tests/`.
+  See the [phase plan](../c-api-consolidation-plan.md).
 * **C++ host integrations:** production private-key providers and real TSA HTTP
   transport remain host responsibilities, as do atomic publication on non-POSIX
   systems and packaging (`install`/`find_package`, vcpkg, Conan). The baseline
@@ -80,6 +89,10 @@ changes. Choose formats for *what they exercise*, as TIFF did:
   atomic file failure tests and a runnable signing/read-back example included
   in the coverage and sanitizer CI matrix. Concurrent destruction of a running
   coroutine is not supported; its documented host-lifetime rules still apply.
+* **Further buffer optimization:** C++ signing read/write leases and shared
+  Rust write payloads are implemented. Sign/signature/timestamp payloads and
+  reader/validator buffer leases remain outside those phases. See
+  [Zero-copy buffers](10-zerocopy.md).
 * **`Builder` surface parity** for the c2pa-rs shape beyond the baseline
   case; `from_stream` and other constructors.
 * **c2pa-node:** `fromManifestDataAndAsset`, `resourceToAsset`, signers,

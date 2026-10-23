@@ -24,8 +24,9 @@ buffer. Hosts can borrow a byte slice for their language boundary; a host-owned
 `Vec<u8>` read reply moves into the engine's `Bytes` without copying. This is not
 an end-to-end zero-copy ABI: Neon/Wasm still copy into JavaScript-owned buffers.
 
-Compatibility policy remains explicit: JPEG selection, settings JSON, baseline
-definition conversion and reports are not generic engine concepts.
+Compatibility policy remains explicit: registry-backed JPEG/TIFF/DNG selection,
+settings JSON, baseline definition conversion and reports are not generic
+engine concepts.
 The [C++ binding](../contentauth-c2pa-cpp/) also consumes both bridges
 through a C ABI with its own ownership adapter. Python and other bindings remain
 prospective. Rust enums are not a stable cross-language ABI.

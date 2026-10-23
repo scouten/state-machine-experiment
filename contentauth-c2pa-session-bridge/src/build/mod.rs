@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use contentauth_c2pa_file_builder::{
     FileBuilderReply, FileBuilderRequest, FileBuilderSession, SignPurpose,
 };
-use contentauth_c2pa_format_jpeg::JpegFormat;
+use contentauth_c2pa_format_registry::AnyFormat;
 use contentauth_c2pa_primitives::{
     tsa::{timestamp_request, timestamp_token},
     Bytes, HostError, SigningAlg,
@@ -32,7 +32,7 @@ mod error;
 
 pub use error::Error;
 
-type Engine = FileBuilderSession<JpegFormat>;
+type Engine = FileBuilderSession<AnyFormat>;
 
 /// Which of the two assets a request concerns.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -231,14 +231,14 @@ impl BuildSessionBridge {
         alg: &str,
         certs: Vec<Vec<u8>>,
     ) -> Result<Self, Error> {
-        for_format(format)?;
+        let handler = for_format(format)?;
         let alg = parse_alg(alg)?;
         let definition = Definition::from_json(definition_json)?;
         let tsa_url = definition.tsa_url.clone();
         let settings = definition.into_settings(alg, certs)?;
 
         Ok(Self {
-            inner: FileBuilderSession::new(JpegFormat, settings),
+            inner: FileBuilderSession::new(handler, settings),
             tsa_url,
             handles: HashMap::new(),
             next_handle: 0,

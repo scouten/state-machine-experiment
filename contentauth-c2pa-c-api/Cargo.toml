@@ -15,52 +15,20 @@ publish = false
 [lib]
 crate-type = ["staticlib", "rlib"]
 
-[[test]]
-name = "read"
-required-features = ["read"]
-
-[[test]]
-name = "build"
-required-features = ["build"]
-
-[[test]]
-name = "roundtrip"
-required-features = ["read", "build"]
-
 [features]
 default = ["read", "build"]
-read = [
-    "dep:contentauth-c2pa-file-reader",
-    "dep:contentauth-c2pa-format-registry",
-    "dep:contentauth-c2pa-js-compat",
-    "dep:contentauth-c2pa-primitives",
-    "dep:contentauth-state-machine",
-    "dep:serde_json",
-]
-build = [
-    "dep:contentauth-c2pa-file-builder",
-    "dep:contentauth-c2pa-format-registry",
-    "dep:contentauth-c2pa-primitives",
-    "dep:contentauth-c2pa-sign-baseline",
-    "dep:contentauth-state-machine",
-]
+read = ["dep:contentauth-c2pa-session-bridge"]
+build = ["dep:contentauth-c2pa-session-bridge"]
 
 [dependencies]
 cimpl = "0.4.1"
-contentauth-c2pa-file-builder = { path = "../contentauth-c2pa-file-builder", optional = true }
-contentauth-c2pa-file-reader = { path = "../contentauth-c2pa-file-reader", optional = true }
-contentauth-c2pa-format-registry = { path = "../contentauth-c2pa-format-registry", optional = true }
-contentauth-c2pa-js-compat = { path = "../contentauth-c2pa-js-compat", optional = true }
-contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives", optional = true }
-contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline", optional = true }
-contentauth-state-machine = { path = "../contentauth-state-machine", optional = true }
-serde_json = { version = "1", optional = true }
-thiserror = "2.0.21"
+contentauth-c2pa-session-bridge = { path = "../contentauth-c2pa-session-bridge", optional = true }
 
 [build-dependencies]
 cbindgen = "0.27"
 
 [dev-dependencies]
+serde_json = "1"
 base64 = "0.22"
 c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
     "rust_native_crypto",
