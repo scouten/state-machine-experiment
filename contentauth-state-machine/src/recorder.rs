@@ -152,18 +152,21 @@ const SHOWN: usize = 120;
 
 struct BoundedDebug {
     text: String,
+    shown: usize,
     truncated: bool,
 }
 
 impl fmt::Write for BoundedDebug {
     fn write_str(&mut self, value: &str) -> fmt::Result {
-        let remaining = SHOWN.saturating_sub(self.text.chars().count());
+        let remaining = SHOWN - self.shown;
         if let Some((cut, _)) = value.char_indices().nth(remaining) {
             self.text.push_str(&value[..cut]);
+            self.shown += remaining;
             self.truncated = true;
             return Err(fmt::Error);
         }
         self.text.push_str(value);
+        self.shown += value.chars().count();
         Ok(())
     }
 }
@@ -172,6 +175,7 @@ impl fmt::Write for BoundedDebug {
 fn abbreviated(value: &dyn fmt::Debug) -> Result<String, fmt::Error> {
     let mut output = BoundedDebug {
         text: String::new(),
+        shown: 0,
         truncated: false,
     };
     match write!(&mut output, "{value:?}") {
