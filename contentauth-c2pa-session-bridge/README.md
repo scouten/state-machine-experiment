@@ -28,8 +28,11 @@ Compatibility policy remains explicit: registry-backed JPEG/TIFF/DNG selection,
 settings JSON, baseline definition conversion and reports are not generic
 engine concepts.
 The [C++ binding](../contentauth-c2pa-cpp/) also consumes both bridges
-through a C ABI with its own ownership adapter. Python and other bindings remain
-prospective. Rust enums are not a stable cross-language ABI.
+through a C ABI with its own ownership adapter. The
+[Python package](../contentauth-c2pa-python/) links that same C ABI
+through compiled CFFI and exposes typed low-level read/build sessions, blocking and
+asyncio hosts, and atomic file signing; other bindings remain prospective.
+Rust enums are not a stable cross-language ABI.
 
 The older browser-shaped async hosts remain in
 [`contentauth-c2pa-js-compat`](../contentauth-c2pa-js-compat/) and its signing

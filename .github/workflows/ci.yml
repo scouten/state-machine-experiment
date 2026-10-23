@@ -570,3 +570,60 @@ jobs:
         run: |
           ctest --test-dir build --output-on-failure --parallel 2
           ./build/c2pa_sm_tests
+
+  python-binding:
+    name: Python binding (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+
+    # `contentauth-c2pa-python` is a standalone package, not a workspace
+    # member: a CFFI extension that statically links the canonical C API,
+    # which its build compiles with cargo. This job certifies what the
+    # README promises. A wheel builds from a full checkout, installs into a
+    # clean virtual environment, and the suite then runs against the
+    # *installed* wheel (never the source tree) with 100% coverage
+    # (`fail_under` in `pyproject.toml`) and `mypy --strict`.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.11", "3.13"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master@2026-06-30
+        with:
+          toolchain: stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          cache-bin: false
+
+      - name: Install Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Build wheel
+        run: python -m pip wheel --no-deps --wheel-dir contentauth-c2pa-python/dist contentauth-c2pa-python
+
+      - name: Install wheel and development dependencies
+        working-directory: contentauth-c2pa-python
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --find-links dist 'contentauth-c2pa-python[dev]'
+
+      - name: Smoke test the installed wheel
+        working-directory: contentauth-c2pa-python
+        run: .venv/bin/python -c 'from contentauth_c2pa import native_version; print(native_version())'
+
+      - name: Run tests with coverage
+        working-directory: contentauth-c2pa-python
+        run: .venv/bin/python -m pytest --cov --cov-report=term-missing
+
+      - name: Type check
+        working-directory: contentauth-c2pa-python
+        run: .venv/bin/python -m mypy

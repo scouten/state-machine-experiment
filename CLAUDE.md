@@ -448,7 +448,8 @@ MSRV is 1.96.0 (kept in sync between `Cargo.toml`'s `rust-version` and the
 
 `.github/workflows/ci.yml` runs, as separate jobs: unit tests + coverage
 upload (Codecov), doc tests, Clippy, nightly `cargo fmt --check`, doc
-build, Wasm target checks, an MSRV check, and `cargo-deny`. All must pass
+build, Wasm target checks, an MSRV check, `cargo-deny`, and a
+`python-binding` job (wheel build, install and tests on Ubuntu and macOS). All must pass
 on a PR into `main`.
 
 ## Merging PRs

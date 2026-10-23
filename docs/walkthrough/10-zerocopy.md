@@ -397,3 +397,22 @@ Signing input, signature replies, timestamps, certificate/settings data,
 and report serialization remain outside these phases. Operating-system
 I/O and memory-host read/write copies also remain; this is not a claim
 that the entire signing pipeline is copy-free.
+
+## What the Python binding measured
+
+The [Python binding](../../contentauth-c2pa-python/README.md#copies-and-leases) did **not**
+adopt these leases, and measured why. Signing a 134 MB file through hand-written raw loops
+over the same C ABI, interleaved and shuffled, read leases saved about 7% and write leases
+about 3% against a no-lease control (a 17 MB file: about 10% and 3%). Roughly half the time
+is the kernel's `pwrite` and a quarter is the engine's hashing, so the copies removed are a
+small remainder; a memcpy of the whole asset is about 8 ms against roughly 120 ms for the
+build. The reader has no lease API, so reading gains nothing. The comparison and its
+methodology are in
+[`benchmarks/copy_cost.py`](../../contentauth-c2pa-python/benchmarks/copy_cost.py).
+
+The cost side is real: handing a language runtime a writable view of engine memory is only
+safe if no reference can outlive the seal that returns the storage, and a worker thread
+cancelled mid-`preadv` outlives its session. The C++ binding pays that cost with
+move-only types; Python would need a `memoryview.release()` proof at every seal. The
+finding is that the optimisation is real but modest, and worth building only where a
+workload shows the copies mattering.

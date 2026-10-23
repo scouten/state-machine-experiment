@@ -117,7 +117,29 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 * **Browser:** a `fetch`-backed OCSP `Platform`; the existing async `web`
   modules still have no browser CI coverage. The shared-host browser CI runs
   the synchronous Wasm session boundary, not those alternative modules.
-* **Other host languages** — Python, Swift, Kotlin, .NET: the Node binding
+* **Python:** the standalone
+  [`contentauth-c2pa-python`](../../contentauth-c2pa-python/) package builds a
+  compiled CFFI adapter over the canonical C API and exposes typed low-level
+  `ReadSession` / `BuildSession` with deterministic ownership, blocking memory, stream
+  and file hosts, `read_asset`, and `sign_file`, which publishes atomically and leaves no
+  debris on failure (a real sign → read-back `Trusted` round trip included, with a
+  caller-owned key). Its native `asyncio` drivers answer each request as its own task,
+  report replies in any order, interleave many sessions on one loop, and accept a
+  coroutine-function signer, so a remote signing service is awaited concurrently with file
+  I/O. Cancellation is the interesting part, and a direct payoff of the sans-I/O design:
+  stopping a session is just ceasing to drive it, so cancelling cancels the in-flight host
+  calls and nothing is delivered to the session afterwards. What cannot be cancelled is a
+  worker thread already mid-I/O, so the thread adapters defer closing a file or removing a
+  temporary output until the last started call has really finished, on whichever thread
+  that is (randomised cancellation of 400 real signings left no debris, no leaked
+  descriptors and no partial destination). Opt-in standard-library HTTP
+  transports for OCSP (public addresses only, pinned to the vetted address, no redirects)
+  and timestamps are provided. A `cibuildwheel` workflow builds and tests
+  manylinux/musllinux (x86_64, aarch64) and macOS (arm64, Intel) wheels as artifacts. Next:
+  publication, Windows, and a real-asset corpus compared against c2pa-rs. Finding for the engine: a
+  `TimestampResponse` reply to a *length* request is accepted and then fails the build,
+  instead of being rejected with the request left outstanding like other mismatched kinds.
+* **Other host languages** — Swift, Kotlin, .NET: the Node binding
   shows the minimal shape (a handful of synchronous functions plus a host
   loop). Each is a good test of whether the flattened `PendingRequest`/
   `Reply` data model is the right wire format.
