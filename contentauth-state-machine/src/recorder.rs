@@ -577,6 +577,34 @@ mod tests {
     }
 
     #[test]
+    fn transcript_propagates_output_errors_while_formatting_requests() {
+        struct RejectRequestOutput;
+
+        impl fmt::Write for RejectRequestOutput {
+            fn write_str(&mut self, text: &str) -> fmt::Result {
+                if text.contains("Ping") {
+                    Err(fmt::Error)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        let transcript = Transcript {
+            events: vec![Event::Advanced {
+                phase: "Start".into(),
+                outcome: Outcome::Ok(Step::AwaitHost),
+                issued: vec![HostRequest {
+                    id: RequestId(0),
+                    kind: Ping::Ping(0),
+                }],
+            }],
+        };
+
+        assert!(write!(&mut RejectRequestOutput, "{transcript}").is_err());
+    }
+
+    #[test]
     fn long_values_are_abbreviated_for_reading() {
         let long = "x".repeat(500);
         let text = abbreviated(&long).unwrap();
