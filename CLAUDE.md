@@ -10,7 +10,11 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
 - **`contentauth-state-machine`** — the reusable engine. Domain-agnostic:
   a request/reply vocabulary trait, request tracking, a protocol-error
   vocabulary, and the `advance` / `fulfill` / `finish` interaction
-  contract. See [`src/session.rs`](contentauth-state-machine/src/session.rs)
+  contract. Its session core is held to model-based `proptest` tests and
+  `cargo-fuzz` targets (`fuzz/`, outside the workspace; see the engine's README, "Testing and fuzzing");
+  a change to `SessionCore`/`RequestTracker` must keep
+  `cargo test -p contentauth-state-machine` passing and should be
+  fuzzed briefly. See [`src/session.rs`](contentauth-state-machine/src/session.rs)
   for `Session`/`SessionCore` and [`README.md`](contentauth-state-machine/README.md)
   for the interaction contract diagram.
 - **`contentauth-c2pa-reader`** — a from-scratch, sans-I/O reader/validator

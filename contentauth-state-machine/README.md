@@ -86,6 +86,40 @@ rustup toolchain add nightly
 cargo +nightly fmt
 ```
 
+## Testing and fuzzing
+
+The engine's bookkeeping is the one piece every session shares, so it is
+tested adversarially. [`tests/support/model.rs`](tests/support/model.rs)
+holds two *model-based* harnesses. Each takes a script of host calls —
+including illegal ones: unknown or foreign IDs, wrong reply payloads,
+replies after completion or failure — runs it against the real engine and
+against a deliberately naive reference model, and asserts they agree after
+every step:
+
+* `run_core` drives `SessionCore` directly, as a workflow would;
+* `run_session` drives a complete `Session` through the public
+  `advance` / `fulfill` / `outstanding_requests` / `finish` contract.
+
+Two front ends feed them:
+
+* [`tests/model_based.rs`](tests/model_based.rs) uses
+  [`proptest`](https://docs.rs/proptest) for structured, shrinking
+  generation. It runs in plain `cargo test`.
+* [`fuzz/`](fuzz) uses [`cargo-fuzz`](https://github.com/rust-fuzz/cargo-fuzz)
+  (libFuzzer) for coverage-guided generation from raw bytes. It is outside
+  the workspace because it needs nightly:
+
+  ```sh
+  cargo install cargo-fuzz
+  cargo +nightly fuzz run session_core        # from this directory
+  cargo +nightly fuzz run fan_out_session
+  ```
+
+  CI runs each target for a short, fixed time on every PR. A crash
+  artifact replays with `cargo +nightly fuzz run <target> <artifact>`;
+  turn it into a named case in `seed_scripts` in `tests/model_based.rs`
+  once fixed.
+
 ## License
 
 Licensed under either the [Apache License, Version 2.0](../LICENSE-APACHE) or
