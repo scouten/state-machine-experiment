@@ -229,6 +229,20 @@ npm test
 npm run test:browser
 ```
 
+CI builds Rust/Wasm and Neon and runs the Node contracts on the Ubuntu runner.
+Only the browser runner executes in the official Playwright Noble image, which
+already contains Chromium, Firefox, WebKit and their OS dependencies. This avoids
+reinstalling browser system libraries through apt on every run. The image tag and
+digest in `.github/workflows/ci.yml` must be updated together with the Playwright
+version in `package.json` and `package-lock.json`; CI checks the installed version
+before pulling the image. The image's Node 24 runs the same `test:browser` command,
+using the runner's installed npm packages and freshly built bindings and fixtures
+through a workspace mount. It runs as the runner's UID/GID so results stay
+runner-owned, with shared host IPC for Chromium's shared-memory requirements.
+All three browsers still run both JSON/binary contracts and the full boundary
+comparison, including the 64 MiB assets. npm installation, image pulling, Node
+contracts and browser contracts have separate steps and timeouts.
+
 The independent Neon and Wasm workspaces are not built by root `cargo test`.
 `fixtures` builds the existing signing addon, generates small and 64 MiB signed
 assets with the repository's public TEST ONLY ES256 credentials, and checks
