@@ -23,7 +23,7 @@
 
 use contentauth_c2pa_builder::{
     Assertion, BuilderHostReply, BuilderRequest, BuilderSession, BuilderSettings, BuilderStep,
-    GeneratorInfo, HashAlgorithm, SigningAlg, TimestampSettings,
+    ChunkSize, GeneratorInfo, HashAlgorithm, HashWindow, SigningAlg, TimestampSettings,
 };
 use contentauth_c2pa_reader::{
     ClaimVersion, ReadHostReply, ReadRequest, ReadSession, ReadSettings, ReadStep, ValidationState,
@@ -45,6 +45,13 @@ const TEST_SIGNER_KEY: &[u8] = include_bytes!("fixtures/test-signer.key.pem");
 struct Host {
     asset: Vec<u8>,
     manifest_range: Option<(u64, u64)>,
+
+    /// The length of every [`BuilderRequest::AssetBytes`] the session issued.
+    asset_bytes_asked: Vec<u64>,
+
+    /// The most [`BuilderRequest::AssetBytes`] ever outstanding in one
+    /// batch — the session's in-flight hash window.
+    peak_asset_bytes: usize,
 }
 
 impl Host {
@@ -52,6 +59,8 @@ impl Host {
         Self {
             asset: (0..asset_len as u32).map(|i| (i % 251) as u8).collect(),
             manifest_range: None,
+            asset_bytes_asked: Vec::new(),
+            peak_asset_bytes: 0,
         }
     }
 
@@ -71,6 +80,11 @@ impl Host {
             }
 
             let requests = session.outstanding_requests().to_vec();
+            let asset_bytes_now = requests
+                .iter()
+                .filter(|request| matches!(request.kind, BuilderRequest::AssetBytes { .. }))
+                .count();
+            self.peak_asset_bytes = self.peak_asset_bytes.max(asset_bytes_now);
             for request in requests {
                 let reply = self.reply_to(&request.kind);
                 session.fulfill(request.id, reply).unwrap();
@@ -100,6 +114,7 @@ impl Host {
             }
 
             BuilderRequest::AssetBytes { range, .. } => {
+                self.asset_bytes_asked.push(range.len);
                 let start = range.start as usize;
                 let end = start + range.len as usize;
                 BuilderHostReply::AssetBytes(self.asset[start..end].to_vec().into())
@@ -207,6 +222,56 @@ fn read_back_with_manifest(
             session.fulfill(request.id, reply).unwrap();
         }
     }
+}
+
+#[test]
+fn the_asset_is_requested_in_chunks_of_the_configured_size() {
+    let small = ChunkSize::MIN;
+    let mut host = Host::new(40_000);
+    let mut builder_settings = settings(vec![], None);
+    builder_settings.hash_chunk_size = small;
+
+    let (asset, _) = host.build(BuilderSession::new(builder_settings));
+
+    assert!(
+        host.asset_bytes_asked.iter().all(|len| *len <= small.get()),
+        "no request may exceed the configured chunk size: {:?}",
+        host.asset_bytes_asked
+    );
+    assert!(
+        host.asset_bytes_asked.len() as u64 >= 40_000 / small.get(),
+        "got only {} requests",
+        host.asset_bytes_asked.len()
+    );
+
+    // However it was chunked, the hard binding the builder recorded is the
+    // one the independently written reader computes.
+    let parsed = read_back_with_manifest(&asset, host.manifest_range.unwrap());
+    assert_eq!(parsed.validation_state, Some(ValidationState::Trusted));
+}
+
+#[test]
+fn the_builder_hash_window_caps_how_many_asset_reads_are_in_flight() {
+    let mut host = Host::new(50_000);
+    let mut builder_settings = settings(vec![], None);
+    builder_settings.hash_chunk_size = ChunkSize::MIN;
+    builder_settings.hash_window = HashWindow::new(2).unwrap();
+
+    let (asset, _) = host.build(BuilderSession::new(builder_settings));
+
+    assert!(
+        host.asset_bytes_asked.len() > 2,
+        "the asset should take several chunks, took {}",
+        host.asset_bytes_asked.len()
+    );
+    // Would rise to the default of 8 if `hash_window` were ignored.
+    assert_eq!(
+        host.peak_asset_bytes, 2,
+        "a window of 2 must never have more than 2 asset reads outstanding"
+    );
+
+    let parsed = read_back_with_manifest(&asset, host.manifest_range.unwrap());
+    assert_eq!(parsed.validation_state, Some(ValidationState::Trusted));
 }
 
 #[test]

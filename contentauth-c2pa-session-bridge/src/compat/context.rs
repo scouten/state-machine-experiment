@@ -173,6 +173,9 @@ impl Context {
             identity_trust_lists: identity_lists,
             check_ocsp: doc.verify.ocsp_fetch.unwrap_or(defaults.check_ocsp),
             fetch_remote_manifests: defaults.fetch_remote_manifests,
+            // c2pa-rs has no setting for this, so there is no key to follow.
+            hash_chunk_size: defaults.hash_chunk_size,
+            hash_window: defaults.hash_window,
         };
 
         Ok(Self { settings })
