@@ -25,6 +25,9 @@ jobs:
     name: Shared JavaScript host (Node and three browsers)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # Match js/package-lock.json; the image supplies browsers and OS libraries.
+      PLAYWRIGHT_IMAGE: mcr.microsoft.com/playwright:v1.60.0-noble@sha256:9bd26ad900bb5e0f4dee75839e957a89ae89c2b7ab1e76050e559790e946b948
     steps:
       - name: Checkout repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -49,11 +52,23 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Install JavaScript dependencies and browsers
+      - name: Install JavaScript dependencies
+        timeout-minutes: 5
         working-directory: js
+        run: npm ci
+
+      - name: Pull matching browser image
+        timeout-minutes: 5
         run: |
-          npm ci
-          npx playwright install --with-deps chromium firefox webkit
+          node <<'NODE'
+          const assert = require("node:assert/strict");
+          const { version } = require("./js/node_modules/playwright/package.json");
+          assert.ok(
+            process.env.PLAYWRIGHT_IMAGE.startsWith(`mcr.microsoft.com/playwright:v${version}-noble@sha256:`),
+            "Update PLAYWRIGHT_IMAGE and its digest to match the installed Playwright version",
+          );
+          NODE
+          docker pull "$PLAYWRIGHT_IMAGE"
 
       - name: Install matching Wasm binding CLI
         run: cargo install wasm-bindgen-cli --version 0.2.122 --locked
@@ -67,11 +82,20 @@ jobs:
       - name: Lint synchronous Wasm boundary
         run: cargo clippy --manifest-path contentauth-c2pa-wasm/Cargo.toml --target wasm32-unknown-unknown -- -Dwarnings
 
-      - name: Node and browser preservation contracts
+      - name: Node preservation contracts
+        timeout-minutes: 5
         working-directory: js
+        run: npm test
+
+      - name: Browser preservation contracts (Chromium, Firefox, WebKit)
+        timeout-minutes: 15
         run: |
-          npm test
-          npm run test:browser
+          docker run --rm --init --ipc=host \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp --env CI=true \
+            --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            --workdir "$GITHUB_WORKSPACE/js" \
+            "$PLAYWRIGHT_IMAGE" npm run test:browser
 
   tests:
     name: Unit tests + code coverage
