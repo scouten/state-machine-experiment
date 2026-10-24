@@ -72,14 +72,16 @@ pub enum Step {
 /// 4. On `Complete`: consume the session with [`Self::finish`] to obtain its
 ///    result.
 ///
-/// A session is a plain, `Send` value with no interior mutability — it is
-/// meant to be handed across threads or tasks, not shared.
+/// A session is a `Send` value meant to be handed across threads or tasks,
+/// not accessed concurrently. Implementations may use internal shared
+/// state: [`Workflow`](crate::Workflow) uses a synchronized mailbox shared
+/// with its future.
 ///
-/// # Not re-entrant, and not locked
+/// # Not re-entrant; host calls must be serialized
 ///
-/// Sessions are **not re-entrant** and the Rust code provides **no locks**
-/// around them. A host that employs a thread model must
-/// ensure that the methods of a session (`advance`, `fulfill`,
+/// Sessions are **not re-entrant**. Internal synchronization does not lock
+/// the session's API or replace host-side serialization. A host that employs
+/// a thread model must ensure that the methods of a session (`advance`, `fulfill`,
 /// `outstanding_requests`, `respond`, `finish`) are never called simultaneously from
 /// multiple threads, nor re-entered from within a call already in progress
 /// on the same session. In safe Rust the borrow checker does much of this

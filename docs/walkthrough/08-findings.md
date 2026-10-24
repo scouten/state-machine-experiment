@@ -60,6 +60,22 @@ about C2PA itself.
 
 ## Things that were *not* cheap
 
+* Hand-writing each workflow's state machine: every point where a session
+  waits on its host cost an enum variant carrying every live local, a
+  handler, and the same `None` / `Failed` / wrong-reply arms again. The
+  builder now writes its workflow as an `async fn` over the engine's
+  `Workflow` instead — same host contract, same request vocabulary, every
+  existing test and binding unchanged — and the compiler generates that
+  state machine. The duplicated arms, and the coverage gaps they left,
+  collapsed into one helper; `HashStream`'s chunk table and reorder buffer
+  became a window of polled replies and shared buffers. The whole window
+  must still be polled: a failed or wrongly sized later read must fail
+  promptly even when an earlier read is outstanding. `Host::set_phase`
+  retains diagnostic stage names without recreating the phase enum.
+  Reply wakers are still necessary for wake-driven collections, but only
+  `advance` polls the workflow. Terminal transitions cancel remaining
+  requests and release stored replies and wakers rather than leaving
+  work visible that the workflow can no longer consume.
 * Matching c2pa-rs's JSON/error contracts exactly (it's a moving target;
   the repo already tracked c2pa-rs 0.91's trust-anchor and revocation
   changes).

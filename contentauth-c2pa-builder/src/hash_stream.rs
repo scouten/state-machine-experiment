@@ -14,21 +14,33 @@
 //! Hashing an asset from chunks the host streams in, to compute the hard
 //! binding this crate is about to sign.
 //!
-//! This is the write-side twin of `contentauth-c2pa-reader`'s own
-//! `hash_stream` module — same windowed, order-independent chunk protocol,
-//! same invariants — kept as its own copy rather than shared, since it is
-//! generic over which `Request` enum it issues chunk requests against. See
-//! `contentauth-c2pa-primitives`'s README for what *is* shared between the
-//! two crates and why this is not.
+//! The write-side twin of `contentauth-c2pa-reader`'s own `hash_stream`
+//! module — the same windowed, order-independent chunk protocol — but
+//! written as an `async fn` over the session's [`Host`], where the
+//! reader's is a hand-written state machine with its own table of which
+//! chunk each outstanding request covers, and its own buffer for chunks
+//! that arrive before their turn. Here a queue of [`PendingReply`]s is
+//! that table. All replies in the window are polled so failures and wrong
+//! lengths surface promptly; valid chunks wait in shared buffers until
+//! their turn to be hashed.
+//!
+//! [`PendingReply`]: contentauth_state_machine::PendingReply
 //!
 //! # Memory
 //!
-//! At most [`WINDOW`] chunks are in play at once (outstanding plus
-//! buffered), bounding peak memory at `WINDOW × CHUNK_SIZE` no matter how
+//! At most [`WINDOW`] chunks are in play at once (requested but not yet
+//! folded), bounding peak memory at `WINDOW × CHUNK_SIZE` no matter how
 //! large the asset is.
 
+use std::{
+    collections::VecDeque,
+    future::{poll_fn, Future},
+    pin::Pin,
+    task::Poll,
+};
+
 use contentauth_c2pa_primitives::{hash::Hasher, ByteRange, Bytes, HashAlgorithm, StreamId};
-use contentauth_state_machine::{ProtocolError, RequestId, SessionCore};
+use contentauth_state_machine::{Host, PendingReply, ProtocolError};
 
 use crate::{
     error::Error,
@@ -38,190 +50,103 @@ use crate::{
 /// Bytes requested per chunk.
 const CHUNK_SIZE: u64 = 64 * 1024;
 
-/// Maximum chunks in play (outstanding or buffered) at any moment.
+/// Maximum chunks in play (outstanding or arrived but not yet folded) at
+/// any moment.
 ///
 /// This is what lets the host overlap reads while keeping memory bounded.
 const WINDOW: usize = 8;
 
-/// Accumulates a digest over host-streamed chunks of an asset.
-#[derive(Debug)]
-pub(crate) struct HashStream {
-    hasher: Hasher,
-
-    /// Every chunk to be hashed, in the order they must be folded.
-    chunks: Vec<ByteRange>,
-
-    /// Index of the next chunk to request.
-    next_to_issue: usize,
-
-    /// Index of the next chunk to fold into the hasher.
-    next_to_fold: usize,
-
-    /// Maximum chunks in play at once.
-    window: usize,
-
-    /// Requests the host has not yet answered, with the chunk each covers.
-    outstanding: Vec<(RequestId, usize)>,
-
-    /// Chunks that arrived before their turn.
-    buffered: Vec<(usize, Bytes)>,
-
-    /// Bytes folded so far, checked against the total on completion.
-    folded: u64,
-
-    /// Total bytes this stream must hash.
-    total: u64,
+/// Hashes `ranges` of `stream`, in order, from chunks the host reads.
+pub(crate) async fn hash(
+    host: &Host<BuilderRequest>,
+    stream: StreamId,
+    algorithm: HashAlgorithm,
+    ranges: &[ByteRange],
+) -> Result<Vec<u8>, Error> {
+    hash_with_limits(host, stream, algorithm, ranges, CHUNK_SIZE, WINDOW).await
 }
 
-impl HashStream {
-    /// Prepares to hash the given ranges, in order.
-    pub(crate) fn new(algorithm: HashAlgorithm, ranges: &[ByteRange]) -> Self {
-        Self::with_limits(algorithm, ranges, CHUNK_SIZE, WINDOW)
-    }
+/// [`hash`] with explicit chunking limits, so tests can drive many chunks
+/// through a small window.
+async fn hash_with_limits(
+    host: &Host<BuilderRequest>,
+    stream: StreamId,
+    algorithm: HashAlgorithm,
+    ranges: &[ByteRange],
+    chunk_size: u64,
+    window: usize,
+) -> Result<Vec<u8>, Error> {
+    let mut chunks = ranges
+        .iter()
+        .flat_map(|range| chunks_of(*range, chunk_size));
+    let mut hasher = Hasher::new(algorithm);
+    let mut in_flight: VecDeque<(ByteRange, PendingReply<BuilderRequest>, Option<Bytes>)> =
+        VecDeque::new();
 
-    /// Prepares to hash with explicit chunking limits, so tests can drive
-    /// many chunks through a small window.
-    pub(crate) fn with_limits(
-        algorithm: HashAlgorithm,
-        ranges: &[ByteRange],
-        chunk_size: u64,
-        window: usize,
-    ) -> Self {
-        let mut chunks = Vec::new();
-
-        for range in ranges {
-            let mut offset = range.start;
-            let end = range.start.saturating_add(range.len);
-
-            while offset < end {
-                let len = chunk_size.min(end - offset);
-                chunks.push(ByteRange { start: offset, len });
-                offset += len;
-            }
+    loop {
+        while in_flight.len() < window.max(1) {
+            let Some(range) = chunks.next() else { break };
+            let pending = host.request(BuilderRequest::AssetBytes { stream, range });
+            in_flight.push_back((range, pending, None));
         }
 
-        Self {
-            hasher: Hasher::new(algorithm),
-            total: chunks.iter().map(|c| c.len).sum(),
-            chunks,
-            next_to_issue: 0,
-            next_to_fold: 0,
-            window: window.max(1),
-            outstanding: Vec::new(),
-            buffered: Vec::new(),
-            folded: 0,
+        if in_flight.is_empty() {
+            return Ok(hasher.finish());
         }
-    }
 
-    /// Issues chunk requests until the window is full.
-    pub(crate) fn issue(&mut self, core: &mut SessionCore<BuilderRequest>, stream: StreamId) {
-        while self.next_to_issue < self.chunks.len()
-            && self.next_to_issue - self.next_to_fold < self.window
-        {
-            let index = self.next_to_issue;
-            let id = core.issue(BuilderRequest::AssetBytes {
-                stream,
-                range: self.chunks[index],
-            });
-
-            self.outstanding.push((id, index));
-            self.next_to_issue += 1;
-        }
-    }
-
-    /// Consumes whatever replies the host has provided, folding them in
-    /// order and buffering any that arrived early.
-    pub(crate) fn absorb(&mut self, core: &mut SessionCore<BuilderRequest>) -> Result<(), Error> {
-        let mut position = 0;
-
-        while position < self.outstanding.len() {
-            let (id, index) = self.outstanding[position];
-
-            match core.take_reply(id) {
-                None => position += 1,
-
-                Some(BuilderHostReply::AssetBytes(bytes)) => {
-                    self.outstanding.remove(position);
-
-                    let expected = self.chunks[index].len;
-                    let actual = bytes.len() as u64;
-
-                    // A short or long read would shift every byte after
-                    // it, so this can never be tolerated.
-                    if actual != expected {
-                        return Err(Error::AssetBytesLengthMismatch {
-                            range: self.chunks[index],
-                            actual,
-                        });
+        let bytes = poll_fn(|cx| {
+            for (range, pending, buffered) in &mut in_flight {
+                if buffered.is_some() {
+                    continue;
+                }
+                let id = pending.id();
+                let bytes = match Pin::new(pending).poll(cx) {
+                    Poll::Pending => continue,
+                    Poll::Ready(BuilderHostReply::AssetBytes(bytes)) => bytes,
+                    Poll::Ready(BuilderHostReply::Failed(source)) => {
+                        return Poll::Ready(Err(Error::HostFailure { id, source }));
                     }
-
-                    self.place(index, bytes);
-                }
-
-                Some(BuilderHostReply::Failed(source)) => {
-                    self.outstanding.remove(position);
-                    return Err(Error::HostFailure { id, source });
-                }
-
-                // `RequestTracker::fulfill` rejects mismatched reply
-                // payloads, so this arm is unreachable in practice.
-                Some(_) => {
-                    self.outstanding.remove(position);
-                    return Err(ProtocolError::ReplyMismatch {
-                        id,
-                        expected: "AssetBytes",
+                    Poll::Ready(_) => {
+                        return Poll::Ready(Err(ProtocolError::ReplyMismatch {
+                            id,
+                            expected: "AssetBytes",
+                        }
+                        .into()));
                     }
-                    .into());
+                };
+                let actual = bytes.len() as u64;
+                if actual != range.len {
+                    return Poll::Ready(Err(Error::AssetBytesLengthMismatch {
+                        range: *range,
+                        actual,
+                    }));
                 }
+                *buffered = Some(bytes);
             }
-        }
-
-        Ok(())
+            match in_flight.front_mut().and_then(|(_, _, bytes)| bytes.take()) {
+                Some(bytes) => Poll::Ready(Ok(bytes)),
+                None => Poll::Pending,
+            }
+        })
+        .await?;
+        in_flight.pop_front();
+        hasher.update(&bytes);
     }
+}
 
-    /// True once every chunk has been folded.
-    pub(crate) fn is_complete(&self) -> bool {
-        self.next_to_fold == self.chunks.len()
-    }
+/// Splits `range` into consecutive chunks of at most `chunk_size` bytes.
+fn chunks_of(range: ByteRange, chunk_size: u64) -> impl Iterator<Item = ByteRange> {
+    let end = range.start.saturating_add(range.len);
+    let chunk_size = chunk_size.max(1);
 
-    /// Finalizes the digest, checking that everything expected was folded.
-    pub(crate) fn finish(self) -> Result<Vec<u8>, Error> {
-        if !self.is_complete() || self.folded != self.total {
-            return Err(Error::IncompleteAssetHash {
-                folded: self.folded,
-                expected: self.total,
-            });
-        }
-
-        Ok(self.hasher.finish())
-    }
-
-    /// Places a chunk: folds it if it is next, otherwise buffers it, then
-    /// drains anything the fold unblocked.
-    fn place(&mut self, index: usize, bytes: Bytes) {
-        if index != self.next_to_fold {
-            self.buffered.push((index, bytes));
-            return;
-        }
-
-        self.fold(&bytes);
-
-        while let Some(position) = self
-            .buffered
-            .iter()
-            .position(|(index, _)| *index == self.next_to_fold)
-        {
-            let (_, bytes) = self.buffered.remove(position);
-            self.fold(&bytes);
-        }
-    }
-
-    /// Folds one chunk into the hasher and advances the cursor.
-    fn fold(&mut self, bytes: &[u8]) {
-        self.hasher.update(bytes);
-        self.folded += bytes.len() as u64;
-        self.next_to_fold += 1;
-    }
+    std::iter::successors(Some(range.start), move |offset| {
+        offset.checked_add(chunk_size)
+    })
+    .take_while(move |offset| *offset < end)
+    .map(move |start| ByteRange {
+        start,
+        len: chunk_size.min(end - start),
+    })
 }
 
 /// Computes the ranges an asset hash covers: everything outside the
@@ -269,6 +194,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use contentauth_c2pa_primitives::HostError;
+    use contentauth_state_machine::{RequestId, Session, Step, Workflow};
 
     use super::*;
 
@@ -320,21 +246,43 @@ mod tests {
         assert_eq!(included_ranges(&[range(u64::MAX, 2)], 100), None);
     }
 
-    /// Drives a stream to completion, fulfilling chunks in the order the
-    /// given permutation names, and returns the digest.
+    type HashSession = Workflow<BuilderRequest, Vec<u8>, Error>;
+
+    /// A hash over `ranges` of a 1000-byte asset, run as a session of its
+    /// own: an `async fn` sub-workflow needs no session around it to be
+    /// tested.
+    fn session(ranges: &[ByteRange], chunk_size: u64, window: usize) -> HashSession {
+        let ranges = ranges.to_vec();
+        Workflow::new(move |host| async move {
+            hash_with_limits(
+                &host,
+                StreamId::new(0),
+                HashAlgorithm::Sha256,
+                &ranges,
+                chunk_size,
+                window,
+            )
+            .await
+        })
+    }
+
+    fn asset() -> Vec<u8> {
+        (0..1000u32).map(|i| (i % 251) as u8).collect()
+    }
+
+    /// Drives a hash to completion, answering each round's outstanding
+    /// chunks in the order the given permutation names, and returns the
+    /// digest.
     fn run(order: impl Fn(usize) -> Vec<usize>, chunk_size: u64, window: usize) -> Vec<u8> {
-        let asset: Vec<u8> = (0..1000u32).map(|i| (i % 251) as u8).collect();
+        let asset = asset();
+        let mut session = session(&[range(0, 1000)], chunk_size, window);
 
-        let mut core = SessionCore::default();
-        let mut stream =
-            HashStream::with_limits(HashAlgorithm::Sha256, &[range(0, 1000)], chunk_size, window);
+        loop {
+            if session.advance().unwrap() == Step::Complete {
+                return session.finish().unwrap();
+            }
 
-        while !stream.is_complete() {
-            stream.issue(&mut core, StreamId::new(0));
-
-            // Collect what is outstanding, then answer in the requested
-            // order to simulate a host completing reads out of order.
-            let pending: Vec<(RequestId, ByteRange)> = core
+            let pending: Vec<(RequestId, ByteRange)> = session
                 .outstanding_requests()
                 .iter()
                 .map(|request| match request.kind {
@@ -343,26 +291,23 @@ mod tests {
                 })
                 .collect();
 
-            // Absorb after each individual reply, so a later chunk really
-            // does reach the stream before an earlier one and has to be
-            // buffered until its turn.
+            // Advance after each individual reply, so a later chunk really
+            // does arrive before an earlier one and has to wait its turn.
             for position in order(pending.len()) {
                 let (id, range) = pending[position];
                 let start = range.start as usize;
                 let bytes = asset[start..start + range.len as usize].to_vec();
-                core.fulfill(id, BuilderHostReply::AssetBytes(bytes.into()))
+                session
+                    .fulfill(id, BuilderHostReply::AssetBytes(bytes.into()))
                     .unwrap();
-                stream.absorb(&mut core).unwrap();
+                session.advance().unwrap();
             }
         }
-
-        stream.finish().unwrap()
     }
 
     #[test]
     fn out_of_order_fulfilment_yields_an_identical_digest() {
-        let expected = HashAlgorithm::Sha256
-            .digest(&(0..1000u32).map(|i| (i % 251) as u8).collect::<Vec<u8>>());
+        let expected = HashAlgorithm::Sha256.digest(&asset());
 
         // In order.
         assert_eq!(run(|n| (0..n).collect(), 100, 4), expected);
@@ -392,67 +337,95 @@ mod tests {
 
     #[test]
     fn no_more_than_the_window_is_ever_in_play() {
-        let mut core = SessionCore::default();
-        let mut stream = HashStream::with_limits(HashAlgorithm::Sha256, &[range(0, 1000)], 100, 3);
+        let mut session = session(&[range(0, 1000)], 100, 3);
 
-        stream.issue(&mut core, StreamId::new(0));
+        session.advance().unwrap();
         assert_eq!(
-            core.outstanding_requests().len(),
+            session.outstanding_requests().len(),
             3,
             "issuing must stop at the window"
         );
 
         // Answer the newest chunk only: it cannot be folded yet, so the
         // window stays full and nothing new is issued.
-        let last = core.outstanding_requests()[2].id;
-        let range = range(200, 100);
-        core.fulfill(
-            last,
-            BuilderHostReply::AssetBytes(vec![0u8; range.len as usize].into()),
-        )
-        .unwrap();
-        stream.absorb(&mut core).unwrap();
-        stream.issue(&mut core, StreamId::new(0));
+        let last = session.outstanding_requests()[2].id;
+        session
+            .fulfill(last, BuilderHostReply::AssetBytes(vec![0u8; 100].into()))
+            .unwrap();
+        assert_eq!(session.advance().unwrap(), Step::AwaitHost);
 
         assert_eq!(
-            core.outstanding_requests().len(),
+            session.outstanding_requests().len(),
             2,
-            "a buffered chunk still occupies the window"
+            "an arrived but unfolded chunk still occupies the window"
+        );
+    }
+
+    #[test]
+    fn several_ranges_are_hashed_as_one_in_order() {
+        let asset = asset();
+        let mut session = session(&[range(0, 10), range(900, 100)], 64, 8);
+
+        session.advance().unwrap();
+        let requested: Vec<ByteRange> = session
+            .outstanding_requests()
+            .iter()
+            .map(|request| match request.kind {
+                BuilderRequest::AssetBytes { range, .. } => range,
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(requested, [range(0, 10), range(900, 64), range(964, 36)]);
+
+        for request in session.outstanding_requests().to_vec() {
+            let BuilderRequest::AssetBytes { range, .. } = request.kind else {
+                unreachable!()
+            };
+            let start = range.start as usize;
+            let bytes = asset[start..start + range.len as usize].to_vec();
+            session
+                .fulfill(request.id, BuilderHostReply::AssetBytes(bytes.into()))
+                .unwrap();
+        }
+
+        assert_eq!(session.advance().unwrap(), Step::Complete);
+        let mut included = asset[..10].to_vec();
+        included.extend_from_slice(&asset[900..]);
+        assert_eq!(
+            session.finish().unwrap(),
+            HashAlgorithm::Sha256.digest(&included)
         );
     }
 
     #[test]
     fn a_wrong_length_reply_is_rejected() {
-        let mut core = SessionCore::default();
-        let mut stream = HashStream::with_limits(HashAlgorithm::Sha256, &[range(0, 100)], 100, 4);
-
-        stream.issue(&mut core, StreamId::new(0));
-        let id = core.outstanding_requests()[0].id;
+        let mut session = session(&[range(0, 100)], 100, 4);
+        session.advance().unwrap();
+        let id = session.outstanding_requests()[0].id;
 
         // One byte short: tolerating this would shift every later byte.
-        core.fulfill(id, BuilderHostReply::AssetBytes(vec![0u8; 99].into()))
+        session
+            .fulfill(id, BuilderHostReply::AssetBytes(vec![0u8; 99].into()))
             .unwrap();
 
         assert!(matches!(
-            stream.absorb(&mut core),
+            session.advance(),
             Err(Error::AssetBytesLengthMismatch { actual: 99, .. })
         ));
     }
 
     #[test]
     fn a_mismatched_stored_reply_is_defensively_rejected() {
-        let mut core = SessionCore::default();
-        let mut stream = HashStream::with_limits(HashAlgorithm::Sha256, &[range(0, 100)], 100, 4);
+        let mut session = session(&[range(0, 100)], 100, 4);
+        session.advance().unwrap();
+        let id = session.outstanding_requests()[0].id;
 
-        stream.issue(&mut core, StreamId::new(0));
-        let id = core.outstanding_requests()[0].id;
-
-        // Bypass `fulfill`'s payload validation to reach the stream's own
+        // Bypass `fulfill`'s payload validation to reach the hash's own
         // defence-in-depth check.
-        core.fulfill_unchecked(id, BuilderHostReply::AssetLength(0));
+        session.fulfill_unchecked(id, BuilderHostReply::AssetLength(0));
 
         assert!(matches!(
-            stream.absorb(&mut core),
+            session.advance(),
             Err(Error::Protocol(ProtocolError::ReplyMismatch {
                 expected: "AssetBytes",
                 ..
@@ -462,37 +435,52 @@ mod tests {
 
     #[test]
     fn a_host_failure_propagates() {
-        let mut core = SessionCore::default();
-        let mut stream = HashStream::with_limits(HashAlgorithm::Sha256, &[range(0, 100)], 100, 4);
-
-        stream.issue(&mut core, StreamId::new(0));
-        let id = core.outstanding_requests()[0].id;
-        core.fulfill(id, BuilderHostReply::Failed(HostError::new("unreadable")))
+        let mut session = session(&[range(0, 100)], 100, 4);
+        session.advance().unwrap();
+        let id = session.outstanding_requests()[0].id;
+        session
+            .fulfill(id, BuilderHostReply::Failed(HostError::new("unreadable")))
             .unwrap();
 
-        assert!(matches!(
-            stream.absorb(&mut core),
-            Err(Error::HostFailure { .. })
-        ));
+        assert!(matches!(session.advance(), Err(Error::HostFailure { .. })));
     }
 
     #[test]
-    fn finishing_early_is_refused() {
-        let stream = HashStream::with_limits(HashAlgorithm::Sha256, &[range(0, 100)], 100, 4);
-
+    fn a_later_chunk_failure_is_reported_without_waiting_for_earlier_chunks() {
+        let mut session = session(&[range(0, 1000)], 100, 4);
+        session.advance().unwrap();
+        let id = session.outstanding_requests()[2].id;
+        session
+            .fulfill(id, BuilderHostReply::Failed(HostError::new("unreadable")))
+            .unwrap();
         assert!(matches!(
-            stream.finish(),
-            Err(Error::IncompleteAssetHash {
-                folded: 0,
-                expected: 100
-            })
+            session.advance(),
+            Err(Error::HostFailure { id: failed, .. }) if failed == id
         ));
+        assert!(session.outstanding_requests().is_empty());
+    }
+
+    #[test]
+    fn a_later_chunk_with_the_wrong_length_is_reported_immediately() {
+        for len in [99, 101] {
+            let mut session = session(&[range(0, 1000)], 100, 4);
+            session.advance().unwrap();
+            let id = session.outstanding_requests()[2].id;
+            session
+                .fulfill(id, BuilderHostReply::AssetBytes(vec![0; len].into()))
+                .unwrap();
+            assert!(matches!(
+                session.advance(),
+                Err(Error::AssetBytesLengthMismatch { range: failed, actual })
+                    if failed == range(200, 100) && actual == len as u64
+            ));
+        }
     }
 
     #[test]
     fn an_empty_range_set_completes_immediately() {
-        let stream = HashStream::with_limits(HashAlgorithm::Sha256, &[], 100, 4);
-        assert!(stream.is_complete());
-        assert_eq!(stream.finish().unwrap(), HashAlgorithm::Sha256.digest(b""));
+        let mut session = session(&[], 100, 4);
+        assert_eq!(session.advance().unwrap(), Step::Complete);
+        assert_eq!(session.finish().unwrap(), HashAlgorithm::Sha256.digest(b""));
     }
 }

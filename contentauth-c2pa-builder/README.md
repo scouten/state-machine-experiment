@@ -17,12 +17,25 @@ This crate carries no engine logic of its own: request tracking, session
 lifecycle bookkeeping, and protocol-level errors all come from
 `contentauth-state-machine`. [`BuilderSession`] implements that crate's
 `Session` trait, adding only the build/sign workflow and its own request
-vocabulary. See the sibling crate's
+vocabulary. That workflow is written as one `async fn` over the engine's
+`Workflow` — the compiler, not a hand-written phase enum, generates the
+state machine — so the whole build reads top to bottom in
+[`src/builder.rs`](src/builder.rs)'s `build`. No async runtime is involved,
+and hosts see exactly the `Session` contract they always did. See the
+workflow's `Host::set_phase` calls for its diagnostic stage names: these
+are exposed through `Session::phase` and retained alongside the cause
+after a failure, including when driven through `Recorder`/`replay`. See the
+sibling crate's
 [README](../contentauth-state-machine/README.md) for the interaction
 contract and the `advance` / `outstanding_requests` / `fulfill` / `finish`
 cycle itself. [`contentauth-c2pa-primitives`](../contentauth-c2pa-primitives)
 holds the handful of types and encoders genuinely shared with the reader
 crate — see that crate's README for what and why.
+
+The public `Host::ask(request, decode)` helper in the engine issues and
+awaits a request, then passes its ID and reply to a decoder. The builder's
+small wrapper supplies only its vocabulary-specific failure and
+reply-mismatch policy.
 
 ## The two-pass hard binding
 
@@ -120,10 +133,10 @@ consequential to persist than an incomplete read report.
 |---|---|---|
 | `ReservePlaceholder { stream, placeholder }` | the byte range of the container structure now carrying it, framing included | Host embeds a complete, zero-filled-where-pending manifest store into the asset (typically via a [`contentauth-c2pa-format`](../contentauth-c2pa-format) handler). |
 | `AssetLength { stream }` | total length in bytes | Needed to know what lies after the reserved placeholder. |
-| `AssetBytes { stream, range }` | bytes | Streams the asset (now containing the placeholder) into this crate's hashing, to compute the hard binding. |
+| `AssetBytes { stream, range }` | `Bytes` | Streams the asset (now containing the placeholder) into this crate's hashing, to compute the hard binding. Hosts can return shared slices of in-memory or mapped assets without copying. |
 | `Sign { purpose, alg, data }` | raw signature bytes | Signs a COSE `Sig_structure`; mirrors `c2pa_raw_crypto::RawSigner::sign`. `purpose` says whose key: the claim's, or the identity assertion with the given label. |
 | `Timestamp { digest, hash_alg }` | a bare `TimeStampToken` | Obtains an RFC 3161 countersignature; the host owns the TSA round trip. |
-| `CommitManifest { stream, range, manifest }` | acknowledgement | Replaces the reserved placeholder with the final manifest bytes — guaranteed byte-identical in length. |
+| `CommitManifest { stream, exclusions, manifest }` | acknowledgement | Replaces the reserved placeholder with the final manifest bytes — guaranteed byte-identical in length. `manifest` is a shared `Bytes` buffer, also returned in `BuilderReport`. |
 
 ## Building
 

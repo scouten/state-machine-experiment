@@ -19,6 +19,7 @@ flowchart LR
         d8["C++ signing read + write leases:<br/>host I/O directly into/from Rust-owned buffers"]
         d9["Canonical C API: tracked reader/build/results,<br/>independent signing buffer leases, registry formats"]
         d10["Debuggability: phase(), failure context,<br/>record / replay transcripts"]
+        d11["Engine: async-fn workflows, no runtime<br/>(builder ported, with phase/failure diagnostics)"]
     end
     subgraph next["Next"]
         direction TB
@@ -124,8 +125,11 @@ changes. Choose formats for *what they exercise*, as TIFF did:
   `Reply` data model is the right wire format.
 * **A WIT / Wasm component** exposing `advance`/`fulfill`/`finish` as the
   language-neutral form of the contract.
-* **Cancellation and progress** — c2pa-rs's `Context` has them; here they'd
-  be natural (stop calling `advance`; observe requests) but untested.
+* **Host-driven cancellation and progress** — c2pa-rs's `Context` has them;
+  here they'd be natural (stop calling `advance`; observe requests).
+  `Workflow` already cancels pending requests on completion or failure
+  and releases reply/waker storage when dropped, with regression tests.
+  Explicit host-operation cancellation and progress callbacks remain open.
 * **Debugging through every binding.** `phase()` reaches the C API
   (`c2pa_sm_{read,build}_phase`) and node-compat's sessions, but not yet
   the Neon addons' JavaScript, the C++ wrappers, or the Wasm binding; and
@@ -143,6 +147,14 @@ changes. Choose formats for *what they exercise*, as TIFF did:
   refuse hostile input by design, but nothing yet hammers that.
 * **Benchmarks** against c2pa-rs for large assets (the Node numbers are
   encouraging but not comparative).
+
+## 6. Engine ergonomics
+
+| Item | Why it matters |
+|---|---|
+| **Port `ReadSession` onto `Workflow`** | The builder already runs as an `async fn`; the reader is the larger test — OCSP fan-out across chains, and the recursion ingredients and remote manifests will need (`Box::pin(validate(ingredient))` instead of a stack of hand-nested sessions). |
+| **Typed replies** | `host.request(..)` still resolves to the whole reply enum, so each request's own wrong-kind check stays (in one helper now, not per state). A reply type per request would make it a compile-time fact. |
+| **Composing sessions as `async fn`s** | `FileReadSession`/`FileBuilderSession` translate an inner session's vocabulary by hand; as sub-workflows they could simply `.await` it. |
 
 ## Questions for discussion
 

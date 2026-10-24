@@ -21,3 +21,7 @@ test-util = []
 
 [dependencies]
 thiserror = "2.0.20"
+
+[dev-dependencies]
+# Exercise wake-driven collections without an executor or runtime.
+futures-util = { version = "0.3.31", default-features = false, features = ["alloc"] }
