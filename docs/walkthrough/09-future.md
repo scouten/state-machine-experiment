@@ -125,8 +125,11 @@ changes. Choose formats for *what they exercise*, as TIFF did:
   `Reply` data model is the right wire format.
 * **A WIT / Wasm component** exposing `advance`/`fulfill`/`finish` as the
   language-neutral form of the contract.
-* **Cancellation and progress** — c2pa-rs's `Context` has them; here they'd
-  be natural (stop calling `advance`; observe requests) but untested.
+* **Host-driven cancellation and progress** — c2pa-rs's `Context` has them;
+  here they'd be natural (stop calling `advance`; observe requests).
+  `Workflow` already cancels pending requests on completion or failure
+  and releases reply/waker storage when dropped, with regression tests.
+  Explicit host-operation cancellation and progress callbacks remain open.
 * **Debugging through every binding.** `phase()` reaches the C API
   (`c2pa_sm_{read,build}_phase`) and node-compat's sessions, but not yet
   the Neon addons' JavaScript, the C++ wrappers, or the Wasm binding; and

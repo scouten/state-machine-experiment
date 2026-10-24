@@ -46,9 +46,11 @@ whatever outcomes have arrived and make further progress.
 
 ### Threading
 
-A session is **not re-entrant**, and the Rust code provides **no locks**
-around it. Any host that employs a thread model must ensure the session's
-methods are never called simultaneously from multiple threads (nor
+A session is **not re-entrant**. `Workflow` uses internal synchronization
+for the mailbox shared with its future; ordinary serialized host calls do
+not contend on that lock. This does not lock the session's API or make
+concurrent calls safe. Any host that employs a thread model must ensure
+the session's methods are never called simultaneously from multiple threads (nor
 re-entered from within a call in progress on the same session). Crashes or
 unpredictable behavior are likely if this constraint is violated. Calls on
 *different* sessions may safely run at the same time; only calls on the
@@ -79,8 +81,10 @@ workflow can be written either of two ways, and the host cannot tell which:
   reply; the compiler generates the state machine, including the locals,
   loops, `?` early returns and sub-workflow calls a hand-written one would
   have to encode. `advance` polls the future once with a no-op waker —
-  there is no executor, runtime, or thread, and nothing to wake, because a
-  `PendingReply` is ready exactly when `fulfill` has delivered its reply.
+  there is no executor, runtime, or background thread. `fulfill` notifies
+  the reply's registered waker so collections such as `FuturesUnordered`
+  and `join_all` know which children are ready, but only `advance` polls
+  the workflow.
   Issuing several requests before awaiting any puts them in front of the
   host at once. `contentauth-c2pa-builder`'s `BuilderSession` uses this
   approach.
@@ -90,6 +94,17 @@ with `Host::set_phase`, exposed through `Session::phase` and preserved in
 failure reports. It must await only `PendingReply`s (or futures built from them).
 Awaiting anything else would never be woken; `advance` reports that as
 `ProtocolError::WorkflowStalled` instead of hanging.
+
+`Host::ask(request, decode)` combines issuing, awaiting, and decoding one
+reply; the decoder receives the request ID for vocabulary-specific errors
+and host-failure policy. Use `Host::request` to issue multiple requests
+before awaiting them.
+
+When a `Workflow` completes or fails, it cancels remaining requests and
+discards stored replies and wakers. Its outstanding list is then empty.
+Hosts should stop servicing those requests and discard late results;
+operations already performed are not undone. Dropping one `PendingReply`
+while the workflow is still running does not cancel its request.
 
 ## Debugging a session
 

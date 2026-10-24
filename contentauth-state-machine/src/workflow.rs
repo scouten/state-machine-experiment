@@ -25,10 +25,10 @@
 //! workflows) all work as they do in any Rust function.
 //!
 //! None of this needs an async runtime. A [`PendingReply`] is ready exactly
-//! when the host has fulfilled its request, so there is never anything to
-//! wake: [`Session::advance`] polls the workflow's future once, with a
-//! no-op waker, and the future runs until every branch is waiting on the
-//! host — which is precisely [`Step::AwaitHost`].
+//! when the host has fulfilled its request. Reply wakers notify enclosing
+//! combinators that their children are ready, without polling the workflow.
+//! Only [`Session::advance`] polls the root future, with a no-op waker,
+//! until every branch is waiting on the host — [`Step::AwaitHost`].
 //!
 //! A workflow must only `.await` [`PendingReply`]s (or futures built from
 //! them, such as another workflow `async fn`). A future that waits on
@@ -69,6 +69,7 @@ struct Mailbox<Req: Request> {
     next_id: u64,
     issued: Vec<HostRequest<Req>>,
     replies: Vec<(RequestId, Req::Reply)>,
+    wakers: Vec<(RequestId, Waker)>,
 }
 
 type Shared<Req> = Arc<Mutex<Mailbox<Req>>>;
@@ -102,6 +103,24 @@ impl<Req: Request> fmt::Debug for Host<Req> {
 }
 
 impl<Req: Request> Host<Req> {
+    /// Issues a request, waits for its reply, and decodes it using `decode`.
+    ///
+    /// The decoder receives the request ID for diagnostics. The vocabulary
+    /// owns reply decoding and host-failure policy; the engine does not
+    /// assume a particular failure variant.
+    ///
+    /// Like an `async fn`, this issues nothing until first polled. To issue
+    /// several requests immediately, use [`Self::request`] instead.
+    pub async fn ask<T, E>(
+        &self,
+        request: Req,
+        decode: impl FnOnce(RequestId, Req::Reply) -> Result<T, E>,
+    ) -> Result<T, E> {
+        let pending = self.request(request);
+        let id = pending.id();
+        decode(id, pending.await)
+    }
+
     /// Names the current workflow phase for [`Session::phase`] and failure
     /// reports. Set this before entering a new stage, including before any
     /// fallible work in that stage. The initial phase is `"Start"`.
@@ -161,12 +180,32 @@ impl<Req: Request> fmt::Debug for PendingReply<Req> {
 impl<Req: Request> Future for PendingReply<Req> {
     type Output = Req::Reply;
 
-    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Req::Reply> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Req::Reply> {
         let mut mailbox = lock(&self.shared);
         match mailbox.replies.iter().position(|(id, _)| *id == self.id) {
             Some(index) => Poll::Ready(mailbox.replies.remove(index).1),
-            None => Poll::Pending,
+            None => {
+                match mailbox.wakers.iter_mut().find(|(id, _)| *id == self.id) {
+                    Some((_, waker)) => waker.clone_from(cx.waker()),
+                    None => mailbox.wakers.push((self.id, cx.waker().clone())),
+                }
+                Poll::Pending
+            }
         }
+    }
+}
+
+impl<Req: Request> Drop for PendingReply<Req> {
+    fn drop(&mut self) {
+        let waker = {
+            let mut mailbox = lock(&self.shared);
+            mailbox
+                .wakers
+                .iter()
+                .position(|(id, _)| *id == self.id)
+                .map(|index| mailbox.wakers.swap_remove(index).1)
+        };
+        drop(waker);
     }
 }
 
@@ -180,6 +219,12 @@ enum State<T, E> {
 
 /// A [`Session`] whose workflow is an `async fn` rather than a hand-written
 /// state machine.
+///
+/// On completion or failure, pending requests are cancelled: outstanding
+/// requests, stored replies, and registered wakers are discarded. Hosts
+/// should stop servicing them and discard any late results. This does not
+/// undo host operations already performed. Dropping a single
+/// [`PendingReply`] while running does not cancel its request.
 ///
 /// A concrete session wraps one of these and delegates the
 /// [`Session`] methods to it:
@@ -270,6 +315,7 @@ where
             next_id: 0,
             issued: Vec::new(),
             replies: Vec::new(),
+            wakers: Vec::new(),
         }));
 
         let future = start(Host {
@@ -291,13 +337,51 @@ where
     #[cfg(any(test, feature = "test-util"))]
     pub fn fulfill_unchecked(&mut self, id: RequestId, reply: Req::Reply) {
         self.outstanding.retain(|r| r.id != id);
-        lock(&self.shared).replies.push((id, reply));
+        self.deliver(id, reply);
+    }
+
+    fn deliver(&self, id: RequestId, reply: Req::Reply) {
+        let waker = {
+            let mut mailbox = lock(&self.shared);
+            mailbox.replies.push((id, reply));
+            mailbox
+                .wakers
+                .iter()
+                .position(|(waiting, _)| *waiting == id)
+                .map(|index| mailbox.wakers.swap_remove(index).1)
+        };
+        // A custom waker may access the mailbox; never call it under the lock.
+        if let Some(waker) = waker {
+            waker.wake();
+        }
     }
 
     /// Moves requests the future issued into the list the host sees.
     fn collect_issued(&mut self) {
         let issued = mem::take(&mut lock(&self.shared).issued);
         self.outstanding.extend(issued);
+    }
+}
+
+impl<Req: Request, T, E> Workflow<Req, T, E> {
+    fn clear_pending(&mut self) {
+        self.outstanding.clear();
+        let pending = {
+            let mut mailbox = lock(&self.shared);
+            (
+                mem::take(&mut mailbox.issued),
+                mem::take(&mut mailbox.replies),
+                mem::take(&mut mailbox.wakers),
+            )
+        };
+        drop(pending);
+    }
+}
+
+impl<Req: Request, T, E> Drop for Workflow<Req, T, E> {
+    fn drop(&mut self) {
+        // Collection wakers may retain futures that themselves hold the mailbox.
+        self.clear_pending();
     }
 }
 
@@ -334,11 +418,13 @@ where
         match poll {
             Poll::Ready(Ok(output)) => {
                 self.state = State::Complete(output);
+                self.clear_pending();
                 Ok(Step::Complete)
             }
 
             Poll::Ready(Err(err)) => {
                 self.state = State::Failed(Failure::new(self.phase(), &err));
+                self.clear_pending();
                 Err(err)
             }
 
@@ -346,6 +432,7 @@ where
             Poll::Pending if self.outstanding.is_empty() => {
                 self.state =
                     State::Failed(Failure::new(self.phase(), &ProtocolError::WorkflowStalled));
+                self.clear_pending();
                 Err(ProtocolError::WorkflowStalled.into())
             }
 
@@ -391,12 +478,13 @@ where
         }
 
         self.outstanding.remove(index);
-        lock(&self.shared).replies.push((id, reply));
+        self.deliver(id, reply);
         Ok(())
     }
 
     fn finish(self) -> Result<T, E> {
-        match self.state {
+        let mut this = self;
+        match mem::replace(&mut this.state, State::Failed(Failure::default())) {
             State::Complete(output) => Ok(output),
             State::Running(_) => Err(ProtocolError::SessionNotComplete.into()),
             State::Failed(failure) => Err(ProtocolError::SessionFailed(failure).into()),
@@ -423,7 +511,16 @@ impl<Req: Request, T, E> fmt::Debug for Workflow<Req, T, E> {
 mod tests {
     #![allow(clippy::unwrap_used)]
 
-    use std::future::pending;
+    use std::{
+        future::pending,
+        sync::atomic::{AtomicUsize, Ordering},
+        task::Wake,
+    };
+
+    use futures_util::{
+        future::join_all,
+        stream::{FuturesUnordered, StreamExt},
+    };
 
     use super::*;
 
@@ -475,6 +572,223 @@ mod tests {
     }
 
     type TestWorkflow<T> = Workflow<Ask, T, TestError>;
+
+    #[test]
+    fn wake_driven_collections_finish_only_when_advanced() {
+        for unordered in [false, true] {
+            for count in [3, 100] {
+                let polls = Arc::new(AtomicUsize::new(0));
+                let observed = Arc::clone(&polls);
+                let mut session: TestWorkflow<usize> = Workflow::new(|host| async move {
+                    let replies: Vec<_> = (0..count).map(|_| host.request(Ask::Number)).collect();
+                    observed.fetch_add(1, Ordering::SeqCst);
+                    if unordered {
+                        let mut replies: FuturesUnordered<_> = replies.into_iter().collect();
+                        while replies.next().await.is_some() {}
+                    } else {
+                        join_all(replies).await;
+                    }
+                    observed.fetch_add(1, Ordering::SeqCst);
+                    Ok(count)
+                });
+                assert_eq!(session.advance().unwrap(), Step::AwaitHost);
+                assert_eq!(session.outstanding_requests().len(), count);
+                let ids: Vec<_> = session
+                    .outstanding_requests()
+                    .iter()
+                    .map(|r| r.id)
+                    .collect();
+                for id in ids.into_iter().rev() {
+                    session.fulfill(id, Answer::Number(1)).unwrap();
+                }
+                assert_eq!(polls.load(Ordering::SeqCst), 1, "fulfill must not poll");
+                assert_eq!(session.advance().unwrap(), Step::Complete);
+                assert_eq!(polls.load(Ordering::SeqCst), 2);
+                assert_eq!(session.finish().unwrap(), count);
+            }
+        }
+    }
+
+    struct MailboxWake {
+        shared: Shared<Ask>,
+        wakes: AtomicUsize,
+    }
+
+    impl Wake for MailboxWake {
+        fn wake(self: Arc<Self>) {
+            // This would deadlock if fulfillment notified under the mailbox lock.
+            let _mailbox = lock(&self.shared);
+            self.wakes.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn reply_wakers_are_replaced_notified_outside_the_lock_and_removed_on_drop() {
+        let mut session: TestWorkflow<()> = Workflow::new(|_| async { Ok(()) });
+        let host = Host {
+            shared: Arc::clone(&session.shared),
+        };
+        let mut reply = host.request(Ask::Number);
+        session.collect_issued();
+        let first = Arc::new(MailboxWake {
+            shared: Arc::clone(&session.shared),
+            wakes: AtomicUsize::new(0),
+        });
+        let second = Arc::new(MailboxWake {
+            shared: Arc::clone(&session.shared),
+            wakes: AtomicUsize::new(0),
+        });
+        let first_waker = Waker::from(Arc::clone(&first));
+        let second_waker = Waker::from(Arc::clone(&second));
+        assert!(Pin::new(&mut reply)
+            .poll(&mut Context::from_waker(&first_waker))
+            .is_pending());
+        assert!(Pin::new(&mut reply)
+            .poll(&mut Context::from_waker(&second_waker))
+            .is_pending());
+        assert_eq!(lock(&session.shared).wakers.len(), 1);
+        session.fulfill(reply.id(), Answer::Number(7)).unwrap();
+        assert_eq!(first.wakes.load(Ordering::SeqCst), 0);
+        assert_eq!(second.wakes.load(Ordering::SeqCst), 1);
+        assert!(lock(&session.shared).wakers.is_empty());
+        assert_eq!(
+            Pin::new(&mut reply).poll(&mut Context::from_waker(&second_waker)),
+            Poll::Ready(Answer::Number(7))
+        );
+        let mut abandoned = host.request(Ask::Text);
+        assert!(Pin::new(&mut abandoned)
+            .poll(&mut Context::from_waker(&second_waker))
+            .is_pending());
+        drop(abandoned);
+        assert!(lock(&session.shared).wakers.is_empty());
+    }
+
+    #[test]
+    fn terminal_transitions_discard_unawaited_requests_replies_and_wakers() {
+        for fail in [false, true] {
+            let mut session: TestWorkflow<()> = Workflow::new(|host| async move {
+                let unused = host.request(Ask::Text);
+                let answer = number(&host).await?;
+                drop(unused);
+                drop(host.request(Ask::Number));
+                if fail || answer == 0 {
+                    Err(TestError::HostFailed)
+                } else {
+                    Ok(())
+                }
+            });
+            session.advance().unwrap();
+            let ids: Vec<_> = session
+                .outstanding_requests()
+                .iter()
+                .map(|r| r.id)
+                .collect();
+            session.fulfill(ids[1], Answer::Number(1)).unwrap();
+            if fail {
+                session
+                    .fulfill(ids[0], Answer::Text("stored but never consumed".into()))
+                    .unwrap();
+            }
+            assert_eq!(session.advance().is_err(), fail);
+            assert!(session.outstanding_requests().is_empty());
+            let mailbox = lock(&session.shared);
+            assert!(mailbox.issued.is_empty());
+            assert!(mailbox.replies.is_empty());
+            assert!(mailbox.wakers.is_empty());
+            drop(mailbox);
+            assert!(session
+                .fulfill(ids[0], Answer::Text("late".into()))
+                .is_err());
+            assert_eq!(session.finish().is_err(), fail);
+        }
+    }
+
+    #[test]
+    fn early_failure_cancels_pending_collection_children_and_releases_the_mailbox() {
+        let mut session: TestWorkflow<()> = Workflow::new(|host| async move {
+            let mut replies: FuturesUnordered<_> =
+                (0..3).map(|_| host.request(Ask::Number)).collect();
+            match replies.next().await {
+                Some(Answer::Failed) => Err(TestError::HostFailed),
+                _ => Ok(()),
+            }
+        });
+        session.advance().unwrap();
+        let shared = Arc::downgrade(&session.shared);
+        let id = session.outstanding_requests()[1].id;
+        session.fulfill(id, Answer::Failed).unwrap();
+        assert_eq!(session.advance(), Err(TestError::HostFailed));
+        assert!(session.outstanding_requests().is_empty());
+        assert!(lock(&session.shared).wakers.is_empty());
+        drop(session);
+        assert!(shared.upgrade().is_none());
+    }
+
+    #[test]
+    fn dropping_a_running_collection_does_not_leak_the_mailbox() {
+        let mut session: TestWorkflow<Vec<Answer>> = Workflow::new(|host| async move {
+            Ok(join_all((0..100).map(|_| host.request(Ask::Number))).await)
+        });
+        session.advance().unwrap();
+        let shared = Arc::downgrade(&session.shared);
+        drop(session);
+        assert!(shared.upgrade().is_none());
+    }
+
+    #[test]
+    fn unchecked_delivery_also_notifies_collection_children() {
+        let mut session: TestWorkflow<Vec<Answer>> = Workflow::new(|host| async move {
+            Ok(join_all((0..100).map(|_| host.request(Ask::Number))).await)
+        });
+        session.advance().unwrap();
+        let ids: Vec<_> = session
+            .outstanding_requests()
+            .iter()
+            .map(|r| r.id)
+            .collect();
+        for id in ids {
+            session.fulfill_unchecked(id, Answer::Text("bypassed".into()));
+        }
+        assert_eq!(session.advance().unwrap(), Step::Complete);
+        assert_eq!(
+            session.finish().unwrap(),
+            vec![Answer::Text("bypassed".into()); 100]
+        );
+    }
+
+    #[test]
+    fn requests_issued_and_abandoned_on_the_first_poll_are_cancelled() {
+        let mut session: TestWorkflow<()> = Workflow::new(|host| async move {
+            drop(host.request(Ask::Text));
+            Ok(())
+        });
+        assert_eq!(session.advance().unwrap(), Step::Complete);
+        assert!(session.outstanding_requests().is_empty());
+        assert!(matches!(
+            session.fulfill(RequestId(0), Answer::Text("late".into())),
+            Err(TestError::Protocol(ProtocolError::SessionComplete))
+        ));
+        session.finish().unwrap();
+    }
+
+    #[test]
+    fn ask_decodes_with_the_request_id_and_defers_issuing_until_polled() {
+        let mut session: TestWorkflow<u32> = Workflow::new(|host| async move {
+            let answer = host.ask(Ask::Number, |id, reply| {
+                assert_eq!(id, RequestId(0));
+                match reply {
+                    Answer::Number(n) => Ok(n * 2),
+                    _ => Err(TestError::HostFailed),
+                }
+            });
+            assert!(lock(&host.shared).issued.is_empty());
+            answer.await
+        });
+        session.advance().unwrap();
+        session.respond(|_| Answer::Number(4)).unwrap();
+        assert_eq!(session.advance().unwrap(), Step::Complete);
+        assert_eq!(session.finish().unwrap(), 8);
+    }
 
     async fn number(host: &Host<Ask>) -> Result<u32, TestError> {
         match host.request(Ask::Number).await {

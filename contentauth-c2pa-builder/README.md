@@ -32,6 +32,11 @@ cycle itself. [`contentauth-c2pa-primitives`](../contentauth-c2pa-primitives)
 holds the handful of types and encoders genuinely shared with the reader
 crate — see that crate's README for what and why.
 
+The public `Host::ask(request, decode)` helper in the engine issues and
+awaits a request, then passes its ID and reply to a decoder. The builder's
+small wrapper supplies only its vocabulary-specific failure and
+reply-mismatch policy.
+
 ## The two-pass hard binding
 
 A manifest's hard binding must hash the asset it describes while excluding

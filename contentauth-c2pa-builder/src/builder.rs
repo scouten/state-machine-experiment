@@ -436,13 +436,11 @@ async fn ask<T>(
     expected: &'static str,
     pick: impl FnOnce(BuilderHostReply) -> Option<T>,
 ) -> Result<T, Error> {
-    let pending = host.request(request);
-    let id = pending.id();
-
-    match pending.await {
+    host.ask(request, |id, reply| match reply {
         BuilderHostReply::Failed(source) => Err(Error::HostFailure { id, source }),
         reply => pick(reply).ok_or_else(|| ProtocolError::ReplyMismatch { id, expected }.into()),
-    }
+    })
+    .await
 }
 
 /// Picks a signature out of a reply, for [`ask`].

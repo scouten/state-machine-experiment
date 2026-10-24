@@ -457,6 +457,7 @@ mod tests {
             session.advance(),
             Err(Error::HostFailure { id: failed, .. }) if failed == id
         ));
+        assert!(session.outstanding_requests().is_empty());
     }
 
     #[test]

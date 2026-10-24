@@ -72,6 +72,10 @@ about C2PA itself.
   must still be polled: a failed or wrongly sized later read must fail
   promptly even when an earlier read is outstanding. `Host::set_phase`
   retains diagnostic stage names without recreating the phase enum.
+  Reply wakers are still necessary for wake-driven collections, but only
+  `advance` polls the workflow. Terminal transitions cancel remaining
+  requests and release stored replies and wakers rather than leaving
+  work visible that the workflow can no longer consume.
 * Matching c2pa-rs's JSON/error contracts exactly (it's a moving target;
   the repo already tracked c2pa-rs 0.91's trust-anchor and revocation
   changes).
