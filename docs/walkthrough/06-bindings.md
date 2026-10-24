@@ -66,6 +66,10 @@ retains those shared buffers until the host consumes them; the final copy into
 JavaScript-owned memory still belongs to the language boundary, not the engine.
 The package layout is `js/src/{shared,browser,node}`, with contracts under
 `js/test` and transport measurements under `js/benchmarks`.
+Both Node adapters pass byte replies as exact-range `Buffer` views, avoiding
+a redundant JavaScript copy before Neon's synchronous Rust-ownership copy.
+This preserves nonzero offsets and does not expose mutable JavaScript aliases
+as immutable Rust `Bytes` or claim a native lease.
 The old addon JavaScript drivers remain intentional alternative hosts, not
 silently replaced by the narrower Worker implementation: they support file and
 custom sources, OCSP, timestamp transport and transactional file output.
