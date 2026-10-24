@@ -20,8 +20,9 @@
 //! reader's is a hand-written state machine with its own table of which
 //! chunk each outstanding request covers, and its own buffer for chunks
 //! that arrive before their turn. Here a queue of [`PendingReply`]s is
-//! that table, and a chunk that arrives early simply waits in the session
-//! until its turn is awaited.
+//! that table. All replies in the window are polled so failures and wrong
+//! lengths surface promptly; valid chunks wait in shared buffers until
+//! their turn to be hashed.
 //!
 //! [`PendingReply`]: contentauth_state_machine::PendingReply
 //!
@@ -31,10 +32,15 @@
 //! folded), bounding peak memory at `WINDOW × CHUNK_SIZE` no matter how
 //! large the asset is.
 
-use std::collections::VecDeque;
+use std::{
+    collections::VecDeque,
+    future::{poll_fn, Future},
+    pin::Pin,
+    task::Poll,
+};
 
-use contentauth_c2pa_primitives::{hash::Hasher, ByteRange, HashAlgorithm, StreamId};
-use contentauth_state_machine::{Host, ProtocolError};
+use contentauth_c2pa_primitives::{hash::Hasher, ByteRange, Bytes, HashAlgorithm, StreamId};
+use contentauth_state_machine::{Host, PendingReply, ProtocolError};
 
 use crate::{
     error::Error,
@@ -74,39 +80,56 @@ async fn hash_with_limits(
         .iter()
         .flat_map(|range| chunks_of(*range, chunk_size));
     let mut hasher = Hasher::new(algorithm);
-    let mut in_flight = VecDeque::new();
+    let mut in_flight: VecDeque<(ByteRange, PendingReply<BuilderRequest>, Option<Bytes>)> =
+        VecDeque::new();
 
     loop {
         while in_flight.len() < window.max(1) {
             let Some(range) = chunks.next() else { break };
             let pending = host.request(BuilderRequest::AssetBytes { stream, range });
-            in_flight.push_back((range, pending));
+            in_flight.push_back((range, pending, None));
         }
 
-        let Some((range, pending)) = in_flight.pop_front() else {
+        if in_flight.is_empty() {
             return Ok(hasher.finish());
-        };
-
-        let id = pending.id();
-        let bytes = match pending.await {
-            BuilderHostReply::AssetBytes(bytes) => bytes,
-            BuilderHostReply::Failed(source) => return Err(Error::HostFailure { id, source }),
-            _ => {
-                return Err(ProtocolError::ReplyMismatch {
-                    id,
-                    expected: "AssetBytes",
-                }
-                .into())
-            }
-        };
-
-        // A short or long read would shift every byte after it, so this
-        // can never be tolerated.
-        let actual = bytes.len() as u64;
-        if actual != range.len {
-            return Err(Error::AssetBytesLengthMismatch { range, actual });
         }
 
+        let bytes = poll_fn(|cx| {
+            for (range, pending, buffered) in &mut in_flight {
+                if buffered.is_some() {
+                    continue;
+                }
+                let id = pending.id();
+                let bytes = match Pin::new(pending).poll(cx) {
+                    Poll::Pending => continue,
+                    Poll::Ready(BuilderHostReply::AssetBytes(bytes)) => bytes,
+                    Poll::Ready(BuilderHostReply::Failed(source)) => {
+                        return Poll::Ready(Err(Error::HostFailure { id, source }));
+                    }
+                    Poll::Ready(_) => {
+                        return Poll::Ready(Err(ProtocolError::ReplyMismatch {
+                            id,
+                            expected: "AssetBytes",
+                        }
+                        .into()));
+                    }
+                };
+                let actual = bytes.len() as u64;
+                if actual != range.len {
+                    return Poll::Ready(Err(Error::AssetBytesLengthMismatch {
+                        range: *range,
+                        actual,
+                    }));
+                }
+                *buffered = Some(bytes);
+            }
+            match in_flight.front_mut().and_then(|(_, _, bytes)| bytes.take()) {
+                Some(bytes) => Poll::Ready(Ok(bytes)),
+                None => Poll::Pending,
+            }
+        })
+        .await?;
+        in_flight.pop_front();
         hasher.update(&bytes);
     }
 }
@@ -420,6 +443,37 @@ mod tests {
             .unwrap();
 
         assert!(matches!(session.advance(), Err(Error::HostFailure { .. })));
+    }
+
+    #[test]
+    fn a_later_chunk_failure_is_reported_without_waiting_for_earlier_chunks() {
+        let mut session = session(&[range(0, 1000)], 100, 4);
+        session.advance().unwrap();
+        let id = session.outstanding_requests()[2].id;
+        session
+            .fulfill(id, BuilderHostReply::Failed(HostError::new("unreadable")))
+            .unwrap();
+        assert!(matches!(
+            session.advance(),
+            Err(Error::HostFailure { id: failed, .. }) if failed == id
+        ));
+    }
+
+    #[test]
+    fn a_later_chunk_with_the_wrong_length_is_reported_immediately() {
+        for len in [99, 101] {
+            let mut session = session(&[range(0, 1000)], 100, 4);
+            session.advance().unwrap();
+            let id = session.outstanding_requests()[2].id;
+            session
+                .fulfill(id, BuilderHostReply::AssetBytes(vec![0; len].into()))
+                .unwrap();
+            assert!(matches!(
+                session.advance(),
+                Err(Error::AssetBytesLengthMismatch { range: failed, actual })
+                    if failed == range(200, 100) && actual == len as u64
+            ));
+        }
     }
 
     #[test]

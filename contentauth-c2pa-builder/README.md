@@ -22,6 +22,9 @@ vocabulary. That workflow is written as one `async fn` over the engine's
 state machine — so the whole build reads top to bottom in
 [`src/builder.rs`](src/builder.rs)'s `build`. No async runtime is involved,
 and hosts see exactly the `Session` contract they always did. See the
+workflow's `Host::set_phase` calls for its diagnostic stage names: these
+are exposed through `Session::phase` and retained alongside the cause
+after a failure, including when driven through `Recorder`/`replay`. See the
 sibling crate's
 [README](../contentauth-state-machine/README.md) for the interaction
 contract and the `advance` / `outstanding_requests` / `fulfill` / `finish`

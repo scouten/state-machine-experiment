@@ -73,8 +73,7 @@ workflow can be written either of two ways, and the host cannot tell which:
   `advance` matches on it. Every state is explicit and inspectable — and
   every new wait costs a variant, a handler, and the same
   `None` / `Failed` / wrong-reply arms again.
-  `contentauth-c2pa-reader`'s `ReadSession` and
-  `contentauth-c2pa-builder`'s `BuilderSession` use this approach.
+  `contentauth-c2pa-reader`'s `ReadSession` uses this approach.
 * **As an `async fn`, with `Workflow`** ([`src/workflow.rs`](src/workflow.rs)).
   The workflow asks its `Host` handle for what it needs and `.await`s the
   reply; the compiler generates the state machine, including the locals,
@@ -83,14 +82,53 @@ workflow can be written either of two ways, and the host cannot tell which:
   there is no executor, runtime, or thread, and nothing to wake, because a
   `PendingReply` is ready exactly when `fulfill` has delivered its reply.
   Issuing several requests before awaiting any puts them in front of the
-  host at once. The reader's experimental `read_workflow` is an example;
-  it is available behind that crate's `engine` feature.
+  host at once. `contentauth-c2pa-builder`'s `BuilderSession` uses this
+  approach.
 
-The trade: a `Workflow`'s position is opaque — a test observes it as a host
-does, through `outstanding_requests`, rather than by matching on a phase
-enum — and it must await only `PendingReply`s (or futures built from them).
+The compiler's state is opaque, but a workflow names its current stage
+with `Host::set_phase`, exposed through `Session::phase` and preserved in
+failure reports. It must await only `PendingReply`s (or futures built from them).
 Awaiting anything else would never be woken; `advance` reports that as
 `ProtocolError::WorkflowStalled` instead of hanging.
+
+## Debugging a session
+
+A state machine that stops with an error can be hard to diagnose: by the
+time the host sees the error, the session has moved on (or poisoned
+itself), and the call stack that produced it is gone. Two things answer
+"where did it go wrong, and why?":
+
+* **Where it is, and where it failed.** `Session::phase` describes the
+  session's current phase in words — `"Locating > Scanning > Marker at
+  byte 2"`, `"Building > AwaitingSignature"` — with a session nested inside
+  another named after the outer phase. A failed session keeps reporting the
+  phase it failed in, and every later call returns
+  `ProtocolError::SessionFailed(Failure)`, which carries that phase and the
+  original error's text rather than a bare "failed earlier". A session
+  implementation records both with `SessionCore::mark_failed(phase, &err)`
+  on every error exit; `Workflow` does this automatically using the most
+  recent `Host::set_phase` (initially `"Start"`). Only the first failure
+  is kept. Phase wording is
+  for people and logs, not a stable interface: don't branch on it.
+* **What the host said to it.** Since a session performs no I/O, its
+  behavior depends on nothing but the replies it is given. Wrap a session
+  in a `Recorder` — itself a `Session`, so the host does not change — and
+  it keeps a `Transcript` of every `advance` (the phase, what it returned,
+  the requests it issued) and every `fulfill` (the reply, and whether it
+  was accepted). A transcript prints as a readable one-line-per-call log,
+  and `replay` drives a fresh session through it, reproducing the run
+  exactly — on another machine, under a debugger, or against a fix — or
+  reporting the first call where the session behaved differently
+  (`Divergence`). A transcript holds every reply in full, asset bytes
+  included, so record only where its size and contents are acceptable.
+
+```rust,ignore
+let mut session = Recorder::new(FileReadSession::new(&handler, settings));
+// ...drive `session` exactly as before...
+if let Err(err) = session.advance() {
+    eprintln!("failed in {}: {err}\n{}", session.phase(), session.transcript());
+}
+```
 
 Synchronous hosts can use `session.respond(|request| answer(request))?`
 after each `AwaitHost`. This borrows each request, obtains its owned reply,

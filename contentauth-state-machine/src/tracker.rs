@@ -189,6 +189,15 @@ mod tests {
         // The request is still outstanding and can be fulfilled correctly.
         assert_eq!(tracker.outstanding().len(), 1);
         tracker.fulfill(id, TestReply::Ping).unwrap();
+
+        let id = tracker.issue(TestRequest::Pong);
+        assert_eq!(
+            tracker.fulfill(id, TestReply::Ping),
+            Err(ProtocolError::ReplyMismatch {
+                id,
+                expected: "Pong",
+            })
+        );
     }
 
     #[test]

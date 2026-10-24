@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 
 use contentauth_c2pa_file_reader::{FileReadReply, FileReadRequest, FileReadSession};
-use contentauth_c2pa_format_jpeg::JpegFormat;
+use contentauth_c2pa_format_registry::AnyFormat;
 use contentauth_c2pa_primitives::HostError;
 use contentauth_state_machine::{RequestId, Session};
 
@@ -122,7 +122,7 @@ pub enum Step {
 /// spawns, and holds no lock. It is `Send` or not exactly as the engine
 /// is, and nothing here requires either.
 pub struct ReadSessionBridge {
-    inner: FileReadSession<JpegFormat>,
+    inner: FileReadSession<AnyFormat>,
 
     /// Numbers handed to the host, mapped to the engine's own ids. The
     /// engine's `RequestId` is opaque (and rightly so); the host's handle
@@ -204,6 +204,13 @@ impl ReadSessionBridge {
         self.handles.remove(&id);
         self.reported.remove(&engine_id);
         Ok(())
+    }
+
+    /// Where the engine is — the phase it is waiting in, or the one it
+    /// failed in — for logs and error reports, not control flow. See
+    /// [`contentauth_state_machine::Session::phase`].
+    pub fn phase(&self) -> String {
+        self.inner.phase()
     }
 
     /// Consumes the finished session.

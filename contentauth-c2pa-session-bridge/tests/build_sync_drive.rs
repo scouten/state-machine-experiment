@@ -161,6 +161,11 @@ fn a_rejected_signature_fails_the_build() {
 }
 
 #[test]
+fn the_phase_says_where_a_fresh_session_starts() {
+    assert_eq!(new_session().phase(), "Building > Start");
+}
+
+#[test]
 fn a_bad_definition_is_rejected_before_any_request() {
     let err = BuildSessionBridge::new("{", "image/jpeg", "es256", vec![])
         .err()

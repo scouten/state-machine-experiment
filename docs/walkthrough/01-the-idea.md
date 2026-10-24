@@ -76,6 +76,14 @@ close to it:
   thread model must never call one session's methods simultaneously from
   several threads. Crashes or unpredictable behavior are likely otherwise.
   (Calls on *different* sessions may safely run at the same time.)
+* **Debugging is not a stack trace.** When a session fails, the work that
+  failed is not on the host's call stack, and an inverted control flow is
+  harder to step through. The engine compensates: every session reports a
+  `phase()` (nested sessions as `"Reading > HashingAsset"`), a failed
+  session keeps reporting where and why it failed in every later error,
+  and a `Recorder` captures the whole host conversation, which `replay`
+  reproduces exactly — something a blocking design cannot offer, since its
+  I/O is not a value you can record.
 * **A second implementation to keep honest.** Reader/validator logic is
   written from scratch here, so conformance to c2pa-rs and to the spec is
   something to *keep proving*, not inherit.

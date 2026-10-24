@@ -35,6 +35,11 @@
 //! anything else — a timer, a channel, an async runtime's I/O — would
 //! never be woken, and [`Session::advance`] reports it as
 //! [`ProtocolError::WorkflowStalled`] rather than hang.
+//!
+//! Call [`Host::set_phase`] before each stage to expose its name through
+//! [`Session::phase`]. Errors retain that phase and their original message
+//! in [`Failure`], including on later `advance`, `fulfill`, or `finish`
+//! calls. [`crate::Recorder`] and [`crate::replay`] work unchanged.
 
 use std::{
     fmt,
@@ -46,7 +51,7 @@ use std::{
 };
 
 use crate::{
-    error::ProtocolError,
+    error::{Failure, ProtocolError},
     request::{HostRequest, Request},
     session::{Session, Step},
     types::RequestId,
@@ -60,6 +65,7 @@ use crate::{
 /// lands here, and the session moves it into its own outstanding list —
 /// which it can then lend out by reference — once the poll returns.
 struct Mailbox<Req: Request> {
+    phase: String,
     next_id: u64,
     issued: Vec<HostRequest<Req>>,
     replies: Vec<(RequestId, Req::Reply)>,
@@ -96,6 +102,16 @@ impl<Req: Request> fmt::Debug for Host<Req> {
 }
 
 impl<Req: Request> Host<Req> {
+    /// Names the current workflow phase for [`Session::phase`] and failure
+    /// reports. Set this before entering a new stage, including before any
+    /// fallible work in that stage. The initial phase is `"Start"`.
+    ///
+    /// This is diagnostic text, not a stable interface. Sub-workflows can
+    /// include their enclosing stage using `"Outer > Inner"`.
+    pub fn set_phase(&self, phase: impl Into<String>) {
+        lock(&self.shared).phase = phase.into();
+    }
+
     /// Issues a request and returns a future that resolves to the host's
     /// reply.
     ///
@@ -159,13 +175,13 @@ type BoxedWorkflow<T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + Send>>;
 enum State<T, E> {
     Running(BoxedWorkflow<T, E>),
     Complete(T),
-    Failed,
+    Failed(Failure),
 }
 
 /// A [`Session`] whose workflow is an `async fn` rather than a hand-written
 /// state machine.
 ///
-/// A concrete session wraps one of these and delegates the four
+/// A concrete session wraps one of these and delegates the
 /// [`Session`] methods to it:
 ///
 /// ```
@@ -250,6 +266,7 @@ where
         Fut: Future<Output = Result<T, E>> + Send + 'static,
     {
         let shared = Arc::new(Mutex::new(Mailbox {
+            phase: "Start".into(),
             next_id: 0,
             issued: Vec::new(),
             replies: Vec::new(),
@@ -289,7 +306,7 @@ where
     Req: Request + Send + 'static,
     Req::Reply: Send,
     T: Send,
-    E: From<ProtocolError>,
+    E: From<ProtocolError> + fmt::Display,
 {
     type Error = E;
     type Output = T;
@@ -304,7 +321,9 @@ where
         let future = match &mut self.state {
             State::Running(future) => future,
             State::Complete(_) => return Ok(Step::Complete),
-            State::Failed => return Err(ProtocolError::SessionFailed.into()),
+            State::Failed(failure) => {
+                return Err(ProtocolError::SessionFailed(failure.clone()).into())
+            }
         };
 
         let poll = future
@@ -319,13 +338,14 @@ where
             }
 
             Poll::Ready(Err(err)) => {
-                self.state = State::Failed;
+                self.state = State::Failed(Failure::new(self.phase(), &err));
                 Err(err)
             }
 
             // Waiting, with nothing the host could answer to unblock it.
             Poll::Pending if self.outstanding.is_empty() => {
-                self.state = State::Failed;
+                self.state =
+                    State::Failed(Failure::new(self.phase(), &ProtocolError::WorkflowStalled));
                 Err(ProtocolError::WorkflowStalled.into())
             }
 
@@ -337,13 +357,23 @@ where
         &self.outstanding
     }
 
+    fn phase(&self) -> String {
+        match &self.state {
+            State::Running(_) => lock(&self.shared).phase.clone(),
+            State::Complete(_) => "Complete".into(),
+            State::Failed(failure) => failure.phase.clone(),
+        }
+    }
+
     /// Delivers a reply, after the same checks
     /// [`SessionCore::fulfill`](crate::SessionCore::fulfill) makes.
     fn fulfill(&mut self, id: RequestId, reply: Req::Reply) -> Result<(), E> {
-        match self.state {
+        match &self.state {
             State::Running(_) => {}
             State::Complete(_) => return Err(ProtocolError::SessionComplete.into()),
-            State::Failed => return Err(ProtocolError::SessionFailed.into()),
+            State::Failed(failure) => {
+                return Err(ProtocolError::SessionFailed(failure.clone()).into())
+            }
         }
 
         let index = self
@@ -369,7 +399,7 @@ where
         match self.state {
             State::Complete(output) => Ok(output),
             State::Running(_) => Err(ProtocolError::SessionNotComplete.into()),
-            State::Failed => Err(ProtocolError::SessionFailed.into()),
+            State::Failed(failure) => Err(ProtocolError::SessionFailed(failure).into()),
         }
     }
 }
@@ -379,7 +409,7 @@ impl<Req: Request, T, E> fmt::Debug for Workflow<Req, T, E> {
         let state = match self.state {
             State::Running(_) => "Running",
             State::Complete(_) => "Complete",
-            State::Failed => "Failed",
+            State::Failed(_) => "Failed",
         };
 
         f.debug_struct("Workflow")
@@ -430,9 +460,11 @@ mod tests {
         }
     }
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Clone, Debug, PartialEq, thiserror::Error)]
     enum TestError {
+        #[error(transparent)]
         Protocol(ProtocolError),
+        #[error("host failed")]
         HostFailed,
     }
 
@@ -545,18 +577,113 @@ mod tests {
         session.fulfill(id, Answer::Failed).unwrap();
 
         assert_eq!(session.advance(), Err(TestError::HostFailed));
+        let failed = TestError::Protocol(ProtocolError::SessionFailed(Failure::new(
+            "Start",
+            &TestError::HostFailed,
+        )));
+        assert_eq!(session.advance(), Err(failed.clone()));
+        assert_eq!(session.fulfill(id, Answer::Number(1)), Err(failed.clone()));
+        assert_eq!(session.finish(), Err(failed));
+    }
+
+    #[test]
+    fn phases_follow_stages_and_preserve_the_one_that_fails() {
+        let mut session: TestWorkflow<u32> = Workflow::new(|host| async move {
+            host.set_phase("Reading > First");
+            let first = number(&host).await?;
+            host.set_phase("Reading > Second");
+            Ok(first + number(&host).await?)
+        });
+        assert_eq!(session.phase(), "Start");
+        session.advance().unwrap();
+        assert_eq!(session.phase(), "Reading > First");
+        let first = only_outstanding(&session);
+        session.fulfill(first, Answer::Number(1)).unwrap();
+        session.advance().unwrap();
+        assert_eq!(session.phase(), "Reading > Second");
+        let second = only_outstanding(&session);
+        session.fulfill(second, Answer::Failed).unwrap();
+        assert_eq!(session.advance(), Err(TestError::HostFailed));
+
+        let failed = TestError::Protocol(ProtocolError::SessionFailed(Failure::new(
+            "Reading > Second",
+            &TestError::HostFailed,
+        )));
+        assert_eq!(session.phase(), "Reading > Second");
+        assert_eq!(session.advance(), Err(failed.clone()));
+        assert_eq!(
+            session.fulfill(second, Answer::Number(2)),
+            Err(failed.clone())
+        );
+        assert_eq!(session.phase(), "Reading > Second");
+        assert_eq!(session.finish(), Err(failed));
+    }
+
+    #[test]
+    fn phases_can_be_set_before_polling_and_complete_after_success() {
+        let mut session: TestWorkflow<u32> = Workflow::new(|host| {
+            host.set_phase("Initialized");
+            async move {
+                host.set_phase("Calculating");
+                Ok(7)
+            }
+        });
+        assert_eq!(session.phase(), "Initialized");
+        assert_eq!(session.advance().unwrap(), Step::Complete);
+        assert_eq!(session.phase(), "Complete");
+        assert_eq!(session.advance().unwrap(), Step::Complete);
+        assert_eq!(session.finish().unwrap(), 7);
+    }
+
+    #[test]
+    fn a_stalled_workflow_preserves_its_phase_on_every_later_call() {
+        let mut session: TestWorkflow<u32> = Workflow::new(|host| async move {
+            host.set_phase("InvalidWait");
+            pending().await
+        });
         assert_eq!(
             session.advance(),
-            Err(TestError::Protocol(ProtocolError::SessionFailed))
+            Err(TestError::Protocol(ProtocolError::WorkflowStalled))
         );
+        let failed = TestError::Protocol(ProtocolError::SessionFailed(Failure::new(
+            "InvalidWait",
+            &ProtocolError::WorkflowStalled,
+        )));
+        assert_eq!(session.phase(), "InvalidWait");
+        assert_eq!(session.advance(), Err(failed.clone()));
         assert_eq!(
-            session.fulfill(id, Answer::Number(1)),
-            Err(TestError::Protocol(ProtocolError::SessionFailed))
+            session.fulfill(RequestId(0), Answer::Failed),
+            Err(failed.clone())
         );
-        assert_eq!(
-            session.finish(),
-            Err(TestError::Protocol(ProtocolError::SessionFailed))
-        );
+        assert_eq!(session.finish(), Err(failed));
+    }
+
+    #[test]
+    fn workflows_record_and_replay_success_and_failure_with_phases() {
+        fn session() -> TestWorkflow<u32> {
+            Workflow::new(|host| async move {
+                host.set_phase("AwaitingNumber");
+                number(&host).await
+            })
+        }
+        for reply in [Answer::Number(7), Answer::Failed] {
+            let mut recorded = crate::Recorder::new(session());
+            assert_eq!(recorded.phase(), "Start");
+            recorded.advance().unwrap();
+            assert_eq!(recorded.phase(), "AwaitingNumber");
+            let id = recorded.outstanding_requests()[0].id;
+            recorded.fulfill(id, reply).unwrap();
+            let result = recorded.advance();
+            if result.is_err() {
+                let _ = recorded.advance();
+                let _ = recorded.fulfill(id, Answer::Number(0));
+            } else {
+                assert_eq!(recorded.phase(), "Complete");
+            }
+            let replayed = crate::replay(session(), recorded.transcript()).unwrap();
+            assert_eq!(replayed.phase(), recorded.phase());
+            assert_eq!(replayed.finish(), recorded.finish());
+        }
     }
 
     #[test]
@@ -620,7 +747,9 @@ mod tests {
         );
         assert_eq!(
             session.advance(),
-            Err(TestError::Protocol(ProtocolError::SessionFailed))
+            Err(TestError::Protocol(ProtocolError::SessionFailed(
+                Failure::new("Start", &ProtocolError::WorkflowStalled,)
+            )))
         );
     }
 

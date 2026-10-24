@@ -44,6 +44,10 @@ about C2PA itself.
 * Interleaving two reads on one thread.
 * Swapping the format handler under a session (`AnyFormat`) with no
   changes below the host.
+* Deterministic record and replay: a session's only inputs are replies,
+  so recording the host conversation (`Recorder`) captures everything a
+  failure depends on, and `replay` reproduces it without the asset's
+  original host, clock or network.
 * Zero-copy payloads. Carrying asset chunks, manifest stores and writes as
   reference-counted `Bytes` instead of `Vec<u8>` changed no contract — only
   payload types — and, on a 16 MiB JPEG, cut a host that holds the asset
@@ -64,7 +68,10 @@ about C2PA itself.
   existing test and binding unchanged — and the compiler generates that
   state machine. The duplicated arms, and the coverage gaps they left,
   collapsed into one helper; `HashStream`'s chunk table and reorder buffer
-  became a queue of awaited replies.
+  became a window of polled replies and shared buffers. The whole window
+  must still be polled: a failed or wrongly sized later read must fail
+  promptly even when an earlier read is outstanding. `Host::set_phase`
+  retains diagnostic stage names without recreating the phase enum.
 * Matching c2pa-rs's JSON/error contracts exactly (it's a moving target;
   the repo already tracked c2pa-rs 0.91's trust-anchor and revocation
   changes).

@@ -301,6 +301,7 @@ async fn build(
     let mut manifest = assemble_placeholder(&settings)?;
 
     // The session keeps patching its buffer, so the host needs its own copy.
+    host.set_phase("AwaitingPlaceholderReserved");
     let exclusions = ask(
         &host,
         BuilderRequest::ReservePlaceholder {
@@ -328,6 +329,7 @@ async fn build(
         ));
     }
 
+    host.set_phase("AwaitingAssetLength");
     let asset_len = ask(
         &host,
         BuilderRequest::AssetLength { stream },
@@ -343,6 +345,7 @@ async fn build(
         Error::PlaceholderRangeInvalid("the reserved placeholder range does not fit the asset"),
     )?;
     let hash_alg = settings.signing_alg.claim_hash_algorithm();
+    host.set_phase("HashingAsset");
     let hash = hash_stream::hash(&host, stream, hash_alg, &ranges).await?;
     manifest.apply_hard_binding(&exclusions, hash)?;
 
@@ -350,6 +353,7 @@ async fn build(
     // assertion's hash — and an identity assertion's hash is not known
     // until it is signed.
     for index in 0..manifest.identity_count() {
+        host.set_phase("AwaitingIdentitySignature");
         let (label, alg, data) = manifest.identity_to_be_signed(index)?;
         let signature = ask(
             &host,
@@ -365,6 +369,7 @@ async fn build(
         manifest.apply_identity_signature(index, &signature)?;
     }
 
+    host.set_phase("AwaitingSignature");
     let to_be_signed = manifest.apply_claim()?;
     let claim_signature = ask(
         &host,
@@ -382,6 +387,7 @@ async fn build(
     // signature — see the crate-level error docs.
     let timestamp_token = match manifest.countersigned_bytes(&claim_signature) {
         Some(countersigned) => {
+            host.set_phase("AwaitingTimestamp");
             let digest = hash_alg.digest(&countersigned);
             Some(
                 ask(
@@ -399,6 +405,7 @@ async fn build(
         None => None,
     };
 
+    host.set_phase("AwaitingCommit");
     let final_bytes = Bytes::from(manifest.finish(&claim_signature, timestamp_token.as_deref())?);
 
     ask(
@@ -557,6 +564,10 @@ impl Session for BuilderSession {
         self.workflow.outstanding_requests()
     }
 
+    fn phase(&self) -> String {
+        self.workflow.phase()
+    }
+
     /// Reports the outcome of one outstanding request.
     fn fulfill(&mut self, id: RequestId, reply: BuilderHostReply) -> Result<(), Error> {
         self.workflow.fulfill(id, reply)
@@ -655,6 +666,7 @@ mod tests {
     #[test]
     fn a_reply_of_the_wrong_kind_to_an_identity_signature_request_is_refused() {
         let (mut session, id) = session_at_identity_signature();
+        assert_eq!(session.phase(), "AwaitingIdentitySignature");
 
         session
             .workflow
@@ -667,6 +679,21 @@ mod tests {
                 ..
             })
         ));
+
+        assert_eq!(session.phase(), "AwaitingIdentitySignature");
+        match session.advance().unwrap_err() {
+            Error::Protocol(ProtocolError::SessionFailed(failure)) => {
+                assert_eq!(failure.phase, "AwaitingIdentitySignature");
+                assert!(failure.cause.contains("expected Signature"), "{failure}");
+            }
+            other => panic!("expected SessionFailed, got {other:?}"),
+        }
+        match session.finish().unwrap_err() {
+            Error::Protocol(ProtocolError::SessionFailed(failure)) => {
+                assert_eq!(failure.phase, "AwaitingIdentitySignature");
+            }
+            other => panic!("expected SessionFailed, got {other:?}"),
+        }
     }
 
     /// The workflow's position is the compiler's, not an enum a test can
@@ -805,6 +832,55 @@ mod tests {
     }
 
     #[test]
+    fn host_failures_preserve_each_build_stage() {
+        let cases: [(Stop, &str); 6] = [
+            (
+                |r| matches!(r, BuilderRequest::ReservePlaceholder { .. }),
+                "AwaitingPlaceholderReserved",
+            ),
+            (
+                |r| matches!(r, BuilderRequest::AssetLength { .. }),
+                "AwaitingAssetLength",
+            ),
+            (
+                |r| matches!(r, BuilderRequest::AssetBytes { .. }),
+                "HashingAsset",
+            ),
+            (
+                |r| matches!(r, BuilderRequest::Sign { .. }),
+                "AwaitingSignature",
+            ),
+            (
+                |r| matches!(r, BuilderRequest::Timestamp { .. }),
+                "AwaitingTimestamp",
+            ),
+            (
+                |r| matches!(r, BuilderRequest::CommitManifest { .. }),
+                "AwaitingCommit",
+            ),
+        ];
+        for (stop, phase) in cases {
+            let (mut session, id) = session_at(stop);
+            assert_eq!(session.phase(), phase);
+            session
+                .fulfill(
+                    id,
+                    BuilderHostReply::Failed(crate::HostError::new("unavailable")),
+                )
+                .unwrap();
+            assert!(matches!(session.advance(), Err(Error::HostFailure { .. })));
+            assert_eq!(session.phase(), phase);
+            match session.finish().unwrap_err() {
+                Error::Protocol(ProtocolError::SessionFailed(failure)) => {
+                    assert_eq!(failure.phase, phase);
+                    assert!(failure.cause.contains("unavailable"), "{failure}");
+                }
+                other => panic!("expected SessionFailed, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn settings_without_a_certificate_fail_on_the_first_advance_and_poison_the_session() {
         let mut session = BuilderSession::new(BuilderSettings::new(
             "xmp:iid:1",
@@ -819,13 +895,14 @@ mod tests {
             "nothing runs before the first advance"
         );
         assert!(matches!(session.advance(), Err(Error::NoCertificates)));
+        assert_eq!(session.phase(), "Start");
         assert!(matches!(
             session.advance(),
-            Err(Error::Protocol(ProtocolError::SessionFailed))
+            Err(Error::Protocol(ProtocolError::SessionFailed(_)))
         ));
         assert!(matches!(
             session.finish(),
-            Err(Error::Protocol(ProtocolError::SessionFailed))
+            Err(Error::Protocol(ProtocolError::SessionFailed(_)))
         ));
     }
 }

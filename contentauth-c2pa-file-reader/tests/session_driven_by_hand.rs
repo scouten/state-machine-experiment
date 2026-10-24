@@ -39,7 +39,7 @@ use contentauth_c2pa_file_reader::{
 use contentauth_c2pa_format_jpeg::JpegFormat;
 use contentauth_c2pa_primitives::HostError;
 use contentauth_c2pa_reader::ValidationState;
-use contentauth_state_machine::{RequestId, Session, Step};
+use contentauth_state_machine::{replay, ProtocolError, Recorder, RequestId, Session, Step};
 
 const C_JPG: &[u8] = include_bytes!("../../contentauth-c2pa-reader/tests/fixtures/C.jpg");
 const FIXTURE_ISSUER: &[u8] =
@@ -279,4 +279,158 @@ fn a_store_split_across_non_adjacent_segments_fails_locating() {
         .expect_err("non-adjacent manifest packets must not reassemble");
 
     assert!(matches!(err, Error::Format(_)), "{err:?}");
+}
+
+#[test]
+fn the_phase_names_where_the_session_is_including_the_session_inside_it() {
+    let mut session = trusting_session();
+    let mut phases = vec![session.phase()];
+
+    while session.advance().unwrap() == Step::AwaitHost {
+        phases.push(session.phase());
+        for request in session.outstanding_requests().to_vec() {
+            session.fulfill(request.id, answer(&request.kind)).unwrap();
+        }
+    }
+    phases.push(session.phase());
+
+    assert_eq!(phases.first().unwrap(), "Locating > Scanning > Start");
+    assert!(
+        phases.iter().any(|p| p == "Reading > AwaitingSigningTime"),
+        "{phases:#?}"
+    );
+    assert!(
+        phases.iter().any(|p| p == "Reading > HashingAsset"),
+        "{phases:#?}"
+    );
+    assert_eq!(phases.last().unwrap(), "Complete");
+}
+
+#[test]
+fn a_failure_inside_the_read_session_is_reported_with_both_phases() {
+    let mut session = FileReadSession::new(
+        &JpegFormat,
+        ReadSettings {
+            trust_anchors: vec![vec![1, 2, 3]],
+            ..ReadSettings::default()
+        },
+    );
+
+    let err = loop {
+        match session.advance() {
+            Ok(Step::AwaitHost) => {}
+            Ok(Step::Complete) => panic!("a broken trust anchor cannot complete"),
+            Ok(other) => panic!("unexpected step {other:?}"),
+            Err(err) => break err,
+        }
+        for request in session.outstanding_requests().to_vec() {
+            session.fulfill(request.id, answer(&request.kind)).unwrap();
+        }
+    };
+    assert!(matches!(err, Error::Read(_)), "{err:?}");
+    assert_eq!(session.phase(), "Reading > Start");
+
+    match session.advance() {
+        Err(Error::Protocol(ProtocolError::SessionFailed(failure))) => {
+            assert_eq!(failure.phase, "Reading > Start");
+            assert_eq!(failure.cause, err.to_string());
+        }
+        other => panic!("expected SessionFailed, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_host_failure_while_locating_is_reported_with_both_phases() {
+    let mut session = trusting_session();
+    assert_eq!(session.advance().unwrap(), Step::AwaitHost);
+    let id = session.outstanding_requests()[0].id;
+    session
+        .fulfill(id, FileReadReply::Failed(HostError::new("disk on fire")))
+        .unwrap();
+
+    assert!(matches!(session.advance(), Err(Error::Format(_))));
+    assert_eq!(session.phase(), "Locating > Scanning > Length");
+    assert!(matches!(
+        session.fulfill(id, FileReadReply::Length(0)),
+        Err(Error::Protocol(ProtocolError::SessionFailed(failure)))
+            if failure.phase == "Locating > Scanning > Length"
+                && failure.cause.contains("disk on fire")
+    ));
+}
+
+/// Records a whole read that fails — the asset turns out to be truncated
+/// partway through hashing — then replays the transcript against a fresh
+/// session, which fails identically, without the asset or a host.
+#[test]
+fn a_recorded_failure_replays_without_the_host() {
+    let truncated_len = (C_JPG.len() - 1000) as u64;
+    let truncating = |request: &FileReadRequest| match request {
+        FileReadRequest::Read { range, .. } if range.start + range.len > truncated_len => {
+            FileReadReply::Failed(HostError::new("unexpected end of file"))
+        }
+        other => answer(other),
+    };
+
+    let mut recorder = Recorder::new(trusting_session());
+    let err = loop {
+        match recorder.advance() {
+            Ok(Step::AwaitHost) => {}
+            Ok(step) => panic!("unexpected step {step:?}"),
+            Err(err) => break err,
+        }
+        for request in recorder.outstanding_requests().to_vec() {
+            recorder
+                .fulfill(request.id, truncating(&request.kind))
+                .unwrap();
+        }
+    };
+    let failed_in = recorder.phase();
+    assert!(failed_in.starts_with("Reading > "), "{failed_in}");
+
+    let (_, transcript) = recorder.into_parts();
+    let log = transcript.to_string();
+    assert!(log.contains("unexpected end of file"), "{log}");
+    assert!(
+        log.lines().last().unwrap().contains(&err.to_string()),
+        "{log}"
+    );
+
+    let replayed = replay(trusting_session(), &transcript).unwrap();
+    assert_eq!(replayed.phase(), failed_in);
+}
+
+/// A replay against a session configured differently from the recorded
+/// one stops at the first call where the two disagree.
+#[test]
+fn a_replay_against_a_different_session_reports_where_it_diverged() {
+    let mut recorder = Recorder::new(trusting_session());
+    while recorder.advance().unwrap() == Step::AwaitHost {
+        for request in recorder.outstanding_requests().to_vec() {
+            recorder.fulfill(request.id, answer(&request.kind)).unwrap();
+        }
+    }
+    let (_, transcript) = recorder.into_parts();
+
+    // Configured with a trust anchor that is not a certificate: it locates
+    // the store exactly as the recording did, then fails where the
+    // recording went on reading. (A session that merely trusts nothing
+    // would *not* diverge — it makes the very same requests, and replay
+    // compares the conversation, not the verdict at the end of it.)
+    let untrusting = FileReadSession::new(
+        &JpegFormat,
+        ReadSettings {
+            trust_anchors: vec![vec![1, 2, 3]],
+            ..ReadSettings::default()
+        },
+    );
+    match replay(untrusting, &transcript) {
+        Err(divergence) => {
+            // The call that diverged began while still locating, and is
+            // the one that went on to start reading.
+            assert!(divergence.phase.starts_with("Locating > "), "{divergence}");
+            assert_eq!(divergence.expected, "advance -> Ok(AwaitHost)");
+            assert!(divergence.actual.contains("trust anchor 0"), "{divergence}");
+        }
+        Ok(_) => panic!("an untrusting session cannot replay a trusting one's transcript"),
+    }
 }

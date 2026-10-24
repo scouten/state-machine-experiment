@@ -25,6 +25,9 @@ jobs:
     name: Shared JavaScript host (Node and three browsers)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # Match js/package-lock.json; the image supplies browsers and OS libraries.
+      PLAYWRIGHT_IMAGE: mcr.microsoft.com/playwright:v1.60.0-noble@sha256:9bd26ad900bb5e0f4dee75839e957a89ae89c2b7ab1e76050e559790e946b948
     steps:
       - name: Checkout repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -49,11 +52,23 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Install JavaScript dependencies and browsers
+      - name: Install JavaScript dependencies
+        timeout-minutes: 5
         working-directory: js
+        run: npm ci
+
+      - name: Pull matching browser image
+        timeout-minutes: 5
         run: |
-          npm ci
-          npx playwright install --with-deps chromium firefox webkit
+          node <<'NODE'
+          const assert = require("node:assert/strict");
+          const { version } = require("./js/node_modules/playwright/package.json");
+          assert.ok(
+            process.env.PLAYWRIGHT_IMAGE.startsWith(`mcr.microsoft.com/playwright:v${version}-noble@sha256:`),
+            "Update PLAYWRIGHT_IMAGE and its digest to match the installed Playwright version",
+          );
+          NODE
+          docker pull "$PLAYWRIGHT_IMAGE"
 
       - name: Install matching Wasm binding CLI
         run: cargo install wasm-bindgen-cli --version 0.2.122 --locked
@@ -67,11 +82,20 @@ jobs:
       - name: Lint synchronous Wasm boundary
         run: cargo clippy --manifest-path contentauth-c2pa-wasm/Cargo.toml --target wasm32-unknown-unknown -- -Dwarnings
 
-      - name: Node and browser preservation contracts
+      - name: Node preservation contracts
+        timeout-minutes: 5
         working-directory: js
+        run: npm test
+
+      - name: Browser preservation contracts (Chromium, Firefox, WebKit)
+        timeout-minutes: 15
         run: |
-          npm test
-          npm run test:browser
+          docker run --rm --init --ipc=host \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp --env CI=true \
+            --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            --workdir "$GITHUB_WORKSPACE/js" \
+            "$PLAYWRIGHT_IMAGE" npm run test:browser
 
   tests:
     name: Unit tests + code coverage
@@ -94,6 +118,13 @@ jobs:
         uses: taiki-e/install-action@4684b8405694ae9dd42c9f39ba901a70ae83f4a3 # v2.82.9
         with:
           tool: cargo-llvm-cov
+
+      - name: Check C API feature configurations and generated header
+        run: |
+          bash contentauth-c2pa-c-api/tests/check-features.sh
+          cargo test -p contentauth-c2pa-c-api --no-default-features --features read
+          cargo test -p contentauth-c2pa-c-api --no-default-features --features build
+          cargo test -p contentauth-c2pa-c-api --no-default-features
 
       - name: Generate code coverage
         env:
@@ -436,11 +467,12 @@ jobs:
     name: C++ binding (${{ matrix.name }})
     runs-on: ubuntu-latest
 
-    # `contentauth-c2pa-cpp` is a Rust static library behind a C ABI plus
-    # C++17 readers, compiled signing/thread pools and C++20 coroutines.
-    # Its Rust half is an ordinary workspace member, tested by
-    # the jobs above; this job builds the C++ half against it with CMake
-    # and runs the C++ tests and examples three ways:
+    # `contentauth-c2pa-cpp` is C++17 readers, compiled signing/thread pools
+    # and C++20 coroutines over the canonical `contentauth-c2pa-c-api` C
+    # library and header. It holds no Rust of its own; the C API is an
+    # ordinary workspace member, tested by the jobs above, and this job
+    # builds it with cargo through CMake (along with a plain C client of the
+    # same library) and runs the C++ tests and examples three ways:
     #   - plain, with coverage of C++ headers and sources (uploaded to Codecov);
     #   - under AddressSanitizer (leaks, use-after-free on cancellation);
     #   - under ThreadSanitizer (the session handed between threads, and
@@ -502,8 +534,7 @@ jobs:
         run: >
           gcovr --root . --object-directory contentauth-c2pa-cpp/build
           --filter 'contentauth-c2pa-cpp/include/'
-          --filter 'contentauth-c2pa-cpp/cpp/src/'
-          --filter 'contentauth-c2pa-cpp/cpp/include/scope_exit\.hpp$'
+          --filter 'contentauth-c2pa-cpp/src/'
           --gcov-ignore-parse-errors negative_hits.warn_once_per_file
           --exclude-throw-branches --exclude-unreachable-branches
           --lcov lcov.cpp.info --txt

@@ -57,13 +57,17 @@
 #![deny(unsafe_code)]
 
 mod error;
+mod recorder;
 mod request;
 mod session;
+#[cfg(test)]
+mod test_session;
 mod tracker;
 mod types;
 mod workflow;
 
-pub use error::ProtocolError;
+pub use error::{Failure, ProtocolError};
+pub use recorder::{replay, Divergence, Event, Outcome, Recorder, Transcript};
 pub use request::{HostRequest, Request};
 pub use session::{Session, SessionCore, Step};
 pub use tracker::RequestTracker;

@@ -174,7 +174,7 @@ impl Request for FileBuilderRequest {
 }
 
 /// The host's report of the outcome of one [`FileBuilderRequest`].
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum FileBuilderReply {
     /// Answers [`FileBuilderRequest::Read`]: the requested bytes.
@@ -347,6 +347,20 @@ pub struct FileBuilderSession<H: FormatHandler + Send> {
 
     handler: H,
     phase: Option<Phase<H>>,
+
+    /// [`Session::phase`]'s answer as of the start of the current pass of
+    /// `advance`'s loop, captured before `phase` is taken out so a failure
+    /// can still be blamed on the phase it happened in.
+    active: String,
+}
+
+/// The outer phase every [`FileBuilderSession`] phase name starts with
+/// while the inner [`BuilderSession`] is still running.
+const BUILDING: &str = "Building";
+
+/// `outer > inner`, the way [`Session::phase`] joins nested phases.
+fn nested<S: Session + ?Sized>(outer: &str, inner: &S) -> String {
+    format!("{outer} > {}", inner.phase())
 }
 
 impl<H: FormatHandler + Send> FileBuilderSession<H> {
@@ -373,6 +387,24 @@ impl<H: FormatHandler + Send> FileBuilderSession<H> {
                 plan: None,
                 sub: None,
             }),
+            active: String::new(),
+        }
+    }
+
+    /// Where this session is, not counting a recorded failure — see
+    /// [`Session::phase`].
+    fn describe(&self) -> String {
+        match &self.phase {
+            None => "Poisoned".to_string(),
+            Some(Phase::Done(_)) => "Complete".to_string(),
+            Some(Phase::Building { session, sub, .. }) => match sub {
+                None => nested(BUILDING, &**session),
+                Some(Sub::Planning { op, .. }) => {
+                    format!("{BUILDING} > Planning > {}", op.phase())
+                }
+                Some(Sub::Validating { .. }) => format!("{BUILDING} > Validating"),
+                Some(Sub::Writing { .. }) => format!("{BUILDING} > Writing"),
+            },
         }
     }
 
@@ -405,9 +437,24 @@ impl<H: FormatHandler + Send> FileBuilderSession<H> {
     /// after `self.phase.take()` is routed through this.
     fn poisoning<T, E: Into<Error>>(&mut self, result: Result<T, E>) -> Result<T, Error> {
         result.map_err(|err| {
-            self.core.mark_failed();
-            err.into()
+            let err = err.into();
+            self.core.mark_failed(self.active.clone(), &err);
+            err
         })
+    }
+
+    /// [`Self::poisoning`] for a call into the inner [`BuilderSession`],
+    /// which knows better than this session's own snapshot where inside
+    /// it the call failed.
+    fn poisoning_inner<T, E: Into<Error>>(
+        &mut self,
+        session: &BuilderSession,
+        result: Result<T, E>,
+    ) -> Result<T, Error> {
+        if result.is_err() {
+            self.active = nested(BUILDING, session);
+        }
+        self.poisoning(result)
     }
 }
 
@@ -418,10 +465,11 @@ impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
 
     fn advance(&mut self) -> Result<Step, Error> {
         loop {
+            self.active = self.describe();
             match self.phase.take() {
                 None => {
-                    self.core.mark_failed();
-                    return Err(ProtocolError::SessionFailed.into());
+                    self.core.mark_failed("", &"session state was lost");
+                    return Err(self.core.failed_error().into());
                 }
 
                 Some(Phase::Building {
@@ -548,7 +596,7 @@ impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
                                 WriteThen::ManifestCommitted => BuilderHostReply::ManifestCommitted,
                             };
                             let result = session.fulfill(request, reply);
-                            self.poisoning(result)?;
+                            self.poisoning_inner(&session, result)?;
                             self.phase = Some(Phase::Building {
                                 session,
                                 plan,
@@ -567,12 +615,14 @@ impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
                     for (id, reply) in self.ready_replies() {
                         let translated = to_builder_host_reply(reply);
                         let result = session.fulfill(id, translated);
-                        self.poisoning(result)?;
+                        self.poisoning_inner(&session, result)?;
                     }
 
-                    let step = self.poisoning(session.advance())?;
+                    let result = session.advance();
+                    let step = self.poisoning_inner(&session, result)?;
 
                     if step == Step::Complete {
+                        self.active = nested(BUILDING, &*session);
                         let report = self.poisoning(session.finish())?;
                         self.core.mark_complete();
                         self.phase = Some(Phase::Done(FileBuilderReport {
@@ -623,7 +673,7 @@ impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
                                 let len = self.poisoning(result)?;
                                 let result =
                                     session.fulfill(request.id, BuilderHostReply::AssetLength(len));
-                                self.poisoning(result)?;
+                                self.poisoning_inner(&session, result)?;
                                 answered_internally = true;
                             }
 
@@ -681,7 +731,7 @@ impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
                                     request.id,
                                     BuilderHostReply::Failed(HostError::new("unsupported request")),
                                 );
-                                self.poisoning(result)?;
+                                self.poisoning_inner(&session, result)?;
                                 answered_internally = true;
                             }
                         }
@@ -709,6 +759,13 @@ impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
 
     fn fulfill(&mut self, id: RequestId, reply: FileBuilderReply) -> Result<(), Error> {
         Ok(self.core.fulfill(id, reply)?)
+    }
+
+    fn phase(&self) -> String {
+        match self.core.failure() {
+            Some(failure) => failure.phase.clone(),
+            None => self.describe(),
+        }
     }
 
     fn finish(self) -> Result<FileBuilderReport, Error> {
@@ -1597,13 +1654,16 @@ mod tests {
             pending: HashMap::new(),
             handler: JpegFormat,
             phase: None,
+            active: String::new(),
         };
 
         assert!(matches!(
             session.advance(),
-            Err(Error::Protocol(ProtocolError::SessionFailed))
+            Err(Error::Protocol(ProtocolError::SessionFailed(failure)))
+                if failure.cause == "session state was lost"
         ));
         assert!(session.core.is_failed());
+        assert_eq!(session.phase(), "");
     }
 
     /// `finish` does not trust `SessionCore`'s lifecycle alone: it also
@@ -1620,6 +1680,7 @@ mod tests {
             pending: HashMap::new(),
             handler: JpegFormat,
             phase: None,
+            active: String::new(),
         };
 
         assert!(matches!(
@@ -1636,9 +1697,11 @@ mod tests {
     fn poisoning_marks_the_session_failed_on_error() {
         let mut session = FileBuilderSession::new(JpegFormat, test_settings());
 
+        session.active = "Somewhere".to_string();
         let result: Result<(), Error> = session.poisoning(Err(Error::Invariant("boom")));
         assert!(matches!(result, Err(Error::Invariant("boom"))));
         assert!(session.core.is_failed());
+        assert_eq!(session.phase(), "Somewhere");
     }
 
     /// A source read a `CopyFromSource` task needs must not be reissued

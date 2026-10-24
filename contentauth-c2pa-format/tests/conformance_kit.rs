@@ -86,13 +86,31 @@ impl Scan {
             return Ok(Step::Complete);
         }
 
+        // Every phase that can fail returns before looping, so the phase
+        // before the call is the one any error comes from.
+        let phase = self.phase();
         match self.run() {
             Ok(step) => Ok(step),
             Err(err) => {
-                self.core.mark_failed();
+                self.core.mark_failed(phase, &err);
                 Err(err)
             }
         }
+    }
+
+    fn phase(&self) -> String {
+        if let Some(failure) = self.core.failure() {
+            return failure.phase.clone();
+        }
+        match self.phase {
+            Phase::Start => "Start",
+            Phase::Length(_) => "Length",
+            Phase::Tail { .. } => "Tail",
+            Phase::Store { .. } => "Store",
+            Phase::Done(_) => "Complete",
+            Phase::Poisoned => "Poisoned",
+        }
+        .into()
     }
 
     fn run(&mut self) -> Result<Step, FormatError> {
@@ -190,7 +208,7 @@ impl Scan {
                     return Ok(Step::Complete);
                 }
 
-                Phase::Poisoned => return Err(ProtocolError::SessionFailed.into()),
+                Phase::Poisoned => return Err(self.core.failed_error().into()),
             }
         }
     }
@@ -199,7 +217,7 @@ impl Scan {
         self.core.finish_check()?;
         match self.phase {
             Phase::Done(found) => Ok(found),
-            _ => Err(ProtocolError::SessionFailed.into()),
+            _ => Err(self.core.failed_error().into()),
         }
     }
 }
@@ -217,6 +235,10 @@ impl Session for Locate {
 
     fn outstanding_requests(&self) -> &[HostRequest<IoRequest>] {
         self.0.core.outstanding_requests()
+    }
+
+    fn phase(&self) -> String {
+        self.0.phase()
     }
 
     fn fulfill(
@@ -251,6 +273,10 @@ impl Session for PlanEmbed {
 
     fn outstanding_requests(&self) -> &[HostRequest<IoRequest>] {
         self.scan.core.outstanding_requests()
+    }
+
+    fn phase(&self) -> String {
+        self.scan.phase()
     }
 
     fn fulfill(
@@ -377,11 +403,11 @@ fn a_failed_operation_stays_failed() {
     assert!(matches!(op.advance(), Err(FormatError::HostFailure { .. })));
     assert!(matches!(
         op.advance(),
-        Err(FormatError::Protocol(ProtocolError::SessionFailed))
+        Err(FormatError::Protocol(ProtocolError::SessionFailed(_)))
     ));
     assert!(matches!(
         op.finish(),
-        Err(FormatError::Protocol(ProtocolError::SessionFailed))
+        Err(FormatError::Protocol(ProtocolError::SessionFailed(_)))
     ));
 
     // And a host that can answer nothing drives the same path through

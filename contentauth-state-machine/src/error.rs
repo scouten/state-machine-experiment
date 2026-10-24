@@ -14,6 +14,8 @@
 //! The protocol-level error vocabulary common to every session built on
 //! this engine.
 
+use std::fmt;
+
 use crate::types::RequestId;
 
 /// A misuse of the [`Session`](crate::Session) API, as opposed to a failure
@@ -21,9 +23,8 @@ use crate::types::RequestId;
 ///
 /// Every one of these but [`Self::WorkflowStalled`] means the host binding
 /// is buggy — fulfilling a request that was never issued or was already
-/// answered, answering with the wrong payload type, or driving a session
-/// past a terminal state — never that the data the session is working on
-/// is somehow wrong. A
+/// answered, answering with the wrong payload type, or driving a session past a terminal state —
+/// never that the data the session is working on is somehow wrong. A
 /// concrete session's own `Error` type is expected to fold this in (for
 /// example, via `#[from]`) alongside whatever domain-specific failures its
 /// own workflow can produce.
@@ -62,18 +63,56 @@ pub enum ProtocolError {
     /// half-built, so handing anything out as if it were a result would be
     /// misleading. Sessions built with [`SessionCore`](crate::SessionCore)
     /// poison themselves on error: the original error is returned when it
-    /// happens, and every later call reports this instead.
-    #[error("session failed on an earlier call")]
-    SessionFailed,
+    /// happens, and every later call reports this instead — carrying the
+    /// phase the session failed in and the original error's message, so a
+    /// host that only sees this later report still learns where and why.
+    #[error("{0}")]
+    SessionFailed(Failure),
 
     /// A [`Workflow`](crate::Workflow) is waiting, yet has nothing
     /// outstanding that the host could answer to unblock it.
     ///
-    /// Unlike every other variant, this is a bug in the session, not its
-    /// host: its workflow awaited something other than a
-    /// [`PendingReply`](crate::PendingReply).
+    /// This is a bug in the workflow rather than its host: it awaited
+    /// something other than a [`PendingReply`](crate::PendingReply).
     #[error("workflow is waiting on something other than its host")]
     WorkflowStalled,
+}
+
+/// Where and why a session failed, as remembered by
+/// [`SessionCore::mark_failed`](crate::SessionCore::mark_failed) and
+/// reported by [`ProtocolError::SessionFailed`].
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct Failure {
+    /// The phase the session was in when it failed, as reported by
+    /// [`Session::phase`](crate::Session::phase). Empty if unknown.
+    pub phase: String,
+
+    /// The message of the error that ended the session. Empty if unknown.
+    pub cause: String,
+}
+
+impl Failure {
+    /// Records a failure in `phase` caused by `cause`.
+    pub fn new(phase: impl Into<String>, cause: &dyn fmt::Display) -> Self {
+        Self {
+            phase: phase.into(),
+            cause: cause.to_string(),
+        }
+    }
+}
+
+impl fmt::Display for Failure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("session failed on an earlier call")?;
+        if !self.phase.is_empty() {
+            write!(f, ", in {}", self.phase)?;
+        }
+        if !self.cause.is_empty() {
+            write!(f, ": {}", self.cause)?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -93,6 +132,23 @@ mod tests {
             }
             .to_string(),
             "reply payload does not match request #1: expected Widget"
+        );
+    }
+
+    #[test]
+    fn session_failed_reports_where_and_why_when_known() {
+        assert_eq!(
+            ProtocolError::SessionFailed(Failure::default()).to_string(),
+            "session failed on an earlier call"
+        );
+        assert_eq!(
+            ProtocolError::SessionFailed(Failure::new("Reading > AwaitingOcsp", &"revoked"))
+                .to_string(),
+            "session failed on an earlier call, in Reading > AwaitingOcsp: revoked"
+        );
+        assert_eq!(
+            ProtocolError::SessionFailed(Failure::new("", &"revoked")).to_string(),
+            "session failed on an earlier call: revoked"
         );
     }
 }
