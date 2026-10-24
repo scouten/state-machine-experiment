@@ -18,6 +18,19 @@ fn c_api_constructor_scenarios_validate_each_string_with_valid_companion_fields(
         assert!(s.is_null());
     }
 }
+
+#[test]
+fn build_session_phase_is_returned_as_an_owned_string() {
+    let build = Build::new(BASELINE_DEFINITION);
+    let phase = unsafe { c2pa_sm_build_session_phase(build.0) };
+    assert!(!phase.is_null());
+    assert!(unsafe { CStr::from_ptr(phase) }
+        .to_str()
+        .unwrap()
+        .contains("Building"));
+    unsafe { c2pa_sm_string_free(phase) };
+}
+
 #[test]
 fn build_format_aliases_select_registered_handlers() {
     let def = CString::new(BASELINE_DEFINITION).unwrap();

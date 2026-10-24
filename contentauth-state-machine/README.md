@@ -62,6 +62,43 @@ it themselves.
 See the `Session` trait and `SessionCore` in [`src/session.rs`](src/session.rs)
 for the concrete API.
 
+## Debugging a session
+
+A state machine that stops with an error can be hard to diagnose: by the
+time the host sees the error, the session has moved on (or poisoned
+itself), and the call stack that produced it is gone. Two things answer
+"where did it go wrong, and why?":
+
+* **Where it is, and where it failed.** `Session::phase` describes the
+  session's current phase in words — `"Locating > Scanning > Marker at
+  byte 2"`, `"Building > AwaitingSignature"` — with a session nested inside
+  another named after the outer phase. A failed session keeps reporting the
+  phase it failed in, and every later call returns
+  `ProtocolError::SessionFailed(Failure)`, which carries that phase and the
+  original error's text rather than a bare "failed earlier". A session
+  implementation records both with `SessionCore::mark_failed(phase, &err)`
+  on every error exit (only the first failure is kept). Phase wording is
+  for people and logs, not a stable interface: don't branch on it.
+* **What the host said to it.** Since a session performs no I/O, its
+  behavior depends on nothing but the replies it is given. Wrap a session
+  in a `Recorder` — itself a `Session`, so the host does not change — and
+  it keeps a `Transcript` of every `advance` (the phase, what it returned,
+  the requests it issued) and every `fulfill` (the reply, and whether it
+  was accepted). A transcript prints as a readable one-line-per-call log,
+  and `replay` drives a fresh session through it, reproducing the run
+  exactly — on another machine, under a debugger, or against a fix — or
+  reporting the first call where the session behaved differently
+  (`Divergence`). A transcript holds every reply in full, asset bytes
+  included, so record only where its size and contents are acceptable.
+
+```rust,ignore
+let mut session = Recorder::new(FileReadSession::new(&handler, settings));
+// ...drive `session` exactly as before...
+if let Err(err) = session.advance() {
+    eprintln!("failed in {}: {err}\n{}", session.phase(), session.transcript());
+}
+```
+
 Synchronous hosts can use `session.respond(|request| answer(request))?`
 after each `AwaitHost`. This borrows each request, obtains its owned reply,
 and calls `fulfill` before servicing the next request: no request clones

@@ -78,6 +78,12 @@ message/name pointers borrow the error. Reader JSON and label strings are
 independent allocations freed with `c2pa_sm_string_free`, and outlive the reader.
 String cleanup rejects non-string handles without destroying their owners.
 
+**Diagnosable failures:** `c2pa_sm_session_phase` and
+`c2pa_sm_build_session_phase` return an owned string describing the session's
+current phase, or the phase where it failed, freed with `c2pa_sm_string_free`.
+Errors reported after failure retain the original phase and cause. The wording
+is intended for logs and is not a stable interface.
+
 Sessions may move between threads, but a host must serialize operations on
 each session and all use of borrowed request views. Request borrows end at the
 next advance, fulfill, finish or free; read/write lease acquisition preserves

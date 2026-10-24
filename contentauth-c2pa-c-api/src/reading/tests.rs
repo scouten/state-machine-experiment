@@ -46,6 +46,18 @@ fn new_session(format: &str, settings: Option<&str>) -> *mut C2paSmSession {
     assert!(error.is_null());
     session
 }
+
+#[test]
+fn session_phase_is_returned_as_an_owned_string() {
+    let session = new_session("jpeg", None);
+    let phase = unsafe { c2pa_sm_session_phase(session) };
+    assert_eq!(text(phase), "Locating > Scanning > Start");
+    unsafe {
+        c2pa_sm_string_free(phase);
+        c2pa_sm_session_free(session);
+    }
+}
+
 fn advance(session: *mut C2paSmSession) -> Result<bool, (c_int, String, String)> {
     let mut done = -1;
     let mut error = ptr::null_mut();

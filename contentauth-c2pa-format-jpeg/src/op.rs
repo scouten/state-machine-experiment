@@ -23,7 +23,7 @@
 use core::mem::replace;
 
 use contentauth_c2pa_format::{
-    FormatError, HostRequest, IoReply, IoRequest, ProtocolError, RequestId, Session, Step, StreamId,
+    FormatError, HostRequest, IoReply, IoRequest, RequestId, Session, Step, StreamId,
 };
 use contentauth_state_machine::SessionCore;
 
@@ -86,7 +86,7 @@ impl<G: Goal> ScanOp<G> {
                 Ok(Step::Complete)
             }
 
-            State::Poisoned => Err(ProtocolError::SessionFailed.into()),
+            State::Poisoned => Err(self.core.failed_error().into()),
         }
     }
 }
@@ -99,16 +99,21 @@ impl<G: Goal> Session for ScanOp<G> {
     /// Performs as much synchronous work as possible.
     ///
     /// If this returns an error the operation is spent: every later call
-    /// reports [`ProtocolError::SessionFailed`].
+    /// reports [`ProtocolError::SessionFailed`](contentauth_c2pa_format::ProtocolError::SessionFailed), naming the phase that
+    /// failed and why.
     fn advance(&mut self) -> Result<Step, FormatError> {
         if self.core.is_complete() {
             return Ok(Step::Complete);
         }
 
+        // The scanner handles exactly one phase per call (see
+        // `Scanner::advance`), so the phase before the call is the one any
+        // error comes from.
+        let phase = self.phase();
         match self.run() {
             Ok(step) => Ok(step),
             Err(err) => {
-                self.core.mark_failed();
+                self.core.mark_failed(phase, &err);
                 Err(err)
             }
         }
@@ -116,6 +121,17 @@ impl<G: Goal> Session for ScanOp<G> {
 
     fn outstanding_requests(&self) -> &[HostRequest<IoRequest>] {
         self.core.outstanding_requests()
+    }
+
+    fn phase(&self) -> String {
+        if let Some(failure) = self.core.failure() {
+            return failure.phase.clone();
+        }
+        match &self.state {
+            State::Scanning { scanner, .. } => format!("Scanning > {}", scanner.phase()),
+            State::Done(_) => "Complete".into(),
+            State::Poisoned => "Poisoned".into(),
+        }
     }
 
     fn fulfill(&mut self, id: RequestId, reply: IoReply) -> Result<(), FormatError> {
@@ -126,7 +142,7 @@ impl<G: Goal> Session for ScanOp<G> {
         self.core.finish_check()?;
         match self.state {
             State::Done(output) => Ok(output),
-            _ => Err(ProtocolError::SessionFailed.into()),
+            _ => Err(self.core.failed_error().into()),
         }
     }
 }
@@ -144,12 +160,18 @@ macro_rules! delegate_session {
             ///
             /// If this returns an error the operation is spent: every
             /// later call reports
-            /// [`ProtocolError::SessionFailed`](::contentauth_c2pa_format::ProtocolError::SessionFailed).
+            /// [`ProtocolError::SessionFailed`](::contentauth_c2pa_format::ProtocolError::SessionFailed),
+            /// naming the phase that failed and why.
             fn advance(
                 &mut self,
             ) -> Result<::contentauth_c2pa_format::Step, ::contentauth_c2pa_format::FormatError>
             {
                 self.0.advance()
+            }
+
+            /// Describes where in its workflow the operation is.
+            fn phase(&self) -> String {
+                self.0.phase()
             }
 
             /// Returns the requests the host has not yet fulfilled.

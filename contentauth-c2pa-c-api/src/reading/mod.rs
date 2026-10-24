@@ -150,6 +150,19 @@ pub unsafe extern "C" fn c2pa_sm_session_free(session: *mut C2paSmSession) {
     let _ = cimpl::untrack_owned(session);
 }
 
+/// Owned description of the current or failed phase, freed with
+/// [`c2pa_sm_string_free`](crate::c2pa_sm_string_free); null for an invalid
+/// or busy handle.
+///
+/// # Safety
+/// Serialize session mutations and destruction with this call.
+#[no_mangle]
+pub unsafe extern "C" fn c2pa_sm_session_phase(session: *const C2paSmSession) -> *mut c_char {
+    cimpl::checkout_exclusive(session.cast_mut()).map_or(ptr::null_mut(), |session| {
+        owned_string(&session.inner.phase())
+    })
+}
+
 /// Advances bounded work; done is nonzero only when ready to finish.
 /// New requests are exposed once, not repeated while outstanding.
 ///

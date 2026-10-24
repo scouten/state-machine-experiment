@@ -8,7 +8,7 @@ use contentauth_c2pa_session_bridge::{
     Bytes,
 };
 
-use super::{clear, guard, handle_error, tracked, utf8, C2paSmError, Failure};
+use super::{clear, guard, handle_error, owned_string, ptr, tracked, utf8, C2paSmError, Failure};
 
 /// Signing-specific error codes.
 #[repr(C)]
@@ -120,6 +120,21 @@ pub struct C2paSmBuildSession {
     identity: Arc<()>,
     reads: BTreeMap<u64, (u64, Option<Arc<()>>)>,
     writes: BTreeMap<u64, Bytes>,
+}
+
+/// Owned description of the current or failed phase, freed with
+/// [`c2pa_sm_string_free`](crate::c2pa_sm_string_free); null for an invalid
+/// or busy handle.
+///
+/// # Safety
+/// Serialize session mutations and destruction with this call.
+#[no_mangle]
+pub unsafe extern "C" fn c2pa_sm_build_session_phase(
+    session: *const C2paSmBuildSession,
+) -> *mut c_char {
+    cimpl::checkout_exclusive(session.cast_mut()).map_or(ptr::null_mut(), |session| {
+        owned_string(&session.inner.phase())
+    })
 }
 
 /// Immutable write storage retained independently of its session.

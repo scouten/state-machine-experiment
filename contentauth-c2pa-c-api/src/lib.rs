@@ -112,7 +112,7 @@ fn strings() -> &'static Mutex<HashSet<usize>> {
     STRINGS.get_or_init(Mutex::default)
 }
 
-#[cfg(feature = "read")]
+#[cfg(any(feature = "read", feature = "build"))]
 fn owned_string(s: &str) -> *mut c_char {
     let Ok(mut strings) = strings().lock() else {
         return ptr::null_mut();

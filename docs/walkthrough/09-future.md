@@ -18,6 +18,7 @@ flowchart LR
         d7["C++ read + sign; blocking / pool / future / coroutine<br/>atomic file signing + Trusted read-back example"]
         d8["C++ signing read + write leases:<br/>host I/O directly into/from Rust-owned buffers"]
         d9["Canonical C API: tracked reader/build/results,<br/>independent signing buffer leases, registry formats"]
+        d10["Debuggability: phase(), failure context,<br/>record / replay transcripts"]
     end
     subgraph next["Next"]
         direction TB
@@ -125,6 +126,12 @@ changes. Choose formats for *what they exercise*, as TIFF did:
   language-neutral form of the contract.
 * **Cancellation and progress** — c2pa-rs's `Context` has them; here they'd
   be natural (stop calling `advance`; observe requests) but untested.
+* **Debugging through every binding.** `phase()` reaches the C API
+  (`c2pa_sm_{read,build}_phase`) and node-compat's sessions, but not yet
+  the Neon addons' JavaScript, the C++ wrappers, or the Wasm binding; and
+  `Recorder` transcripts are Rust-only, with no serialized form a bug
+  report could attach (a `serde` feature, with replies' bytes optionally
+  elided, would be the natural next step).
 
 ## 5. Proof at scale
 

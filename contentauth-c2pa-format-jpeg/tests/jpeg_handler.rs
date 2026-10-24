@@ -22,7 +22,8 @@ mod common;
 use common::{app11, segment, store, unsigned_jpeg, AFTER_APP0, C_JPG, C_MANIFEST_STORE};
 use contentauth_c2pa_format::{
     test_util::{conformance, MemoryHost, STREAM},
-    ByteRange, FormatError, FormatHandler, HostError, IoReply, ProtocolError, Session, Step,
+    ByteRange, FormatError, FormatHandler, HostError, IoReply, IoRequest, ProtocolError, Session,
+    Step,
 };
 use contentauth_c2pa_format_jpeg::JpegFormat;
 
@@ -236,24 +237,32 @@ fn commit_refuses_a_store_that_does_not_fit_the_plan() {
 #[test]
 fn a_failed_operation_stays_failed() {
     let mut op = JpegFormat.locate(STREAM);
+    assert_eq!(op.phase(), "Scanning > Start");
 
     assert_eq!(op.advance().unwrap(), Step::AwaitHost);
     let id = op.outstanding_requests()[0].id;
     op.fulfill(id, IoReply::Failed(HostError::new("unreadable")))
         .unwrap();
 
+    assert_eq!(op.phase(), "Scanning > Length");
     assert!(matches!(op.advance(), Err(FormatError::HostFailure { .. })));
-    assert!(matches!(
-        op.advance(),
-        Err(FormatError::Protocol(ProtocolError::SessionFailed))
-    ));
+
+    // Every later report says where the operation failed, and why.
+    assert_eq!(op.phase(), "Scanning > Length");
+    match op.advance() {
+        Err(FormatError::Protocol(ProtocolError::SessionFailed(failure))) => {
+            assert_eq!(failure.phase, "Scanning > Length");
+            assert!(failure.cause.contains("unreadable"), "{failure}");
+        }
+        other => panic!("expected SessionFailed, got {other:?}"),
+    }
     assert!(matches!(
         op.fulfill(id, IoReply::Length(0)),
-        Err(FormatError::Protocol(ProtocolError::SessionFailed))
+        Err(FormatError::Protocol(ProtocolError::SessionFailed(_)))
     ));
     assert!(matches!(
         op.finish(),
-        Err(FormatError::Protocol(ProtocolError::SessionFailed))
+        Err(FormatError::Protocol(ProtocolError::SessionFailed(_)))
     ));
 }
 
@@ -294,4 +303,32 @@ fn a_completed_operation_stays_complete() {
         op.finish(),
         Err(FormatError::Protocol(ProtocolError::SessionNotComplete))
     ));
+}
+
+#[test]
+fn a_malformed_marker_is_blamed_on_the_offset_it_was_read_from() {
+    let asset = [0xff, 0xd8, 0x00, 0x00, 0x00, 0x00];
+    let mut op = JpegFormat.locate(STREAM);
+
+    let err = loop {
+        match op.advance() {
+            Ok(Step::AwaitHost) => {}
+            Ok(step) => panic!("expected an error, got {step:?}"),
+            Err(err) => break err,
+        }
+        for request in op.outstanding_requests().to_vec() {
+            let reply = match request.kind {
+                IoRequest::Length { .. } => IoReply::Length(asset.len() as u64),
+                IoRequest::Read { range, .. } => {
+                    let start = range.start as usize;
+                    IoReply::Bytes(asset[start..start + range.len as usize].to_vec().into())
+                }
+                other => panic!("unexpected request {other:?}"),
+            };
+            op.fulfill(request.id, reply).unwrap();
+        }
+    };
+
+    assert!(matches!(err, FormatError::Malformed(_)), "{err:?}");
+    assert_eq!(op.phase(), "Scanning > Marker at byte 2");
 }

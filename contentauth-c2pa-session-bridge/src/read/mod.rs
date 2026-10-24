@@ -206,6 +206,13 @@ impl ReadSessionBridge {
         Ok(())
     }
 
+    /// Where the engine is — the phase it is waiting in, or the one it
+    /// failed in — for logs and error reports, not control flow. See
+    /// [`contentauth_state_machine::Session::phase`].
+    pub fn phase(&self) -> String {
+        self.inner.phase()
+    }
+
     /// Consumes the finished session.
     ///
     /// `None` if the asset carries no manifest store — the case c2pa-node

@@ -73,7 +73,7 @@ impl Request for IoRequest {
 }
 
 /// The host's report of the outcome of one [`IoRequest`].
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum IoReply {
     /// Answers [`IoRequest::Read`]: the requested bytes.

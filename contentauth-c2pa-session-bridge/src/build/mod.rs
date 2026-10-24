@@ -289,6 +289,13 @@ impl BuildSessionBridge {
         Ok(())
     }
 
+    /// Where the engine is — the phase it is waiting in, or the one it
+    /// failed in — for logs and error reports, not control flow. See
+    /// [`contentauth_state_machine::Session::phase`].
+    pub fn phase(&self) -> String {
+        self.inner.phase()
+    }
+
     /// Consumes the finished session.
     pub fn finish(self) -> Result<SignReport, Error> {
         let report = self.inner.finish().map_err(Error::from)?;

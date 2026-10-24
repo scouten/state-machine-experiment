@@ -62,8 +62,10 @@ impl Host {
         &mut self,
         mut session: BuilderSession,
     ) -> (Vec<u8>, contentauth_c2pa_builder::BuilderReport) {
+        assert_eq!(session.phase(), "Start");
         loop {
             if session.advance().unwrap() == BuilderStep::Complete {
+                assert_eq!(session.phase(), "Complete");
                 let report = session.finish().unwrap();
                 return (self.asset.clone(), report);
             }

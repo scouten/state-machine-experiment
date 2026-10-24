@@ -204,7 +204,7 @@ impl Request for BuilderRequest {
 }
 
 /// The host's report of the outcome of one host request.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum BuilderHostReply {
     /// Answers [`BuilderRequest::ReservePlaceholder`]: the byte ranges the

@@ -479,6 +479,16 @@ int c2pa_sm_session_new(const char *format,
 void c2pa_sm_session_free(struct C2paSmSession *session);
 
 /**
+ * Owned description of the current or failed phase, freed with
+ * [`c2pa_sm_string_free`](crate::c2pa_sm_string_free); null for an invalid
+ * or busy handle.
+ *
+ * # Safety
+ * Serialize session mutations and destruction with this call.
+ */
+char *c2pa_sm_session_phase(const struct C2paSmSession *session);
+
+/**
  * Advances bounded work; done is nonzero only when ready to finish.
  * New requests are exposed once, not repeated while outstanding.
  *
@@ -572,6 +582,16 @@ char *c2pa_sm_reader_active_label(const struct C2paSmReader *reader);
  * Serialize reader destruction with this call.
  */
 bool c2pa_sm_reader_is_embedded(const struct C2paSmReader *reader);
+
+/**
+ * Owned description of the current or failed phase, freed with
+ * [`c2pa_sm_string_free`](crate::c2pa_sm_string_free); null for an invalid
+ * or busy handle.
+ *
+ * # Safety
+ * Serialize session mutations and destruction with this call.
+ */
+char *c2pa_sm_build_session_phase(const struct C2paSmBuildSession *session);
 
 /**
  * Starts a build, copying inputs. Certificates must be a nonempty chain of

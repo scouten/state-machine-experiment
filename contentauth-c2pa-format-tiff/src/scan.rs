@@ -186,6 +186,20 @@ impl Scanner {
         }
     }
 
+    /// Names the scan's current phase — with the byte offset it concerns,
+    /// where there is one — for [`Session::phase`](contentauth_c2pa_format::Session::phase).
+    pub(crate) fn phase(&self) -> String {
+        match &self.phase {
+            Phase::Start => "Start".into(),
+            Phase::Length(_) => "Length".into(),
+            Phase::Header { .. } => "Header".into(),
+            Phase::IfdCount { offset, .. } => format!("IfdCount of IFD at byte {offset}"),
+            Phase::IfdEntries { offset, .. } => format!("IfdEntries of IFD at byte {offset}"),
+            Phase::Manifest { range, .. } => format!("Manifest at byte {}", range.start),
+            Phase::Poisoned => "Poisoned".into(),
+        }
+    }
+
     /// Makes as much progress as the host's replies allow. Returns the
     /// [`Layout`] once the chain has been followed to its end (and the
     /// store read, if asked to); `Ok(None)` means a request is
@@ -307,16 +321,26 @@ impl Scanner {
                 Some(manifest) => Ok(Some(self.layout(Some(manifest))?)),
             },
 
-            Phase::Poisoned => Err(ProtocolError::SessionFailed.into()),
+            Phase::Poisoned => Err(core.failed_error().into()),
         }
     }
 
     fn flavor(&self) -> Result<Flavor, FormatError> {
-        Ok(self.header.ok_or(ProtocolError::SessionFailed)?.flavor)
+        Ok(self
+            .header
+            .ok_or(ProtocolError::SessionFailed(
+                contentauth_c2pa_format::Failure::default(),
+            ))?
+            .flavor)
     }
 
     fn endian(&self) -> Result<Endian, FormatError> {
-        Ok(self.header.ok_or(ProtocolError::SessionFailed)?.endian)
+        Ok(self
+            .header
+            .ok_or(ProtocolError::SessionFailed(
+                contentauth_c2pa_format::Failure::default(),
+            ))?
+            .endian)
     }
 
     fn read(&self, core: &mut SessionCore<IoRequest>, range: ByteRange) -> RequestId {
@@ -374,7 +398,9 @@ impl Scanner {
         entries: u64,
         bytes: &[u8],
     ) -> Result<Option<Layout>, FormatError> {
-        let header = self.header.ok_or(ProtocolError::SessionFailed)?;
+        let header = self.header.ok_or(ProtocolError::SessionFailed(
+            contentauth_c2pa_format::Failure::default(),
+        ))?;
         let entry_len = header.flavor.entry_len() as usize;
         let index = self.ifds.len();
 
@@ -450,7 +476,9 @@ impl Scanner {
     }
 
     fn layout(&mut self, manifest: Option<Bytes>) -> Result<Layout, FormatError> {
-        let header = self.header.ok_or(ProtocolError::SessionFailed)?;
+        let header = self.header.ok_or(ProtocolError::SessionFailed(
+            contentauth_c2pa_format::Failure::default(),
+        ))?;
         Ok(Layout {
             header,
             source_len: self.source_len,

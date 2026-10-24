@@ -343,10 +343,12 @@ fn a_host_failure_surfaces_rather_than_hanging() {
         .unwrap();
 
     assert!(matches!(op.advance(), Err(FormatError::HostFailure { .. })));
-    // The operation is spent.
+    // The operation is spent, and says where it failed.
+    assert_eq!(op.phase(), "Scanning > Length");
     assert!(matches!(
         op.advance(),
-        Err(FormatError::Protocol(ProtocolError::SessionFailed))
+        Err(FormatError::Protocol(ProtocolError::SessionFailed(failure)))
+            if failure.phase == "Scanning > Length"
     ));
 }
 

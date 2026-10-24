@@ -12,7 +12,13 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   vocabulary, and the `advance` / `fulfill` / `finish` interaction
   contract. See [`src/session.rs`](contentauth-state-machine/src/session.rs)
   for `Session`/`SessionCore` and [`README.md`](contentauth-state-machine/README.md)
-  for the interaction contract diagram.
+  for the interaction contract diagram. Every session reports a
+  diagnostic `phase()` (nested sessions as `"Outer > Inner"`) and records
+  where and why it failed via `SessionCore::mark_failed(phase, &err)`,
+  which later calls report as `ProtocolError::SessionFailed(Failure)`;
+  `Recorder`/`replay` ([`src/recorder.rs`](contentauth-state-machine/src/recorder.rs))
+  record a host conversation as a `Transcript` and reproduce it
+  deterministically.
 - **`contentauth-c2pa-reader`** — a from-scratch, sans-I/O reader/validator
   for C2PA manifest stores, built on the engine above. An experimental
   alternative architecture to the [c2pa-rs](https://github.com/contentauth/c2pa-rs)

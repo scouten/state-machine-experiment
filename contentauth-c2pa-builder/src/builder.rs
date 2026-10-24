@@ -274,6 +274,12 @@ pub struct BuilderSession {
     settings: BuilderSettings,
     core: SessionCore<BuilderRequest>,
     state: State,
+
+    /// The name of the state [`BuilderSession::run`] is processing, kept
+    /// because `state` itself is [`State::Poisoned`] while that happens —
+    /// so an error exit can be blamed on the phase it occurred in.
+    active: &'static str,
+
     report: Option<BuilderReport>,
 }
 
@@ -335,6 +341,23 @@ enum State {
     Poisoned,
 }
 
+impl State {
+    /// This state's name, for [`Session::phase`].
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Start => "Start",
+            Self::AwaitingPlaceholderReserved { .. } => "AwaitingPlaceholderReserved",
+            Self::AwaitingAssetLength { .. } => "AwaitingAssetLength",
+            Self::HashingAsset { .. } => "HashingAsset",
+            Self::AwaitingIdentitySignature { .. } => "AwaitingIdentitySignature",
+            Self::AwaitingSignature { .. } => "AwaitingSignature",
+            Self::AwaitingTimestamp { .. } => "AwaitingTimestamp",
+            Self::AwaitingCommit { .. } => "AwaitingCommit",
+            Self::Poisoned => "Poisoned",
+        }
+    }
+}
+
 impl BuilderSession {
     /// The asset stream this session embeds its manifest into.
     pub const PRIMARY_STREAM: StreamId = StreamId::new(0);
@@ -348,6 +371,7 @@ impl BuilderSession {
             settings,
             core: SessionCore::default(),
             state: State::Start,
+            active: State::Start.name(),
             report: None,
         }
     }
@@ -361,6 +385,7 @@ impl BuilderSession {
                 return Ok(Step::Complete);
             }
 
+            self.active = self.state.name();
             let outcome = match replace(&mut self.state, State::Poisoned) {
                 State::Start => self.handle_start(),
 
@@ -406,7 +431,7 @@ impl BuilderSession {
                     exclusions,
                 } => self.handle_awaiting_commit(request, manifest, exclusions),
 
-                State::Poisoned => return Err(ProtocolError::SessionFailed.into()),
+                State::Poisoned => return Err(self.core.failed_error().into()),
             }?;
 
             if let Some(step) = outcome {
@@ -942,7 +967,7 @@ impl Session for BuilderSession {
         match self.run() {
             Ok(step) => Ok(step),
             Err(err) => {
-                self.core.mark_failed();
+                self.core.mark_failed(self.active, &err);
                 Err(err)
             }
         }
@@ -951,6 +976,16 @@ impl Session for BuilderSession {
     /// Returns the requests the host has not yet fulfilled.
     fn outstanding_requests(&self) -> &[HostRequest<BuilderRequest>] {
         self.core.outstanding_requests()
+    }
+
+    fn phase(&self) -> String {
+        if let Some(failure) = self.core.failure() {
+            failure.phase.clone()
+        } else if self.core.is_complete() {
+            "Complete".into()
+        } else {
+            self.state.name().into()
+        }
     }
 
     /// Reports the outcome of one outstanding request.
@@ -966,8 +1001,7 @@ impl Session for BuilderSession {
     /// an error.
     fn finish(self) -> Result<BuilderReport, Error> {
         self.core.finish_check()?;
-        self.report
-            .ok_or_else(|| ProtocolError::SessionFailed.into())
+        self.report.ok_or_else(|| self.core.failed_error().into())
     }
 }
 
@@ -1053,6 +1087,7 @@ mod tests {
     #[test]
     fn a_reply_of_the_wrong_kind_to_an_identity_signature_request_is_refused() {
         let (mut session, id) = session_at_identity_signature();
+        assert_eq!(session.phase(), "AwaitingIdentitySignature");
 
         session
             .core
@@ -1065,6 +1100,23 @@ mod tests {
                 ..
             })
         ));
+
+        // The phase that failed outlives the failure, in `phase` and in
+        // every later report.
+        assert_eq!(session.phase(), "AwaitingIdentitySignature");
+        match session.advance().unwrap_err() {
+            Error::Protocol(ProtocolError::SessionFailed(failure)) => {
+                assert_eq!(failure.phase, "AwaitingIdentitySignature");
+                assert!(failure.cause.contains("expected Signature"), "{failure}");
+            }
+            other => panic!("expected SessionFailed, got {other:?}"),
+        }
+        match session.finish().unwrap_err() {
+            Error::Protocol(ProtocolError::SessionFailed(failure)) => {
+                assert_eq!(failure.phase, "AwaitingIdentitySignature");
+            }
+            other => panic!("expected SessionFailed, got {other:?}"),
+        }
     }
 
     #[test]
