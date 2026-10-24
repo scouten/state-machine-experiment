@@ -48,6 +48,6 @@ contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline", f
 ] }
 serde_json = "1"
 # Test-only signer, as every sibling crate's tests use. See deny.toml.
-c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
+c2pa_raw_crypto = { version = "0.2.0", default-features = false, features = [
     "rust_native_crypto",
 ] }

@@ -44,7 +44,7 @@ contentauth-c2pa-format = { path = "../contentauth-c2pa-format", features = [
 ] }
 contentauth-c2pa-format-tiff = { path = "../contentauth-c2pa-format-tiff" }
 contentauth-state-machine = { path = "../contentauth-state-machine" }
-c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
+c2pa_raw_crypto = { version = "0.2.0", default-features = false, features = [
     "rust_native_crypto",
 ] }
 # The c2pa-rs-shaped manifest definition every write binding is held to,

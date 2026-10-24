@@ -41,6 +41,6 @@ contentauth-state-machine = { path = "../contentauth-state-machine", features = 
 contentauth-c2pa-reader = { path = "../contentauth-c2pa-reader" }
 # Test-only: plays the "host signer" in integration tests, standing in for
 # whatever real signer a host would use.
-c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
+c2pa_raw_crypto = { version = "0.2.0", default-features = false, features = [
     "rust_native_crypto",
 ] }

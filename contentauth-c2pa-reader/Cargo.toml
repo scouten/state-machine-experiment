@@ -26,7 +26,7 @@ contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
 # layering this crate wants, since those live here. `rust_native_crypto`
 # only: the `openssl` feature vendors OpenSSL, which would end the Wasm
 # story.
-c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
+c2pa_raw_crypto = { version = "0.2.0", default-features = false, features = [
     "rust_native_crypto",
 ] }
 # CMS (RFC 5652) decoding, used only to unwrap an RFC 3161 timestamp token
@@ -52,8 +52,9 @@ thiserror = "2.0.20"
 # X.509 decoding, confined to `cert.rs`. RustCrypto's `der` is a
 # hand-written codec rather than a parser-combinator library, so unlike
 # `x509-parser`/`asn1-rs`/`rasn` it brings no `nom`. Pinned to the 0.7
-# `der` line, which is the one `c2pa-raw-crypto` already pulls in through
-# `spki`/`pkcs8` — so no second `der` generation enters the tree.
+# `der` line shared by `cms`, `x509-cert`, `x509-ocsp`, and the RSA/Ed25519
+# backends in `c2pa_raw_crypto`. Its ECDSA backend uses `der` 0.8 instead;
+# see deny.toml for the generation-boundary exceptions.
 #
 # `cert.rs` is a deliberate seam: nothing outside it names an `x509_cert`
 # type.
@@ -82,7 +83,7 @@ x509-ocsp = { version = "0.2.1", default-features = false }
 # `ocsp.rs` alongside the rest of this crate's OCSP handling. Not used for
 # content hashing, where `contentauth-c2pa-primitives::HashAlgorithm`
 # still has no SHA-1 option. `digest` 0.10 is already in the tree via
-# `ecdsa`/`curve25519-dalek` (through `c2pa_raw_crypto`), so this adds no
+# `rsa`/`curve25519-dalek` (through `c2pa_raw_crypto`), so this adds no
 # second copy.
 sha1 = { version = "0.10", default-features = false }
 
