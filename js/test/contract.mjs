@@ -26,6 +26,18 @@ export async function contract(createClient, small, large, fixture) {
     equal(result.report, expected.report, "full report differs from direct native host");
     equal(result.stats, expected.stats, "session request accounting differs");
     check(snapshot.byteLength === small.length, "caller buffer was detached");
+    const owned = new Uint8Array(small);
+    const transferred = client.read(owned, { ...options, ownership: "transfer" });
+    check(owned.byteLength === 0, "transfer did not consume input before awaiting");
+    equal((await transferred).report, expected.report, "transferred input report changed");
+    const subview = new Uint8Array(small.length + 2).subarray(1, small.length + 1);
+    subview.set(small);
+    await rejects(client.read(subview, { ...options, ownership: "transfer" }), /full ArrayBuffer/);
+    check(subview.byteLength === small.length, "rejected transfer detached a subview");
+    await rejects(client.read(small, { ...options, ownership: "invalid" }), /ownership/);
+    const wasm = new WebAssembly.Memory({ initial: 1 });
+    await rejects(client.read(new Uint8Array(wasm.buffer), { ...options, ownership: "transfer" }), /./);
+    check(wasm.buffer.byteLength === 65536, "rejected transfer detached Wasm storage");
     equal((await client.read(new Uint8Array([255, 216, 255, 217]), options)).report, null, "unsigned must return null");
     await rejects(client.read(small, { settings: { verify: { ocsp_fetch: "invalid" } }, now: fixture.now }), /BadParam|invalid|expected/i);
     const malformed = new Uint8Array(small);
@@ -38,6 +50,10 @@ export async function contract(createClient, small, large, fixture) {
     const ordered = await Promise.all([client.read(small, options), client.read(large, options)]);
     equal(ordered[0].report, expected.report, "queued operation report changed");
     equal(ordered[1].report, fixture.files.large.report, "large report differs");
+    const ownedLarge = new Uint8Array(large);
+    const movedLarge = client.read(ownedLarge, { ...options, ownership: "transfer" });
+    check(ownedLarge.byteLength === 0, "large input was not consumed");
+    equal((await movedLarge).report, fixture.files.large.report, "large transferred input report changed");
 
     const samples = [];
     // Warmup and startup costs are separate from these repeated operations.
@@ -73,6 +89,7 @@ export async function contract(createClient, small, large, fixture) {
     } finally { await other.dispose() }
     await rejects(client.read(small, options), /disposed/);
     return { samples, checks: ["full report", "exact request bytes", "input snapshot/no detach",
+      "owned input transfer", "subview and Wasm transfer rejection",
       "unsigned null", "settings error", "malformed error/retry", "tamper Invalid",
       "queued operations", "application task progress", "pending disposal", "Worker isolation"] };
   } finally { await client.dispose() }
