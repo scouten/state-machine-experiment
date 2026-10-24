@@ -30,7 +30,7 @@ cbindgen = "0.27"
 [dev-dependencies]
 serde_json = "1"
 base64 = "0.22"
-c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
+c2pa_raw_crypto = { version = "0.2.0", default-features = false, features = [
     "rust_native_crypto",
 ] }
 contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline", features = [

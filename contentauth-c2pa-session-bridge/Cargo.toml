@@ -28,4 +28,4 @@ contentauth-c2pa-format-jpeg = { path = "../contentauth-c2pa-format-jpeg" }
 contentauth-c2pa-js-compat = { path = "../contentauth-c2pa-js-compat" }
 contentauth-c2pa-rs-compat = { path = "../contentauth-c2pa-rs-compat" }
 contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline", features = ["fixtures"] }
-c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = ["rust_native_crypto"] }
+c2pa_raw_crypto = { version = "0.2.0", default-features = false, features = ["rust_native_crypto"] }

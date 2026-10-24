@@ -54,22 +54,29 @@ skip = [
     # in force for everything else.
     { crate = "syn" },
 
-    # The rest are one situation, not five: `c2pa_raw_crypto` straddles a
-    # RustCrypto generation boundary. It uses `sha2` 0.11 directly (the
-    # version `contentauth-c2pa-reader` uses too), while the signature
-    # crates it wraps — `rsa` 0.9, `p256`/`p384`/`p521` 0.13, `ed25519-dalek`
-    # 2 — are still on the 0.10 generation and pull `digest` 0.10 with it.
+    # `c2pa_raw_crypto` 0.2 straddles a RustCrypto generation boundary.
+    # Its ECDSA backend (`ecdsa` 0.17, `p256`/`p384`/`p521` 0.14) and
+    # direct `sha2` 0.11 dependency use the newer generation, while `rsa`
+    # 0.9 and `ed25519-dalek` 2 still use the older generation. This
+    # workspace's `cms`/`x509-cert`/`x509-ocsp` decoding also needs `der`
+    # 0.7, while the newer ECDSA backend needs `der` 0.8.
     #
-    # None of this is ours to resolve: it clears when RustCrypto ships 0.11
-    # for the signature crates and `c2pa_raw_crypto` moves up. Listed crate
-    # by crate rather than switching the check to "warn", so a *new*
-    # duplicate outside this set still fails the build.
+    # These clear as the remaining backends and ASN.1 crates converge.
+    # Listed crate by crate rather than switching the check to "warn", so
+    # a *new* duplicate outside this set still fails the build.
     { crate = "block-buffer" },
     { crate = "const-oid" },
     { crate = "cpufeatures" },
     { crate = "crypto-common" },
+    { crate = "der" },
     { crate = "digest" },
+    { crate = "getrandom" },
+    { crate = "pem-rfc7468" },
+    { crate = "pkcs8" },
+    { crate = "rand_core" },
     { crate = "sha2" },
+    { crate = "signature" },
+    { crate = "spki" },
 
     # `reqwest` (contentauth-c2pa-rs-compat's default OCSP transport, and
     # contentauth-c2pa-rs-compat-sign's timestamp transport) wants
@@ -88,13 +95,7 @@ skip = [
     #   TLS certificate verification) — two macOS Security-framework
     #   binding generations reqwest's own dependencies have not
     #   converged on yet.
-    # * `getrandom` 0.2 (the RustCrypto generation this workspace's own
-    #   signing code already uses — see the `sha2` et al. entries above)
-    #   vs. 0.4, pulled in only as a *build-time* dependency of
-    #   `aws-lc-sys` (via `cc`/`jobserver`/`cmake`) and never linked into
-    #   the compiled library.
     { crate = "core-foundation" },
-    { crate = "getrandom" },
 ]
 
 [licenses]
