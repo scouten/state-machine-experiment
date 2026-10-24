@@ -108,19 +108,20 @@ export async function build(adapter, asset, definition, certs, sign) {
           }
           case "length": session.fulfill(request.id, "length", stream(request.stream).length); break;
           case "write": {
-            if (request.stream !== "output" || !(request.bytes instanceof Uint8Array))
+            if (request.stream !== "output")
               throw new Error("invalid output write");
-            range(request.offset, request.bytes.length, Number.MAX_SAFE_INTEGER);
-            const end = request.offset + request.bytes.length;
+            range(request.offset, request.len, Number.MAX_SAFE_INTEGER);
+            const end = request.offset + request.len;
             if (end > output.length) {
               const next = new Uint8Array(Math.max(end, output.length * 2, 4096));
               next.set(output);
               output = next;
             }
-            output.set(request.bytes, request.offset);
+            // The adapter borrows any Wasm bytes only for this synchronous copy.
+            session.write(request, output);
             length = Math.max(length, end);
             stats.writes++;
-            stats.writtenBytes += request.bytes.length;
+            stats.writtenBytes += request.len;
             session.fulfill(request.id, "written");
             break;
           }

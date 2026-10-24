@@ -48,7 +48,10 @@ request IDs route the reply. Delayed callbacks, failures, disposal races and
 trusted read-back run in Node and all three browsers. Whole-input/output
 buffering and abrupt termination remain explicit limits; disposing a Worker
 cannot cancel a caller-owned signer.
-The browser boundary now uses binary bulk write payloads with JSON metadata.
+The browser boundary now defaults to short-lived immutable write leases with
+JSON metadata: the adapter reads a fresh view of retained Rust `Bytes`, copies
+directly into host output, then releases before any Wasm call or await.
+No temporary JS payload array is needed. Copied binary and JSON remain controls.
 Both the binary transport and the retained JSON experiment control pass the same contracts;
 paired large-build measurements isolate a major avoidable boundary cost
 without changing the shared host or Rust builder. This is still copying,

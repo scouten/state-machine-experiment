@@ -115,6 +115,11 @@ flowchart TB
 
 ## Crate table
 
+The synchronous Wasm builder now exposes immutable, session-scoped write leases
+over the bridge's shared `Bytes`. The trusted Worker copies directly from a
+fresh Wasm view into output and releases before another Wasm call or await.
+Crate dependencies and host-owned I/O are unchanged.
+
 | Crate | Layer | What it is |
 |---|---|---|
 | `contentauth-state-machine` | Foundation | The engine: `Session`, `SessionCore`, request tracking, protocol errors, failure context (`phase()`, `Failure`), and `Recorder`/`replay` transcripts. Domain-agnostic. |

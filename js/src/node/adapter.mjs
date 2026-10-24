@@ -25,7 +25,14 @@ export const adapter = {
   createBuild(definition, certs) {
     let session = signing.buildNew(definition, "image/jpeg", "es256", certs.map((cert) => Buffer.from(cert)));
     return {
-      advance: () => signing.buildAdvance(session),
+      advance() {
+        const step = signing.buildAdvance(session);
+        for (const request of step.requests ?? []) {
+          if (request.kind === "write") request.len = request.bytes.length;
+        }
+        return step;
+      },
+      write(request, output) { output.set(request.bytes, request.offset) },
       fulfill: (id, kind, value) => signing.buildFulfill(session, id, kind,
         kind === "bytes" || kind === "signature" ? Buffer.from(value) : value),
       finish: () => signing.buildFinish(session),

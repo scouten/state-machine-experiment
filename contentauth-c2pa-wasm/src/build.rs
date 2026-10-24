@@ -62,6 +62,25 @@ impl BuildSession {
         Ok(js_sys::Uint8Array::from(&bytes[..]))
     }
 
+    /// Borrows a write payload's address without copying or releasing its storage.
+    ///
+    /// The trusted JS host must read it synchronously, using a fresh view of the
+    /// current Wasm memory buffer, and retain no view across any Wasm call or
+    /// await. It must never mutate these immutable bytes. `release_payload`
+    /// ends the lease; dropping this session releases abandoned leases.
+    pub fn payload_ptr(&self, index: u32) -> Result<usize, JsValue> {
+        self.payloads
+            .get(index as usize)
+            .and_then(Option::as_ref)
+            .map(|bytes| bytes.as_ptr() as usize)
+            .ok_or_else(|| JsValue::from_str("unknown or consumed write payload"))
+    }
+
+    /// Releases a write lease after the host has stopped accessing its view.
+    pub fn release_payload(&mut self, index: u32) -> Result<(), JsValue> {
+        self.take_payload(index).map(drop)
+    }
+
     /// Answers a source or output byte-range read.
     pub fn bytes(&mut self, id: u32, bytes: Vec<u8>) -> Result<(), JsValue> {
         self.reply(id, Reply::Bytes(bytes))
@@ -138,9 +157,10 @@ impl BuildSession {
             } => {
                 if binary {
                     let payload = self.payloads.len();
+                    let len = bytes.len();
                     self.payloads.push(Some(bytes));
                     json!({ "id": id, "kind": "write", "stream": stream.as_str(),
-                        "offset": offset, "payload": payload })
+                        "offset": offset, "payload": payload, "len": len })
                 } else {
                     json!({ "id": id, "kind": "write", "stream": stream.as_str(),
                         "offset": offset, "bytes": &bytes[..] })
@@ -194,11 +214,15 @@ mod tests {
             assert_eq!(
                 request,
                 json!({ "id": index, "kind": "write", "stream": "output",
-                    "offset": 9, "payload": index })
+                    "offset": 9, "payload": index, "len": bytes.len() })
             );
             assert_eq!(
                 session.payloads[index as usize].as_ref().unwrap().as_ptr(),
                 bytes.as_ptr()
+            );
+            assert_eq!(
+                session.payload_ptr(index as u32).unwrap(),
+                bytes.as_ptr() as usize
             );
         }
         for index in 0..2 {
@@ -230,6 +254,26 @@ mod tests {
         assert_eq!(request["payload"], 0);
         assert!(session.take_payload(0).unwrap().is_empty());
         assert!(session.payloads[0].is_none());
+    }
+
+    #[test]
+    fn releasing_a_lease_drops_only_its_shared_reference() {
+        let mut session = session();
+        let bytes = Bytes::from(vec![0x42; 128 * 1024]).slice(7..);
+        let ptr = bytes.as_ptr();
+        session.describe(write(1, bytes.clone()), true).unwrap();
+        assert!(!bytes.is_unique());
+        assert_eq!(session.payload_ptr(0).unwrap(), ptr as usize);
+        session.release_payload(0).unwrap();
+        assert!(session.payloads[0].is_none());
+        assert!(bytes.is_unique());
+        assert_eq!(bytes.as_ptr(), ptr);
+        assert!(bytes.iter().all(|byte| *byte == 0x42));
+
+        session.describe(write(2, bytes.clone()), true).unwrap();
+        assert!(!bytes.is_unique());
+        drop(session);
+        assert!(bytes.is_unique());
     }
 
     #[test]
