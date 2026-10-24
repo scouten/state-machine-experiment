@@ -10,7 +10,7 @@
  * rejected and the Worker terminated.
  *
  * @typedef {object} Port Transport abstraction over `Worker`/`worker_threads`.
- * @property {(message: object) => void} post
+ * @property {(message: object, transfer?: ArrayBuffer[]) => void} post
  * @property {(handler: (message: object) => void) => void} onMessage
  * @property {(handler: (error: Error) => void) => void} onError
  * @property {() => unknown} terminate

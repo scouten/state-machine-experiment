@@ -115,6 +115,10 @@ flowchart TB
 
 ## Crate table
 
+The shared JS signing host transfers completed exact-length output buffers to
+the caller rather than cloning payloads. This changes transport ownership, not
+crate dependencies or the Uint8Array result type.
+
 | Crate | Layer | What it is |
 |---|---|---|
 | `contentauth-state-machine` | Foundation | The engine: `Session`, `SessionCore`, request tracking, protocol errors, failure context (`phase()`, `Failure`), and `Recorder`/`replay` transcripts. Domain-agnostic. |

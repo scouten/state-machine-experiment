@@ -93,7 +93,8 @@ export async function build(adapter, asset, definition, certs, sign) {
       const step = session.advance();
       if (step.done) {
         const report = session.finish();
-        return { ...report, asset: output.slice(0, length), stats }; // trimmed copy: no stale tail
+        // Transfer/shrink the exclusive backing store; never return spare capacity.
+        return { ...report, asset: new Uint8Array(output.buffer.transferToFixedLength(length)), stats };
       }
       if (!step.requests.length) throw new Error("session stalled without host requests");
       for (const request of step.requests) {
