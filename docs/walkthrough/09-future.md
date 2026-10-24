@@ -107,8 +107,12 @@ changes. Choose formats for *what they exercise*, as TIFF did:
   No new core features or Tokio are involved. A paired JSON/binary Wasm
   write-payload comparison preserves both contracts and reduces median local
   large-build time by about 6.7–8.5 times; binary is now the browser default.
-  Streaming sources/outputs, measured peak memory and production distribution
-  remain unproven.
+  Browser Blob/File and Node file-path sources now service bounded exact reads
+  without whole-input materialization. Real-browser/Node proofs retain byte
+  snapshots, trusted readback and queue/error/disposal contracts and report
+  actual source I/O bounds. Node files must remain unchanged during operations.
+  Non-monolithic outputs, measured peak memory, physical zero-copy and
+  production distribution remain unproven.
   The neutral read/build bridges and compatibility vocabulary now live in
   `contentauth-c2pa-session-bridge`; Wasm and Neon are consumers. Node and all
   three browser contracts are wired into CI. Next, migrate the older host
