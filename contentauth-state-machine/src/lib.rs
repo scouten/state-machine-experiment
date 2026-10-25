@@ -43,6 +43,9 @@
 //!   host's replies, and let the compiler generate the state machine. No
 //!   async runtime is involved, and the host sees the same [`Session`]
 //!   contract either way.
+//! * [`Nested`] — a [`Session`] driven from inside a [`Workflow`], so a
+//!   session that composes others can answer their requests itself or
+//!   forward them to its own host from a plain `async` loop.
 //!
 //! A concrete workflow — reading and validating a C2PA manifest store,
 //! generating and signing one, or an unrelated state machine entirely —
@@ -57,6 +60,7 @@
 #![deny(unsafe_code)]
 
 mod error;
+mod nested;
 mod recorder;
 mod request;
 mod session;
@@ -67,6 +71,7 @@ mod types;
 mod workflow;
 
 pub use error::{Failure, ProtocolError};
+pub use nested::Nested;
 pub use recorder::{replay, Divergence, Event, Outcome, Recorder, Transcript};
 pub use request::{HostRequest, Request};
 pub use session::{Session, SessionCore, Step};

@@ -21,7 +21,8 @@ use crate::types::RequestId;
 /// A misuse of the [`Session`](crate::Session) API, as opposed to a failure
 /// of the workflow the session carries out.
 ///
-/// Every one of these but [`Self::WorkflowStalled`] means the host binding
+/// Every one of these but [`Self::WorkflowStalled`] and
+/// [`Self::UnansweredRequest`] means the host binding
 /// is buggy — fulfilling a request that was never issued or was already
 /// answered, answering with the wrong payload type, or driving a session past a terminal state —
 /// never that the data the session is working on is somehow wrong. A
@@ -76,6 +77,14 @@ pub enum ProtocolError {
     /// something other than a [`PendingReply`](crate::PendingReply).
     #[error("workflow is waiting on something other than its host")]
     WorkflowStalled,
+
+    /// A workflow took a request from a [`Nested`](crate::Nested) session
+    /// and asked for the next one without answering it, leaving the inner
+    /// session with nothing that could ever unblock it.
+    ///
+    /// Like [`Self::WorkflowStalled`], a bug in the session, not its host.
+    #[error("nested request {0} was taken but never answered or forwarded")]
+    UnansweredRequest(RequestId),
 }
 
 /// Where and why a session failed, as remembered by
