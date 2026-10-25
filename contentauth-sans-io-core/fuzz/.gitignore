@@ -1,5 +1,0 @@
-/target
-/artifacts
-/Cargo.lock
-# Hand-written seeds under corpus/ are tracked; libFuzzer adds its own
-# discoveries beside them, so commit only deliberate, minimized ones.

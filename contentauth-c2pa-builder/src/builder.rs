@@ -552,7 +552,7 @@ impl Workflow for BuilderSession {
     /// If this returns an error, the session is spent: it cannot be
     /// advanced or fulfilled again, and [`Workflow::finish`] will refuse to
     /// hand over a manifest that was never actually completed. Every later
-    /// call reports [`ProtocolError::SessionFailed`].
+    /// call reports [`ProtocolError::WorkflowFailed`].
     fn advance(&mut self) -> Result<Step, Error> {
         self.workflow.advance()
     }
@@ -573,9 +573,9 @@ impl Workflow for BuilderSession {
 
     /// Consumes the session and returns the completed manifest.
     ///
-    /// Fails with [`ProtocolError::SessionNotComplete`] if the workflow
+    /// Fails with [`ProtocolError::WorkflowNotComplete`] if the workflow
     /// has not reached [`BuilderStep::Complete`], or with
-    /// [`ProtocolError::SessionFailed`] if [`Workflow::advance`] returned
+    /// [`ProtocolError::WorkflowFailed`] if [`Workflow::advance`] returned
     /// an error.
     fn finish(self) -> Result<BuilderReport, Error> {
         self.workflow.finish()
@@ -680,17 +680,17 @@ mod tests {
 
         assert_eq!(session.phase(), "AwaitingIdentitySignature");
         match session.advance().unwrap_err() {
-            Error::Protocol(ProtocolError::SessionFailed(failure)) => {
+            Error::Protocol(ProtocolError::WorkflowFailed(failure)) => {
                 assert_eq!(failure.phase, "AwaitingIdentitySignature");
                 assert!(failure.cause.contains("expected Signature"), "{failure}");
             }
-            other => panic!("expected SessionFailed, got {other:?}"),
+            other => panic!("expected WorkflowFailed, got {other:?}"),
         }
         match session.finish().unwrap_err() {
-            Error::Protocol(ProtocolError::SessionFailed(failure)) => {
+            Error::Protocol(ProtocolError::WorkflowFailed(failure)) => {
                 assert_eq!(failure.phase, "AwaitingIdentitySignature");
             }
-            other => panic!("expected SessionFailed, got {other:?}"),
+            other => panic!("expected WorkflowFailed, got {other:?}"),
         }
     }
 
@@ -869,11 +869,11 @@ mod tests {
             assert!(matches!(session.advance(), Err(Error::HostFailure { .. })));
             assert_eq!(session.phase(), phase);
             match session.finish().unwrap_err() {
-                Error::Protocol(ProtocolError::SessionFailed(failure)) => {
+                Error::Protocol(ProtocolError::WorkflowFailed(failure)) => {
                     assert_eq!(failure.phase, phase);
                     assert!(failure.cause.contains("unavailable"), "{failure}");
                 }
-                other => panic!("expected SessionFailed, got {other:?}"),
+                other => panic!("expected WorkflowFailed, got {other:?}"),
             }
         }
     }
@@ -896,11 +896,11 @@ mod tests {
         assert_eq!(session.phase(), "Start");
         assert!(matches!(
             session.advance(),
-            Err(Error::Protocol(ProtocolError::SessionFailed(_)))
+            Err(Error::Protocol(ProtocolError::WorkflowFailed(_)))
         ));
         assert!(matches!(
             session.finish(),
-            Err(Error::Protocol(ProtocolError::SessionFailed(_)))
+            Err(Error::Protocol(ProtocolError::WorkflowFailed(_)))
         ));
     }
 }

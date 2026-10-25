@@ -218,7 +218,7 @@ impl<H: FormatHandler> FileReadSession<H> {
     /// Every fallible call inside `advance` after `self.phase.take()` needs
     /// this: `self.phase` is `None` until an arm reassigns it, so a bare
     /// `?` on an inner `fulfill` would leave `self.core` reporting
-    /// `Running` — `finish` would then say `SessionNotComplete` — for a
+    /// `Running` — `finish` would then say `WorkflowNotComplete` — for a
     /// session `advance` has actually abandoned. Routing every such call
     /// through here keeps the two in agreement.
     ///
@@ -458,7 +458,7 @@ impl<H: FormatHandler> Workflow for FileReadSession<H> {
         self.core.finish_check()?;
         match self.phase {
             Some(Phase::Done(report)) => Ok(report),
-            _ => Err(ProtocolError::SessionNotComplete.into()),
+            _ => Err(ProtocolError::WorkflowNotComplete.into()),
         }
     }
 }
@@ -730,7 +730,7 @@ mod tests {
 
         assert!(matches!(
             session.advance(),
-            Err(Error::Protocol(ProtocolError::SessionFailed(failure)))
+            Err(Error::Protocol(ProtocolError::WorkflowFailed(failure)))
                 if failure.cause == "session state was lost"
         ));
         assert!(session.core.is_failed());
@@ -754,7 +754,7 @@ mod tests {
 
         assert!(matches!(
             session.finish(),
-            Err(Error::Protocol(ProtocolError::SessionNotComplete))
+            Err(Error::Protocol(ProtocolError::WorkflowNotComplete))
         ));
     }
 }

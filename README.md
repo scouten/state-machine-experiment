@@ -3,7 +3,8 @@
 A suite of prototypes exploring host-driven, sans-I/O workflows for C2PA
 and CAWG.
 
-The foundation is [`contentauth-sans-io-core`](contentauth-sans-io-core),
+The foundation is the published
+[`contentauth-sans-io-core`](https://github.com/contentauth/contentauth-sans-io-core) 0.2.0 crate,
 shared infrastructure for Content Authenticity's C2PA and CAWG crates, not
 a general-purpose state-machine engine. The host application owns I/O,
 concurrency, and scheduling, ideally in its own language and runtime.
@@ -15,7 +16,7 @@ host's runtime or performs I/O itself.
 
 Concrete C2PA workflows built on top of that engine — reading and
 validating a manifest store, generating and signing one, and so on — are
-expected to live in their own crates alongside it in this workspace as the
+expected to live in their own crates in this workspace as the
 experiment grows.
 
 ## Walkthrough
@@ -34,10 +35,6 @@ where it could go next — written in Markdown with Mermaid diagrams.
 
 ## Crates
 
-* [`contentauth-sans-io-core`](contentauth-sans-io-core) — the
-  host-driven workflow contract and its manual/coroutine implementations. See its
-  [README](contentauth-sans-io-core/README.md) for the interaction
-  contract and build instructions.
 * [`contentauth-c2pa-reader`](contentauth-c2pa-reader) — reads and
   validates C2PA manifest stores, built on top of the engine above. See its
   [README](contentauth-c2pa-reader/README.md) for what it validates and its
@@ -102,6 +99,10 @@ where it could go next — written in Markdown with Mermaid diagrams.
   shared with the alternative async host.
 Outside the workspace (see its own README for why):
 
+* [`contentauth-sans-io-core`](https://github.com/contentauth/contentauth-sans-io-core) —
+  the published 0.2.0 dependency providing the host-driven workflow contract
+  and its manual/coroutine implementations. Its own repository maintains
+  the engine's tests and fuzz targets.
 * [`contentauth-c2pa-wasm`](contentauth-c2pa-wasm) — synchronous wasm-bindgen
   adapters consumed by the shared JavaScript host. Its standalone workspace
   pins the binding CLI schema.

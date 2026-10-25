@@ -16,7 +16,7 @@ publish = false
 # `test-util` exposes `ManualWorkflowCore::fulfill_unchecked` outside this crate,
 # for this crate's own tests that need to exercise a defense-in-depth
 # check against a reply payload `fulfill` itself would reject.
-contentauth-sans-io-core = { path = "../contentauth-sans-io-core", features = [
+contentauth-sans-io-core = { version = "0.2.0", features = [
     "test-util",
 ] }
 

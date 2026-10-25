@@ -2,7 +2,7 @@
 
 An experimental, fully-synchronous, sans-I/O crate for generating and
 signing C2PA manifest stores, built on
-[`contentauth-sans-io-core`](../contentauth-sans-io-core).
+[`contentauth-sans-io-core`](https://github.com/contentauth/contentauth-sans-io-core).
 
 This is a personal prototype exploring an alternative architecture for the
 [c2pa-rs] SDK: a builder that implements C2PA manifest generation and
@@ -25,8 +25,8 @@ and hosts see exactly the `Workflow` contract they always did. See the
 workflow's `Host::set_phase` calls for its diagnostic stage names: these
 are exposed through `Workflow::phase` and retained alongside the cause
 after a failure, including when driven through `Recorder`/`replay`. See the
-sibling crate's
-[README](../contentauth-sans-io-core/README.md) for the interaction
+upstream crate's
+[README](https://github.com/contentauth/contentauth-sans-io-core/blob/main/README.md) for the interaction
 contract and the `advance` / `outstanding_requests` / `fulfill` / `finish`
 cycle itself. [`contentauth-c2pa-primitives`](../contentauth-c2pa-primitives)
 holds the handful of types and encoders genuinely shared with the reader

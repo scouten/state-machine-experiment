@@ -43,7 +43,7 @@ contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
 # The `Workflow`/`Step` interaction contract `src/host.rs` drives
 # `FileReadSession` through directly, in place of
 # `contentauth-c2pa-file-reader`'s own `read_manifest_from_file`.
-contentauth-sans-io-core = { path = "../contentauth-sans-io-core" }
+contentauth-sans-io-core = "0.2.0"
 
 thiserror = "2.0.20"
 

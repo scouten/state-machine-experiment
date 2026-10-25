@@ -21,7 +21,7 @@ flowchart LR
         d10["Debuggability: phase(), failure context,<br/>record / replay transcripts"]
         d11["Engine: async-fn workflows, no runtime<br/>(builder ported, with phase/failure diagnostics)"]
         d12["Engine: Nested adapter for composing sessions<br/>inside async-fn workflows"]
-        d13["contentauth-sans-io-core: host-driven Workflow contract<br/>ManualWorkflowCore / CoroutineWorkflow"]
+        d13["contentauth-sans-io-core extracted and published<br/>workspace consumes crates.io version 0.2.0"]
     end
     subgraph next["Next"]
         direction TB
@@ -145,9 +145,9 @@ changes. Choose formats for *what they exercise*, as TIFF did:
   disagreements. This is the highest-value next step for deciding whether
   the validator is trustworthy.
 * **Track c2pa-rs releases** — the compat layer follows a moving target.
-* **Fuzzing** — done for the engine's session core (model-based
+* **Fuzzing** — done for the engine's workflow core in its own repository (model-based
   `proptest` suite plus `cargo-fuzz` targets; see the engine's
-  [README](../../contentauth-sans-io-core/README.md#testing-and-fuzzing)).
+  [README](https://github.com/contentauth/contentauth-sans-io-core/blob/main/README.md#testing-and-fuzzing)).
   Still to do: the parsers (JUMBF, COSE, TIFF graph walks) — they already
   refuse hostile input by design, but nothing yet hammers that. The
   engine's harness shape (script in, reference model out) carries over.
@@ -159,8 +159,10 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 The shared core is now named `contentauth-sans-io-core`, emphasizing that
 the host owns I/O, concurrency, and scheduling. `Workflow` is the common
 contract; `ManualWorkflowCore` supports explicit state machines and
-`CoroutineWorkflow` supports async-authored ones. The crate still lives
-in this workspace; extracting it into its own repository is a separate step.
+`CoroutineWorkflow` supports async-authored ones. Extraction is complete:
+the crate lives in its [own repository](https://github.com/contentauth/contentauth-sans-io-core),
+and this workspace consumes the published 0.2.0 release from crates.io.
+Engine tests and fuzzing run upstream; this repository tests its consumers.
 
 | Item | Why it matters |
 |---|---|

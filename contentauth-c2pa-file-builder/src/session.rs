@@ -772,7 +772,7 @@ impl<H: FormatHandler + Send> Workflow for FileBuilderSession<H> {
         self.core.finish_check()?;
         match self.phase {
             Some(Phase::Done(report)) => Ok(report),
-            _ => Err(ProtocolError::SessionNotComplete.into()),
+            _ => Err(ProtocolError::WorkflowNotComplete.into()),
         }
     }
 }
@@ -1659,7 +1659,7 @@ mod tests {
 
         assert!(matches!(
             session.advance(),
-            Err(Error::Protocol(ProtocolError::SessionFailed(failure)))
+            Err(Error::Protocol(ProtocolError::WorkflowFailed(failure)))
                 if failure.cause == "session state was lost"
         ));
         assert!(session.core.is_failed());
@@ -1685,7 +1685,7 @@ mod tests {
 
         assert!(matches!(
             session.finish(),
-            Err(Error::Protocol(ProtocolError::SessionNotComplete))
+            Err(Error::Protocol(ProtocolError::WorkflowNotComplete))
         ));
     }
 

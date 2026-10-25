@@ -403,11 +403,11 @@ fn a_failed_operation_stays_failed() {
     assert!(matches!(op.advance(), Err(FormatError::HostFailure { .. })));
     assert!(matches!(
         op.advance(),
-        Err(FormatError::Protocol(ProtocolError::SessionFailed(_)))
+        Err(FormatError::Protocol(ProtocolError::WorkflowFailed(_)))
     ));
     assert!(matches!(
         op.finish(),
-        Err(FormatError::Protocol(ProtocolError::SessionFailed(_)))
+        Err(FormatError::Protocol(ProtocolError::WorkflowFailed(_)))
     ));
 
     // And a host that can answer nothing drives the same path through

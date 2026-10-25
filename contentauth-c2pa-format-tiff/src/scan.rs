@@ -328,7 +328,7 @@ impl Scanner {
     fn flavor(&self) -> Result<Flavor, FormatError> {
         Ok(self
             .header
-            .ok_or(ProtocolError::SessionFailed(
+            .ok_or(ProtocolError::WorkflowFailed(
                 contentauth_c2pa_format::Failure::default(),
             ))?
             .flavor)
@@ -337,7 +337,7 @@ impl Scanner {
     fn endian(&self) -> Result<Endian, FormatError> {
         Ok(self
             .header
-            .ok_or(ProtocolError::SessionFailed(
+            .ok_or(ProtocolError::WorkflowFailed(
                 contentauth_c2pa_format::Failure::default(),
             ))?
             .endian)
@@ -398,7 +398,7 @@ impl Scanner {
         entries: u64,
         bytes: &[u8],
     ) -> Result<Option<Layout>, FormatError> {
-        let header = self.header.ok_or(ProtocolError::SessionFailed(
+        let header = self.header.ok_or(ProtocolError::WorkflowFailed(
             contentauth_c2pa_format::Failure::default(),
         ))?;
         let entry_len = header.flavor.entry_len() as usize;
@@ -476,7 +476,7 @@ impl Scanner {
     }
 
     fn layout(&mut self, manifest: Option<Bytes>) -> Result<Layout, FormatError> {
-        let header = self.header.ok_or(ProtocolError::SessionFailed(
+        let header = self.header.ok_or(ProtocolError::WorkflowFailed(
             contentauth_c2pa_format::Failure::default(),
         ))?;
         Ok(Layout {

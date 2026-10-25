@@ -300,7 +300,9 @@ dependencies = [
 
 [[package]]
 name = "contentauth-sans-io-core"
-version = "0.1.0"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "341cb43afeeb64d274145c314668171dfd68b33977ce3efec092cc247ef7e753"
 dependencies = [
  "thiserror",
 ]

@@ -40,7 +40,7 @@ contentauth-c2pa-js-compat = { path = "../contentauth-c2pa-js-compat" }
 
 contentauth-c2pa-format-jpeg = { path = "../contentauth-c2pa-format-jpeg" }
 contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
-contentauth-sans-io-core = { path = "../contentauth-sans-io-core" }
+contentauth-sans-io-core = "0.2.0"
 thiserror = "2.0.20"
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]

@@ -390,12 +390,12 @@ fn a_refused_signature_is_blamed_on_the_inner_session_phase() {
     assert_eq!(session.phase(), "Building > AwaitingSignature");
     match session.advance() {
         Err(contentauth_c2pa_file_builder::Error::Protocol(
-            contentauth_sans_io_core::ProtocolError::SessionFailed(failure),
+            contentauth_sans_io_core::ProtocolError::WorkflowFailed(failure),
         )) => {
             assert_eq!(failure.phase, "Building > AwaitingSignature");
             assert_eq!(failure.cause, err.to_string());
         }
-        other => panic!("expected SessionFailed, got {other:?}"),
+        other => panic!("expected WorkflowFailed, got {other:?}"),
     }
 }
 

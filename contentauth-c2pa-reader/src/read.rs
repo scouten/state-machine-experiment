@@ -304,7 +304,7 @@ enum State {
     /// every `?` and every `return Err(…)` in [`ReadSession::run`] does,
     /// since none of them install a successor state. [`ReadSession::advance`]
     /// turns that into [`ManualWorkflowCore::mark_failed`], so a later call finds
-    /// this variant again and reports [`ProtocolError::SessionFailed`]
+    /// this variant again and reports [`ProtocolError::WorkflowFailed`]
     /// without needing to distinguish "just poisoned" from "already
     /// reported".
     Poisoned,
@@ -1325,7 +1325,7 @@ impl Workflow for ReadSession {
     /// If this returns an error, the session is spent: it cannot be advanced
     /// or fulfilled again, and [`Workflow::finish`] will refuse to hand over
     /// the half-built report. Every later call reports
-    /// [`ProtocolError::SessionFailed`], naming the phase that failed and
+    /// [`ProtocolError::WorkflowFailed`], naming the phase that failed and
     /// why.
     fn advance(&mut self) -> Result<Step, Error> {
         if self.core.is_complete() {
@@ -1366,9 +1366,9 @@ impl Workflow for ReadSession {
 
     /// Consumes the session and returns the completed report.
     ///
-    /// Fails with [`ProtocolError::SessionNotComplete`] if the workflow has
+    /// Fails with [`ProtocolError::WorkflowNotComplete`] if the workflow has
     /// not reached [`ReadStep::Complete`], or with
-    /// [`ProtocolError::SessionFailed`] if [`Workflow::advance`] returned an
+    /// [`ProtocolError::WorkflowFailed`] if [`Workflow::advance`] returned an
     /// error: a report that stopped partway through validation would
     /// understate what was checked, so it is never handed out.
     fn finish(self) -> Result<ReadReport, Error> {
@@ -1630,7 +1630,7 @@ mod tests {
         assert!(session.outstanding_requests().is_empty());
         assert!(matches!(
             session.finish(),
-            Err(Error::Protocol(ProtocolError::SessionFailed(_)))
+            Err(Error::Protocol(ProtocolError::WorkflowFailed(_)))
         ));
     }
 
@@ -2067,7 +2067,7 @@ mod tests {
 
         assert!(matches!(
             session.finish(),
-            Err(Error::Protocol(ProtocolError::SessionFailed(_)))
+            Err(Error::Protocol(ProtocolError::WorkflowFailed(_)))
         ));
     }
 
@@ -2091,20 +2091,20 @@ mod tests {
         // complete. Each later report still says where and why it failed.
         assert_eq!(session.phase(), "AwaitingManifestStore");
         match session.advance() {
-            Err(Error::Protocol(ProtocolError::SessionFailed(failure))) => {
+            Err(Error::Protocol(ProtocolError::WorkflowFailed(failure))) => {
                 assert_eq!(failure.phase, "AwaitingManifestStore");
                 assert!(failure.cause.starts_with("malformed manifest store"));
             }
-            other => panic!("expected SessionFailed, got {other:?}"),
+            other => panic!("expected WorkflowFailed, got {other:?}"),
         }
         assert_eq!(session.phase(), "AwaitingManifestStore");
         assert!(matches!(
             session.fulfill(id, ReadHostReply::ManifestStore(None)),
-            Err(Error::Protocol(ProtocolError::SessionFailed(_)))
+            Err(Error::Protocol(ProtocolError::WorkflowFailed(_)))
         ));
         assert!(matches!(
             session.finish(),
-            Err(Error::Protocol(ProtocolError::SessionFailed(_)))
+            Err(Error::Protocol(ProtocolError::WorkflowFailed(_)))
         ));
     }
 
@@ -2154,7 +2154,7 @@ mod tests {
         assert_eq!(session.phase(), "HashingAsset");
         assert!(matches!(
             session.finish(),
-            Err(Error::Protocol(ProtocolError::SessionFailed(_)))
+            Err(Error::Protocol(ProtocolError::WorkflowFailed(_)))
         ));
     }
 
@@ -2212,7 +2212,7 @@ mod tests {
 
         assert!(matches!(
             session.fulfill(id, ReadHostReply::ManifestStore(None)),
-            Err(Error::Protocol(ProtocolError::SessionComplete))
+            Err(Error::Protocol(ProtocolError::WorkflowComplete))
         ));
     }
 
@@ -2221,7 +2221,7 @@ mod tests {
         let session = ReadSession::new(ReadSettings::default());
         assert!(matches!(
             session.finish(),
-            Err(Error::Protocol(ProtocolError::SessionNotComplete))
+            Err(Error::Protocol(ProtocolError::WorkflowNotComplete))
         ));
     }
 

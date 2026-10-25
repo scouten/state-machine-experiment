@@ -347,7 +347,7 @@ fn a_host_failure_surfaces_rather_than_hanging() {
     assert_eq!(op.phase(), "Scanning > Length");
     assert!(matches!(
         op.advance(),
-        Err(FormatError::Protocol(ProtocolError::SessionFailed(failure)))
+        Err(FormatError::Protocol(ProtocolError::WorkflowFailed(failure)))
             if failure.phase == "Scanning > Length"
     ));
 }
