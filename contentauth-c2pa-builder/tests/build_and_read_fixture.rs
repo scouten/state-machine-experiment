@@ -45,6 +45,7 @@ const TEST_SIGNER_KEY: &[u8] = include_bytes!("fixtures/test-signer.key.pem");
 struct Host {
     asset: Vec<u8>,
     manifest_range: Option<(u64, u64)>,
+    committed_manifest: Option<contentauth_c2pa_builder::Bytes>,
 }
 
 impl Host {
@@ -52,6 +53,7 @@ impl Host {
         Self {
             asset: (0..asset_len as u32).map(|i| (i % 251) as u8).collect(),
             manifest_range: None,
+            committed_manifest: None,
         }
     }
 
@@ -125,6 +127,7 @@ impl Host {
                 manifest,
                 ..
             } => {
+                self.committed_manifest = Some(manifest.clone());
                 let range = exclusions[0];
                 let start = range.start as usize;
                 let end = start + range.len as usize;
@@ -218,6 +221,10 @@ fn a_signed_manifest_with_no_assertions_reads_back_as_trusted() {
     assert_eq!(
         (report.exclusions[0].start, report.exclusions[0].len),
         host.manifest_range.unwrap()
+    );
+    assert_eq!(
+        report.manifest.as_ptr(),
+        host.committed_manifest.as_ref().unwrap().as_ptr()
     );
 
     let parsed = read_back_with_manifest(&asset, host.manifest_range.unwrap());

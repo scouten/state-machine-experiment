@@ -15,10 +15,15 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   a change to `SessionCore`/`RequestTracker` must keep
   `cargo test -p contentauth-state-machine` passing and should be
   fuzzed briefly. See [`src/session.rs`](contentauth-state-machine/src/session.rs)
-  for `Session`/`SessionCore` and [`README.md`](contentauth-state-machine/README.md)
+  for `Session`/`SessionCore` (a hand-written phase enum) and
+  [`src/workflow.rs`](contentauth-state-machine/src/workflow.rs) for
+  `Workflow`/`Host` (the same contract, with the workflow written as an
+  `async fn` the compiler turns into the state machine — no runtime;
+  `BuilderSession` uses it, `ReadSession` does not yet), and [`README.md`](contentauth-state-machine/README.md)
   for the interaction contract diagram. Every session reports a
   diagnostic `phase()` (nested sessions as `"Outer > Inner"`) and records
-  where and why it failed via `SessionCore::mark_failed(phase, &err)`,
+  where and why it failed via `SessionCore::mark_failed(phase, &err)` or
+  automatically in `Workflow` using the current `Host::set_phase`,
   which later calls report as `ProtocolError::SessionFailed(Failure)`;
   `Recorder`/`replay` ([`src/recorder.rs`](contentauth-state-machine/src/recorder.rs))
   record a host conversation as a `Transcript` and reproduce it

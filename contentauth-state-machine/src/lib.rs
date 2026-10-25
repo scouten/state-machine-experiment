@@ -38,6 +38,11 @@
 //! * [`SessionCore`] — a struct a concrete session embeds to get request
 //!   tracking and terminal-state bookkeeping for free, leaving only its own
 //!   workflow logic to write.
+//! * [`Workflow`], [`Host`], and [`PendingReply`] — the alternative to
+//!   [`SessionCore`]: write the workflow as an `async fn` that awaits its
+//!   host's replies, and let the compiler generate the state machine. No
+//!   async runtime is involved, and the host sees the same [`Session`]
+//!   contract either way.
 //!
 //! A concrete workflow — reading and validating a C2PA manifest store,
 //! generating and signing one, or an unrelated state machine entirely —
@@ -59,6 +64,7 @@ mod session;
 mod test_session;
 mod tracker;
 mod types;
+mod workflow;
 
 pub use error::{Failure, ProtocolError};
 pub use recorder::{replay, Divergence, Event, Outcome, Recorder, Transcript};
@@ -66,3 +72,4 @@ pub use request::{HostRequest, Request};
 pub use session::{Session, SessionCore, Step};
 pub use tracker::RequestTracker;
 pub use types::RequestId;
+pub use workflow::{Host, PendingReply, Workflow};

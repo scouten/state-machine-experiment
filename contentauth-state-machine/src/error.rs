@@ -21,9 +21,9 @@ use crate::types::RequestId;
 /// A misuse of the [`Session`](crate::Session) API, as opposed to a failure
 /// of the workflow the session carries out.
 ///
-/// Every one of these means the host binding is buggy — fulfilling a
-/// request that was never issued or was already answered, answering with
-/// the wrong payload type, or driving a session past a terminal state —
+/// Every one of these but [`Self::WorkflowStalled`] means the host binding
+/// is buggy — fulfilling a request that was never issued or was already
+/// answered, answering with the wrong payload type, or driving a session past a terminal state —
 /// never that the data the session is working on is somehow wrong. A
 /// concrete session's own `Error` type is expected to fold this in (for
 /// example, via `#[from]`) alongside whatever domain-specific failures its
@@ -68,6 +68,14 @@ pub enum ProtocolError {
     /// host that only sees this later report still learns where and why.
     #[error("{0}")]
     SessionFailed(Failure),
+
+    /// A [`Workflow`](crate::Workflow) is waiting, yet has nothing
+    /// outstanding that the host could answer to unblock it.
+    ///
+    /// This is a bug in the workflow rather than its host: it awaited
+    /// something other than a [`PendingReply`](crate::PendingReply).
+    #[error("workflow is waiting on something other than its host")]
+    WorkflowStalled,
 }
 
 /// Where and why a session failed, as remembered by

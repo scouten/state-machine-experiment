@@ -96,6 +96,12 @@ skip = [
     #   binding generations reqwest's own dependencies have not
     #   converged on yet.
     { crate = "core-foundation" },
+
+    # Windows bindings have not converged: `rustls-platform-verifier` and
+    # `rustix`/`tempfile` require 0.52, while Tokio 1.54.1 and its networking
+    # dependencies use 0.61. These are transitive, incompatible versions;
+    # remove this exception when those upstream requirements converge.
+    { crate = "windows-sys" },
 ]
 
 [licenses]

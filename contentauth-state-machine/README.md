@@ -46,9 +46,11 @@ whatever outcomes have arrived and make further progress.
 
 ### Threading
 
-A session is **not re-entrant**, and the Rust code provides **no locks**
-around it. Any host that employs a thread model must ensure the session's
-methods are never called simultaneously from multiple threads (nor
+A session is **not re-entrant**. `Workflow` uses internal synchronization
+for the mailbox shared with its future; ordinary serialized host calls do
+not contend on that lock. This does not lock the session's API or make
+concurrent calls safe. Any host that employs a thread model must ensure
+the session's methods are never called simultaneously from multiple threads (nor
 re-entered from within a call in progress on the same session). Crashes or
 unpredictable behavior are likely if this constraint is violated. Calls on
 *different* sessions may safely run at the same time; only calls on the
@@ -61,6 +63,48 @@ it themselves.
 
 See the `Session` trait and `SessionCore` in [`src/session.rs`](src/session.rs)
 for the concrete API.
+
+## Two ways to implement a session
+
+The host-facing contract above is fixed. Behind it, a session's own
+workflow can be written either of two ways, and the host cannot tell which:
+
+* **By hand, with `SessionCore`** ([`src/session.rs`](src/session.rs)). The
+  workflow keeps a phase enum with one variant per point where it waits on
+  its host, each carrying every local that must survive the wait, and
+  `advance` matches on it. Every state is explicit and inspectable — and
+  every new wait costs a variant, a handler, and the same
+  `None` / `Failed` / wrong-reply arms again.
+  `contentauth-c2pa-reader`'s `ReadSession` uses this approach.
+* **As an `async fn`, with `Workflow`** ([`src/workflow.rs`](src/workflow.rs)).
+  The workflow asks its `Host` handle for what it needs and `.await`s the
+  reply; the compiler generates the state machine, including the locals,
+  loops, `?` early returns and sub-workflow calls a hand-written one would
+  have to encode. `advance` polls the future once with a no-op waker —
+  there is no executor, runtime, or background thread. `fulfill` notifies
+  the reply's registered waker so collections such as `FuturesUnordered`
+  and `join_all` know which children are ready, but only `advance` polls
+  the workflow.
+  Issuing several requests before awaiting any puts them in front of the
+  host at once. `contentauth-c2pa-builder`'s `BuilderSession` uses this
+  approach.
+
+The compiler's state is opaque, but a workflow names its current stage
+with `Host::set_phase`, exposed through `Session::phase` and preserved in
+failure reports. It must await only `PendingReply`s (or futures built from them).
+Awaiting anything else would never be woken; `advance` reports that as
+`ProtocolError::WorkflowStalled` instead of hanging.
+
+`Host::ask(request, decode)` combines issuing, awaiting, and decoding one
+reply; the decoder receives the request ID for vocabulary-specific errors
+and host-failure policy. Use `Host::request` to issue multiple requests
+before awaiting them.
+
+When a `Workflow` completes or fails, it cancels remaining requests and
+discards stored replies and wakers. Its outstanding list is then empty.
+Hosts should stop servicing those requests and discard late results;
+operations already performed are not undone. Dropping one `PendingReply`
+while the workflow is still running does not cancel its request.
 
 ## Debugging a session
 
@@ -77,7 +121,9 @@ itself), and the call stack that produced it is gone. Two things answer
   `ProtocolError::SessionFailed(Failure)`, which carries that phase and the
   original error's text rather than a bare "failed earlier". A session
   implementation records both with `SessionCore::mark_failed(phase, &err)`
-  on every error exit (only the first failure is kept). Phase wording is
+  on every error exit; `Workflow` does this automatically using the most
+  recent `Host::set_phase` (initially `"Start"`). Only the first failure
+  is kept. Phase wording is
   for people and logs, not a stable interface: don't branch on it.
 * **What the host said to it.** Since a session performs no I/O, its
   behavior depends on nothing but the replies it is given. Wrap a session

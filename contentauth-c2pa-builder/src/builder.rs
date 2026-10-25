@@ -13,18 +13,16 @@
 
 //! The build/sign workflow: [`BuilderSession`].
 
-use core::mem::replace;
-
 use contentauth_c2pa_primitives::{ByteRange, Bytes, SigningAlg, StreamId};
 pub use contentauth_state_machine::Step as BuilderStep;
 use contentauth_state_machine::{
-    HostRequest, ProtocolError, RequestId, Session, SessionCore, Step,
+    Host, HostRequest, ProtocolError, RequestId, Session, Step, Workflow,
 };
 
 use crate::{
     cose, data_hash,
     error::Error,
-    hash_stream::{self, HashStream},
+    hash_stream,
     identity::{self, IdentitySettings},
     jumbf::{AssertionInput, IdentityInput, ManifestBuilder, ManifestInputs},
     request::{BuilderHostReply, BuilderRequest, SignPurpose},
@@ -271,91 +269,7 @@ impl GeneratorInfo {
 /// [`contentauth_c2pa_reader::ReadSession`]: https://docs.rs/contentauth-c2pa-reader/latest/contentauth_c2pa_reader/struct.ReadSession.html
 #[derive(Debug)]
 pub struct BuilderSession {
-    settings: BuilderSettings,
-    core: SessionCore<BuilderRequest>,
-    state: State,
-
-    /// The name of the state [`BuilderSession::run`] is processing, kept
-    /// because `state` itself is [`State::Poisoned`] while that happens —
-    /// so an error exit can be blamed on the phase it occurred in.
-    active: &'static str,
-
-    report: Option<BuilderReport>,
-}
-
-/// The build workflow's own phase, tracked separately from whether the
-/// session as a whole has completed or failed — that half of the
-/// lifecycle belongs to [`SessionCore`], via [`BuilderSession::core`].
-#[derive(Debug)]
-enum State {
-    Start,
-    AwaitingPlaceholderReserved {
-        request: RequestId,
-        manifest: Box<ManifestBuilder>,
-    },
-    AwaitingAssetLength {
-        request: RequestId,
-        manifest: Box<ManifestBuilder>,
-        exclusions: Vec<ByteRange>,
-    },
-    HashingAsset {
-        /// Boxed for the same reason `contentauth-c2pa-reader`'s
-        /// `HashStream` is: far larger than any other variant, and a
-        /// session spends most of its life not hashing.
-        stream: Box<HashStream>,
-        manifest: Box<ManifestBuilder>,
-        exclusions: Vec<ByteRange>,
-    },
-    AwaitingIdentitySignature {
-        request: RequestId,
-        manifest: Box<ManifestBuilder>,
-        exclusions: Vec<ByteRange>,
-
-        /// Which of the manifest's identity assertions was sent to be
-        /// signed.
-        index: usize,
-    },
-    AwaitingSignature {
-        request: RequestId,
-        manifest: Box<ManifestBuilder>,
-        exclusions: Vec<ByteRange>,
-    },
-    AwaitingTimestamp {
-        request: RequestId,
-        manifest: Box<ManifestBuilder>,
-        exclusions: Vec<ByteRange>,
-        signature: Vec<u8>,
-    },
-    AwaitingCommit {
-        request: RequestId,
-        manifest: Bytes,
-        exclusions: Vec<ByteRange>,
-    },
-
-    /// Installed while a phase is being processed (see
-    /// [`BuilderSession::run`]), and left behind if that phase exits
-    /// early — every `?` and every `return Err(…)` in
-    /// [`BuilderSession::run`] does. [`BuilderSession::advance`] turns
-    /// that into [`SessionCore::mark_failed`], so a later call finds this
-    /// variant again and reports [`ProtocolError::SessionFailed`].
-    Poisoned,
-}
-
-impl State {
-    /// This state's name, for [`Session::phase`].
-    fn name(&self) -> &'static str {
-        match self {
-            Self::Start => "Start",
-            Self::AwaitingPlaceholderReserved { .. } => "AwaitingPlaceholderReserved",
-            Self::AwaitingAssetLength { .. } => "AwaitingAssetLength",
-            Self::HashingAsset { .. } => "HashingAsset",
-            Self::AwaitingIdentitySignature { .. } => "AwaitingIdentitySignature",
-            Self::AwaitingSignature { .. } => "AwaitingSignature",
-            Self::AwaitingTimestamp { .. } => "AwaitingTimestamp",
-            Self::AwaitingCommit { .. } => "AwaitingCommit",
-            Self::Poisoned => "Poisoned",
-        }
-    }
+    workflow: Workflow<BuilderRequest, BuilderReport, Error>,
 }
 
 impl BuilderSession {
@@ -368,580 +282,260 @@ impl BuilderSession {
     /// as [`Self::PRIMARY_STREAM`].
     pub fn new(settings: BuilderSettings) -> Self {
         Self {
-            settings,
-            core: SessionCore::default(),
-            state: State::Start,
-            active: State::Start.name(),
-            report: None,
+            workflow: Workflow::new(|host| build(host, settings)),
         }
     }
+}
 
-    /// The state-machine loop proper, factored out of [`Session::advance`]
-    /// so that every error exit is poisoned in one place rather than at
-    /// each fallible call within the loop.
-    fn run(&mut self) -> Result<Step, Error> {
-        loop {
-            if self.core.is_complete() {
-                return Ok(Step::Complete);
-            }
+/// The whole build workflow, from settings to a committed manifest.
+///
+/// Every `.await` is a point where the session returns
+/// [`BuilderStep::AwaitHost`]; the compiler, not a hand-written phase
+/// enum, keeps track of which one it is parked at and of every local that
+/// must survive it.
+async fn build(
+    host: Host<BuilderRequest>,
+    settings: BuilderSettings,
+) -> Result<BuilderReport, Error> {
+    let stream = BuilderSession::PRIMARY_STREAM;
+    let mut manifest = assemble_placeholder(&settings)?;
 
-            self.active = self.state.name();
-            let outcome = match replace(&mut self.state, State::Poisoned) {
-                State::Start => self.handle_start(),
+    // The session keeps patching its buffer, so the host needs its own copy.
+    host.set_phase("AwaitingPlaceholderReserved");
+    let exclusions = ask(
+        &host,
+        BuilderRequest::ReservePlaceholder {
+            stream,
+            placeholder: Bytes::copy_from_slice(manifest.placeholder_bytes()),
+        },
+        "PlaceholderReserved",
+        |reply| match reply {
+            BuilderHostReply::PlaceholderReserved(exclusions) => Some(exclusions),
+            _ => None,
+        },
+    )
+    .await?;
 
-                State::AwaitingPlaceholderReserved { request, manifest } => {
-                    self.handle_awaiting_placeholder_reserved(request, manifest)
-                }
-
-                State::AwaitingAssetLength {
-                    request,
-                    manifest,
-                    exclusions,
-                } => self.handle_awaiting_asset_length(request, manifest, exclusions),
-
-                State::HashingAsset {
-                    stream,
-                    manifest,
-                    exclusions,
-                } => self.handle_hashing_asset(stream, manifest, exclusions),
-
-                State::AwaitingIdentitySignature {
-                    request,
-                    manifest,
-                    exclusions,
-                    index,
-                } => self.handle_awaiting_identity_signature(request, manifest, exclusions, index),
-
-                State::AwaitingSignature {
-                    request,
-                    manifest,
-                    exclusions,
-                } => self.handle_awaiting_signature(request, manifest, exclusions),
-
-                State::AwaitingTimestamp {
-                    request,
-                    manifest,
-                    exclusions,
-                    signature,
-                } => self.handle_awaiting_timestamp(request, manifest, exclusions, signature),
-
-                State::AwaitingCommit {
-                    request,
-                    manifest,
-                    exclusions,
-                } => self.handle_awaiting_commit(request, manifest, exclusions),
-
-                State::Poisoned => return Err(self.core.failed_error().into()),
-            }?;
-
-            if let Some(step) = outcome {
-                return Ok(step);
-            }
-        }
+    // The container's framing around the placeholder (a JPEG's APP11
+    // segment headers, say) belongs inside the exclusions, so they may
+    // total more than the placeholder — but never less, which would leave
+    // part of the manifest inside its own hash.
+    let excluded = exclusions
+        .iter()
+        .try_fold(0u64, |total, range| total.checked_add(range.len));
+    if excluded.is_none_or(|excluded| excluded < manifest.placeholder_bytes().len() as u64) {
+        return Err(Error::PlaceholderRangeInvalid(
+            "the reserved ranges are shorter than the placeholder that was embedded",
+        ));
     }
 
-    /// Handles [`State::Start`]: validates settings, assembles the
-    /// placeholder manifest, and asks the host to embed it.
-    fn handle_start(&mut self) -> Result<Option<Step>, Error> {
-        if self.settings.certificates.is_empty() {
-            return Err(Error::NoCertificates);
-        }
+    host.set_phase("AwaitingAssetLength");
+    let asset_len = ask(
+        &host,
+        BuilderRequest::AssetLength { stream },
+        "AssetLength",
+        |reply| match reply {
+            BuilderHostReply::AssetLength(len) => Some(len),
+            _ => None,
+        },
+    )
+    .await?;
 
-        let mut assertion_labels = std::collections::HashSet::from([data_hash::LABEL]);
-        for assertion in &self.settings.assertions {
-            if !assertion_labels.insert(assertion.label.as_str()) {
-                return Err(Error::InvalidAssertionLabel(assertion.label.clone()));
-            }
-        }
+    let ranges = hash_stream::included_ranges(&exclusions, asset_len).ok_or(
+        Error::PlaceholderRangeInvalid("the reserved placeholder range does not fit the asset"),
+    )?;
+    let hash_alg = settings.signing_alg.claim_hash_algorithm();
+    host.set_phase("HashingAsset");
+    let hash = hash_stream::hash(&host, stream, hash_alg, &ranges).await?;
+    manifest.apply_hard_binding(&exclusions, hash)?;
 
-        // The labels this crate generates for identity assertions are as
-        // reserved as the hard binding's.
-        for index in 0..self.settings.identities.len() {
-            let label = identity::label_for(index);
-            if assertion_labels.contains(label.as_str()) {
-                return Err(Error::InvalidAssertionLabel(label));
-            }
-        }
-
-        let identity_inputs = self
-            .settings
-            .identities
-            .iter()
-            .map(|identity| {
-                let referenced = match &identity.referenced_assertions {
-                    None => self
-                        .settings
-                        .assertions
-                        .iter()
-                        .map(|a| a.label.as_str())
-                        .collect(),
-                    Some(labels) => {
-                        let mut seen = std::collections::HashSet::new();
-                        for label in labels {
-                            if !self.settings.assertions.iter().any(|a| &a.label == label) {
-                                return Err(Error::UnknownReferencedAssertion(label.clone()));
-                            }
-                            // Naming one twice would write an assertion the
-                            // reader reports as a duplicate reference.
-                            if !seen.insert(label.as_str()) {
-                                return Err(Error::DuplicateReferencedAssertion(label.clone()));
-                            }
-                        }
-                        labels.iter().map(String::as_str).collect()
-                    }
-                };
-
-                Ok(IdentityInput {
-                    credential: &identity.credential,
-                    roles: &identity.roles,
-                    referenced,
-                })
-            })
-            .collect::<Result<Vec<_>, Error>>()?;
-
-        let signature_len =
-            cose::signature_len(self.settings.signing_alg, self.settings.rsa_signature_len)?;
-        let generator = &self.settings.claim_generator_info;
-
-        let assertions: Vec<AssertionInput<'_>> = self
-            .settings
-            .assertions
-            .iter()
-            .map(|a| AssertionInput {
-                label: &a.label,
-                cbor: &a.cbor,
-                kind: a.kind,
-            })
-            .collect();
-
-        let inputs = ManifestInputs {
-            manifest_label: &self.settings.manifest_label,
-            title: self.settings.title.as_deref(),
-            instance_id: &self.settings.instance_id,
-            generator_name: &generator.name,
-            generator_version: &generator.version,
-            assertions: &assertions,
-            signing_alg: self.settings.signing_alg,
-            certificates: &self.settings.certificates,
-            signature_len,
-            timestamp_reserve: self.settings.timestamp.map(|t| t.reserve_size),
-            identities: &identity_inputs,
-        };
-
-        let manifest = ManifestBuilder::build_placeholder(&inputs)?;
-        // The one copy on this path: the session keeps patching its own
-        // buffer after this, so the host's must be separate.
-        let placeholder = Bytes::copy_from_slice(manifest.placeholder_bytes());
-
-        let request = self.core.issue(BuilderRequest::ReservePlaceholder {
-            stream: Self::PRIMARY_STREAM,
-            placeholder,
-        });
-        self.state = State::AwaitingPlaceholderReserved {
-            request,
-            manifest: Box::new(manifest),
-        };
-
-        Ok(Some(Step::AwaitHost))
-    }
-
-    /// Handles [`State::AwaitingPlaceholderReserved`].
-    fn handle_awaiting_placeholder_reserved(
-        &mut self,
-        request: RequestId,
-        manifest: Box<ManifestBuilder>,
-    ) -> Result<Option<Step>, Error> {
-        match self.core.take_reply(request) {
-            None => {
-                self.state = State::AwaitingPlaceholderReserved { request, manifest };
-                return Ok(Some(Step::AwaitHost));
-            }
-
-            Some(BuilderHostReply::PlaceholderReserved(exclusions)) => {
-                // The container's framing around the placeholder (a
-                // JPEG's APP11 segment headers, say) belongs inside the
-                // exclusions, so they may total more than the
-                // placeholder — but never less, which would leave part
-                // of the manifest inside its own hash.
-                let excluded = exclusions
-                    .iter()
-                    .try_fold(0u64, |total, range| total.checked_add(range.len));
-                if excluded
-                    .is_none_or(|excluded| excluded < manifest.placeholder_bytes().len() as u64)
-                {
-                    return Err(Error::PlaceholderRangeInvalid(
-                        "the reserved ranges are shorter than the placeholder that was embedded",
-                    ));
-                }
-
-                let request = self.core.issue(BuilderRequest::AssetLength {
-                    stream: Self::PRIMARY_STREAM,
-                });
-                self.state = State::AwaitingAssetLength {
-                    request,
-                    manifest,
-                    exclusions,
-                };
-            }
-
-            Some(BuilderHostReply::Failed(source)) => {
-                return Err(Error::HostFailure {
-                    id: request,
-                    source,
-                });
-            }
-
-            Some(_) => {
-                return Err(ProtocolError::ReplyMismatch {
-                    id: request,
-                    expected: "PlaceholderReserved",
-                }
-                .into());
-            }
-        }
-
-        Ok(None)
-    }
-
-    /// Handles [`State::AwaitingAssetLength`].
-    fn handle_awaiting_asset_length(
-        &mut self,
-        request: RequestId,
-        manifest: Box<ManifestBuilder>,
-        exclusions: Vec<ByteRange>,
-    ) -> Result<Option<Step>, Error> {
-        match self.core.take_reply(request) {
-            None => {
-                self.state = State::AwaitingAssetLength {
-                    request,
-                    manifest,
-                    exclusions,
-                };
-                return Ok(Some(Step::AwaitHost));
-            }
-
-            Some(BuilderHostReply::AssetLength(asset_len)) => {
-                let ranges = hash_stream::included_ranges(&exclusions, asset_len).ok_or(
-                    Error::PlaceholderRangeInvalid(
-                        "the reserved placeholder range does not fit the asset",
-                    ),
-                )?;
-
-                let hash_alg = self.settings.signing_alg.claim_hash_algorithm();
-                let mut stream = Box::new(HashStream::new(hash_alg, &ranges));
-                stream.issue(&mut self.core, Self::PRIMARY_STREAM);
-
-                self.state = State::HashingAsset {
-                    stream,
-                    manifest,
-                    exclusions,
-                };
-            }
-
-            Some(BuilderHostReply::Failed(source)) => {
-                return Err(Error::HostFailure {
-                    id: request,
-                    source,
-                });
-            }
-
-            Some(_) => {
-                return Err(ProtocolError::ReplyMismatch {
-                    id: request,
-                    expected: "AssetLength",
-                }
-                .into());
-            }
-        }
-
-        Ok(None)
-    }
-
-    /// Handles [`State::HashingAsset`]: streams asset bytes into the hard
-    /// binding hasher until it is done, then signs.
-    fn handle_hashing_asset(
-        &mut self,
-        mut stream: Box<HashStream>,
-        mut manifest: Box<ManifestBuilder>,
-        exclusions: Vec<ByteRange>,
-    ) -> Result<Option<Step>, Error> {
-        stream.absorb(&mut self.core)?;
-
-        if !stream.is_complete() {
-            stream.issue(&mut self.core, Self::PRIMARY_STREAM);
-            self.state = State::HashingAsset {
-                stream,
-                manifest,
-                exclusions,
-            };
-            return Ok(Some(Step::AwaitHost));
-        }
-
-        let hash = stream.finish()?;
-        manifest.apply_hard_binding(&exclusions, hash)?;
-
-        self.begin_signing(manifest, exclusions, 0)?;
-
-        Ok(Some(Step::AwaitHost))
-    }
-
-    /// Asks the host for the next signature the manifest needs: identity
-    /// assertion `next_identity`'s, if there is one, else the claim's.
-    ///
-    /// The claim comes last because it lists every assertion's hash, and
-    /// an identity assertion's hash is not known until it is signed.
-    fn begin_signing(
-        &mut self,
-        mut manifest: Box<ManifestBuilder>,
-        exclusions: Vec<ByteRange>,
-        next_identity: usize,
-    ) -> Result<(), Error> {
-        if next_identity < manifest.identity_count() {
-            let (label, alg, data) = manifest.identity_to_be_signed(next_identity)?;
-
-            let request = self.core.issue(BuilderRequest::Sign {
+    // Identity assertions are signed before the claim, which lists every
+    // assertion's hash — and an identity assertion's hash is not known
+    // until it is signed.
+    for index in 0..manifest.identity_count() {
+        host.set_phase("AwaitingIdentitySignature");
+        let (label, alg, data) = manifest.identity_to_be_signed(index)?;
+        let signature = ask(
+            &host,
+            BuilderRequest::Sign {
                 purpose: SignPurpose::Identity { label },
                 alg,
                 data,
-            });
-            self.state = State::AwaitingIdentitySignature {
-                request,
-                manifest,
-                exclusions,
-                index: next_identity,
-            };
-        } else {
-            let to_be_signed = manifest.apply_claim()?;
-
-            let request = self.core.issue(BuilderRequest::Sign {
-                purpose: SignPurpose::Claim,
-                alg: self.settings.signing_alg,
-                data: to_be_signed,
-            });
-            self.state = State::AwaitingSignature {
-                request,
-                manifest,
-                exclusions,
-            };
-        }
-
-        Ok(())
+            },
+            "Signature",
+            signature,
+        )
+        .await?;
+        manifest.apply_identity_signature(index, &signature)?;
     }
 
-    /// Handles [`State::AwaitingIdentitySignature`]: writes the identity
-    /// assertion the signature completes, then asks for whatever is signed
-    /// next.
-    fn handle_awaiting_identity_signature(
-        &mut self,
-        request: RequestId,
-        mut manifest: Box<ManifestBuilder>,
-        exclusions: Vec<ByteRange>,
-        index: usize,
-    ) -> Result<Option<Step>, Error> {
-        match self.core.take_reply(request) {
-            None => {
-                self.state = State::AwaitingIdentitySignature {
-                    request,
-                    manifest,
-                    exclusions,
-                    index,
-                };
-                return Ok(Some(Step::AwaitHost));
-            }
+    host.set_phase("AwaitingSignature");
+    let to_be_signed = manifest.apply_claim()?;
+    let claim_signature = ask(
+        &host,
+        BuilderRequest::Sign {
+            purpose: SignPurpose::Claim,
+            alg: settings.signing_alg,
+            data: to_be_signed,
+        },
+        "Signature",
+        signature,
+    )
+    .await?;
 
-            Some(BuilderHostReply::Signature(signature)) => {
-                manifest.apply_identity_signature(index, &signature)?;
-                self.begin_signing(manifest, exclusions, index + 1)?;
-            }
-
-            Some(BuilderHostReply::Failed(source)) => {
-                return Err(Error::HostFailure {
-                    id: request,
-                    source,
-                });
-            }
-
-            Some(_) => {
-                return Err(ProtocolError::ReplyMismatch {
-                    id: request,
-                    expected: "Signature",
-                }
-                .into());
-            }
+    // A failed timestamp is fatal, not a silent fallback to an unstamped
+    // signature — see the crate-level error docs.
+    let timestamp_token = match manifest.countersigned_bytes(&claim_signature) {
+        Some(countersigned) => {
+            host.set_phase("AwaitingTimestamp");
+            let digest = hash_alg.digest(&countersigned);
+            Some(
+                ask(
+                    &host,
+                    BuilderRequest::Timestamp { digest, hash_alg },
+                    "Timestamp",
+                    |reply| match reply {
+                        BuilderHostReply::Timestamp(token) => Some(token),
+                        _ => None,
+                    },
+                )
+                .await?,
+            )
         }
+        None => None,
+    };
 
-        Ok(None)
-    }
+    host.set_phase("AwaitingCommit");
+    let final_bytes = Bytes::from(manifest.finish(&claim_signature, timestamp_token.as_deref())?);
 
-    /// Handles [`State::AwaitingSignature`]: on a real signature, either
-    /// requests a timestamp or moves straight to committing the manifest.
-    fn handle_awaiting_signature(
-        &mut self,
-        request: RequestId,
-        manifest: Box<ManifestBuilder>,
-        exclusions: Vec<ByteRange>,
-    ) -> Result<Option<Step>, Error> {
-        match self.core.take_reply(request) {
-            None => {
-                self.state = State::AwaitingSignature {
-                    request,
-                    manifest,
-                    exclusions,
-                };
-                return Ok(Some(Step::AwaitHost));
-            }
-
-            Some(BuilderHostReply::Signature(signature)) => {
-                match manifest.countersigned_bytes(&signature) {
-                    Some(countersigned) => {
-                        let hash_alg = self.settings.signing_alg.claim_hash_algorithm();
-                        let digest = hash_alg.digest(&countersigned);
-
-                        let request = self
-                            .core
-                            .issue(BuilderRequest::Timestamp { digest, hash_alg });
-                        self.state = State::AwaitingTimestamp {
-                            request,
-                            manifest,
-                            exclusions,
-                            signature,
-                        };
-                    }
-                    None => self.commit(manifest, exclusions, &signature, None)?,
-                }
-            }
-
-            Some(BuilderHostReply::Failed(source)) => {
-                return Err(Error::HostFailure {
-                    id: request,
-                    source,
-                });
-            }
-
-            Some(_) => {
-                return Err(ProtocolError::ReplyMismatch {
-                    id: request,
-                    expected: "Signature",
-                }
-                .into());
-            }
-        }
-
-        Ok(None)
-    }
-
-    /// Handles [`State::AwaitingTimestamp`].
-    fn handle_awaiting_timestamp(
-        &mut self,
-        request: RequestId,
-        manifest: Box<ManifestBuilder>,
-        exclusions: Vec<ByteRange>,
-        signature: Vec<u8>,
-    ) -> Result<Option<Step>, Error> {
-        match self.core.take_reply(request) {
-            None => {
-                self.state = State::AwaitingTimestamp {
-                    request,
-                    manifest,
-                    exclusions,
-                    signature,
-                };
-                return Ok(Some(Step::AwaitHost));
-            }
-
-            Some(BuilderHostReply::Timestamp(token)) => {
-                self.commit(manifest, exclusions, &signature, Some(&token))?;
-            }
-
-            // A failed timestamp is fatal, not a silent fallback to an
-            // unstamped signature — see the crate-level error docs.
-            Some(BuilderHostReply::Failed(source)) => {
-                return Err(Error::HostFailure {
-                    id: request,
-                    source,
-                });
-            }
-
-            Some(_) => {
-                return Err(ProtocolError::ReplyMismatch {
-                    id: request,
-                    expected: "Timestamp",
-                }
-                .into());
-            }
-        }
-
-        Ok(None)
-    }
-
-    /// Finalizes the manifest with the real signature (and timestamp, if
-    /// any) and asks the host to patch it into the asset.
-    fn commit(
-        &mut self,
-        manifest: Box<ManifestBuilder>,
-        exclusions: Vec<ByteRange>,
-        signature: &[u8],
-        timestamp_token: Option<&[u8]>,
-    ) -> Result<(), Error> {
-        let final_bytes = Bytes::from(manifest.finish(signature, timestamp_token)?);
-
-        let request = self.core.issue(BuilderRequest::CommitManifest {
-            stream: Self::PRIMARY_STREAM,
+    ask(
+        &host,
+        BuilderRequest::CommitManifest {
+            stream,
             exclusions: exclusions.clone(),
             manifest: final_bytes.clone(),
-        });
-        self.state = State::AwaitingCommit {
-            request,
-            manifest: final_bytes,
-            exclusions,
-        };
+        },
+        "ManifestCommitted",
+        |reply| matches!(reply, BuilderHostReply::ManifestCommitted).then_some(()),
+    )
+    .await?;
 
-        Ok(())
+    Ok(BuilderReport {
+        manifest: final_bytes,
+        exclusions,
+    })
+}
+
+/// Asks the host for something and waits for the answer, turning a
+/// [`BuilderHostReply::Failed`] into [`Error::HostFailure`] and a reply of
+/// the wrong kind (which `fulfill` should already have refused) into
+/// [`ProtocolError::ReplyMismatch`].
+async fn ask<T>(
+    host: &Host<BuilderRequest>,
+    request: BuilderRequest,
+    expected: &'static str,
+    pick: impl FnOnce(BuilderHostReply) -> Option<T>,
+) -> Result<T, Error> {
+    host.ask(request, |id, reply| match reply {
+        BuilderHostReply::Failed(source) => Err(Error::HostFailure { id, source }),
+        reply => pick(reply).ok_or_else(|| ProtocolError::ReplyMismatch { id, expected }.into()),
+    })
+    .await
+}
+
+/// Picks a signature out of a reply, for [`ask`].
+fn signature(reply: BuilderHostReply) -> Option<Vec<u8>> {
+    match reply {
+        BuilderHostReply::Signature(signature) => Some(signature),
+        _ => None,
+    }
+}
+
+/// Validates settings and assembles the placeholder manifest, whose size
+/// is final: everything after this only overwrites bytes inside it.
+fn assemble_placeholder(settings: &BuilderSettings) -> Result<ManifestBuilder, Error> {
+    if settings.certificates.is_empty() {
+        return Err(Error::NoCertificates);
     }
 
-    /// Handles [`State::AwaitingCommit`].
-    fn handle_awaiting_commit(
-        &mut self,
-        request: RequestId,
-        manifest: Bytes,
-        exclusions: Vec<ByteRange>,
-    ) -> Result<Option<Step>, Error> {
-        match self.core.take_reply(request) {
-            None => {
-                self.state = State::AwaitingCommit {
-                    request,
-                    manifest,
-                    exclusions,
-                };
-                return Ok(Some(Step::AwaitHost));
-            }
-
-            Some(BuilderHostReply::ManifestCommitted) => {
-                self.report = Some(BuilderReport {
-                    manifest,
-                    exclusions,
-                });
-                self.core.mark_complete();
-            }
-
-            Some(BuilderHostReply::Failed(source)) => {
-                return Err(Error::HostFailure {
-                    id: request,
-                    source,
-                });
-            }
-
-            Some(_) => {
-                return Err(ProtocolError::ReplyMismatch {
-                    id: request,
-                    expected: "ManifestCommitted",
-                }
-                .into());
-            }
+    let mut assertion_labels = std::collections::HashSet::from([data_hash::LABEL]);
+    for assertion in &settings.assertions {
+        if !assertion_labels.insert(assertion.label.as_str()) {
+            return Err(Error::InvalidAssertionLabel(assertion.label.clone()));
         }
-
-        Ok(None)
     }
+
+    // The labels this crate generates for identity assertions are as
+    // reserved as the hard binding's.
+    for index in 0..settings.identities.len() {
+        let label = identity::label_for(index);
+        if assertion_labels.contains(label.as_str()) {
+            return Err(Error::InvalidAssertionLabel(label));
+        }
+    }
+
+    let identity_inputs = settings
+        .identities
+        .iter()
+        .map(|identity| {
+            let referenced = match &identity.referenced_assertions {
+                None => settings
+                    .assertions
+                    .iter()
+                    .map(|a| a.label.as_str())
+                    .collect(),
+                Some(labels) => {
+                    let mut seen = std::collections::HashSet::new();
+                    for label in labels {
+                        if !settings.assertions.iter().any(|a| &a.label == label) {
+                            return Err(Error::UnknownReferencedAssertion(label.clone()));
+                        }
+                        // Naming one twice would write an assertion the
+                        // reader reports as a duplicate reference.
+                        if !seen.insert(label.as_str()) {
+                            return Err(Error::DuplicateReferencedAssertion(label.clone()));
+                        }
+                    }
+                    labels.iter().map(String::as_str).collect()
+                }
+            };
+
+            Ok(IdentityInput {
+                credential: &identity.credential,
+                roles: &identity.roles,
+                referenced,
+            })
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+
+    let signature_len = cose::signature_len(settings.signing_alg, settings.rsa_signature_len)?;
+    let generator = &settings.claim_generator_info;
+
+    let assertions: Vec<AssertionInput<'_>> = settings
+        .assertions
+        .iter()
+        .map(|a| AssertionInput {
+            label: &a.label,
+            cbor: &a.cbor,
+            kind: a.kind,
+        })
+        .collect();
+
+    let inputs = ManifestInputs {
+        manifest_label: &settings.manifest_label,
+        title: settings.title.as_deref(),
+        instance_id: &settings.instance_id,
+        generator_name: &generator.name,
+        generator_version: &generator.version,
+        assertions: &assertions,
+        signing_alg: settings.signing_alg,
+        certificates: &settings.certificates,
+        signature_len,
+        timestamp_reserve: settings.timestamp.map(|t| t.reserve_size),
+        identities: &identity_inputs,
+    };
+
+    ManifestBuilder::build_placeholder(&inputs)
 }
 
 impl Session for BuilderSession {
@@ -960,37 +554,21 @@ impl Session for BuilderSession {
     /// hand over a manifest that was never actually completed. Every later
     /// call reports [`ProtocolError::SessionFailed`].
     fn advance(&mut self) -> Result<Step, Error> {
-        if self.core.is_complete() {
-            return Ok(Step::Complete);
-        }
-
-        match self.run() {
-            Ok(step) => Ok(step),
-            Err(err) => {
-                self.core.mark_failed(self.active, &err);
-                Err(err)
-            }
-        }
+        self.workflow.advance()
     }
 
     /// Returns the requests the host has not yet fulfilled.
     fn outstanding_requests(&self) -> &[HostRequest<BuilderRequest>] {
-        self.core.outstanding_requests()
+        self.workflow.outstanding_requests()
     }
 
     fn phase(&self) -> String {
-        if let Some(failure) = self.core.failure() {
-            failure.phase.clone()
-        } else if self.core.is_complete() {
-            "Complete".into()
-        } else {
-            self.state.name().into()
-        }
+        self.workflow.phase()
     }
 
     /// Reports the outcome of one outstanding request.
     fn fulfill(&mut self, id: RequestId, reply: BuilderHostReply) -> Result<(), Error> {
-        Ok(self.core.fulfill(id, reply)?)
+        self.workflow.fulfill(id, reply)
     }
 
     /// Consumes the session and returns the completed manifest.
@@ -1000,8 +578,7 @@ impl Session for BuilderSession {
     /// [`ProtocolError::SessionFailed`] if [`Session::advance`] returned
     /// an error.
     fn finish(self) -> Result<BuilderReport, Error> {
-        self.core.finish_check()?;
-        self.report.ok_or_else(|| self.core.failed_error().into())
+        self.workflow.finish()
     }
 }
 
@@ -1011,7 +588,7 @@ impl Session for BuilderSession {
 pub struct BuilderReport {
     /// The final, signed C2PA manifest store bytes — identical to what was
     /// patched into the asset via `BuilderRequest::CommitManifest`, and
-    /// the same buffer: shared, not copied.
+    /// shared with that request rather than copied.
     pub manifest: Bytes,
 
     /// The hard binding's exclusions, as the host reported them via
@@ -1090,7 +667,7 @@ mod tests {
         assert_eq!(session.phase(), "AwaitingIdentitySignature");
 
         session
-            .core
+            .workflow
             .fulfill_unchecked(id, BuilderHostReply::ManifestCommitted);
 
         assert!(matches!(
@@ -1101,8 +678,6 @@ mod tests {
             })
         ));
 
-        // The phase that failed outlives the failure, in `phase` and in
-        // every later report.
         assert_eq!(session.phase(), "AwaitingIdentitySignature");
         match session.advance().unwrap_err() {
             Error::Protocol(ProtocolError::SessionFailed(failure)) => {
@@ -1119,33 +694,54 @@ mod tests {
         }
     }
 
+    /// The workflow's position is the compiler's, not an enum a test can
+    /// match on, so it is observed the way a host observes it: through
+    /// what is outstanding.
     #[test]
     fn a_session_whose_identity_signature_is_pending_waits_for_it() {
-        let (mut session, _id) = session_at_identity_signature();
+        let (mut session, id) = session_at_identity_signature();
 
         assert_eq!(session.advance().unwrap(), Step::AwaitHost);
         assert!(matches!(
-            session.state,
-            State::AwaitingIdentitySignature { index: 0, .. }
+            session.outstanding_requests(),
+            [HostRequest {
+                id: waiting,
+                kind: BuilderRequest::Sign {
+                    purpose: SignPurpose::Identity { .. },
+                    ..
+                },
+                ..
+            }] if *waiting == id
         ));
     }
 
-    /// The manifest the host is asked to commit and the one the report
-    /// hands back are one buffer, not two copies.
-    #[test]
-    fn the_committed_manifest_and_the_reported_one_share_a_buffer() {
-        let mut session = BuilderSession::new(BuilderSettings::new(
+    /// Picks out the request [`session_at`] stops at.
+    type Stop = fn(&BuilderRequest) -> bool;
+
+    /// Drives a timestamped session, answering everything plausibly, until
+    /// it asks for something `stop` picks out; returns the session and that
+    /// request's id.
+    fn session_at(stop: Stop) -> (BuilderSession, RequestId) {
+        let mut settings = BuilderSettings::new(
             "xmp:iid:1",
             "urn:uuid:1",
             GeneratorInfo::new("test", "1"),
             SigningAlg::Es256,
             vec![CERT.to_vec()],
-        ));
-        let mut asset = vec![0u8; 4000];
-        let mut committed = None;
+        );
+        settings.timestamp = Some(TimestampSettings::default());
 
-        while session.advance().unwrap() == Step::AwaitHost {
+        let mut session = BuilderSession::new(settings);
+        let mut asset = vec![0u8; 4000];
+
+        loop {
+            session.advance().unwrap();
+
             for request in session.outstanding_requests().to_vec() {
+                if stop(&request.kind) {
+                    return (session, request.id);
+                }
+
                 let reply = match &request.kind {
                     BuilderRequest::ReservePlaceholder { placeholder, .. } => {
                         asset.splice(100..100, placeholder.iter().copied());
@@ -1159,22 +755,152 @@ mod tests {
                     }
                     BuilderRequest::AssetBytes { range, .. } => {
                         let start = range.start as usize;
-                        BuilderHostReply::AssetBytes(Bytes::copy_from_slice(
-                            &asset[start..start + range.len as usize],
-                        ))
+                        BuilderHostReply::AssetBytes(
+                            asset[start..start + range.len as usize].to_vec().into(),
+                        )
                     }
                     BuilderRequest::Sign { .. } => BuilderHostReply::Signature(vec![0u8; 64]),
-                    BuilderRequest::CommitManifest { manifest, .. } => {
-                        committed = Some(manifest.clone());
-                        BuilderHostReply::ManifestCommitted
-                    }
+                    BuilderRequest::Timestamp { .. } => BuilderHostReply::Timestamp(vec![0u8; 16]),
                     other => panic!("unexpected request {other:?}"),
                 };
                 session.fulfill(request.id, reply).unwrap();
             }
         }
+    }
 
-        let report = session.finish().unwrap();
-        assert_eq!(report.manifest.as_ptr(), committed.unwrap().as_ptr());
+    /// Every request's own reply check — defence in depth behind
+    /// `fulfill`'s — names the reply it was waiting for.
+    #[test]
+    fn a_reply_of_the_wrong_kind_to_any_request_is_refused() {
+        let cases: [(Stop, &str); 4] = [
+            (
+                |r| matches!(r, BuilderRequest::ReservePlaceholder { .. }),
+                "PlaceholderReserved",
+            ),
+            (
+                |r| matches!(r, BuilderRequest::AssetLength { .. }),
+                "AssetLength",
+            ),
+            (|r| matches!(r, BuilderRequest::Sign { .. }), "Signature"),
+            (
+                |r| matches!(r, BuilderRequest::Timestamp { .. }),
+                "Timestamp",
+            ),
+        ];
+
+        for (stop, expected_reply) in cases {
+            let (mut session, id) = session_at(stop);
+            session
+                .workflow
+                .fulfill_unchecked(id, BuilderHostReply::ManifestCommitted);
+
+            match session.advance().unwrap_err() {
+                Error::Protocol(ProtocolError::ReplyMismatch { id: got, expected }) => {
+                    assert_eq!((got, expected), (id, expected_reply));
+                }
+                other => panic!("expected a reply mismatch, got {other:?}"),
+            }
+        }
+
+        let (mut session, id) = session_at(|r| matches!(r, BuilderRequest::CommitManifest { .. }));
+        session
+            .workflow
+            .fulfill_unchecked(id, BuilderHostReply::Signature(vec![]));
+        assert!(matches!(
+            session.advance().unwrap_err(),
+            Error::Protocol(ProtocolError::ReplyMismatch {
+                expected: "ManifestCommitted",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn an_asset_too_short_for_its_exclusions_is_refused() {
+        let (mut session, id) = session_at(|r| matches!(r, BuilderRequest::AssetLength { .. }));
+
+        session
+            .fulfill(id, BuilderHostReply::AssetLength(10))
+            .unwrap();
+
+        assert!(matches!(
+            session.advance(),
+            Err(Error::PlaceholderRangeInvalid(_))
+        ));
+    }
+
+    #[test]
+    fn host_failures_preserve_each_build_stage() {
+        let cases: [(Stop, &str); 6] = [
+            (
+                |r| matches!(r, BuilderRequest::ReservePlaceholder { .. }),
+                "AwaitingPlaceholderReserved",
+            ),
+            (
+                |r| matches!(r, BuilderRequest::AssetLength { .. }),
+                "AwaitingAssetLength",
+            ),
+            (
+                |r| matches!(r, BuilderRequest::AssetBytes { .. }),
+                "HashingAsset",
+            ),
+            (
+                |r| matches!(r, BuilderRequest::Sign { .. }),
+                "AwaitingSignature",
+            ),
+            (
+                |r| matches!(r, BuilderRequest::Timestamp { .. }),
+                "AwaitingTimestamp",
+            ),
+            (
+                |r| matches!(r, BuilderRequest::CommitManifest { .. }),
+                "AwaitingCommit",
+            ),
+        ];
+        for (stop, phase) in cases {
+            let (mut session, id) = session_at(stop);
+            assert_eq!(session.phase(), phase);
+            session
+                .fulfill(
+                    id,
+                    BuilderHostReply::Failed(crate::HostError::new("unavailable")),
+                )
+                .unwrap();
+            assert!(matches!(session.advance(), Err(Error::HostFailure { .. })));
+            assert_eq!(session.phase(), phase);
+            match session.finish().unwrap_err() {
+                Error::Protocol(ProtocolError::SessionFailed(failure)) => {
+                    assert_eq!(failure.phase, phase);
+                    assert!(failure.cause.contains("unavailable"), "{failure}");
+                }
+                other => panic!("expected SessionFailed, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn settings_without_a_certificate_fail_on_the_first_advance_and_poison_the_session() {
+        let mut session = BuilderSession::new(BuilderSettings::new(
+            "xmp:iid:1",
+            "urn:uuid:1",
+            GeneratorInfo::new("test", "1"),
+            SigningAlg::Es256,
+            vec![],
+        ));
+
+        assert!(
+            session.outstanding_requests().is_empty(),
+            "nothing runs before the first advance"
+        );
+        assert!(matches!(session.advance(), Err(Error::NoCertificates)));
+        assert_eq!(session.phase(), "Start");
+        assert!(matches!(
+            session.advance(),
+            Err(Error::Protocol(ProtocolError::SessionFailed(_)))
+        ));
+        assert!(matches!(
+            session.finish(),
+            Err(Error::Protocol(ProtocolError::SessionFailed(_)))
+        ));
     }
 }

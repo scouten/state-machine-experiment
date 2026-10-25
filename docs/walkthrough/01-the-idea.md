@@ -72,9 +72,10 @@ close to it:
   Moving it off-thread means running the session in a Worker — possible
   without changing the engine, but the host's job.
 * **Serializing a session's calls is the host's job.** Sessions are not
-  re-entrant and the Rust code puts no locks around them; a host with a
-  thread model must never call one session's methods simultaneously from
-  several threads. Crashes or unpredictable behavior are likely otherwise.
+  re-entrant; `Workflow`'s internal mailbox lock does not serialize its
+  API. A host with a thread model must never call one session's methods
+  simultaneously from several threads. Crashes or unpredictable behavior
+  are likely otherwise.
   (Calls on *different* sessions may safely run at the same time.)
 * **Debugging is not a stack trace.** When a session fails, the work that
   failed is not on the host's call stack, and an inverted control flow is
@@ -114,7 +115,11 @@ sequenceDiagram
 ```
 
 The engine crate has no C2PA logic: a request/reply vocabulary trait,
-request tracking (`SessionCore`), and a protocol-error vocabulary. Concrete
+request tracking (`SessionCore`), and a protocol-error vocabulary. A
+session's workflow can be a hand-written phase enum over `SessionCore`
+(the reader) or an `async fn` over `Workflow` that the compiler turns into
+the state machine (the builder) — polled with a no-op waker, so still no
+runtime, and the host cannot tell the difference. Concrete
 workflows (reader, builder, and the file sessions that compose them) are
 separate crates with their own request vocabularies. Sessions can *nest*:
 a session answers some of an inner session's requests itself and forwards
