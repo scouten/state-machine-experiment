@@ -1,7 +1,7 @@
 # contentauth-sans-io-core
 
-An experimental design for host-driven, sans-I/O workflows in C2PA and
-CAWG, leaving I/O, concurrency, and scheduling to the host application.
+An experimental design for host-driven, sans-I/O workflows in the C2PA and
+CAWG SDKs, leaving I/O, concurrency, and scheduling to the host application.
 
 The goal is to let a library describe work without choosing how files,
 networking, time, or signing are provided, or which threads or async runtime
