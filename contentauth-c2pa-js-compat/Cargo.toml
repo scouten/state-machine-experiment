@@ -72,6 +72,6 @@ contentauth-c2pa-format = { path = "../contentauth-c2pa-format", features = [
     "test-util",
 ] }
 # Test-only: plays the "host signer" in the round-trip test.
-c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
+c2pa_raw_crypto = { version = "0.2.0", default-features = false, features = [
     "rust_native_crypto",
 ] }

@@ -58,6 +58,6 @@ contentauth-c2pa-sign-baseline = { path = "../contentauth-c2pa-sign-baseline", f
 ] }
 # The synchronous host for the very same session, to compare against.
 contentauth-c2pa-file-builder = { path = "../contentauth-c2pa-file-builder" }
-c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
+c2pa_raw_crypto = { version = "0.2.0", default-features = false, features = [
     "rust_native_crypto",
 ] }

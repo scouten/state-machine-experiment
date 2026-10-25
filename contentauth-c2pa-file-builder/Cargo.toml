@@ -45,6 +45,6 @@ contentauth-c2pa-reader = { path = "../contentauth-c2pa-reader" }
 # Test-only signer, exactly as `contentauth-c2pa-builder`'s own tests use
 # it. See deny.toml for why its `rsa` advisory is accepted for test-only
 # use.
-c2pa_raw_crypto = { version = "0.1.2", default-features = false, features = [
+c2pa_raw_crypto = { version = "0.2.0", default-features = false, features = [
     "rust_native_crypto",
 ] }
