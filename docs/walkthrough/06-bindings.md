@@ -38,6 +38,9 @@ host arrangement: the same JS `advance`/`fulfill` driver runs inside a browser
 module Worker or Node Worker thread. A small synchronous Wasm adapter exposes
 the existing read bridge on the browser side; Node reuses Neon unchanged.
 One facade/protocol handles input snapshots, queued reads/builds, results and disposal.
+Completed signing outputs now move/shrink to an exact-length backing buffer
+and transfer to the caller instead of cloning, preserving the Uint8Array result
+and keeping spare capacity private. Internal VM shrink copies are not ruled out.
 Actual tests compare complete reports and request bytes across all three
 browsers and Node, including 64 MiB signed reads and application task progress.
 No Tokio, new domain behavior or cooperative scheduling is needed for this

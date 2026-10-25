@@ -6,6 +6,9 @@ import { createClient } from "../src/node/client.mjs";
 import { contract } from "./contract.mjs";
 import { signingContract } from "./signing.mjs";
 import { fingerprints } from "./evidence.mjs";
+import { resultOwnershipContract } from "./result-ownership.mjs";
+
+test("completed output transfers with exact backing length", resultOwnershipContract);
 
 test("Node Worker + Neon runs shared read/signing contracts end to end", async () => {
   const folder = new URL("../generated/", import.meta.url);
