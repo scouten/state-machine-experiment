@@ -51,7 +51,8 @@ pub(crate) fn build<H, S, O>(
     identity_sign: Option<&mut IdentitySignFn<'_>>,
 ) -> Result<FileBuilderReport, Error>
 where
-    H: FormatHandler + Send,
+    H: FormatHandler + Send + 'static,
+    H::PlanEmbed: Send,
     S: Read + Seek,
     O: Read + Write + Seek,
 {

@@ -39,6 +39,16 @@ into the hash. Only `Sign` and `Timestamp` ever reach the host as
 themselves: a signing key and an RFC 3161 authority round trip are not
 things this crate, or any format handler, can stand in for.
 
+Internally, this composition is an async-authored `Workflow`, not an async
+host: `Nested` drives the builder and format-planning sessions while the
+outer workflow answers or forwards each request. No runtime, I/O or thread
+is introduced. Planning requests can remain concurrently outstanding;
+asset copying and writes still proceed one bounded chunk at a time.
+Diagnostic phases include the inner builder or planning stage and remain
+available after failure. The handler must be `Send + 'static`, and its
+`PlanEmbed` operation must be `Send`, because the workflow owns them across
+host round trips.
+
 `build_and_sign` and `build_and_sign_file` are a host for exactly that
 session, for the common case: a caller with plain, synchronous
 `Read + Seek` access to the source asset, `Read + Write + Seek` access to

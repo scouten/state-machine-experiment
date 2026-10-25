@@ -20,7 +20,7 @@ flowchart LR
         d9["Canonical C API: tracked reader/build/results,<br/>independent signing buffer leases, registry formats"]
         d10["Debuggability: phase(), failure context,<br/>record / replay transcripts"]
         d11["Engine: async-fn workflows, no runtime<br/>(builder ported, with phase/failure diagnostics)"]
-        d12["Engine: Nested adapter for composing sessions<br/>inside async-fn workflows"]
+        d12["Engine: Nested adapter for composing sessions<br/>inside async-fn workflows; file builder ported"]
     end
     subgraph next["Next"]
         direction TB
@@ -159,7 +159,7 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 |---|---|
 | **Port `ReadSession` onto `Workflow`** | The builder already runs as an `async fn`; the reader is the larger test — OCSP fan-out across chains, and the recursion ingredients and remote manifests will need (`Box::pin(validate(ingredient))` instead of a stack of hand-nested sessions). |
 | **Typed replies** | `host.request(..)` still resolves to the whole reply enum, so each request's own wrong-kind check stays (in one helper now, not per state). A reply type per request would make it a compile-time fact. |
-| **Port composing sessions onto `Nested`** | The engine's adapter now handles inner-session requests, forwarding and reply translation inside an async workflow. `FileReadSession`/`FileBuilderSession` still need to adopt it in place of their hand-written translation layers. |
+| **Port `FileReadSession` onto `Nested`** | The file builder now composes its inner sessions inside an async workflow. The file reader still translates its inner session's vocabulary by hand and could adopt the same adapter. |
 
 ## Questions for discussion
 

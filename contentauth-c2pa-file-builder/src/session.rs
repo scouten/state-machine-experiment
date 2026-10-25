@@ -37,17 +37,23 @@
 //! can do on a host's behalf — ever reach this session's own host as
 //! themselves.
 
-use std::collections::{HashMap, VecDeque};
+use std::{
+    collections::VecDeque,
+    fmt,
+    future::{poll_fn, Future},
+    marker::PhantomData,
+    pin::pin,
+};
 
 use contentauth_c2pa_builder::{
     BuilderHostReply, BuilderRequest, BuilderSession, BuilderSettings, SignPurpose,
 };
-use contentauth_c2pa_format::{Edit, EmbedPlan, FormatHandler, IoReply, IoRequest};
+use contentauth_c2pa_format::{Edit, EmbedPlan, FormatHandler, FormatOp, IoReply, IoRequest};
 use contentauth_c2pa_primitives::{
     ByteRange, Bytes, HashAlgorithm, HostError, SigningAlg, StreamId,
 };
 use contentauth_state_machine::{
-    HostRequest, ProtocolError, Request, RequestId, Session, SessionCore, Step,
+    Host, HostRequest, Nested, ProtocolError, Request, RequestId, Session, Step, Workflow,
 };
 
 use crate::error::Error;
@@ -233,88 +239,6 @@ enum WriteTask {
     WriteBytes { output_offset: u64, bytes: Bytes },
 }
 
-/// A request this session has issued to its own host on a [`Sub::Writing`]
-/// task's behalf, awaiting a reply.
-enum Inflight {
-    /// Reading `source_range` before the write it feeds can be issued.
-    Read {
-        id: RequestId,
-        output_offset: u64,
-        source_range: ByteRange,
-    },
-
-    /// Writing bytes already in hand.
-    Write { id: RequestId },
-}
-
-/// What a [`Sub::Writing`] run answers, and how, once every task is done.
-enum WriteThen {
-    /// Answer the outstanding `ReservePlaceholder` with the plan's
-    /// exclusions.
-    PlaceholderReserved { exclusions: Vec<ByteRange> },
-
-    /// Answer the outstanding `CommitManifest`.
-    ManifestCommitted,
-}
-
-/// An internal sub-operation a [`FileBuilderSession`] is driving on behalf
-/// of one outstanding [`BuilderRequest`], without surfacing it to its own
-/// host as anything but the plain `Read`/`Length`/`Write` requests that
-/// sub-operation actually needs.
-enum Sub<H: FormatHandler> {
-    /// Driving `handler.plan_embed`, forwarding its [`IoRequest`]s to this
-    /// session's own host against [`FileBuilderSession::SOURCE_STREAM`].
-    /// `pending` maps a forwarded request's outer id back to `op`'s own —
-    /// the same translation-layer shape as [`FileBuilderSession::pending`],
-    /// scoped to this one sub-operation instead.
-    Planning {
-        op: H::PlanEmbed,
-        placeholder: Bytes,
-        request: RequestId,
-        pending: HashMap<RequestId, RequestId>,
-    },
-
-    /// Confirming the plan `plan_embed` returned actually holds together
-    /// before walking its edits: a handler answers only through
-    /// [`EmbedPlan::new`], not [`EmbedPlan::splice`]'s own validation, so
-    /// nothing has necessarily checked it yet. Awaits one
-    /// [`FileBuilderRequest::Length`] against
-    /// [`FileBuilderSession::SOURCE_STREAM`] to learn the source length
-    /// [`EmbedPlan::check`] needs.
-    Validating {
-        plan: EmbedPlan,
-        placeholder: Bytes,
-        request: RequestId,
-        length_request: RequestId,
-    },
-
-    /// Writing a queued sequence of output ranges to
-    /// [`FileBuilderSession::OUTPUT_STREAM`], one at a time.
-    Writing {
-        tasks: VecDeque<WriteTask>,
-        inflight: Option<Inflight>,
-        request: RequestId,
-        then: WriteThen,
-    },
-}
-
-/// Where a [`FileBuilderSession`] is in its workflow.
-enum Phase<H: FormatHandler> {
-    /// Driving the inner [`BuilderSession`]. `plan` is cached from the
-    /// moment a placeholder is reserved, since `CommitManifest` needs it
-    /// again; `sub` holds whichever internal sub-operation is in progress
-    /// answering `ReservePlaceholder` or `CommitManifest`, or `None` while
-    /// this session is simply forwarding everything else.
-    Building {
-        session: Box<BuilderSession>,
-        plan: Option<EmbedPlan>,
-        sub: Option<Sub<H>>,
-    },
-
-    /// The workflow has finished.
-    Done(FileBuilderReport),
-}
-
 /// Builds and signs a C2PA manifest store, for any container format with a
 /// [`FormatHandler`], without performing any I/O itself beyond what only
 /// its host can do: reading the source asset, writing the output asset,
@@ -329,41 +253,26 @@ enum Phase<H: FormatHandler> {
 /// workspace can do on a host's behalf — are forwarded, as
 /// [`FileBuilderRequest::Sign`] and [`FileBuilderRequest::Timestamp`].
 ///
+/// The whole composition is one `async fn` run by a [`Workflow`]: the
+/// [`BuilderSession`] and the handler's `plan_embed` operation are each
+/// driven through a [`Nested`] adapter, so answering one of the builder's
+/// requests with a sub-operation of several host round trips is an
+/// ordinary `.await` rather than a phase of a hand-written state machine.
+///
 /// See the crate-level docs for why this exists alongside
 /// [`crate::build_and_sign`]: a host with only synchronous, local
 /// `Read + Seek` / `Read + Write + Seek` access (and a plain signing
 /// function) can use that convenience function instead of driving this
 /// session by hand.
-pub struct FileBuilderSession<H: FormatHandler + Send> {
-    core: SessionCore<FileBuilderRequest>,
+pub struct FileBuilderSession<H: FormatHandler> {
+    workflow: Workflow<FileBuilderRequest, FileBuilderReport, Error>,
 
-    /// Maps a request this session issued to its own host (the key) back
-    /// to the [`BuilderSession`] request it stands in for (the value).
-    /// Only ever holds `AssetLength`/`AssetBytes`/`Sign`/`Timestamp`
-    /// pairs: `ReservePlaceholder` and `CommitManifest` are answered
-    /// through [`Sub`] instead, since resolving either takes more than
-    /// one host round trip.
-    pending: HashMap<RequestId, RequestId>,
-
-    handler: H,
-    phase: Option<Phase<H>>,
-
-    /// [`Session::phase`]'s answer as of the start of the current pass of
-    /// `advance`'s loop, captured before `phase` is taken out so a failure
-    /// can still be blamed on the phase it happened in.
-    active: String,
+    /// The handler is moved into the workflow; this only keeps the type
+    /// parameter callers already name.
+    handler: PhantomData<fn() -> H>,
 }
 
-/// The outer phase every [`FileBuilderSession`] phase name starts with
-/// while the inner [`BuilderSession`] is still running.
-const BUILDING: &str = "Building";
-
-/// `outer > inner`, the way [`Session::phase`] joins nested phases.
-fn nested<S: Session + ?Sized>(outer: &str, inner: &S) -> String {
-    format!("{outer} > {}", inner.phase())
-}
-
-impl<H: FormatHandler + Send> FileBuilderSession<H> {
+impl<H: FormatHandler> FileBuilderSession<H> {
     /// The stream id this session uses on its own `Read`/`Length`/`Write`
     /// requests for the asset it is assembling. A host must be able to
     /// read back whatever it has already been asked to write here: the
@@ -373,657 +282,335 @@ impl<H: FormatHandler + Send> FileBuilderSession<H> {
     /// The stream id this session uses on its own `Read`/`Length`
     /// requests for the source asset — read-only, and never written to.
     pub const SOURCE_STREAM: StreamId = SOURCE;
+}
 
+impl<H> FileBuilderSession<H>
+where
+    H: FormatHandler + Send + 'static,
+    H::PlanEmbed: Send,
+{
     /// Starts a new session: builds and signs a manifest per `settings`
     /// for the asset `handler` locates on [`Self::SOURCE_STREAM`],
     /// writing the result to [`Self::OUTPUT_STREAM`].
     pub fn new(handler: H, settings: BuilderSettings) -> Self {
         Self {
-            core: SessionCore::default(),
-            pending: HashMap::new(),
-            handler,
-            phase: Some(Phase::Building {
-                session: Box::new(BuilderSession::new(settings)),
-                plan: None,
-                sub: None,
+            workflow: Workflow::new(|host| {
+                host.set_phase("Building > Start");
+                build_file(host, handler, settings)
             }),
-            active: String::new(),
+            handler: PhantomData,
         }
-    }
-
-    /// Where this session is, not counting a recorded failure — see
-    /// [`Session::phase`].
-    fn describe(&self) -> String {
-        match &self.phase {
-            None => "Poisoned".to_string(),
-            Some(Phase::Done(_)) => "Complete".to_string(),
-            Some(Phase::Building { session, sub, .. }) => match sub {
-                None => nested(BUILDING, &**session),
-                Some(Sub::Planning { op, .. }) => {
-                    format!("{BUILDING} > Planning > {}", op.phase())
-                }
-                Some(Sub::Validating { .. }) => format!("{BUILDING} > Validating"),
-                Some(Sub::Writing { .. }) => format!("{BUILDING} > Writing"),
-            },
-        }
-    }
-
-    /// Removes and returns every reply this session's host has provided
-    /// for a currently pending request, paired with the
-    /// [`BuilderSession`] request it answers.
-    fn ready_replies(&mut self) -> Vec<(RequestId, FileBuilderReply)> {
-        let outer_ids: Vec<RequestId> = self.pending.keys().copied().collect();
-        let mut ready = Vec::new();
-
-        for outer_id in outer_ids {
-            if let Some(reply) = self.core.take_reply(outer_id) {
-                if let Some(inner_id) = self.pending.remove(&outer_id) {
-                    ready.push((inner_id, reply));
-                }
-            }
-        }
-
-        ready
-    }
-
-    /// True if `inner_id` already has a host request pending for it.
-    fn already_pending(&self, inner_id: RequestId) -> bool {
-        self.pending.values().any(|&id| id == inner_id)
-    }
-
-    /// Marks this session failed if `result` is an error, so `self.core`
-    /// never disagrees with the workflow this session has actually
-    /// abandoned — see [`crate`] for why every fallible call in `advance`
-    /// after `self.phase.take()` is routed through this.
-    fn poisoning<T, E: Into<Error>>(&mut self, result: Result<T, E>) -> Result<T, Error> {
-        result.map_err(|err| {
-            let err = err.into();
-            self.core.mark_failed(self.active.clone(), &err);
-            err
-        })
-    }
-
-    /// [`Self::poisoning`] for a call into the inner [`BuilderSession`],
-    /// which knows better than this session's own snapshot where inside
-    /// it the call failed.
-    fn poisoning_inner<T, E: Into<Error>>(
-        &mut self,
-        session: &BuilderSession,
-        result: Result<T, E>,
-    ) -> Result<T, Error> {
-        if result.is_err() {
-            self.active = nested(BUILDING, session);
-        }
-        self.poisoning(result)
     }
 }
 
-impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
+impl<H: FormatHandler> fmt::Debug for FileBuilderSession<H> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FileBuilderSession")
+            .field("workflow", &self.workflow)
+            .finish()
+    }
+}
+
+impl<H: FormatHandler> Session for FileBuilderSession<H> {
     type Error = Error;
     type Output = FileBuilderReport;
     type Request = FileBuilderRequest;
 
     fn advance(&mut self) -> Result<Step, Error> {
-        loop {
-            self.active = self.describe();
-            match self.phase.take() {
-                None => {
-                    self.core.mark_failed("", &"session state was lost");
-                    return Err(self.core.failed_error().into());
-                }
-
-                Some(Phase::Building {
-                    session,
-                    plan,
-                    sub:
-                        Some(Sub::Planning {
-                            op,
-                            placeholder,
-                            request,
-                            pending,
-                        }),
-                }) => {
-                    let result =
-                        step_planning::<H>(&mut self.core, op, placeholder, request, pending);
-                    match self.poisoning(result)? {
-                        PlanningStep::AwaitHost(sub) => {
-                            self.phase = Some(Phase::Building {
-                                session,
-                                plan,
-                                sub: Some(sub),
-                            });
-                            return Ok(Step::AwaitHost);
-                        }
-
-                        PlanningStep::Done {
-                            plan,
-                            placeholder,
-                            request,
-                        } => {
-                            let length_request = self
-                                .core
-                                .issue(FileBuilderRequest::Length { stream: SOURCE });
-                            let sub = Some(Sub::Validating {
-                                plan,
-                                placeholder,
-                                request,
-                                length_request,
-                            });
-                            self.phase = Some(Phase::Building {
-                                session,
-                                plan: None,
-                                sub,
-                            });
-                            continue;
-                        }
-                    }
-                }
-
-                Some(Phase::Building {
-                    session,
-                    plan: _,
-                    sub:
-                        Some(Sub::Validating {
-                            plan,
-                            placeholder,
-                            request,
-                            length_request,
-                        }),
-                }) => {
-                    let result = step_validating::<H>(
-                        &mut self.core,
-                        plan,
-                        placeholder,
-                        request,
-                        length_request,
-                    );
-                    match self.poisoning(result)? {
-                        ValidatingStep::AwaitHost(sub) => {
-                            self.phase = Some(Phase::Building {
-                                session,
-                                plan: None,
-                                sub: Some(sub),
-                            });
-                            return Ok(Step::AwaitHost);
-                        }
-
-                        ValidatingStep::Done {
-                            plan: embed_plan,
-                            tasks,
-                            request,
-                            exclusions,
-                        } => {
-                            let plan = Some(embed_plan);
-                            let sub = Some(Sub::Writing {
-                                tasks,
-                                inflight: None,
-                                request,
-                                then: WriteThen::PlaceholderReserved { exclusions },
-                            });
-                            self.phase = Some(Phase::Building { session, plan, sub });
-                            continue;
-                        }
-                    }
-                }
-
-                Some(Phase::Building {
-                    mut session,
-                    plan,
-                    sub:
-                        Some(Sub::Writing {
-                            tasks,
-                            inflight,
-                            request,
-                            then,
-                        }),
-                }) => {
-                    let result = step_writing::<H>(&mut self.core, tasks, inflight, request, then);
-                    match self.poisoning(result)? {
-                        WritingStep::AwaitHost(sub) => {
-                            self.phase = Some(Phase::Building {
-                                session,
-                                plan,
-                                sub: Some(sub),
-                            });
-                            return Ok(Step::AwaitHost);
-                        }
-
-                        WritingStep::Done { request, then } => {
-                            let reply = match then {
-                                WriteThen::PlaceholderReserved { exclusions } => {
-                                    BuilderHostReply::PlaceholderReserved(exclusions)
-                                }
-                                WriteThen::ManifestCommitted => BuilderHostReply::ManifestCommitted,
-                            };
-                            let result = session.fulfill(request, reply);
-                            self.poisoning_inner(&session, result)?;
-                            self.phase = Some(Phase::Building {
-                                session,
-                                plan,
-                                sub: None,
-                            });
-                            continue;
-                        }
-                    }
-                }
-
-                Some(Phase::Building {
-                    mut session,
-                    plan,
-                    sub: None,
-                }) => {
-                    for (id, reply) in self.ready_replies() {
-                        let translated = to_builder_host_reply(reply);
-                        let result = session.fulfill(id, translated);
-                        self.poisoning_inner(&session, result)?;
-                    }
-
-                    let result = session.advance();
-                    let step = self.poisoning_inner(&session, result)?;
-
-                    if step == Step::Complete {
-                        self.active = nested(BUILDING, &*session);
-                        let report = self.poisoning(session.finish())?;
-                        self.core.mark_complete();
-                        self.phase = Some(Phase::Done(FileBuilderReport {
-                            manifest: report.manifest,
-                            exclusions: report.exclusions,
-                        }));
-                        return Ok(Step::Complete);
-                    }
-
-                    let mut sub = None;
-                    let mut answered_internally = false;
-
-                    for request in session.outstanding_requests().to_vec() {
-                        if self.already_pending(request.id) {
-                            continue;
-                        }
-
-                        match &request.kind {
-                            BuilderRequest::ReservePlaceholder { placeholder, .. } => {
-                                let op = self.handler.plan_embed(SOURCE, placeholder.len() as u64);
-                                sub = Some(Sub::Planning {
-                                    op,
-                                    placeholder: placeholder.clone(),
-                                    request: request.id,
-                                    pending: HashMap::new(),
-                                });
-                                answered_internally = true;
-                                // `ReservePlaceholder` is always issued alone.
-                                break;
-                            }
-
-                            // Answered from the plan itself, not the host:
-                            // an output length only this session already
-                            // knows for certain is the length the hard
-                            // binding must cover, whatever the host's
-                            // stream happens to physically be — asking the
-                            // host instead would let a stream reused (or
-                            // simply longer than needed) from an earlier
-                            // build leak trailing bytes into the hash.
-                            BuilderRequest::AssetLength { .. } => {
-                                let result =
-                                    plan.as_ref()
-                                        .and_then(EmbedPlan::output_len)
-                                        .ok_or(Error::Invariant(
-                                        "AssetLength asked for before ReservePlaceholder, or the \
-                                         plan's output length overflows",
-                                    ));
-                                let len = self.poisoning(result)?;
-                                let result =
-                                    session.fulfill(request.id, BuilderHostReply::AssetLength(len));
-                                self.poisoning_inner(&session, result)?;
-                                answered_internally = true;
-                            }
-
-                            BuilderRequest::AssetBytes { range, .. } => {
-                                let outer = self.core.issue(FileBuilderRequest::Read {
-                                    stream: OUTPUT,
-                                    range: *range,
-                                });
-                                self.pending.insert(outer, request.id);
-                            }
-
-                            BuilderRequest::Sign { purpose, alg, data } => {
-                                let outer = self.core.issue(FileBuilderRequest::Sign {
-                                    purpose: purpose.clone(),
-                                    alg: *alg,
-                                    data: data.clone(),
-                                });
-                                self.pending.insert(outer, request.id);
-                            }
-
-                            BuilderRequest::Timestamp { digest, hash_alg } => {
-                                let outer = self.core.issue(FileBuilderRequest::Timestamp {
-                                    digest: digest.clone(),
-                                    hash_alg: *hash_alg,
-                                });
-                                self.pending.insert(outer, request.id);
-                            }
-
-                            BuilderRequest::CommitManifest { manifest, .. } => {
-                                let result = (|| {
-                                    let plan_ref = plan.as_ref().ok_or(Error::Invariant(
-                                        "CommitManifest asked for before ReservePlaceholder",
-                                    ))?;
-                                    tasks_for_commit(&self.handler, plan_ref, manifest)
-                                })();
-                                let tasks = self.poisoning(result)?;
-                                sub = Some(Sub::Writing {
-                                    tasks,
-                                    inflight: None,
-                                    request: request.id,
-                                    then: WriteThen::ManifestCommitted,
-                                });
-                                answered_internally = true;
-                                // `CommitManifest` is always issued alone.
-                                break;
-                            }
-
-                            // Unreachable with today's `BuilderRequest`;
-                            // kept for `#[non_exhaustive]` forward
-                            // compatibility, matching
-                            // `contentauth-c2pa-file-reader`'s own
-                            // fallback for the same situation.
-                            _ => {
-                                let result = session.fulfill(
-                                    request.id,
-                                    BuilderHostReply::Failed(HostError::new("unsupported request")),
-                                );
-                                self.poisoning_inner(&session, result)?;
-                                answered_internally = true;
-                            }
-                        }
-                    }
-
-                    self.phase = Some(Phase::Building { session, plan, sub });
-
-                    if answered_internally {
-                        continue;
-                    }
-                    return Ok(Step::AwaitHost);
-                }
-
-                Some(Phase::Done(report)) => {
-                    self.phase = Some(Phase::Done(report));
-                    return Ok(Step::Complete);
-                }
-            }
-        }
+        self.workflow.advance()
     }
 
     fn outstanding_requests(&self) -> &[HostRequest<FileBuilderRequest>] {
-        self.core.outstanding_requests()
+        self.workflow.outstanding_requests()
     }
 
     fn fulfill(&mut self, id: RequestId, reply: FileBuilderReply) -> Result<(), Error> {
-        Ok(self.core.fulfill(id, reply)?)
+        self.workflow.fulfill(id, reply)
     }
 
     fn phase(&self) -> String {
-        match self.core.failure() {
-            Some(failure) => failure.phase.clone(),
-            None => self.describe(),
-        }
+        self.workflow.phase()
     }
 
     fn finish(self) -> Result<FileBuilderReport, Error> {
-        self.core.finish_check()?;
-        match self.phase {
-            Some(Phase::Done(report)) => Ok(report),
-            _ => Err(ProtocolError::SessionNotComplete.into()),
-        }
+        self.workflow.finish()
     }
 }
 
-/// The result of one [`step_planning`] call.
-enum PlanningStep<H: FormatHandler> {
-    /// Still in progress; this is the sub-operation's next state.
-    AwaitHost(Sub<H>),
+/// The whole composition: runs a [`BuilderSession`], answering each of its
+/// requests either here or by forwarding it to this session's own host.
+///
+/// `handler` is only ever borrowed between `.await`s — `plan_embed` and
+/// `commit` are both synchronous — so it need not be `Sync` for the
+/// workflow to be `Send`.
+async fn build_file<H: FormatHandler>(
+    host: Host<FileBuilderRequest>,
+    handler: H,
+    settings: BuilderSettings,
+) -> Result<FileBuilderReport, Error> {
+    let mut builder = Nested::new(BuilderSession::new(settings));
 
-    /// `plan_embed` finished with a plan matching the placeholder's
-    /// length. Not yet trusted for anything more than that: the next
-    /// step is [`Sub::Validating`], not [`Sub::Writing`], since nothing
-    /// has checked the plan's edits actually hold together.
-    Done {
-        plan: EmbedPlan,
-        placeholder: Bytes,
-        request: RequestId,
-    },
-}
+    // Set once the placeholder is reserved; `AssetLength` and
+    // `CommitManifest` both need it again.
+    let mut plan: Option<EmbedPlan> = None;
 
-/// Drives one round of [`Sub::Planning`]: feeds it any replies its
-/// forwarded [`IoRequest`]s have received, advances it, and forwards
-/// whatever it asks for next.
-fn step_planning<H: FormatHandler>(
-    core: &mut SessionCore<FileBuilderRequest>,
-    mut op: H::PlanEmbed,
-    placeholder: Bytes,
-    request: RequestId,
-    mut pending: HashMap<RequestId, RequestId>,
-) -> Result<PlanningStep<H>, Error> {
-    let outer_ids: Vec<RequestId> = pending.keys().copied().collect();
-    for outer_id in outer_ids {
-        if let Some(reply) = core.take_reply(outer_id) {
-            if let Some(inner_id) = pending.remove(&outer_id) {
-                op.fulfill(inner_id, to_io_reply(reply))?;
+    while let Some(request) = next(&host, &mut builder, "Building").await? {
+        let id = request.id;
+
+        match request.kind {
+            BuilderRequest::ReservePlaceholder { placeholder, .. } => {
+                let op = handler.plan_embed(SOURCE, placeholder.len() as u64);
+                let reserved = reserve_placeholder(&host, op, &placeholder).await?;
+                let exclusions = reserved.exclusions.clone();
+                plan = Some(reserved);
+                builder.fulfill(id, BuilderHostReply::PlaceholderReserved(exclusions))?;
             }
+
+            // Answered from the plan itself, not the host: an output length
+            // only this session already knows for certain is the length the
+            // hard binding must cover, whatever the host's stream happens to
+            // physically be — asking the host instead would let a stream
+            // reused (or simply longer than needed) from an earlier build
+            // leak trailing bytes into the hash.
+            BuilderRequest::AssetLength { .. } => {
+                let len = plan
+                    .as_ref()
+                    .and_then(EmbedPlan::output_len)
+                    .ok_or(Error::Invariant(
+                        "AssetLength asked for before ReservePlaceholder, or the plan's output \
+                         length overflows",
+                    ))?;
+                builder.fulfill(id, BuilderHostReply::AssetLength(len))?;
+            }
+
+            BuilderRequest::AssetBytes { range, .. } => builder.forward(
+                id,
+                host.request(FileBuilderRequest::Read {
+                    stream: OUTPUT,
+                    range,
+                }),
+                to_builder_host_reply,
+            ),
+
+            BuilderRequest::Sign { purpose, alg, data } => builder.forward(
+                id,
+                host.request(FileBuilderRequest::Sign { purpose, alg, data }),
+                to_builder_host_reply,
+            ),
+
+            BuilderRequest::Timestamp { digest, hash_alg } => builder.forward(
+                id,
+                host.request(FileBuilderRequest::Timestamp { digest, hash_alg }),
+                to_builder_host_reply,
+            ),
+
+            BuilderRequest::CommitManifest { manifest, .. } => {
+                host.set_phase("Building > Committing");
+                let plan = plan.as_ref().ok_or(Error::Invariant(
+                    "CommitManifest asked for before ReservePlaceholder",
+                ))?;
+                let tasks = tasks_for_commit(&handler, plan, &manifest)?;
+                write_all(&host, tasks).await?;
+                builder.fulfill(id, BuilderHostReply::ManifestCommitted)?;
+            }
+
+            // Unreachable with today's `BuilderRequest`; kept for
+            // `#[non_exhaustive]` forward compatibility, matching
+            // `contentauth-c2pa-file-reader`'s own fallback for the same
+            // situation.
+            _ => builder.fulfill(
+                id,
+                BuilderHostReply::Failed(HostError::new("unsupported request")),
+            )?,
         }
     }
 
-    if op.advance()? == Step::Complete {
-        let embed_plan = op.finish()?;
-
-        if placeholder.len() as u64 != embed_plan.manifest_len {
-            return Err(Error::Invariant(
-                "plan_embed's plan does not match the placeholder's length",
-            ));
-        }
-
-        return Ok(PlanningStep::Done {
-            plan: embed_plan,
-            placeholder,
-            request,
-        });
-    }
-
-    for io_request in op.outstanding_requests().to_vec() {
-        if pending.values().any(|&id| id == io_request.id) {
-            continue;
-        }
-
-        match &io_request.kind {
-            IoRequest::Read { range, .. } => {
-                let outer = core.issue(FileBuilderRequest::Read {
-                    stream: SOURCE,
-                    range: *range,
-                });
-                pending.insert(outer, io_request.id);
-            }
-
-            IoRequest::Length { .. } => {
-                let outer = core.issue(FileBuilderRequest::Length { stream: SOURCE });
-                pending.insert(outer, io_request.id);
-            }
-
-            // Unreachable with today's `IoRequest`; see
-            // `contentauth-c2pa-file-reader`'s identical fallback.
-            _ => {
-                op.fulfill(
-                    io_request.id,
-                    IoReply::Failed(HostError::new("unsupported request")),
-                )?;
-            }
-        }
-    }
-
-    Ok(PlanningStep::AwaitHost(Sub::Planning {
-        op,
-        placeholder,
-        request,
-        pending,
-    }))
-}
-
-/// The result of one [`step_validating`] call.
-enum ValidatingStep<H: FormatHandler> {
-    /// Still in progress; this is the sub-operation's next state.
-    AwaitHost(Sub<H>),
-
-    /// The plan checks out. `tasks` lays out the planned placeholder
-    /// embedding, ready for [`Sub::Writing`].
-    Done {
-        plan: EmbedPlan,
-        tasks: VecDeque<WriteTask>,
-        request: RequestId,
-        exclusions: Vec<ByteRange>,
-    },
-}
-
-/// Drives one round of [`Sub::Validating`]: once the source length this
-/// session asked for arrives, runs [`EmbedPlan::check`] against it — the
-/// validation every consumer of a plan relies on, which nothing has
-/// necessarily done yet for a plan built by hand rather than through
-/// [`EmbedPlan::splice`] — before ever indexing into it.
-fn step_validating<H: FormatHandler>(
-    core: &mut SessionCore<FileBuilderRequest>,
-    plan: EmbedPlan,
-    placeholder: Bytes,
-    request: RequestId,
-    length_request: RequestId,
-) -> Result<ValidatingStep<H>, Error> {
-    let Some(source_len) = take_length(core, length_request)? else {
-        return Ok(ValidatingStep::AwaitHost(Sub::Validating {
-            plan,
-            placeholder,
-            request,
-            length_request,
-        }));
-    };
-
-    plan.check(source_len)?;
-
-    let exclusions = plan.exclusions.clone();
-    let tasks = tasks_for_edits(&plan.edits, &placeholder)?;
-    Ok(ValidatingStep::Done {
-        plan,
-        tasks,
-        request,
-        exclusions,
+    let report = builder.finish()?;
+    Ok(FileBuilderReport {
+        manifest: report.manifest,
+        exclusions: report.exclusions,
     })
 }
 
-/// The result of one [`step_writing`] call.
-enum WritingStep<H: FormatHandler> {
-    /// Still in progress; this is the sub-operation's next state.
-    AwaitHost(Sub<H>),
-
-    /// Every task is written.
-    Done { request: RequestId, then: WriteThen },
+/// Refreshes the enclosing phase after every inner poll, including a
+/// pending or failed one. `Nested::next` keeps its progress in the adapter,
+/// so dropping this temporary future between polls does not lose requests.
+async fn next<S>(
+    host: &Host<FileBuilderRequest>,
+    session: &mut Nested<S, FileBuilderRequest>,
+    phase: &str,
+) -> Result<Option<HostRequest<S::Request>>, S::Error>
+where
+    S: Session,
+    S::Request: Clone,
+{
+    poll_fn(|cx| {
+        let poll = {
+            let mut next = pin!(session.next());
+            next.as_mut().poll(cx)
+        };
+        host.set_phase(format!("{phase} > {}", session.phase()));
+        poll
+    })
+    .await
 }
 
-/// Drives one round of [`Sub::Writing`]: resolves whatever request is
-/// currently inflight, then issues the next task's request.
-fn step_writing<H: FormatHandler>(
-    core: &mut SessionCore<FileBuilderRequest>,
-    mut tasks: VecDeque<WriteTask>,
-    inflight: Option<Inflight>,
-    request: RequestId,
-    then: WriteThen,
-) -> Result<WritingStep<H>, Error> {
-    match inflight {
-        // A task's `Read` has resolved: issue the `Write` it feeds and
-        // await that instead — the next queued task, if any, waits its
-        // turn.
-        Some(Inflight::Read {
-            id,
-            output_offset,
-            source_range,
-        }) => {
-            return match take_bytes(core, id, source_range)? {
-                None => Ok(WritingStep::AwaitHost(Sub::Writing {
-                    tasks,
-                    inflight: Some(Inflight::Read {
-                        id,
-                        output_offset,
-                        source_range,
-                    }),
-                    request,
-                    then,
-                })),
-                Some(bytes) => {
-                    let write_id = core.issue(FileBuilderRequest::Write {
-                        stream: OUTPUT,
-                        offset: output_offset,
-                        bytes,
-                    });
-                    Ok(WritingStep::AwaitHost(Sub::Writing {
-                        tasks,
-                        inflight: Some(Inflight::Write { id: write_id }),
-                        request,
-                        then,
-                    }))
-                }
-            };
-        }
+/// Answers a `ReservePlaceholder`: plans the embedding with `op` (a
+/// handler's `plan_embed` operation), then writes it out.
+async fn reserve_placeholder<Op: FormatOp<EmbedPlan>>(
+    host: &Host<FileBuilderRequest>,
+    op: Op,
+    placeholder: &Bytes,
+) -> Result<EmbedPlan, Error> {
+    let plan = plan_embed(host, op).await?;
 
-        // A task's `Write` is still outstanding: await it before moving
-        // on to the next task.
-        Some(Inflight::Write { id }) if take_write_ack(core, id)?.is_none() => {
-            return Ok(WritingStep::AwaitHost(Sub::Writing {
-                tasks,
-                inflight: Some(Inflight::Write { id }),
-                request,
-                then,
-            }));
-        }
-        Some(Inflight::Write { .. }) => {}
-
-        // Nothing was in flight: ready to issue the first/next task.
-        None => {}
+    if placeholder.len() as u64 != plan.manifest_len {
+        return Err(Error::Invariant(
+            "plan_embed's plan does not match the placeholder's length",
+        ));
     }
 
-    match tasks.pop_front() {
-        None => Ok(WritingStep::Done { request, then }),
+    write_plan(host, plan, placeholder).await
+}
 
-        Some(WriteTask::CopyFromSource {
-            output_offset,
-            source_range,
-        }) => {
-            let id = core.issue(FileBuilderRequest::Read {
-                stream: SOURCE,
-                range: source_range,
-            });
-            Ok(WritingStep::AwaitHost(Sub::Writing {
-                tasks,
-                inflight: Some(Inflight::Read {
-                    id,
-                    output_offset,
-                    source_range,
+/// Runs a handler's `plan_embed` operation, forwarding every read it needs
+/// to [`FileBuilderSession::SOURCE_STREAM`].
+async fn plan_embed<Op: FormatOp<EmbedPlan>>(
+    host: &Host<FileBuilderRequest>,
+    op: Op,
+) -> Result<EmbedPlan, Error> {
+    let mut op = Nested::new(op);
+
+    while let Some(request) = next(host, &mut op, "Building > Planning").await? {
+        match request.kind {
+            IoRequest::Read { range, .. } => op.forward(
+                request.id,
+                host.request(FileBuilderRequest::Read {
+                    stream: SOURCE,
+                    range,
                 }),
-                request,
-                then,
-            }))
-        }
+                to_io_reply,
+            ),
 
-        Some(WriteTask::WriteBytes {
-            output_offset,
-            bytes,
-        }) => {
-            let id = core.issue(FileBuilderRequest::Write {
-                stream: OUTPUT,
-                offset: output_offset,
-                bytes,
-            });
-            Ok(WritingStep::AwaitHost(Sub::Writing {
-                tasks,
-                inflight: Some(Inflight::Write { id }),
-                request,
-                then,
-            }))
+            IoRequest::Length { .. } => op.forward(
+                request.id,
+                host.request(FileBuilderRequest::Length { stream: SOURCE }),
+                to_io_reply,
+            ),
+
+            // Unreachable with today's `IoRequest`; see
+            // `contentauth-c2pa-file-reader`'s identical fallback.
+            _ => op.fulfill(
+                request.id,
+                IoReply::Failed(HostError::new("unsupported request")),
+            )?,
         }
     }
+
+    Ok(op.finish()?)
+}
+
+/// Confirms `plan` actually holds together before walking its edits — a
+/// handler answers only through [`EmbedPlan::new`], not
+/// [`EmbedPlan::splice`]'s own validation, so nothing has necessarily
+/// checked it yet — then writes the planned output, with `placeholder` in
+/// its slots.
+async fn write_plan(
+    host: &Host<FileBuilderRequest>,
+    plan: EmbedPlan,
+    placeholder: &Bytes,
+) -> Result<EmbedPlan, Error> {
+    host.set_phase("Building > Validating");
+    let source_len = ask(
+        host,
+        FileBuilderRequest::Length { stream: SOURCE },
+        "Length",
+        |reply| match reply {
+            FileBuilderReply::Length(len) => Some(len),
+            _ => None,
+        },
+    )
+    .await?;
+
+    plan.check(source_len)?;
+    write_all(host, tasks_for_edits(&plan.edits, placeholder)?).await?;
+    Ok(plan)
+}
+
+/// Performs `tasks` in order, one host round trip at a time: never more
+/// than one chunk of the asset is in memory.
+async fn write_all(
+    host: &Host<FileBuilderRequest>,
+    tasks: VecDeque<WriteTask>,
+) -> Result<(), Error> {
+    host.set_phase("Building > Writing");
+    for task in tasks {
+        let (offset, bytes) = match task {
+            WriteTask::CopyFromSource {
+                output_offset,
+                source_range,
+            } => (output_offset, read_source(host, source_range).await?),
+
+            WriteTask::WriteBytes {
+                output_offset,
+                bytes,
+            } => (output_offset, bytes),
+        };
+
+        ask(
+            host,
+            FileBuilderRequest::Write {
+                stream: OUTPUT,
+                offset,
+                bytes,
+            },
+            "Written",
+            |reply| matches!(reply, FileBuilderReply::Written).then_some(()),
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
+/// Reads exactly `range` of [`FileBuilderSession::SOURCE_STREAM`].
+async fn read_source(host: &Host<FileBuilderRequest>, range: ByteRange) -> Result<Bytes, Error> {
+    let bytes = ask(
+        host,
+        FileBuilderRequest::Read {
+            stream: SOURCE,
+            range,
+        },
+        "Bytes",
+        |reply| match reply {
+            FileBuilderReply::Bytes(bytes) => Some(bytes),
+            _ => None,
+        },
+    )
+    .await?;
+
+    let actual = bytes.len() as u64;
+    if actual != range.len {
+        return Err(Error::ReadLengthMismatch { range, actual });
+    }
+    Ok(bytes)
+}
+
+/// Asks the host for something and waits for the answer, turning a
+/// [`FileBuilderReply::Failed`] into [`Error::HostFailure`] and a reply of
+/// the wrong kind (which `fulfill` should already have refused) into
+/// [`ProtocolError::ReplyMismatch`].
+async fn ask<T>(
+    host: &Host<FileBuilderRequest>,
+    request: FileBuilderRequest,
+    expected: &'static str,
+    pick: impl FnOnce(FileBuilderReply) -> Option<T>,
+) -> Result<T, Error> {
+    host.ask(request, |id, reply| match reply {
+        FileBuilderReply::Failed(source) => Err(Error::HostFailure { id, source }),
+        reply => pick(reply).ok_or_else(|| ProtocolError::ReplyMismatch { id, expected }.into()),
+    })
+    .await
 }
 
 /// The most this session ever asks a host to read from the source (or
@@ -1178,7 +765,7 @@ fn to_io_reply(reply: FileBuilderReply) -> IoReply {
         FileBuilderReply::Length(len) => IoReply::Length(len),
         FileBuilderReply::Failed(err) => IoReply::Failed(err),
 
-        // `SessionCore::fulfill` validates a reply against
+        // `Workflow::fulfill` validates a reply against
         // `FileBuilderRequest::accepts` before this function ever sees
         // it, and only `Read`/`Length` requests are ever forwarded to
         // `plan_embed`'s operation — kept for exhaustiveness.
@@ -1211,84 +798,12 @@ fn to_builder_host_reply(reply: FileBuilderReply) -> BuilderHostReply {
     }
 }
 
-/// Consumes the reply to a [`FileBuilderRequest::Length`], if the host has
-/// provided one.
-fn take_length(
-    core: &mut SessionCore<FileBuilderRequest>,
-    id: RequestId,
-) -> Result<Option<u64>, Error> {
-    match core.take_reply(id) {
-        None => Ok(None),
-        Some(FileBuilderReply::Length(len)) => Ok(Some(len)),
-        Some(FileBuilderReply::Failed(source)) => Err(Error::HostFailure { id, source }),
-
-        // `RequestTracker::fulfill` rejects a reply that does not match
-        // `FileBuilderRequest::accepts` before it is ever stored, so this
-        // arm is unreachable in practice; kept as defense in depth.
-        Some(_) => Err(ProtocolError::ReplyMismatch {
-            id,
-            expected: "Length",
-        }
-        .into()),
-    }
-}
-
-/// Consumes the reply to a [`FileBuilderRequest::Read`] for `range`, if
-/// the host has provided one.
-fn take_bytes(
-    core: &mut SessionCore<FileBuilderRequest>,
-    id: RequestId,
-    range: ByteRange,
-) -> Result<Option<Bytes>, Error> {
-    match core.take_reply(id) {
-        None => Ok(None),
-        Some(FileBuilderReply::Bytes(bytes)) => {
-            let actual = bytes.len() as u64;
-            if actual != range.len {
-                return Err(Error::ReadLengthMismatch { range, actual });
-            }
-            Ok(Some(bytes))
-        }
-        Some(FileBuilderReply::Failed(source)) => Err(Error::HostFailure { id, source }),
-
-        // `RequestTracker::fulfill` rejects a reply that does not match
-        // `FileBuilderRequest::accepts` before it is ever stored, so this
-        // arm is unreachable in practice; kept as defense in depth.
-        Some(_) => Err(ProtocolError::ReplyMismatch {
-            id,
-            expected: "Bytes",
-        }
-        .into()),
-    }
-}
-
-/// Consumes the reply to a [`FileBuilderRequest::Write`], if the host has
-/// provided one.
-fn take_write_ack(
-    core: &mut SessionCore<FileBuilderRequest>,
-    id: RequestId,
-) -> Result<Option<()>, Error> {
-    match core.take_reply(id) {
-        None => Ok(None),
-        Some(FileBuilderReply::Written) => Ok(Some(())),
-        Some(FileBuilderReply::Failed(source)) => Err(Error::HostFailure { id, source }),
-
-        // `RequestTracker::fulfill` rejects a reply that does not match
-        // `FileBuilderRequest::accepts` before it is ever stored, so this
-        // arm is unreachable in practice; kept as defense in depth.
-        Some(_) => Err(ProtocolError::ReplyMismatch {
-            id,
-            expected: "Written",
-        }
-        .into()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::panic)]
     #![allow(clippy::unwrap_used)]
 
+    use contentauth_c2pa_format::FormatError;
     use contentauth_c2pa_format_jpeg::JpegFormat;
 
     use super::*;
@@ -1641,178 +1156,121 @@ mod tests {
         ));
     }
 
-    /// `advance` treats a `None` phase as a poisoned session rather than
-    /// panicking. Every real code path reassigns `phase` before returning
-    /// or looping, so this state is otherwise unreachable — exercised here
-    /// by constructing it directly, the same way
-    /// `contentauth-c2pa-file-reader`'s `FileReadSession` tests its own
-    /// "kept as defense in depth" branch.
-    #[test]
-    fn advance_fails_defensively_if_phase_is_ever_none() {
-        let mut session: FileBuilderSession<JpegFormat> = FileBuilderSession {
-            core: SessionCore::default(),
-            pending: HashMap::new(),
-            handler: JpegFormat,
-            phase: None,
-            active: String::new(),
-        };
+    /// A probe session running one of this module's `async` helpers alone.
+    type Probe<T> = Workflow<FileBuilderRequest, T, Error>;
 
+    /// The single outstanding request of `session`.
+    fn only<T: Send>(session: &Probe<T>) -> HostRequest<FileBuilderRequest> {
+        let requests = session.outstanding_requests();
+        assert_eq!(requests.len(), 1, "one request at a time: {requests:?}");
+        requests[0].clone()
+    }
+
+    #[test]
+    fn write_all_moves_one_chunk_at_a_time() {
+        let tasks = VecDeque::from([
+            WriteTask::CopyFromSource {
+                output_offset: 0,
+                source_range: ByteRange { start: 8, len: 2 },
+            },
+            WriteTask::WriteBytes {
+                output_offset: 2,
+                bytes: vec![7].into(),
+            },
+        ]);
+        let mut session: Probe<()> =
+            Workflow::new(|host| async move { write_all(&host, tasks).await });
+
+        assert_eq!(session.advance().unwrap(), Step::AwaitHost);
+        let read = only(&session);
+        assert!(matches!(
+            read.kind,
+            FileBuilderRequest::Read {
+                stream: SOURCE,
+                range: ByteRange { start: 8, len: 2 }
+            }
+        ));
+        session
+            .fulfill(read.id, FileBuilderReply::Bytes(vec![1, 2].into()))
+            .unwrap();
+
+        assert_eq!(session.advance().unwrap(), Step::AwaitHost);
+        let write = only(&session);
+        assert!(matches!(
+            &write.kind,
+            FileBuilderRequest::Write { stream: OUTPUT, offset: 0, bytes } if bytes[..] == [1, 2]
+        ));
+        assert_eq!(session.advance().unwrap(), Step::AwaitHost);
+        assert_eq!(only(&session).id, write.id, "not reissued while pending");
+        session
+            .fulfill(write.id, FileBuilderReply::Written)
+            .unwrap();
+
+        assert_eq!(session.advance().unwrap(), Step::AwaitHost);
+        let write = only(&session);
+        assert!(matches!(
+            &write.kind,
+            FileBuilderRequest::Write { stream: OUTPUT, offset: 2, bytes } if bytes[..] == [7]
+        ));
+        session
+            .fulfill(write.id, FileBuilderReply::Written)
+            .unwrap();
+
+        assert_eq!(session.advance().unwrap(), Step::Complete);
+    }
+
+    #[test]
+    fn read_source_rejects_a_reply_of_the_wrong_length() {
+        let range = ByteRange { start: 4, len: 3 };
+        let mut session: Probe<Bytes> =
+            Workflow::new(move |host| async move { read_source(&host, range).await });
+
+        assert_eq!(session.advance().unwrap(), Step::AwaitHost);
+        let id = only(&session).id;
+        session
+            .fulfill(id, FileBuilderReply::Bytes(vec![1].into()))
+            .unwrap();
         assert!(matches!(
             session.advance(),
-            Err(Error::Protocol(ProtocolError::SessionFailed(failure)))
-                if failure.cause == "session state was lost"
+            Err(Error::ReadLengthMismatch { actual: 1, .. })
         ));
-        assert!(session.core.is_failed());
-        assert_eq!(session.phase(), "");
     }
 
-    /// `finish` does not trust `SessionCore`'s lifecycle alone: it also
-    /// checks that `phase` actually holds a result. The two can only
-    /// disagree if something bypasses `advance`'s own bookkeeping, as this
-    /// test does directly.
     #[test]
-    fn finish_fails_defensively_if_core_and_phase_disagree() {
-        let mut core = SessionCore::default();
-        core.mark_complete();
+    fn ask_reports_a_host_failure_with_its_request_id() {
+        let mut session: Probe<Bytes> = Workflow::new(|host| async move {
+            read_source(&host, ByteRange { start: 0, len: 1 }).await
+        });
 
-        let session: FileBuilderSession<JpegFormat> = FileBuilderSession {
-            core,
-            pending: HashMap::new(),
-            handler: JpegFormat,
-            phase: None,
-            active: String::new(),
-        };
-
+        assert_eq!(session.advance().unwrap(), Step::AwaitHost);
+        let id = only(&session).id;
+        session
+            .fulfill(id, FileBuilderReply::Failed(HostError::new("nope")))
+            .unwrap();
         assert!(matches!(
-            session.finish(),
-            Err(Error::Protocol(ProtocolError::SessionNotComplete))
+            session.advance(),
+            Err(Error::HostFailure { id: failed, .. }) if failed == id
         ));
     }
 
-    /// `poisoning` must mark the session failed on the way out, not just
-    /// convert the error type — every fallible call in `advance` after
-    /// `self.phase.take()` relies on this to keep `self.core` from
-    /// disagreeing with a workflow `advance` has actually abandoned.
+    /// `fulfill` refuses a reply of the wrong kind before `ask` ever sees
+    /// it; this is the defense in depth behind that.
     #[test]
-    fn poisoning_marks_the_session_failed_on_error() {
-        let mut session = FileBuilderSession::new(JpegFormat, test_settings());
-
-        session.active = "Somewhere".to_string();
-        let result: Result<(), Error> = session.poisoning(Err(Error::Invariant("boom")));
-        assert!(matches!(result, Err(Error::Invariant("boom"))));
-        assert!(session.core.is_failed());
-        assert_eq!(session.phase(), "Somewhere");
-    }
-
-    /// A source read a `CopyFromSource` task needs must not be reissued
-    /// while it is still outstanding — the same "no duplicate requests"
-    /// property this crate's session-level tests prove end to end, here
-    /// isolated to `step_writing` itself.
-    #[test]
-    fn step_writing_does_not_reissue_a_still_pending_source_read() {
-        let mut core = SessionCore::default();
-        let outer_request = core.issue(FileBuilderRequest::Sign {
-            purpose: SignPurpose::Claim,
-            alg: SigningAlg::Es256,
-            data: vec![],
+    fn ask_rejects_a_reply_of_the_wrong_kind() {
+        let mut session: Probe<Bytes> = Workflow::new(|host| async move {
+            read_source(&host, ByteRange { start: 0, len: 1 }).await
         });
-        let tasks: VecDeque<WriteTask> = VecDeque::from([WriteTask::CopyFromSource {
-            output_offset: 0,
-            source_range: ByteRange { start: 0, len: 4 },
-        }]);
 
-        let step = step_writing::<JpegFormat>(
-            &mut core,
-            tasks,
-            None,
-            outer_request,
-            WriteThen::ManifestCommitted,
-        )
-        .unwrap();
-        let sub = match step {
-            WritingStep::AwaitHost(sub) => sub,
-            WritingStep::Done { .. } => panic!("expected to await the source read"),
-        };
-        let Sub::Writing {
-            tasks, inflight, ..
-        } = sub
-        else {
-            panic!("expected Sub::Writing");
-        };
-        let first_id = match &inflight {
-            Some(Inflight::Read { id, .. }) => *id,
-            _ => panic!("expected a pending source read"),
-        };
-
-        let step = step_writing::<JpegFormat>(
-            &mut core,
-            tasks,
-            inflight,
-            outer_request,
-            WriteThen::ManifestCommitted,
-        )
-        .unwrap();
-        match step {
-            WritingStep::AwaitHost(Sub::Writing {
-                inflight: Some(Inflight::Read { id, .. }),
+        assert_eq!(session.advance().unwrap(), Step::AwaitHost);
+        let id = only(&session).id;
+        session.fulfill_unchecked(id, FileBuilderReply::Written);
+        assert!(matches!(
+            session.advance(),
+            Err(Error::Protocol(ProtocolError::ReplyMismatch {
+                expected: "Bytes",
                 ..
-            }) => assert_eq!(id, first_id),
-            _ => panic!("expected the same read still pending, unchanged"),
-        }
-    }
-
-    /// The mirror of the above for a `Write` a task has already issued.
-    #[test]
-    fn step_writing_does_not_reissue_a_still_pending_write() {
-        let mut core = SessionCore::default();
-        let outer_request = core.issue(FileBuilderRequest::Sign {
-            purpose: SignPurpose::Claim,
-            alg: SigningAlg::Es256,
-            data: vec![],
-        });
-        let tasks: VecDeque<WriteTask> = VecDeque::from([WriteTask::WriteBytes {
-            output_offset: 0,
-            bytes: vec![1, 2, 3].into(),
-        }]);
-
-        let step = step_writing::<JpegFormat>(
-            &mut core,
-            tasks,
-            None,
-            outer_request,
-            WriteThen::ManifestCommitted,
-        )
-        .unwrap();
-        let sub = match step {
-            WritingStep::AwaitHost(sub) => sub,
-            WritingStep::Done { .. } => panic!("expected to await the write"),
-        };
-        let Sub::Writing {
-            tasks, inflight, ..
-        } = sub
-        else {
-            panic!("expected Sub::Writing");
-        };
-        let first_id = match &inflight {
-            Some(Inflight::Write { id }) => *id,
-            _ => panic!("expected a pending write"),
-        };
-
-        let step = step_writing::<JpegFormat>(
-            &mut core,
-            tasks,
-            inflight,
-            outer_request,
-            WriteThen::ManifestCommitted,
-        )
-        .unwrap();
-        match step {
-            WritingStep::AwaitHost(Sub::Writing {
-                inflight: Some(Inflight::Write { id }),
-                ..
-            }) => assert_eq!(id, first_id),
-            _ => panic!("expected the same write still pending, unchanged"),
-        }
+            }))
+        ));
     }
 
     /// A plan `plan_embed` returned unchecked — one with a `Copy` edit
@@ -1820,119 +1278,131 @@ mod tests {
     /// must be rejected before this session ever indexes into anything
     /// using its offsets, not silently trusted.
     #[test]
-    fn step_validating_rejects_a_plan_that_does_not_check_out() {
-        let mut core = SessionCore::default();
-        let request = core.issue(FileBuilderRequest::Sign {
-            purpose: SignPurpose::Claim,
-            alg: SigningAlg::Es256,
-            data: vec![],
-        });
-        let length_request = core.issue(FileBuilderRequest::Length { stream: stream() });
-        core.fulfill(length_request, FileBuilderReply::Length(5))
-            .unwrap();
-
+    fn write_plan_rejects_a_plan_that_does_not_check_out() {
         let plan = EmbedPlan::new(
             vec![Edit::Copy(ByteRange { start: 0, len: 10 })],
             0,
             vec![ByteRange { start: 0, len: 0 }],
             None,
         );
+        let mut session: Probe<EmbedPlan> =
+            Workflow::new(|host| async move { write_plan(&host, plan, &Bytes::new()).await });
 
-        let result =
-            step_validating::<JpegFormat>(&mut core, plan, vec![].into(), request, length_request);
-        assert!(matches!(result, Err(Error::Format(_))));
+        assert_eq!(session.advance().unwrap(), Step::AwaitHost);
+        let length = only(&session);
+        assert!(matches!(
+            length.kind,
+            FileBuilderRequest::Length { stream: SOURCE }
+        ));
+        session
+            .fulfill(length.id, FileBuilderReply::Length(5))
+            .unwrap();
+        assert!(matches!(session.advance(), Err(Error::Format(_))));
+    }
+
+    /// A stand-in `plan_embed` operation — itself a [`Workflow`], which
+    /// [`Nested`] drives exactly as it would a handler's hand-written one —
+    /// that asks for the source's length and its first byte, then plans a
+    /// manifest of `manifest_len` bytes.
+    type FakePlanEmbed = Workflow<IoRequest, EmbedPlan, FormatError>;
+
+    fn fake_plan_embed(manifest_len: u64) -> FakePlanEmbed {
+        Workflow::new(move |host| async move {
+            let length = host.request(IoRequest::Length {
+                stream: StreamId::new(7),
+            });
+            let read = host.request(IoRequest::Read {
+                stream: StreamId::new(7),
+                range: ByteRange { start: 0, len: 1 },
+            });
+            let (IoReply::Length(len), IoReply::Bytes(_)) = (length.await, read.await) else {
+                return Err(FormatError::Malformed("unexpected reply".into()));
+            };
+
+            Ok(EmbedPlan::new(
+                vec![
+                    Edit::Copy(ByteRange { start: 0, len }),
+                    Edit::Placeholder(ByteRange {
+                        start: 0,
+                        len: manifest_len,
+                    }),
+                ],
+                manifest_len,
+                vec![ByteRange {
+                    start: len,
+                    len: manifest_len,
+                }],
+                None,
+            ))
+        })
+    }
+
+    /// Answers whatever a [`Probe`] asks, against a one-byte source, and
+    /// returns how many host requests were outstanding at most at once.
+    fn drive<T: Send>(session: &mut Probe<T>) -> Result<usize, Error> {
+        let mut widest = 0;
+        while session.advance()? == Step::AwaitHost {
+            let requests = session.outstanding_requests().to_vec();
+            widest = widest.max(requests.len());
+            for request in requests {
+                let reply = match request.kind {
+                    FileBuilderRequest::Length { stream: SOURCE } => FileBuilderReply::Length(1),
+                    FileBuilderRequest::Read {
+                        stream: SOURCE,
+                        range,
+                    } => FileBuilderReply::Bytes(vec![0; range.len as usize].into()),
+                    FileBuilderRequest::Write { stream: OUTPUT, .. } => FileBuilderReply::Written,
+                    other => panic!("unexpected request: {other:?}"),
+                };
+                session.fulfill(request.id, reply)?;
+            }
+        }
+        Ok(widest)
     }
 
     #[test]
-    fn step_validating_awaits_a_still_pending_source_length() {
-        let mut core = SessionCore::default();
-        let request = core.issue(FileBuilderRequest::Sign {
-            purpose: SignPurpose::Claim,
-            alg: SigningAlg::Es256,
-            data: vec![],
+    fn reserve_placeholder_plans_against_the_source_then_writes_the_plan() {
+        let placeholder = Bytes::from(vec![9; 3]);
+        let mut session: Probe<EmbedPlan> = Workflow::new(|host| async move {
+            reserve_placeholder(&host, fake_plan_embed(3), &placeholder).await
         });
-        let length_request = core.issue(FileBuilderRequest::Length { stream: stream() });
 
-        let plan = EmbedPlan::new(vec![], 0, vec![ByteRange { start: 0, len: 0 }], None);
-
-        let step =
-            step_validating::<JpegFormat>(&mut core, plan, vec![].into(), request, length_request)
-                .unwrap();
-        assert!(matches!(
-            step,
-            ValidatingStep::AwaitHost(Sub::Validating { .. })
-        ));
-    }
-
-    /// Mirrors `contentauth_c2pa_format::request`'s own tests of its
-    /// identical `take_bytes`: outstanding, a wrong-length reply, and a
-    /// host failure.
-    #[test]
-    fn take_bytes_reports_outstanding_wrong_length_and_failure() {
-        let mut core = SessionCore::default();
-        let range = ByteRange { start: 4, len: 3 };
-
-        let id = core.issue(FileBuilderRequest::Read {
-            stream: stream(),
-            range,
-        });
-        assert!(take_bytes(&mut core, id, range).unwrap().is_none());
-
-        core.fulfill(id, FileBuilderReply::Bytes(vec![0; 2].into()))
-            .unwrap();
-        assert!(matches!(
-            take_bytes(&mut core, id, range),
-            Err(Error::ReadLengthMismatch { actual: 2, .. })
-        ));
-
-        let id = core.issue(FileBuilderRequest::Read {
-            stream: stream(),
-            range,
-        });
-        core.fulfill(id, FileBuilderReply::Failed(HostError::new("unreadable")))
-            .unwrap();
-        assert!(matches!(
-            take_bytes(&mut core, id, range),
-            Err(Error::HostFailure { .. })
-        ));
-
-        let id = core.issue(FileBuilderRequest::Read {
-            stream: stream(),
-            range,
-        });
-        core.fulfill(id, FileBuilderReply::Bytes(vec![7; 3].into()))
-            .unwrap();
+        let widest = drive(&mut session).unwrap();
         assert_eq!(
-            take_bytes(&mut core, id, range).unwrap(),
-            Some(vec![7; 3]).map(Into::into)
+            widest, 2,
+            "the operation's two requests are in flight together"
         );
+        let plan = session.finish().unwrap();
+        assert_eq!(plan.output_len(), Some(4));
     }
 
-    /// Mirrors `take_bytes_reports_outstanding_wrong_length_and_failure`
-    /// for `take_write_ack`.
     #[test]
-    fn take_write_ack_reports_outstanding_and_failure() {
-        let mut core = SessionCore::default();
-
-        let id = core.issue(FileBuilderRequest::Write {
-            stream: stream(),
-            offset: 0,
-            bytes: vec![1].into(),
+    fn reserve_placeholder_rejects_a_plan_of_the_wrong_length() {
+        let placeholder = Bytes::from(vec![9; 3]);
+        let mut session: Probe<EmbedPlan> = Workflow::new(|host| async move {
+            reserve_placeholder(&host, fake_plan_embed(2), &placeholder).await
         });
-        assert!(take_write_ack(&mut core, id).unwrap().is_none());
-        core.fulfill(id, FileBuilderReply::Written).unwrap();
-        assert_eq!(take_write_ack(&mut core, id).unwrap(), Some(()));
 
-        let id = core.issue(FileBuilderRequest::Write {
-            stream: stream(),
-            offset: 0,
-            bytes: vec![1].into(),
-        });
-        core.fulfill(id, FileBuilderReply::Failed(HostError::new("no disk")))
-            .unwrap();
-        assert!(matches!(
-            take_write_ack(&mut core, id),
-            Err(Error::HostFailure { .. })
-        ));
+        assert!(matches!(drive(&mut session), Err(Error::Invariant(_))));
+    }
+
+    #[test]
+    fn an_inner_operation_failure_fails_the_session() {
+        let mut session: Probe<EmbedPlan> =
+            Workflow::new(|host| async move { plan_embed(&host, fake_plan_embed(2)).await });
+
+        assert_eq!(session.advance().unwrap(), Step::AwaitHost);
+        for request in session.outstanding_requests().to_vec() {
+            session
+                .fulfill(request.id, FileBuilderReply::Failed(HostError::new("nope")))
+                .unwrap();
+        }
+        assert!(matches!(session.advance(), Err(Error::Format(_))));
+    }
+
+    #[test]
+    fn debug_names_the_session() {
+        let session = FileBuilderSession::new(JpegFormat, test_settings());
+        assert!(format!("{session:?}").starts_with("FileBuilderSession"));
     }
 }
