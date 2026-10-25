@@ -11,6 +11,12 @@ standalone Wasm and Neon bindings, plus the standalone JavaScript package.
 The C++ reader/signing binding is a consumer of the canonical C API, which wraps the bridges. The outlined
 Python node and its dotted edge indicate prospective reuse only.
 
+The shared JS host accepts immutable browser Blob/File sources without a
+whole-input byte snapshot; its Worker materializes only requested slices.
+Node's adapter also opens `{path}` sources and services positioned reads.
+These are host storage choices, not new Rust APIs or dependencies; signing
+output remains a monolithic growable byte array.
+
 ```mermaid
 flowchart BT
     SM["contentauth-state-machine<br/><i>engine</i>"]
@@ -34,7 +40,7 @@ flowchart BT
     SB["sign-baseline"]
     RSS["rs-compat-sign"]
     JSS["js-compat-sign"]
-    HOST["js/src/shared<br/><i>one JS host in both Workers</i>"]
+    HOST["js/src/shared<br/><i>one JS host, bounded array/Blob reads</i>"]
     PW["contentauth-c2pa-wasm<br/><i>standalone synchronous Wasm boundary</i>"]
     PN["c2pa-node-compat-addon<br/><i>existing Neon boundary</i>"]
     PNS["c2pa-node-sign-addon<br/><i>existing signing Neon boundary</i>"]

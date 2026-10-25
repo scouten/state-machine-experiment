@@ -16,6 +16,8 @@
  * @property {() => unknown} terminate
  */
 
+import { snapshotAsset } from "./source.mjs";
+
 /** Wire-protocol version; both ends reject any other value. */
 export const protocol = "shared-worker-proof-v2";
 
@@ -45,9 +47,11 @@ export class Client {
   #closed;
   #ready;
   #termination;
+  #snapshot;
   /** @param {Port} port */
-  constructor(port) {
+  constructor(port, snapshot = snapshotAsset) {
     this.#port = port;
+    this.#snapshot = snapshot;
     this.#ready = new Promise((resolve, reject) => {
       this.#pending.set(0, { resolve, reject });
     });
@@ -70,18 +74,18 @@ export class Client {
   }
   /**
    * Reads and validates an asset.
-   * @param {Uint8Array} asset Copied synchronously, before any await.
+   * @param {Uint8Array|Blob} asset Bytes copied synchronously before any await;
+   *   immutable Blob/File passed to the Worker without whole-input conversion.
    * @param {{settings?: object, now?: number}} [options] `now` is Unix seconds
    *   (signed 32-bit) used as the validation clock; defaults to the current time.
    * @returns {Promise<{report: object|null, stats: object, workerMs: number}>}
    */
   async read(asset, { settings, now = Math.floor(Date.now() / 1000) } = {}) {
     if (this.#closed) throw this.#closed;
-    if (!(asset instanceof Uint8Array)) throw new TypeError("asset must be Uint8Array");
+    // Snapshot before await; no transfer means caller's bytes stay attached.
+    const snapshot = this.#snapshot(asset);
     if (!Number.isInteger(now) || now < -2147483648 || now > 2147483647)
       throw new TypeError("proof clock must be signed 32-bit Unix seconds");
-    // Snapshot before await; no transfer means caller's bytes stay attached.
-    const snapshot = new Uint8Array(asset);
     const json = settings === undefined ? undefined : JSON.stringify(settings);
     await this.#ready;
     if (this.#closed) throw this.#closed;
@@ -89,19 +93,18 @@ export class Client {
   }
   /**
    * Signs an asset with a manifest built from `definition`.
-   * @param {Uint8Array} asset Copied synchronously, before any await.
+   * @param {Uint8Array|Blob} asset Same snapshot/range semantics as `read`.
    * @param {object|string} definition Manifest definition (object or JSON).
    * @param {{alg: "es256", certs: Uint8Array[], sign(data: Uint8Array): Promise<Uint8Array>|Uint8Array}} signer
    *   Runs on the caller's thread; its key never leaves it.
    */
   async sign(asset, definition, signer) {
     if (this.#closed) throw this.#closed;
-    if (!(asset instanceof Uint8Array)) throw new TypeError("asset must be Uint8Array");
+    const snapshot = this.#snapshot(asset);
     if (signer?.alg !== "es256" || typeof signer.sign !== "function")
       throw new TypeError("proof signer must supply es256 and sign(data)");
     if (!Array.isArray(signer.certs) || !signer.certs.every((cert) => cert instanceof Uint8Array))
       throw new TypeError("signer certs must be Uint8Array[]");
-    const snapshot = new Uint8Array(asset);
     const certs = signer.certs.map((cert) => new Uint8Array(cert));
     const json = typeof definition === "string" ? definition : JSON.stringify(definition);
     const sign = signer.sign.bind(signer);
