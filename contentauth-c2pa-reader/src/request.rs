@@ -16,19 +16,19 @@
 //!
 //! When the session cannot make further progress synchronously, it issues
 //! one or more requests through the
-//! [`contentauth_state_machine`] engine — see
-//! [`contentauth_state_machine::HostRequest`]. The host services them —
+//! [`contentauth_sans_io_core`] engine — see
+//! [`contentauth_sans_io_core::HostRequest`]. The host services them —
 //! possibly concurrently, using whatever async machinery its runtime
 //! provides — and reports each outcome back via
-//! [`Session::fulfill`](contentauth_state_machine::Session::fulfill) with a
+//! [`Workflow::fulfill`](contentauth_sans_io_core::Workflow::fulfill) with a
 //! matching [`ReadHostReply`] (or [`ReadHostReply::Failed`]).
 //!
-//! [`ReadRequest`] implements [`contentauth_state_machine::Request`], which
-//! is what lets the engine's [`contentauth_state_machine::RequestTracker`]
+//! [`ReadRequest`] implements [`contentauth_sans_io_core::Request`], which
+//! is what lets the engine's [`contentauth_sans_io_core::RequestTracker`]
 //! validate replies without knowing what the requests mean.
 
 use contentauth_c2pa_primitives::{ByteRange, Bytes, StreamId};
-use contentauth_state_machine::Request;
+use contentauth_sans_io_core::Request;
 
 use crate::error::HostError;
 

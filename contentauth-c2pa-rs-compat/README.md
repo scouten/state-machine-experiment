@@ -7,7 +7,7 @@ c2pa-rs's own `Store`.
 ## Why this crate exists
 
 Every other crate in this workspace exposes its own, new interaction
-contract (`Session`/`advance`/`fulfill`/`finish` — see the root
+contract (`Workflow`/`advance`/`fulfill`/`finish` — see the root
 [README](../README.md)). That is the right shape for a host willing to
 adopt it, but it is not a drop-in replacement for an application already
 written against c2pa-rs. This crate explores the other direction: how much

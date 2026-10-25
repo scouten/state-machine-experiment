@@ -30,7 +30,7 @@ three operations, all format-specific, all pure:
 | `commit(plan, manifest)` | `Vec<Patch>` | Once the final store bytes are known, the output bytes that depend on them (a PNG chunk's CRC); nothing at all for JPEG. |
 
 The first two read the asset, so each is itself a session built on
-[`contentauth-state-machine`](../contentauth-state-machine), speaking the
+[`contentauth-sans-io-core`](../contentauth-sans-io-core), speaking the
 one request vocabulary this crate defines — `IoRequest::Read` and
 `IoRequest::Length`. A handler never writes: it *describes* the output,
 and the host (or an orchestrating session) materializes it.
@@ -66,7 +66,7 @@ the conformance suite's to check:
 ## Writing a handler
 
 Implement `FormatHandler` in a crate of your own, depending only on this
-crate (and `contentauth-state-machine` / `contentauth-c2pa-primitives` for
+crate (and `contentauth-sans-io-core` / `contentauth-c2pa-primitives` for
 the session and range types). Enable this crate's `test-util` feature in
 your dev-dependencies and run `test_util::conformance::run_all` against
 your handler with an unsigned sample asset. See

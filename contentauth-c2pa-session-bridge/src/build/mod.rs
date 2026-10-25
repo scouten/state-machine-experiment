@@ -24,7 +24,7 @@ use contentauth_c2pa_primitives::{
     Bytes, HostError, SigningAlg,
 };
 use contentauth_c2pa_sign_baseline::Definition;
-use contentauth_state_machine::{RequestId, Session};
+use contentauth_sans_io_core::{RequestId, Workflow};
 
 use crate::compat::{for_format, C2paError};
 
@@ -248,7 +248,7 @@ impl BuildSessionBridge {
 
     /// Runs the engine as far as it can go without the host.
     pub fn advance(&mut self) -> Result<Step, Error> {
-        use contentauth_state_machine::Step as Engine;
+        use contentauth_sans_io_core::Step as Engine;
 
         match self.inner.advance().map_err(Error::from)? {
             Engine::Complete => Ok(Step::Complete),
@@ -291,7 +291,7 @@ impl BuildSessionBridge {
 
     /// Where the engine is — the phase it is waiting in, or the one it
     /// failed in — for logs and error reports, not control flow. See
-    /// [`contentauth_state_machine::Session::phase`].
+    /// [`contentauth_sans_io_core::Workflow::phase`].
     pub fn phase(&self) -> String {
         self.inner.phase()
     }

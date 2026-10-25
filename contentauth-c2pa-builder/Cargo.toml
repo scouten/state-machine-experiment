@@ -13,7 +13,7 @@ categories = ["api-bindings"]
 publish = false
 
 [dependencies]
-contentauth-state-machine = { path = "../contentauth-state-machine" }
+contentauth-sans-io-core = { path = "../contentauth-sans-io-core" }
 contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
 # CBOR encoding for the claim and its assertions — the same encoder
 # contentauth-c2pa-reader uses to decode them.
@@ -29,10 +29,10 @@ jumbf = "0.7.0"
 thiserror = "2.0.20"
 
 [dev-dependencies]
-# Enables `SessionCore::fulfill_unchecked`, which this crate's own tests use
+# Enables `ManualWorkflowCore::fulfill_unchecked`, which this crate's own tests use
 # to exercise `BuilderSession`'s defense-in-depth check against a reply
 # payload `fulfill` itself would reject.
-contentauth-state-machine = { path = "../contentauth-state-machine", features = [
+contentauth-sans-io-core = { path = "../contentauth-sans-io-core", features = [
     "test-util",
 ] }
 # Round-trip verification: every manifest this crate builds in its own

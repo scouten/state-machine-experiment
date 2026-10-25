@@ -22,8 +22,8 @@ mod common;
 use common::{app11, segment, store, unsigned_jpeg, AFTER_APP0, C_JPG, C_MANIFEST_STORE};
 use contentauth_c2pa_format::{
     test_util::{conformance, MemoryHost, STREAM},
-    ByteRange, FormatError, FormatHandler, HostError, IoReply, IoRequest, ProtocolError, Session,
-    Step,
+    ByteRange, FormatError, FormatHandler, HostError, IoReply, IoRequest, ProtocolError, Step,
+    Workflow,
 };
 use contentauth_c2pa_format_jpeg::JpegFormat;
 

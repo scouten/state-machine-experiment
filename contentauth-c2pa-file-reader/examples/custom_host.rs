@@ -29,7 +29,7 @@ use contentauth_c2pa_file_reader::{
 };
 use contentauth_c2pa_format_jpeg::JpegFormat;
 use contentauth_c2pa_primitives::HostError;
-use contentauth_state_machine::{Session, Step};
+use contentauth_sans_io_core::{Step, Workflow};
 
 /// A real JPEG signed by c2pa-rs, reused from `contentauth-c2pa-reader`'s
 /// own fixtures.

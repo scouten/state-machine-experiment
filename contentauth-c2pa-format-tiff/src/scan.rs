@@ -31,7 +31,7 @@ use contentauth_c2pa_format::{
     take_bytes, take_length, ByteRange, Bytes, FormatError, IoRequest, ProtocolError, RequestId,
     StreamId,
 };
-use contentauth_state_machine::SessionCore;
+use contentauth_sans_io_core::ManualWorkflowCore;
 
 use crate::format::{
     malformed, parse_entry, parse_header, Endian, Flavor, Header, C2PA_TAG, MAX_HEADER_LEN,
@@ -159,7 +159,7 @@ enum Phase {
 }
 
 /// The scan itself. Owned by an operation, which owns the
-/// [`SessionCore`] and passes it in.
+/// [`ManualWorkflowCore`] and passes it in.
 pub(crate) struct Scanner {
     stream: StreamId,
     read_manifest: bool,
@@ -187,7 +187,7 @@ impl Scanner {
     }
 
     /// Names the scan's current phase — with the byte offset it concerns,
-    /// where there is one — for [`Session::phase`](contentauth_c2pa_format::Session::phase).
+    /// where there is one — for [`Workflow::phase`](contentauth_c2pa_format::Workflow::phase).
     pub(crate) fn phase(&self) -> String {
         match &self.phase {
             Phase::Start => "Start".into(),
@@ -206,7 +206,7 @@ impl Scanner {
     /// outstanding.
     pub(crate) fn advance(
         &mut self,
-        core: &mut SessionCore<IoRequest>,
+        core: &mut ManualWorkflowCore<IoRequest>,
     ) -> Result<Option<Layout>, FormatError> {
         // Each phase issues at most one request, so one reply advances
         // the scan by exactly one phase: no loop is needed here.
@@ -343,7 +343,7 @@ impl Scanner {
             .endian)
     }
 
-    fn read(&self, core: &mut SessionCore<IoRequest>, range: ByteRange) -> RequestId {
+    fn read(&self, core: &mut ManualWorkflowCore<IoRequest>, range: ByteRange) -> RequestId {
         core.issue(IoRequest::Read {
             stream: self.stream,
             range,
@@ -354,7 +354,7 @@ impl Scanner {
     /// that led there.
     fn issue_ifd(
         &mut self,
-        core: &mut SessionCore<IoRequest>,
+        core: &mut ManualWorkflowCore<IoRequest>,
         flavor: Flavor,
         offset: u64,
     ) -> Result<(), FormatError> {
@@ -393,7 +393,7 @@ impl Scanner {
     /// next IFD or finishes the chain.
     fn handle_ifd(
         &mut self,
-        core: &mut SessionCore<IoRequest>,
+        core: &mut ManualWorkflowCore<IoRequest>,
         offset: u64,
         entries: u64,
         bytes: &[u8],

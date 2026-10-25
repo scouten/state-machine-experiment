@@ -11,7 +11,7 @@
 // specific language governing permissions and limitations under
 // each license.
 
-//! Driving one [`Session`] from inside another session's [`Workflow`].
+//! Driving one [`Workflow`] from inside another session's [`CoroutineWorkflow`].
 //!
 //! A composing session — one that runs other sessions on its host's
 //! behalf, answering some of their requests itself and forwarding the
@@ -25,7 +25,7 @@
 //! or by handing the [`PendingReply`] of a request it issued to its own
 //! host to [`Nested::forward`].
 //!
-//! [`Workflow`]: crate::Workflow
+//! [`CoroutineWorkflow`]: crate::CoroutineWorkflow
 
 use std::{
     collections::VecDeque,
@@ -36,34 +36,34 @@ use std::{
 };
 
 use crate::{
+    coroutine::PendingReply,
     error::ProtocolError,
     request::{HostRequest, Request},
-    session::{Session, Step},
     types::RequestId,
-    workflow::PendingReply,
+    workflow::{Step, Workflow},
 };
 
 /// Turns the outer host's reply to a forwarded request into the reply the
 /// inner session expects.
-type ReplyMap<S, Req> = fn(<Req as Request>::Reply) -> <<S as Session>::Request as Request>::Reply;
+type ReplyMap<S, Req> = fn(<Req as Request>::Reply) -> <<S as Workflow>::Request as Request>::Reply;
 
 /// An inner request forwarded to the outer host, awaiting its reply.
-struct Forward<S: Session, Req: Request> {
+struct Forward<S: Workflow, Req: Request> {
     inner: RequestId,
     reply: PendingReply<Req>,
     map: ReplyMap<S, Req>,
 }
 
-/// A [`Session`] run from inside a [`Workflow`](crate::Workflow)'s `async
+/// A [`Workflow`] run from inside a [`CoroutineWorkflow`](crate::CoroutineWorkflow)'s `async
 /// fn`, whose requests the workflow answers itself or forwards to its own
 /// host, issuing requests of type `Req`.
 ///
-/// The inner session may be any [`Session`] — a hand-written state machine
-/// or another [`Workflow`](crate::Workflow) — and it is driven exactly as
+/// The inner session may be any [`Workflow`] — a hand-written state machine
+/// or another [`CoroutineWorkflow`](crate::CoroutineWorkflow) — and it is driven exactly as
 /// its contract requires; nothing about it needs to know it is nested.
 ///
 /// ```
-/// use contentauth_state_machine::{Host, Nested, ProtocolError, Request, Workflow};
+/// use contentauth_sans_io_core::{CoroutineWorkflow, Host, Nested, ProtocolError, Request};
 ///
 /// // An inner vocabulary: one question, answered with a number.
 /// #[derive(Clone, Debug)]
@@ -104,7 +104,7 @@ struct Forward<S: Session, Req: Request> {
 /// // The outer workflow forwards the inner session's question to its own
 /// // host, translating the reply on its way back down.
 /// async fn outer(host: Host<AskText>) -> Result<u32, ProtocolError> {
-///     let mut nested = Nested::new(Workflow::new(inner));
+///     let mut nested = Nested::new(CoroutineWorkflow::new(inner));
 ///     while let Some(request) = nested.next().await? {
 ///         nested.forward(request.id, host.request(AskText), |text: String| {
 ///             text.parse().unwrap_or(0)
@@ -114,9 +114,9 @@ struct Forward<S: Session, Req: Request> {
 /// }
 ///
 /// // The outer host sees only its own vocabulary.
-/// use contentauth_state_machine::{Session, Step};
+/// use contentauth_sans_io_core::{Step, Workflow};
 ///
-/// let mut session = Workflow::new(outer);
+/// let mut session = CoroutineWorkflow::new(outer);
 /// assert_eq!(session.advance()?, Step::AwaitHost);
 /// let id = session.outstanding_requests()[0].id;
 /// session.fulfill(id, "41".to_owned())?;
@@ -124,7 +124,7 @@ struct Forward<S: Session, Req: Request> {
 /// assert_eq!(session.finish()?, 42);
 /// # Ok::<(), ProtocolError>(())
 /// ```
-pub struct Nested<S: Session, Req: Request> {
+pub struct Nested<S: Workflow, Req: Request> {
     session: S,
 
     /// Inner requests already handed out by [`Self::next`] and not yet
@@ -140,7 +140,7 @@ pub struct Nested<S: Session, Req: Request> {
 
 impl<S, Req> Nested<S, Req>
 where
-    S: Session,
+    S: Workflow,
     S::Request: Clone,
     S::Error: From<ProtocolError>,
     Req: Request,
@@ -172,8 +172,8 @@ where
     ///
     /// # Errors
     ///
-    /// Whatever the inner session's [`Session::advance`] or
-    /// [`Session::fulfill`] reports, or [`ProtocolError::UnansweredRequest`].
+    /// Whatever the inner session's [`Workflow::advance`] or
+    /// [`Workflow::fulfill`] reports, or [`ProtocolError::UnansweredRequest`].
     pub async fn next(&mut self) -> Result<Option<HostRequest<S::Request>>, S::Error> {
         loop {
             if let Some(request) = self.queued.pop_front() {
@@ -217,7 +217,7 @@ where
     ///
     /// # Errors
     ///
-    /// Whatever the inner session's [`Session::fulfill`] reports.
+    /// Whatever the inner session's [`Workflow::fulfill`] reports.
     pub fn fulfill(
         &mut self,
         id: RequestId,
@@ -244,7 +244,7 @@ where
     ///
     /// # Errors
     ///
-    /// Whatever the inner session's [`Session::finish`] reports.
+    /// Whatever the inner session's [`Workflow::finish`] reports.
     pub fn finish(self) -> Result<S::Output, S::Error> {
         self.session.finish()
     }
@@ -285,7 +285,7 @@ where
 
 impl<S, Req> fmt::Debug for Nested<S, Req>
 where
-    S: Session + fmt::Debug,
+    S: Workflow + fmt::Debug,
     Req: Request,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -305,7 +305,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
-    use crate::{Host, SessionCore, Workflow};
+    use crate::{CoroutineWorkflow, Host, ManualWorkflowCore};
 
     #[derive(Clone, Debug, Eq, PartialEq)]
     enum Ask {
@@ -358,8 +358,8 @@ mod tests {
         }
     }
 
-    type Inner = Workflow<Ask, u32, TestError>;
-    type Outer = Workflow<Ask, u32, TestError>;
+    type Inner = CoroutineWorkflow<Ask, u32, TestError>;
+    type Outer = CoroutineWorkflow<Ask, u32, TestError>;
 
     fn number(answer: Answer) -> u32 {
         match answer {
@@ -586,10 +586,10 @@ mod tests {
     /// a bug in it, which the adapter must not turn into a hang.
     #[derive(Debug, Default)]
     struct WaitsOnNothing {
-        core: SessionCore<Ask>,
+        core: ManualWorkflowCore<Ask>,
     }
 
-    impl Session for WaitsOnNothing {
+    impl Workflow for WaitsOnNothing {
         type Error = TestError;
         type Output = u32;
         type Request = Ask;
@@ -629,16 +629,16 @@ mod tests {
         );
     }
 
-    /// A hand-written inner session — the [`SessionCore`] shape, not a
-    /// [`Workflow`] — is consumed exactly the same way.
+    /// A hand-written inner session — the [`ManualWorkflowCore`] shape, not a
+    /// [`CoroutineWorkflow`] — is consumed exactly the same way.
     #[derive(Debug, Default)]
     struct Doubler {
-        core: SessionCore<Ask>,
+        core: ManualWorkflowCore<Ask>,
         asked: Option<RequestId>,
         result: Option<u32>,
     }
 
-    impl Session for Doubler {
+    impl Workflow for Doubler {
         type Error = TestError;
         type Output = u32;
         type Request = Ask;

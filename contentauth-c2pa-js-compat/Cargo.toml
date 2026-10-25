@@ -40,9 +40,9 @@ contentauth-c2pa-reader = { path = "../contentauth-c2pa-reader" }
 # `Platform` traits speak, shared with every other host in this workspace.
 contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
 
-# The `Session`/`Step` interaction contract `src/drive.rs` drives
+# The `Workflow`/`Step` interaction contract `src/drive.rs` drives
 # `FileReadSession` through.
-contentauth-state-machine = { path = "../contentauth-state-machine" }
+contentauth-sans-io-core = { path = "../contentauth-sans-io-core" }
 
 # `Reader::from_blob`'s `context_json` argument is c2pa-rs's own settings
 # JSON; `Reader::json`/`manifest_store` reproduce c2pa-wasm's JSON-string

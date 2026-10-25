@@ -21,6 +21,7 @@ flowchart LR
         d10["Debuggability: phase(), failure context,<br/>record / replay transcripts"]
         d11["Engine: async-fn workflows, no runtime<br/>(builder ported, with phase/failure diagnostics)"]
         d12["Engine: Nested adapter for composing sessions<br/>inside async-fn workflows"]
+        d13["contentauth-sans-io-core: host-driven Workflow contract<br/>ManualWorkflowCore / CoroutineWorkflow"]
     end
     subgraph next["Next"]
         direction TB
@@ -128,7 +129,7 @@ changes. Choose formats for *what they exercise*, as TIFF did:
   language-neutral form of the contract.
 * **Host-driven cancellation and progress** — c2pa-rs's `Context` has them;
   here they'd be natural (stop calling `advance`; observe requests).
-  `Workflow` already cancels pending requests on completion or failure
+  `CoroutineWorkflow` already cancels pending requests on completion or failure
   and releases reply/waker storage when dropped, with regression tests.
   Explicit host-operation cancellation and progress callbacks remain open.
 * **Debugging through every binding.** `phase()` reaches the C API
@@ -146,7 +147,7 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 * **Track c2pa-rs releases** — the compat layer follows a moving target.
 * **Fuzzing** — done for the engine's session core (model-based
   `proptest` suite plus `cargo-fuzz` targets; see the engine's
-  [README](../../contentauth-state-machine/README.md#testing-and-fuzzing)).
+  [README](../../contentauth-sans-io-core/README.md#testing-and-fuzzing)).
   Still to do: the parsers (JUMBF, COSE, TIFF graph walks) — they already
   refuse hostile input by design, but nothing yet hammers that. The
   engine's harness shape (script in, reference model out) carries over.
@@ -155,9 +156,16 @@ changes. Choose formats for *what they exercise*, as TIFF did:
 
 ## 6. Engine ergonomics
 
+The shared core is now named `contentauth-sans-io-core`, emphasizing that
+the host owns I/O, concurrency, and scheduling. `Workflow` is the common
+contract; `ManualWorkflowCore` supports explicit state machines and
+`CoroutineWorkflow` supports async-authored ones. The crate still lives
+in this workspace; extracting it into its own repository is a separate step.
+
 | Item | Why it matters |
 |---|---|
-| **Port `ReadSession` onto `Workflow`** | The builder already runs as an `async fn`; the reader is the larger test — OCSP fan-out across chains, and the recursion ingredients and remote manifests will need (`Box::pin(validate(ingredient))` instead of a stack of hand-nested sessions). |
+| **[Consider concrete `XxxWorkflow` names](https://github.com/scouten/state-machine-experiment/issues/86)** | The shared trait and helpers now distinguish the common contract from manual/coroutine authoring styles. Concrete session and binding names remain unchanged; whether to rename them is a separate decision. |
+| **Port `ReadSession` onto `CoroutineWorkflow`** | The builder already runs as an `async fn`; the reader is the larger test — OCSP fan-out across chains, and the recursion ingredients and remote manifests will need (`Box::pin(validate(ingredient))` instead of a stack of hand-nested sessions). |
 | **Typed replies** | `host.request(..)` still resolves to the whole reply enum, so each request's own wrong-kind check stays (in one helper now, not per state). A reply type per request would make it a compile-time fact. |
 | **Port composing sessions onto `Nested`** | The engine's adapter now handles inner-session requests, forwarding and reply translation inside an async workflow. `FileReadSession`/`FileBuilderSession` still need to adopt it in place of their hand-written translation layers. |
 
@@ -169,5 +177,5 @@ changes. Choose formats for *what they exercise*, as TIFF did:
    itself exposes its I/O?
 3. Which of the above would *change the architecture* if tackled (we think:
    ingredients, remote manifests) versus merely extend it (formats)?
-4. Is the `Session` contract the right granularity, or should a coarser
+4. Is the `Workflow` contract the right granularity, or should a coarser
    "run to completion with this host trait" API sit on top for most users?

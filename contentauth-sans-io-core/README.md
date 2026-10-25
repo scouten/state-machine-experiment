@@ -1,18 +1,21 @@
-# contentauth-state-machine
+# contentauth-sans-io-core
 
-A reusable engine for building synchronous, sans-I/O state machines: a
-session type that runs entirely synchronously and externalizes anything that
-might need to be asynchronous (I/O, the network, a clock, signing) to its
-host through an explicit request/reply protocol, rather than blocking or
-spawning.
+An experimental design for host-driven, sans-I/O workflows in the C2PA and
+CAWG SDKs, leaving I/O, concurrency, and scheduling to the host application.
 
-This crate carries no C2PA-specific logic. It distills the session shape
-into pieces — a request/reply vocabulary trait, request tracking, a
-protocol-error vocabulary, and the `advance` / `fulfill` / `finish`
-interaction contract — that any subcomponent of a larger workflow can build
-on independently. Concrete C2PA workflows (reading and validating a
-manifest store, generating and signing one, and so on) are expected to live
-in their own crates built on top of this one.
+The goal is to let a library describe work without choosing how files,
+networking, time, or signing are provided, or which threads or async runtime
+execute that work. Those decisions belong to the host, ideally in the
+application's own language and runtime. A workflow exposes external
+operations through an explicit request/reply protocol rather than
+performing I/O, blocking on a host operation, or spawning threads itself.
+The host may be synchronous, asynchronous, single-threaded, or multi-threaded.
+
+This crate is shared infrastructure for Content Authenticity's C2PA and
+CAWG crates, not a general-purpose state-machine or workflow framework.
+It contains no domain-specific validation or signing logic: concrete
+workflows live in their own crates and define their own request
+vocabularies, settings, and results.
 
 ## Interaction contract
 
@@ -31,8 +34,8 @@ whatever outcomes have arrived and make further progress.
         advance() │                       │ fulfill(id, reply)
                   ▼                       │
              ┌────────────────────────────────────────────────┐
-             │                    SESSION                     │
-             │  synchronous state machine + request tracker   │
+             │                    WORKFLOW                    │
+             │  host-driven progress + request/reply tracking │
              └────────────────────────────────────────────────┘
 ```
 
@@ -46,7 +49,7 @@ whatever outcomes have arrived and make further progress.
 
 ### Threading
 
-A session is **not re-entrant**. `Workflow` uses internal synchronization
+A session is **not re-entrant**. `CoroutineWorkflow` uses internal synchronization
 for the mailbox shared with its future; ordinary serialized host calls do
 not contend on that lock. This does not lock the session's API or make
 concurrent calls safe. Any host that employs a thread model must ensure
@@ -61,22 +64,25 @@ borrow checker does much of this for you (`advance` and `fulfill` take
 interior mutability or reach it through a raw-handle binding must enforce
 it themselves.
 
-See the `Session` trait and `SessionCore` in [`src/session.rs`](src/session.rs)
+See the `Workflow` trait and `ManualWorkflowCore` in [`src/workflow.rs`](src/workflow.rs)
 for the concrete API.
 
-## Two ways to implement a session
+## Two ways to implement a workflow
 
-The host-facing contract above is fixed. Behind it, a session's own
-workflow can be written either of two ways, and the host cannot tell which:
+`Workflow` is the common host-facing contract, not an implementation style.
+Both styles below expose the same synchronous `advance` / `fulfill` /
+`finish` interface; neither requires the host to use Rust async or a
+particular runtime. Concrete domain types such as `ReadSession` and
+`BuilderSession` implement this trait and retain their session names.
 
-* **By hand, with `SessionCore`** ([`src/session.rs`](src/session.rs)). The
+* **Explicit state machine, with `ManualWorkflowCore`** ([`src/workflow.rs`](src/workflow.rs)). The
   workflow keeps a phase enum with one variant per point where it waits on
   its host, each carrying every local that must survive the wait, and
   `advance` matches on it. Every state is explicit and inspectable — and
   every new wait costs a variant, a handler, and the same
   `None` / `Failed` / wrong-reply arms again.
   `contentauth-c2pa-reader`'s `ReadSession` uses this approach.
-* **As an `async fn`, with `Workflow`** ([`src/workflow.rs`](src/workflow.rs)).
+* **Coroutine-style `async fn`, with `CoroutineWorkflow`** ([`src/coroutine.rs`](src/coroutine.rs)).
   The workflow asks its `Host` handle for what it needs and `.await`s the
   reply; the compiler generates the state machine, including the locals,
   loops, `?` early returns and sub-workflow calls a hand-written one would
@@ -89,8 +95,12 @@ workflow can be written either of two ways, and the host cannot tell which:
   host at once. `contentauth-c2pa-builder`'s `BuilderSession` uses this
   approach.
 
+The distinction is how library logic is authored, not synchronous versus
+asynchronous execution by the host. Both implementations are state
+machines; the coroutine style lets Rust's compiler generate one.
+
 The compiler's state is opaque, but a workflow names its current stage
-with `Host::set_phase`, exposed through `Session::phase` and preserved in
+with `Host::set_phase`, exposed through `Workflow::phase` and preserved in
 failure reports. It must await only `PendingReply`s (or futures built from them).
 Awaiting anything else would never be woken; `advance` reports that as
 `ProtocolError::WorkflowStalled` instead of hanging.
@@ -100,7 +110,7 @@ reply; the decoder receives the request ID for vocabulary-specific errors
 and host-failure policy. Use `Host::request` to issue multiple requests
 before awaiting them.
 
-When a `Workflow` completes or fails, it cancels remaining requests and
+When a `CoroutineWorkflow` completes or fails, it cancels remaining requests and
 discards stored replies and wakers. Its outstanding list is then empty.
 Hosts should stop servicing those requests and discard late results;
 operations already performed are not undone. Dropping one `PendingReply`
@@ -108,7 +118,7 @@ while the workflow is still running does not cancel its request.
 
 ## Composing sessions
 
-[`Nested`](src/nested.rs) drives any `Session` from a `Workflow`'s async
+[`Nested`](src/nested.rs) drives any `Workflow` from a `CoroutineWorkflow`'s async
 function, including hand-written sessions and other workflows. Repeatedly
 await `nested.next()` to obtain an inner request, then either answer it
 with `nested.fulfill(id, reply)` or forward it using
@@ -132,21 +142,21 @@ time the host sees the error, the session has moved on (or poisoned
 itself), and the call stack that produced it is gone. Two things answer
 "where did it go wrong, and why?":
 
-* **Where it is, and where it failed.** `Session::phase` describes the
+* **Where it is, and where it failed.** `Workflow::phase` describes the
   session's current phase in words — `"Locating > Scanning > Marker at
   byte 2"`, `"Building > AwaitingSignature"` — with a session nested inside
   another named after the outer phase. A failed session keeps reporting the
   phase it failed in, and every later call returns
   `ProtocolError::SessionFailed(Failure)`, which carries that phase and the
   original error's text rather than a bare "failed earlier". A session
-  implementation records both with `SessionCore::mark_failed(phase, &err)`
-  on every error exit; `Workflow` does this automatically using the most
+  implementation records both with `ManualWorkflowCore::mark_failed(phase, &err)`
+  on every error exit; `CoroutineWorkflow` does this automatically using the most
   recent `Host::set_phase` (initially `"Start"`). Only the first failure
   is kept. Phase wording is
   for people and logs, not a stable interface: don't branch on it.
 * **What the host said to it.** Since a session performs no I/O, its
   behavior depends on nothing but the replies it is given. Wrap a session
-  in a `Recorder` — itself a `Session`, so the host does not change — and
+  in a `Recorder` — itself a `Workflow`, so the host does not change — and
   it keeps a `Transcript` of every `advance` (the phase, what it returned,
   the requests it issued) and every `fulfill` (the reply, and whether it
   was accepted). A transcript prints as a readable one-line-per-call log,
@@ -198,8 +208,8 @@ replies after completion or failure — runs it against the real engine and
 against a deliberately naive reference model, and asserts they agree after
 every step:
 
-* `run_core` drives `SessionCore` directly, as a workflow would;
-* `run_session` drives a complete `Session` through the public
+* `run_core` drives `ManualWorkflowCore` directly, as a workflow would;
+* `run_session` drives a complete `Workflow` through the public
   `advance` / `fulfill` / `outstanding_requests` / `finish` contract.
 
 Two front ends feed them:

@@ -14,7 +14,7 @@
 //! Error types for the sans-I/O builder.
 
 use contentauth_c2pa_primitives::{HostError, SigningAlg};
-use contentauth_state_machine::{ProtocolError, RequestId};
+use contentauth_sans_io_core::{ProtocolError, RequestId};
 
 /// Errors surfaced by [`BuilderSession`](crate::BuilderSession).
 ///
@@ -27,7 +27,7 @@ use contentauth_state_machine::{ProtocolError, RequestId};
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
-    /// The host used the [`contentauth_state_machine::Session`] API
+    /// The host used the [`contentauth_sans_io_core::Workflow`] API
     /// incorrectly.
     #[error(transparent)]
     Protocol(#[from] ProtocolError),

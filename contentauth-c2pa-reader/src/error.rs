@@ -15,7 +15,7 @@
 
 use contentauth_c2pa_primitives::ByteRange;
 pub use contentauth_c2pa_primitives::HostError;
-use contentauth_state_machine::{ProtocolError, RequestId};
+use contentauth_sans_io_core::{ProtocolError, RequestId};
 
 use crate::{cert::CertError, claim::ClaimError};
 
@@ -55,7 +55,7 @@ pub enum AnchorKind {
 /// * [`Self::Protocol`] means the host used the session API incorrectly
 ///   (fulfilling an unknown request, replying with the wrong payload type,
 ///   driving a completed session, …) — see
-///   [`contentauth_state_machine::ProtocolError`]. These indicate a bug in
+///   [`contentauth_sans_io_core::ProtocolError`]. These indicate a bug in
 ///   the host binding, not a problem with the asset.
 /// * The rest mean the workflow itself cannot proceed (a host operation
 ///   failed and the workflow cannot continue without it, or — in this
@@ -72,7 +72,7 @@ pub enum AnchorKind {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
-    /// The host used the [`contentauth_state_machine::Session`] API
+    /// The host used the [`contentauth_sans_io_core::Workflow`] API
     /// incorrectly.
     #[error(transparent)]
     Protocol(#[from] ProtocolError),

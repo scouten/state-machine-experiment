@@ -11,8 +11,9 @@ a path), a signer, and settings, and it pulls bytes, the clock, and OCSP
 responses itself. Each binding then has to reconcile that with its own
 runtime.
 
-Here, **the host drives**. The engine is a synchronous state machine that
-never performs I/O. It parks itself with a set of requests ("give me bytes
+Here, **the host drives**. Library logic exposes a synchronous workflow
+contract that never performs I/O or chooses a scheduler. It parks itself
+with a set of requests ("give me bytes
 `[a, b)` of stream 0", "what time is it", "POST this OCSP request", "sign
 this"), the host answers however it likes, and calls `advance` again.
 
@@ -25,7 +26,7 @@ flowchart LR
     end
     subgraph here["this repo (host drives)"]
         direction TB
-        B1[host] -->|advance| B2[Session]
+        B1[host] -->|advance| B2[Workflow]
         B2 -->|"AwaitHost: requests"| B1
         B1 -->|"fulfill(id, reply)"| B2
         B1 <--> B3[(files, network,<br/>keys, clock)]
@@ -37,7 +38,7 @@ flowchart LR
 | Concern | c2pa-rs and its bindings | This project |
 |---|---|---|
 | **Who performs I/O** | The library, through `Read + Seek` / `Write`, its own HTTP stack, system clock | The host, always. The engine has no I/O, clock, RNG, thread, or runtime |
-| **Sync vs async** | One core, synchronous at heart, with async variants (`with_stream_async`) for the parts that may hit the network | The core is purely synchronous; clients may add asynchronous behavior in their host implementation |
+| **Sync vs async** | One core, synchronous at heart, with async variants (`with_stream_async`) for the parts that may hit the network | The host-facing contract is synchronous; library logic may use an explicit state machine or coroutine-style `async fn`. The host independently chooses synchronous or asynchronous I/O and scheduling |
 | **Asset bytes** | Must arrive as a synchronous `Read + Seek` stream | Arrive as *replies to range requests*, which can be answered asynchronously, out of order, or from a cache |
 | **c2pa-wasm** | `BlobStream` over `FileReaderSync` → reader must live in a Web Worker | `Blob.slice().arrayBuffer()` awaited per request → works on the main thread, and two reads interleave at request boundaries (tested) |
 | **c2pa-node** | Whole reads run on a process-wide tokio pool behind `Mutex<Reader>`; JS thread blocks on sync accessors | Rust is only ever *called* synchronously; Node owns `fs`/`fetch` and the event loop; no threads, locks, or `futures` in the addon |
@@ -72,7 +73,7 @@ close to it:
   Moving it off-thread means running the session in a Worker — possible
   without changing the engine, but the host's job.
 * **Serializing a session's calls is the host's job.** Sessions are not
-  re-entrant; `Workflow`'s internal mailbox lock does not serialize its
+  re-entrant; `CoroutineWorkflow`'s internal mailbox lock does not serialize its
   API. A host with a thread model must never call one session's methods
   simultaneously from several threads. Crashes or unpredictable behavior
   are likely otherwise.
@@ -93,13 +94,13 @@ close to it:
 
 ## The engine, for reference
 
-Four calls, from the `Session` trait in
-[`contentauth-state-machine/src/session.rs`](../../contentauth-state-machine/src/session.rs):
+Four calls, from the `Workflow` trait in
+[`contentauth-sans-io-core/src/workflow.rs`](../../contentauth-sans-io-core/src/workflow.rs):
 
 ```mermaid
 sequenceDiagram
     participant H as Host
-    participant S as Session
+    participant S as Workflow
     H->>S: create
     loop until Complete
         H->>S: advance()
@@ -115,9 +116,9 @@ sequenceDiagram
 ```
 
 The engine crate has no C2PA logic: a request/reply vocabulary trait,
-request tracking (`SessionCore`), and a protocol-error vocabulary. A
-session's workflow can be a hand-written phase enum over `SessionCore`
-(the reader) or an `async fn` over `Workflow` that the compiler turns into
+request tracking (`ManualWorkflowCore`), and a protocol-error vocabulary. A
+session's workflow can be a hand-written phase enum over `ManualWorkflowCore`
+(the reader) or an `async fn` over `CoroutineWorkflow` that the compiler turns into
 the state machine (the builder) — polled with a no-op waker, so still no
 runtime, and the host cannot tell the difference. Concrete
 workflows (reader, builder, and the file sessions that compose them) are

@@ -18,10 +18,10 @@ use core::mem::replace;
 use contentauth_c2pa_primitives::{ByteRange, HashAlgorithm, StreamId};
 /// [`Step::AwaitHost`] / [`Step::Complete`], under the name this crate's
 /// docs and tests use for [`ReadSession`]'s own steps. This is the very
-/// same type as [`contentauth_state_machine::Step`] — see the crate root.
-pub use contentauth_state_machine::Step as ReadStep;
-use contentauth_state_machine::{
-    HostRequest, ProtocolError, RequestId, Session, SessionCore, Step,
+/// same type as [`contentauth_sans_io_core::Step`] — see the crate root.
+pub use contentauth_sans_io_core::Step as ReadStep;
+use contentauth_sans_io_core::{
+    HostRequest, ManualWorkflowCore, ProtocolError, RequestId, Step, Workflow,
 };
 
 use crate::{
@@ -194,23 +194,23 @@ impl Default for ReadSettings {
 /// Reads and validates a C2PA manifest store from a digital asset.
 ///
 /// This is the synchronous, sans-I/O counterpart of `Reader` in c2pa-rs. It
-/// implements the [`Session`] trait from `contentauth-state-machine`: it
+/// implements the [`Workflow`] trait from `contentauth-sans-io-core`: it
 /// never touches the asset, the network, or a clock itself; it issues host
 /// requests and the host reports outcomes back in any order.
 ///
 /// # Interaction contract
 ///
-/// See the [`Session`] trait for the full contract. Concretely:
+/// See the [`Workflow`] trait for the full contract. Concretely:
 ///
 /// 1. Create the session with [`ReadSession::new`].
-/// 2. Call [`Session::advance`] to let the session do as much synchronous
+/// 2. Call [`Workflow::advance`] to let the session do as much synchronous
 ///    work as it can. It returns [`ReadStep::AwaitHost`] when blocked on the
 ///    host, or [`ReadStep::Complete`] when done.
 /// 3. While `AwaitHost`: service any subset of
-///    [`Session::outstanding_requests`] (concurrently if desired), report
-///    each outcome via [`Session::fulfill`], and call
-///    [`Session::advance`] again.
-/// 4. On `Complete`: consume the session with [`Session::finish`] to obtain
+///    [`Workflow::outstanding_requests`] (concurrently if desired), report
+///    each outcome via [`Workflow::fulfill`], and call
+///    [`Workflow::advance`] again.
+/// 4. On `Complete`: consume the session with [`Workflow::finish`] to obtain
 ///    the [`ReadReport`].
 ///
 /// # Example
@@ -219,7 +219,7 @@ impl Default for ReadSettings {
 ///
 /// ```
 /// use contentauth_c2pa_reader::{Error, ReadHostReply, ReadSession, ReadSettings, ReadStep};
-/// use contentauth_state_machine::Session;
+/// use contentauth_sans_io_core::Workflow;
 ///
 /// let mut session = ReadSession::new(ReadSettings::default());
 ///
@@ -239,7 +239,7 @@ impl Default for ReadSettings {
 #[derive(Debug)]
 pub struct ReadSession {
     settings: ReadSettings,
-    core: SessionCore<ReadRequest>,
+    core: ManualWorkflowCore<ReadRequest>,
     state: State,
 
     /// The name of the state [`ReadSession::run`] is processing, kept
@@ -262,7 +262,7 @@ pub struct ReadSession {
     /// runs, which is also the answer when it never does.
     trust: Option<Trust>,
 
-    /// Built up as the workflow proceeds; handed over by [`Session::finish`]
+    /// Built up as the workflow proceeds; handed over by [`Workflow::finish`]
     /// once the session reaches a terminal state. Held directly rather
     /// than behind an `Option` so there is no "no report yet" state to
     /// defend against.
@@ -271,7 +271,7 @@ pub struct ReadSession {
 
 /// The read workflow's own phase, tracked separately from whether the
 /// session as a whole has completed or failed — that half of the lifecycle
-/// belongs to [`SessionCore`], via [`ReadSession::core`].
+/// belongs to [`ManualWorkflowCore`], via [`ReadSession::core`].
 #[derive(Debug)]
 enum State {
     Start,
@@ -303,7 +303,7 @@ enum State {
     /// [`ReadSession::run`]), and left behind if that phase exits early —
     /// every `?` and every `return Err(…)` in [`ReadSession::run`] does,
     /// since none of them install a successor state. [`ReadSession::advance`]
-    /// turns that into [`SessionCore::mark_failed`], so a later call finds
+    /// turns that into [`ManualWorkflowCore::mark_failed`], so a later call finds
     /// this variant again and reports [`ProtocolError::SessionFailed`]
     /// without needing to distinguish "just poisoned" from "already
     /// reported".
@@ -311,7 +311,7 @@ enum State {
 }
 
 impl State {
-    /// This state's name, for [`Session::phase`].
+    /// This state's name, for [`Workflow::phase`].
     fn name(&self) -> &'static str {
         match self {
             Self::Start => "Start",
@@ -467,7 +467,7 @@ impl ReadSession {
     pub fn new(settings: ReadSettings) -> Self {
         Self {
             settings,
-            core: SessionCore::default(),
+            core: ManualWorkflowCore::default(),
             state: State::Start,
             active: State::Start.name(),
             anchors: vec![],
@@ -484,7 +484,7 @@ impl ReadSession {
         }
     }
 
-    /// The state-machine loop proper, factored out of [`Session::advance`]
+    /// The state-machine loop proper, factored out of [`Workflow::advance`]
     /// so that every error exit is poisoned in one place (there) rather
     /// than at each fallible call within the loop.
     fn run(&mut self) -> Result<Step, Error> {
@@ -535,7 +535,7 @@ impl ReadSession {
                 }
 
                 // Left poisoned by an earlier error; `self.core` was marked
-                // failed by `Session::advance` at the same time.
+                // failed by `Workflow::advance` at the same time.
                 State::Poisoned => return Err(self.core.failed_error().into()),
             }?;
 
@@ -1311,7 +1311,7 @@ impl ReadSession {
     }
 }
 
-impl Session for ReadSession {
+impl Workflow for ReadSession {
     type Error = Error;
     type Output = ReadReport;
     type Request = ReadRequest;
@@ -1323,7 +1323,7 @@ impl Session for ReadSession {
     /// (idempotently, on subsequent calls as well).
     ///
     /// If this returns an error, the session is spent: it cannot be advanced
-    /// or fulfilled again, and [`Session::finish`] will refuse to hand over
+    /// or fulfilled again, and [`Workflow::finish`] will refuse to hand over
     /// the half-built report. Every later call reports
     /// [`ProtocolError::SessionFailed`], naming the phase that failed and
     /// why.
@@ -1359,7 +1359,7 @@ impl Session for ReadSession {
     /// Reports the outcome of one outstanding request.
     ///
     /// Outcomes may be reported in any order and at any pace; call
-    /// [`Session::advance`] afterward to let the session consume them.
+    /// [`Workflow::advance`] afterward to let the session consume them.
     fn fulfill(&mut self, id: RequestId, reply: ReadHostReply) -> Result<(), Error> {
         Ok(self.core.fulfill(id, reply)?)
     }
@@ -1368,7 +1368,7 @@ impl Session for ReadSession {
     ///
     /// Fails with [`ProtocolError::SessionNotComplete`] if the workflow has
     /// not reached [`ReadStep::Complete`], or with
-    /// [`ProtocolError::SessionFailed`] if [`Session::advance`] returned an
+    /// [`ProtocolError::SessionFailed`] if [`Workflow::advance`] returned an
     /// error: a report that stopped partway through validation would
     /// understate what was checked, so it is never handed out.
     fn finish(self) -> Result<ReadReport, Error> {

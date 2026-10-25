@@ -34,10 +34,10 @@ use std::{fmt, sync::Arc};
 
 use contentauth_c2pa_format::{
     EmbedPlan, FormatDescriptor, FormatError, FormatHandler, FormatOp, HostRequest, IoReply,
-    IoRequest, ManifestLocation, Patch, RequestId, Session, Step, StreamId,
+    IoRequest, ManifestLocation, Patch, RequestId, Step, StreamId, Workflow,
 };
 
-/// The object-safe core of [`FormatOp`]: [`Session`] with `finish` taking
+/// The object-safe core of [`FormatOp`]: [`Workflow`] with `finish` taking
 /// a boxed `self`.
 trait ErasedOp<Output>: Send {
     fn advance(&mut self) -> Result<Step, FormatError>;
@@ -49,23 +49,23 @@ trait ErasedOp<Output>: Send {
 
 impl<Output, S: FormatOp<Output>> ErasedOp<Output> for S {
     fn advance(&mut self) -> Result<Step, FormatError> {
-        Session::advance(self)
+        Workflow::advance(self)
     }
 
     fn outstanding_requests(&self) -> &[HostRequest<IoRequest>] {
-        Session::outstanding_requests(self)
+        Workflow::outstanding_requests(self)
     }
 
     fn phase(&self) -> String {
-        Session::phase(self)
+        Workflow::phase(self)
     }
 
     fn fulfill(&mut self, id: RequestId, reply: IoReply) -> Result<(), FormatError> {
-        Session::fulfill(self, id, reply)
+        Workflow::fulfill(self, id, reply)
     }
 
     fn finish_boxed(self: Box<Self>) -> Result<Output, FormatError> {
-        Session::finish(*self)
+        Workflow::finish(*self)
     }
 }
 
@@ -80,7 +80,7 @@ impl<Output> BoxedOp<Output> {
     }
 }
 
-impl<Output> Session for BoxedOp<Output> {
+impl<Output> Workflow for BoxedOp<Output> {
     type Error = FormatError;
     type Output = Output;
     type Request = IoRequest;

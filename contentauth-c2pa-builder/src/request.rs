@@ -15,16 +15,16 @@
 //! [`BuilderSession`](crate::BuilderSession) and its host.
 //!
 //! When the session cannot make further progress synchronously, it issues
-//! one or more requests through the [`contentauth_state_machine`] engine —
-//! see [`contentauth_state_machine::HostRequest`]. The host services them
+//! one or more requests through the [`contentauth_sans_io_core`] engine —
+//! see [`contentauth_sans_io_core::HostRequest`]. The host services them
 //! and reports each outcome back via
-//! [`Session::fulfill`](contentauth_state_machine::Session::fulfill) with a
+//! [`Workflow::fulfill`](contentauth_sans_io_core::Workflow::fulfill) with a
 //! matching [`BuilderHostReply`] (or [`BuilderHostReply::Failed`]).
 
 use contentauth_c2pa_primitives::{
     ByteRange, Bytes, HashAlgorithm, HostError, SigningAlg, StreamId,
 };
-use contentauth_state_machine::Request;
+use contentauth_sans_io_core::Request;
 
 /// What a [`BuilderRequest::Sign`] is a signature *for*.
 ///

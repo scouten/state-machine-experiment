@@ -49,7 +49,7 @@
 //! large the asset is.
 
 use contentauth_c2pa_primitives::{hash::Hasher, ByteRange, Bytes, HashAlgorithm, StreamId};
-use contentauth_state_machine::{ProtocolError, RequestId, SessionCore};
+use contentauth_sans_io_core::{ManualWorkflowCore, ProtocolError, RequestId};
 
 use crate::{
     error::Error,
@@ -135,7 +135,7 @@ impl HashStream {
     }
 
     /// Issues chunk requests until the window is full.
-    pub(crate) fn issue(&mut self, core: &mut SessionCore<ReadRequest>, stream: StreamId) {
+    pub(crate) fn issue(&mut self, core: &mut ManualWorkflowCore<ReadRequest>, stream: StreamId) {
         while self.next_to_issue < self.chunks.len()
             && self.next_to_issue - self.next_to_fold < self.window
         {
@@ -152,7 +152,10 @@ impl HashStream {
 
     /// Consumes whatever replies the host has provided, folding them in
     /// order and buffering any that arrived early.
-    pub(crate) fn absorb(&mut self, core: &mut SessionCore<ReadRequest>) -> Result<(), Error> {
+    pub(crate) fn absorb(
+        &mut self,
+        core: &mut ManualWorkflowCore<ReadRequest>,
+    ) -> Result<(), Error> {
         let mut position = 0;
 
         while position < self.outstanding.len() {
@@ -346,7 +349,7 @@ mod tests {
     fn run(order: impl Fn(usize) -> Vec<usize>, chunk_size: u64, window: usize) -> Vec<u8> {
         let asset: Vec<u8> = (0..1000u32).map(|i| (i % 251) as u8).collect();
 
-        let mut core = SessionCore::default();
+        let mut core = ManualWorkflowCore::default();
         let mut stream =
             HashStream::with_limits(HashAlgorithm::Sha256, &[range(0, 1000)], chunk_size, window);
 
@@ -413,7 +416,7 @@ mod tests {
 
     #[test]
     fn no_more_than_the_window_is_ever_in_play() {
-        let mut core = SessionCore::default();
+        let mut core = ManualWorkflowCore::default();
         let mut stream = HashStream::with_limits(HashAlgorithm::Sha256, &[range(0, 1000)], 100, 3);
 
         stream.issue(&mut core, StreamId::new(0));
@@ -444,7 +447,7 @@ mod tests {
 
     #[test]
     fn a_wrong_length_reply_is_rejected() {
-        let mut core = SessionCore::default();
+        let mut core = ManualWorkflowCore::default();
         let mut stream = HashStream::with_limits(HashAlgorithm::Sha256, &[range(0, 100)], 100, 4);
 
         stream.issue(&mut core, StreamId::new(0));
@@ -462,7 +465,7 @@ mod tests {
 
     #[test]
     fn a_mismatched_stored_reply_is_defensively_rejected() {
-        let mut core = SessionCore::default();
+        let mut core = ManualWorkflowCore::default();
         let mut stream = HashStream::with_limits(HashAlgorithm::Sha256, &[range(0, 100)], 100, 4);
 
         stream.issue(&mut core, StreamId::new(0));
@@ -483,7 +486,7 @@ mod tests {
 
     #[test]
     fn a_host_failure_propagates() {
-        let mut core = SessionCore::default();
+        let mut core = ManualWorkflowCore::default();
         let mut stream = HashStream::with_limits(HashAlgorithm::Sha256, &[range(0, 100)], 100, 4);
 
         stream.issue(&mut core, StreamId::new(0));

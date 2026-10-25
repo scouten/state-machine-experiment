@@ -60,7 +60,7 @@ use contentauth_c2pa_file_reader::{
     FileReadReply, FileReadRequest, FileReadSession, ReadReport, ReadSettings,
 };
 use contentauth_c2pa_primitives::{ByteRange, HostError};
-use contentauth_state_machine::{Session, Step};
+use contentauth_sans_io_core::{Step, Workflow};
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 
 use crate::{error::Error, format};

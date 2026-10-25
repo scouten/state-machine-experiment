@@ -16,7 +16,7 @@ publish = false
 # The contract this crate implements — the only crate in the workspace a
 # format handler needs to know about.
 contentauth-c2pa-format = { path = "../contentauth-c2pa-format" }
-contentauth-state-machine = { path = "../contentauth-state-machine" }
+contentauth-sans-io-core = { path = "../contentauth-sans-io-core" }
 contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
 
 [dev-dependencies]

@@ -31,8 +31,8 @@
 
 #![allow(dead_code, clippy::unwrap_used, clippy::panic)]
 
-use contentauth_state_machine::{
-    Failure, HostRequest, ProtocolError, Request, RequestId, Session, SessionCore, Step,
+use contentauth_sans_io_core::{
+    Failure, HostRequest, ManualWorkflowCore, ProtocolError, Request, RequestId, Step, Workflow,
 };
 
 /// A two-kind request vocabulary: enough to exercise reply-shape
@@ -74,7 +74,7 @@ impl Request for Kind {
 /// the n-th ID any fresh session hands out, which is exactly what a host
 /// confusing two sessions' IDs would present.
 pub struct Ids {
-    mint: SessionCore<Kind>,
+    mint: ManualWorkflowCore<Kind>,
     pool: Vec<RequestId>,
 }
 
@@ -88,7 +88,7 @@ fn core_failure() -> Failure {
 impl Ids {
     pub fn new() -> Self {
         Self {
-            mint: SessionCore::default(),
+            mint: ManualWorkflowCore::default(),
             pool: Vec::new(),
         }
     }
@@ -170,10 +170,10 @@ impl Cursor<'_> {
 }
 
 // ---------------------------------------------------------------------
-// Harness 1: `SessionCore` driven directly, as a workflow would.
+// Harness 1: `ManualWorkflowCore` driven directly, as a workflow would.
 // ---------------------------------------------------------------------
 
-/// One call on a [`SessionCore`].
+/// One call on a [`ManualWorkflowCore`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CoreOp {
     Issue(Kind),
@@ -215,7 +215,7 @@ enum Life {
     Failed,
 }
 
-/// The reference model of a `SessionCore`: plain vectors and linear scans.
+/// The reference model of a `ManualWorkflowCore`: plain vectors and linear scans.
 #[derive(Default)]
 struct CoreModel {
     next: u64,
@@ -241,10 +241,10 @@ impl CoreModel {
     }
 }
 
-/// Runs `ops` against a real [`SessionCore`] and the reference model,
+/// Runs `ops` against a real [`ManualWorkflowCore`] and the reference model,
 /// asserting they agree after every operation.
 pub fn run_core(ops: &[CoreOp]) {
-    let mut core: SessionCore<Kind> = SessionCore::default();
+    let mut core: ManualWorkflowCore<Kind> = ManualWorkflowCore::default();
     let mut model = CoreModel::default();
     let mut ids = Ids::new();
 
@@ -337,7 +337,7 @@ pub fn run_core(ops: &[CoreOp]) {
 }
 
 // ---------------------------------------------------------------------
-// Harness 2: a whole `Session` through the public `Session` contract.
+// Harness 2: a whole `Workflow` through the public `Workflow` contract.
 // ---------------------------------------------------------------------
 
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
@@ -353,7 +353,7 @@ pub enum FanError {
 /// completes once every one is answered, or fails on the first `Failed`
 /// reply it consumes.
 pub struct FanOut {
-    core: SessionCore<Kind>,
+    core: ManualWorkflowCore<Kind>,
     n: usize,
     ids: Option<Vec<RequestId>>,
     received: usize,
@@ -362,7 +362,7 @@ pub struct FanOut {
 impl FanOut {
     pub fn new(n: usize) -> Self {
         Self {
-            core: SessionCore::default(),
+            core: ManualWorkflowCore::default(),
             n,
             ids: None,
             received: 0,
@@ -374,7 +374,7 @@ fn fan_failure() -> Failure {
     Failure::new("AwaitingReplies", &"the host reported a failure")
 }
 
-impl Session for FanOut {
+impl Workflow for FanOut {
     type Error = FanError;
     type Output = usize;
     type Request = Kind;
@@ -476,7 +476,7 @@ pub fn decode_session(bytes: &[u8]) -> SessionScript {
     SessionScript { n, ops }
 }
 
-/// Reference model of [`FanOut`], derived from the [`Session`] contract
+/// Reference model of [`FanOut`], derived from the [`Workflow`] contract
 /// alone (not from `FanOut`'s code).
 struct FanModel {
     n: usize,

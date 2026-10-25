@@ -24,9 +24,9 @@
 
 use std::{collections::HashSet, fmt, fmt::Write as _};
 
-use crate::{HostRequest, Request, RequestId, Session, Step};
+use crate::{HostRequest, Request, RequestId, Step, Workflow};
 
-/// What one call to [`Session::advance`] (or [`Session::fulfill`]) returned,
+/// What one call to [`Workflow::advance`] (or [`Workflow::fulfill`]) returned,
 /// as recorded in a [`Transcript`].
 ///
 /// Errors are kept as their [`Display`](fmt::Display) text: what matters for
@@ -57,20 +57,20 @@ impl<T> Outcome<T> {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Event<Req: Request> {
-    /// The host called [`Session::advance`].
+    /// The host called [`Workflow::advance`].
     Advanced {
-        /// [`Session::phase`] just before the call.
+        /// [`Workflow::phase`] just before the call.
         phase: String,
 
         /// What the call returned.
         outcome: Outcome<Step>,
 
         /// Requests the session issued during the call, in the order
-        /// [`Session::outstanding_requests`] lists them.
+        /// [`Workflow::outstanding_requests`] lists them.
         issued: Vec<HostRequest<Req>>,
     },
 
-    /// The host called [`Session::fulfill`].
+    /// The host called [`Workflow::fulfill`].
     Fulfilled {
         /// The request being answered.
         id: RequestId,
@@ -235,15 +235,15 @@ impl<Req: Request> fmt::Display for Transcript<Req> {
 }
 
 /// Wraps a session, recording every call its host makes into a
-/// [`Transcript`]. Is itself a [`Session`], so a host drives it exactly as it
+/// [`Transcript`]. Is itself a [`Workflow`], so a host drives it exactly as it
 /// would the session inside — recording is a one-line change to a host.
-pub struct Recorder<S: Session> {
+pub struct Recorder<S: Workflow> {
     session: S,
     transcript: Transcript<S::Request>,
     seen: HashSet<RequestId>,
 }
 
-impl<S: Session> Recorder<S> {
+impl<S: Workflow> Recorder<S> {
     /// Starts recording `session`.
     pub fn new(session: S) -> Self {
         Self {
@@ -265,9 +265,9 @@ impl<S: Session> Recorder<S> {
     }
 }
 
-impl<S> Session for Recorder<S>
+impl<S> Workflow for Recorder<S>
 where
-    S: Session,
+    S: Workflow,
     S::Request: Clone + Send,
     <S::Request as Request>::Reply: Clone + Send,
     S::Error: fmt::Display,
@@ -329,7 +329,7 @@ pub struct Divergence {
     /// Index into [`Transcript::events`] of the call that went differently.
     pub event: usize,
 
-    /// [`Session::phase`] just before that call, in the replay.
+    /// [`Workflow::phase`] just before that call, in the replay.
     pub phase: String,
 
     /// What the transcript recorded.
@@ -357,13 +357,13 @@ impl std::error::Error for Divergence {}
 /// issues the same requests (compared by their [`Debug`](fmt::Debug) text).
 ///
 /// Returns the session as the transcript leaves it, so a caller can go on
-/// to inspect it, keep driving it, or [`Session::finish`] it; or the first
+/// to inspect it, keep driving it, or [`Workflow::finish`] it; or the first
 /// [`Divergence`]. Since a session's every input arrives as a reply, a
 /// faithful replay reproduces a failure exactly — under a debugger, with
 /// added logging, or against a fix that should now behave differently.
 pub fn replay<S>(mut session: S, transcript: &Transcript<S::Request>) -> Result<S, Divergence>
 where
-    S: Session,
+    S: Workflow,
     <S::Request as Request>::Reply: Clone,
     S::Error: fmt::Display,
 {
@@ -431,7 +431,7 @@ mod tests {
 
     /// Drives `session` to the end, answering every ping with `answer`,
     /// and returns how it ended.
-    fn drive<S: Session<Request = Ping>>(
+    fn drive<S: Workflow<Request = Ping>>(
         session: &mut S,
         answer: impl Fn(&Ping) -> Pong,
     ) -> Result<Step, S::Error> {

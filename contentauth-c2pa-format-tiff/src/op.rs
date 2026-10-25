@@ -23,9 +23,9 @@
 use core::mem::replace;
 
 use contentauth_c2pa_format::{
-    FormatError, HostRequest, IoReply, IoRequest, RequestId, Session, Step, StreamId,
+    FormatError, HostRequest, IoReply, IoRequest, RequestId, Step, StreamId, Workflow,
 };
-use contentauth_state_machine::SessionCore;
+use contentauth_sans_io_core::ManualWorkflowCore;
 
 use crate::scan::{Layout, Scanner};
 
@@ -56,14 +56,14 @@ enum State<G: Goal> {
 
 /// A scan-then-finalize operation over one stream.
 pub(crate) struct ScanOp<G: Goal> {
-    core: SessionCore<IoRequest>,
+    core: ManualWorkflowCore<IoRequest>,
     state: State<G>,
 }
 
 impl<G: Goal> ScanOp<G> {
     pub(crate) fn new(stream: StreamId, goal: G) -> Self {
         Self {
-            core: SessionCore::default(),
+            core: ManualWorkflowCore::default(),
             state: State::Scanning {
                 scanner: Scanner::new(stream, G::READS_MANIFEST),
                 goal,
@@ -92,7 +92,7 @@ impl<G: Goal> ScanOp<G> {
     }
 }
 
-impl<G: Goal> Session for ScanOp<G> {
+impl<G: Goal> Workflow for ScanOp<G> {
     type Error = FormatError;
     type Output = G::Output;
     type Request = IoRequest;
@@ -148,11 +148,11 @@ impl<G: Goal> Session for ScanOp<G> {
     }
 }
 
-/// Implements [`Session`] for a public newtype around a [`ScanOp`] by
+/// Implements [`Workflow`] for a public newtype around a [`ScanOp`] by
 /// delegation, keeping [`ScanOp`] and [`Goal`] out of the crate's API.
 macro_rules! delegate_session {
     ($wrapper:ident, $output:ty) => {
-        impl ::contentauth_c2pa_format::Session for $wrapper {
+        impl ::contentauth_c2pa_format::Workflow for $wrapper {
             type Error = ::contentauth_c2pa_format::FormatError;
             type Output = $output;
             type Request = ::contentauth_c2pa_format::IoRequest;

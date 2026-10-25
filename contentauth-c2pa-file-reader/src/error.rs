@@ -32,9 +32,9 @@ pub enum Error {
     },
 
     /// [`crate::FileReadSession`]'s own host used the
-    /// [`contentauth_state_machine::Session`] API incorrectly.
+    /// [`contentauth_sans_io_core::Workflow`] API incorrectly.
     #[error(transparent)]
-    Protocol(#[from] contentauth_state_machine::ProtocolError),
+    Protocol(#[from] contentauth_sans_io_core::ProtocolError),
 
     /// The format handler could not locate the manifest store in the
     /// asset's container.

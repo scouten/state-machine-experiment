@@ -94,7 +94,7 @@ proptest! {
 /// fan-out width and every order of replies.
 #[test]
 fn happy_path_completes_for_any_reply_order() {
-    use contentauth_state_machine::{RequestId, Session, Step};
+    use contentauth_sans_io_core::{RequestId, Step, Workflow};
 
     for n in 0..6u8 {
         for reverse in [false, true] {

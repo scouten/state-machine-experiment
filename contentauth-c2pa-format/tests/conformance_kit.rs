@@ -30,10 +30,10 @@ use contentauth_c2pa_format::{
     take_bytes, take_length,
     test_util::{conformance, MemoryHost, STREAM},
     ByteRange, Edit, EmbedPlan, FormatDescriptor, FormatError, FormatHandler, HostRequest,
-    IoRequest, ManifestLocation, Patch, ProtocolError, RequestId, Session, Signature, Step,
-    StreamId,
+    IoRequest, ManifestLocation, Patch, ProtocolError, RequestId, Signature, Step, StreamId,
+    Workflow,
 };
-use contentauth_state_machine::SessionCore;
+use contentauth_sans_io_core::ManualWorkflowCore;
 
 const MAGIC: &[u8; 4] = b"C2PA";
 
@@ -68,7 +68,7 @@ enum Phase {
 /// describe.
 struct Scan {
     stream: StreamId,
-    core: SessionCore<IoRequest>,
+    core: ManualWorkflowCore<IoRequest>,
     phase: Phase,
 }
 
@@ -76,7 +76,7 @@ impl Scan {
     fn new(stream: StreamId) -> Self {
         Self {
             stream,
-            core: SessionCore::default(),
+            core: ManualWorkflowCore::default(),
             phase: Phase::Start,
         }
     }
@@ -224,7 +224,7 @@ impl Scan {
 
 struct Locate(Scan);
 
-impl Session for Locate {
+impl Workflow for Locate {
     type Error = FormatError;
     type Output = ManifestLocation;
     type Request = IoRequest;
@@ -244,7 +244,7 @@ impl Session for Locate {
     fn fulfill(
         &mut self,
         id: RequestId,
-        reply: <IoRequest as contentauth_state_machine::Request>::Reply,
+        reply: <IoRequest as contentauth_sans_io_core::Request>::Reply,
     ) -> Result<(), FormatError> {
         Ok(self.0.core.fulfill(id, reply)?)
     }
@@ -262,7 +262,7 @@ struct PlanEmbed {
     manifest_len: u64,
 }
 
-impl Session for PlanEmbed {
+impl Workflow for PlanEmbed {
     type Error = FormatError;
     type Output = EmbedPlan;
     type Request = IoRequest;
@@ -282,7 +282,7 @@ impl Session for PlanEmbed {
     fn fulfill(
         &mut self,
         id: RequestId,
-        reply: <IoRequest as contentauth_state_machine::Request>::Reply,
+        reply: <IoRequest as contentauth_sans_io_core::Request>::Reply,
     ) -> Result<(), FormatError> {
         Ok(self.scan.core.fulfill(id, reply)?)
     }

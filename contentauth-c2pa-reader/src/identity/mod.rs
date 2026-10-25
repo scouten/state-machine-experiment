@@ -471,7 +471,7 @@ mod tests {
             TEST_SIGNER_CERT,
         },
         validation::ValidationState,
-        ReadReport, ReadStep, Session,
+        ReadReport, ReadStep, Workflow,
     };
 
     /// An instant inside the test signer's validity window.

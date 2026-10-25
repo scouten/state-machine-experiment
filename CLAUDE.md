@@ -7,32 +7,35 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
 (Content Credentials) workflows. Crates today:
 
-- **`contentauth-state-machine`** — the reusable engine. Domain-agnostic:
+- **`contentauth-sans-io-core`** — shared host-driven workflow infrastructure
+  for C2PA/CAWG, not a general-purpose state-machine framework. The host
+  owns I/O, concurrency, and scheduling; the core contains no domain logic:
   a request/reply vocabulary trait, request tracking, a protocol-error
   vocabulary, and the `advance` / `fulfill` / `finish` interaction
   contract. Its session core is held to model-based `proptest` tests and
   `cargo-fuzz` targets (`fuzz/`, outside the workspace; see the engine's README, "Testing and fuzzing");
-  a change to `SessionCore`/`RequestTracker` must keep
-  `cargo test -p contentauth-state-machine` passing and should be
-  fuzzed briefly. See [`src/session.rs`](contentauth-state-machine/src/session.rs)
-  for `Session`/`SessionCore` (a hand-written phase enum) and
-  [`src/workflow.rs`](contentauth-state-machine/src/workflow.rs) for
-  `Workflow`/`Host` (the same contract, with the workflow written as an
+  a change to `ManualWorkflowCore`/`RequestTracker` must keep
+  `cargo test -p contentauth-sans-io-core` passing and should be
+  fuzzed briefly. See [`src/workflow.rs`](contentauth-sans-io-core/src/workflow.rs)
+  for the common `Workflow` contract and `ManualWorkflowCore` bookkeeping
+  (a hand-written phase enum), and
+  [`src/coroutine.rs`](contentauth-sans-io-core/src/coroutine.rs) for
+  `CoroutineWorkflow`/`Host` (the same contract, with the workflow written as an
   `async fn` the compiler turns into the state machine — no runtime;
-  `BuilderSession` uses it, `ReadSession` does not yet), and [`README.md`](contentauth-state-machine/README.md)
+  `BuilderSession` uses it, `ReadSession` does not yet), and [`README.md`](contentauth-sans-io-core/README.md)
   for the interaction contract diagram. Every session reports a
   diagnostic `phase()` (nested sessions as `"Outer > Inner"`) and records
-  where and why it failed via `SessionCore::mark_failed(phase, &err)` or
-  automatically in `Workflow` using the current `Host::set_phase`,
+  where and why it failed via `ManualWorkflowCore::mark_failed(phase, &err)` or
+  automatically in `CoroutineWorkflow` using the current `Host::set_phase`,
   which later calls report as `ProtocolError::SessionFailed(Failure)`;
-  `Recorder`/`replay` ([`src/recorder.rs`](contentauth-state-machine/src/recorder.rs))
+  `Recorder`/`replay` ([`src/recorder.rs`](contentauth-sans-io-core/src/recorder.rs))
   record a host conversation as a `Transcript` and reproduce it
   deterministically.
 - **`contentauth-c2pa-reader`** — a from-scratch, sans-I/O reader/validator
   for C2PA manifest stores, built on the engine above. An experimental
   alternative architecture to the [c2pa-rs](https://github.com/contentauth/c2pa-rs)
   SDK. `ReadSession` ([`src/read.rs`](contentauth-c2pa-reader/src/read.rs))
-  implements `Session`; its own request vocabulary is in
+  implements `Workflow`; its own request vocabulary is in
   [`src/request.rs`](contentauth-c2pa-reader/src/request.rs). See its
   [README.md](contentauth-c2pa-reader/README.md) for what it validates
   (integrity, claim signature, trust chain, RFC 3161 timestamps, and OCSP
@@ -152,7 +155,7 @@ A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
   Rust's ownership rules allow it, same `Error::JumbfNotFound`/JSON
   contracts — on top of `contentauth-c2pa-file-reader` and
   `contentauth-c2pa-format-registry` (JPEG and TIFF), instead of this workspace's own
-  `Session` interaction contract. One use case only: `Context` (trust
+  `Workflow` interaction contract. One use case only: `Context` (trust
   anchors) and `Reader::from_context(context).with_file(path)` on a local
   JPEG or TIFF — the preferred shape, mirroring what c2pa-rs's own docs now
   recommend over its deprecated standalone `Reader::from_file` (kept here
@@ -370,8 +373,8 @@ make further progress. `Step::Complete` means the workflow is done; consume
 the session with `finish` to get its result.
 
 A new concrete workflow (e.g. a future write/signing crate) is expected to
-be its own crate depending on `contentauth-state-machine`, implementing
-`Session` and defining its own `Request` vocabulary and settings/result
+be its own crate depending on `contentauth-sans-io-core`, implementing
+`Workflow` and defining its own `Request` vocabulary and settings/result
 types — it should not need to modify the engine crate.
 
 `contentauth-c2pa-reader` treats several submodules as deliberate seams

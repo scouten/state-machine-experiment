@@ -17,7 +17,7 @@
 use std::path::PathBuf;
 
 use contentauth_c2pa_primitives::{ByteRange, HostError};
-use contentauth_state_machine::RequestId;
+use contentauth_sans_io_core::RequestId;
 
 /// Errors surfaced by [`crate::FileBuilderSession`],
 /// [`crate::build_and_sign`], and [`crate::build_and_sign_file`].
@@ -36,9 +36,9 @@ pub enum Error {
     },
 
     /// [`crate::FileBuilderSession`]'s own host used the
-    /// [`contentauth_state_machine::Session`] API incorrectly.
+    /// [`contentauth_sans_io_core::Workflow`] API incorrectly.
     #[error(transparent)]
-    Protocol(#[from] contentauth_state_machine::ProtocolError),
+    Protocol(#[from] contentauth_sans_io_core::ProtocolError),
 
     /// The format handler could not plan the embedding, or commit the
     /// final manifest, into the asset's container.
