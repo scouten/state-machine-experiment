@@ -6,9 +6,11 @@
 import init, { ReadSession, BuildSession } from "../../generated/contentauth_c2pa_wasm.js";
 import { serve } from "../shared/service.mjs";
 
-await init();
-// The JSON control is retained only for the boundary experiment.
-const binary = new URL(self.location.href).searchParams.get("transport") !== "json";
+const wasm = await init();
+// Copied binary and JSON controls are retained only for the boundary experiment.
+const transport = new URL(self.location.href).searchParams.get("transport") ?? "leased";
+const binary = transport !== "json";
+const leased = transport === "leased";
 serve({
   post: (message) => self.postMessage(message),
   onMessage: (callback) => { self.onmessage = (event) => callback(event.data) },
@@ -35,8 +37,8 @@ serve({
    */
   createBuild(definition, certs) {
     const session = new BuildSession(definition, JSON.stringify(certs.map((cert) => Array.from(cert))));
-    const boundary = { transport: binary ? "binary" : "json", wasmAdvanceMs: 0, parseMs: 0,
-      payloadMs: 0, metadataChars: 0, writePayloadBytes: 0, writes: 0 };
+    const boundary = { transport, wasmAdvanceMs: 0, parseMs: 0,
+      payloadMs: 0, metadataChars: 0, writePayloadBytes: 0, copiedPayloadBytes: 0, writes: 0 };
     return {
       advance() {
         let started = performance.now();
@@ -48,18 +50,32 @@ serve({
         boundary.parseMs += performance.now() - started;
         started = performance.now();
         for (const request of step.requests ?? []) {
-          // Binary transport: write bytes stay in Wasm memory and are copied
-          // out once by `payload`; JSON transport inlines them as number arrays.
           if (request.kind === "write") {
-            request.bytes = binary ? session.payload(request.payload) : new Uint8Array(request.bytes);
-            delete request.payload;
+            if (!leased) {
+              request.bytes = binary ? session.payload(request.payload) : new Uint8Array(request.bytes);
+              request.len = request.bytes.length;
+              boundary.copiedPayloadBytes += request.len;
+            }
             boundary.writes++;
-            boundary.writePayloadBytes += request.bytes.length;
+            boundary.writePayloadBytes += request.len;
           }
           if (request.data) request.data = new Uint8Array(request.data);
         }
         boundary.payloadMs += performance.now() - started;
         return step;
+      },
+      write(request, output) {
+        const started = performance.now();
+        if (leased) {
+          const ptr = session.payload_ptr(request.payload);
+          // No await or Wasm call while the view exists. memory.grow can detach
+          // an earlier buffer, so acquire memory.buffer anew for every write.
+          output.set(new Uint8Array(wasm.memory.buffer, ptr, request.len), request.offset);
+          session.release_payload(request.payload);
+        } else {
+          output.set(request.bytes, request.offset);
+        }
+        boundary.payloadMs += performance.now() - started;
       },
       fulfill(id, kind, value) {
         if (kind === "bytes") session.bytes(id, value);

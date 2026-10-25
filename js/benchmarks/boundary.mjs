@@ -10,7 +10,8 @@ function equal(actual, expected, message) {
 export async function boundaryComparison(createClient, fixture, pkcs8) {
   const key = await crypto.subtle.importKey("pkcs8", pkcs8,
     { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
-  const clients = { json: createClient({ transport: "json" }), binary: createClient({ transport: "binary" }) };
+  const transports = ["json", "binary", "leased"];
+  const clients = Object.fromEntries(transports.map((transport) => [transport, createClient({ transport })]));
   const samples = [];
   const source = (name) => {
     const bytes = new Uint8Array(fixture.signing.files[name].sourceBytes);
@@ -49,6 +50,8 @@ export async function boundaryComparison(createClient, fixture, pkcs8) {
     check(result.boundary.transport === transport, "wrong boundary selected");
     check(result.boundary.writePayloadBytes === result.stats.writtenBytes, "boundary byte accounting changed");
     check(result.boundary.writes === result.stats.writes, "boundary write accounting changed");
+    check(result.boundary.copiedPayloadBytes === (transport === "leased" ? 0 : result.stats.writtenBytes),
+      "temporary write-payload copy budget exceeded");
     // Validate outside the measured build interval.
     const { report } = await client.read(result.asset, { settings: fixture.settings, now: fixture.now });
     equal(report, fixture.files[name].report, "boundary comparison trusted report changed");
@@ -58,14 +61,14 @@ export async function boundaryComparison(createClient, fixture, pkcs8) {
   }
   try {
     for (const name of ["small", "large"]) {
-      for (const transport of ["json", "binary"]) await run(transport, name, false, -1);
+      for (const transport of transports) await run(transport, name, false, -1);
       for (let iteration = 0; iteration < 4; iteration++) {
-        for (const transport of iteration % 2 ? ["binary", "json"] : ["json", "binary"])
+        for (const transport of iteration % 2 ? [...transports].reverse() : transports)
           await run(transport, name, true, iteration);
       }
     }
-    return { order: "four paired iterations per size, alternating json/binary first; one warmup per size/transport",
-      instrumentation: "wasmAdvanceMs includes Rust work, serialization and string transfer; parseMs is JSON.parse; payloadMs includes byte conversion/copy and request normalization",
+    return { order: "four iterations per size, reversing json/binary/leased order; one warmup per size/transport",
+      instrumentation: "wasmAdvanceMs includes Rust work, serialization and string transfer; parseMs is JSON.parse; payloadMs includes normalization and synchronous output writes; copiedPayloadBytes counts temporary boundary bytes, excluding output writes and JS-to-Wasm reads",
       samples };
   } finally { await Promise.all(Object.values(clients).map((client) => client.dispose())) }
 }

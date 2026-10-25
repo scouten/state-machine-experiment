@@ -46,6 +46,7 @@ try {
         const { createClient } = await import("/src/browser/client.mjs");
         const { contract } = await import("/test/contract.mjs");
         const { signingContract } = await import("/test/signing.mjs");
+        const { leaseContract } = await import("/test/leases.mjs");
         const { boundaryComparison } = await import("/benchmarks/boundary.mjs");
         const fixture = await (await fetch("/generated/fixtures.json")).json();
         const load = async (name) => new Uint8Array(await (await fetch(`/generated/${name}.jpg`)).arrayBuffer());
@@ -53,13 +54,14 @@ try {
         const small = await load("small");
         const large = await load("large");
         const transports = {};
-        for (const transport of ["json", "binary"]) {
-          const create = transport === "binary" ? () => createClient() : () => createClient({ transport });
+        const leases = await leaseContract(fixture);
+        for (const transport of ["json", "binary", "leased"]) {
+          const create = transport === "leased" ? () => createClient() : () => createClient({ transport });
           const signing = await signingContract(create, fixture, pkcs8);
           transports[transport] = { ...(await contract(create, small, large, fixture)), signing };
         }
         const comparison = await boundaryComparison(createClient, fixture, pkcs8);
-        return { ...transports.binary, transports, comparison,
+        return { ...transports.leased, leases, transports, comparison,
           userAgent: navigator.userAgent };
       });
       assert.deepEqual(errors, [], `${name}: unhandled application error`);
@@ -68,7 +70,7 @@ try {
         JSON.stringify({ measuredAt: new Date().toISOString(), fingerprints: await fingerprints(), ...result }, null, 2));
       console.log(`${name}: all ${result.checks.length} shared contract checks pass`);
       console.log(`${name}: all ${result.signing.checks.length} shared signing checks pass`);
-      console.log(`${name}: both JSON/binary contracts pass; ${result.comparison.samples.length} paired boundary samples validated`);
+      console.log(`${name}: JSON/binary/leased contracts and ${result.leases.length} lease checks pass; ${result.comparison.samples.length} boundary samples validated`);
     } finally { await browser.close() }
   }
 } finally { await new Promise((resolve) => server.close(resolve)) }
