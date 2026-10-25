@@ -106,6 +106,25 @@ Hosts should stop servicing those requests and discard late results;
 operations already performed are not undone. Dropping one `PendingReply`
 while the workflow is still running does not cancel its request.
 
+## Composing sessions
+
+[`Nested`](src/nested.rs) drives any `Session` from a `Workflow`'s async
+function, including hand-written sessions and other workflows. Repeatedly
+await `nested.next()` to obtain an inner request, then either answer it
+with `nested.fulfill(id, reply)` or forward it using
+`nested.forward(id, host.request(outer_request), map_reply)`. Once `next`
+returns `None`, `nested.finish()` returns the inner result.
+
+The adapter handles request-ID translation and delivers whichever forwarded
+replies are ready, so multiple requests remain concurrently outstanding and
+the host may answer in any order. There is still no runtime or I/O inside
+the engine. An unanswered inner request that cannot make progress produces
+`ProtocolError::UnansweredRequest`; inner errors propagate to the caller.
+`nested.phase()` exposes the inner diagnostic stage for the outer workflow.
+
+The inner request vocabulary must implement `Clone`; forwarding's reply
+mapper is a function pointer (a function or non-capturing closure).
+
 ## Debugging a session
 
 A state machine that stops with an error can be hard to diagnose: by the
