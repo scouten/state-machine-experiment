@@ -33,6 +33,10 @@ New here? [`docs/walkthrough`](docs/walkthrough/README.md) is a guided tour —
 how this differs from c2pa-rs and its bindings, the architecture, and
 where it could go next — written in Markdown with Mermaid diagrams.
 
+[`docs/migration-plan.md`](docs/migration-plan.md) is a draft plan for
+adopting this architecture as the core of c2pa-rs: the major milestones,
+what proves each one done, and the questions still open.
+
 ## Crates
 
 * [`contentauth-state-machine`](contentauth-state-machine) — the
