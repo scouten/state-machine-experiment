@@ -16,6 +16,11 @@
 //! — with the asynchrony that API promises living *here*, at the
 //! interface-specific layer, rather than anywhere in the engine.
 //!
+//! This is the earlier alternative Rust-owned async host. The preferred shared
+//! JavaScript host drives synchronous bridges through Wasm/Neon instead.
+//! Compatibility vocabulary now lives in `contentauth-c2pa-session-bridge`;
+//! this crate reexports it to preserve its existing async API and behavior.
+//!
 //! # Why
 //!
 //! [`contentauth-c2pa-rs-compat`](../contentauth_c2pa_rs_compat/index.html)
@@ -86,8 +91,8 @@
 //!   [`Blob`]s.
 //! * **`resourceToBytes`, `crJson`** — both depend on resource and
 //!   thumbnail data [`contentauth_c2pa_reader`] does not decode yet.
-//! * **Every format but JPEG** — `src/format.rs` is the seam, exactly as
-//!   it is in `contentauth-c2pa-rs-compat`.
+//! * **Formats beyond JPEG and TIFF/BigTIFF/DNG** — the bridge's
+//!   `compat::format` selects from the workspace's format registry.
 //! * **The full `@contentauth/c2pa-types` `ManifestStore` shape** —
 //!   ingredients, decoded assertion values, thumbnails. [`ManifestStore`]
 //!   carries the top-level contract (a map of manifests keyed by label, an
@@ -107,11 +112,8 @@
 #![deny(unsafe_code)]
 
 mod blob;
-mod context;
 mod drive;
-mod error;
-mod format;
-mod manifest_store;
+use contentauth_c2pa_session_bridge::compat::{context, error, format, manifest_store};
 mod platform;
 mod reader;
 

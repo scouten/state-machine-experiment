@@ -343,10 +343,12 @@ fn a_host_failure_surfaces_rather_than_hanging() {
         .unwrap();
 
     assert!(matches!(op.advance(), Err(FormatError::HostFailure { .. })));
-    // The operation is spent.
+    // The operation is spent, and says where it failed.
+    assert_eq!(op.phase(), "Scanning > Length");
     assert!(matches!(
         op.advance(),
-        Err(FormatError::Protocol(ProtocolError::SessionFailed))
+        Err(FormatError::Protocol(ProtocolError::SessionFailed(failure)))
+            if failure.phase == "Scanning > Length"
     ));
 }
 
@@ -355,9 +357,11 @@ fn answer(asset: &[u8], request: &contentauth_c2pa_format::IoRequest) -> IoReply
     use contentauth_c2pa_format::IoRequest;
     match request {
         IoRequest::Length { .. } => IoReply::Length(asset.len() as u64),
-        IoRequest::Read { range, .. } => {
-            IoReply::Bytes(asset[range.start as usize..][..range.len as usize].to_vec())
-        }
+        IoRequest::Read { range, .. } => IoReply::Bytes(
+            asset[range.start as usize..][..range.len as usize]
+                .to_vec()
+                .into(),
+        ),
         other => panic!("unexpected request: {other:?}"),
     }
 }

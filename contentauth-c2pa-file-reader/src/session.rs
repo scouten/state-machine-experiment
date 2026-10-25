@@ -28,7 +28,7 @@
 use std::collections::HashMap;
 
 use contentauth_c2pa_format::{FormatHandler, IoReply, IoRequest};
-use contentauth_c2pa_primitives::{ByteRange, HostError, StreamId};
+use contentauth_c2pa_primitives::{ByteRange, Bytes, HostError, StreamId};
 use contentauth_c2pa_reader::{
     ReadHostReply, ReadReport, ReadRequest, ReadSession, ReadSettings, ReadStep,
 };
@@ -112,11 +112,11 @@ impl Request for FileReadRequest {
 }
 
 /// The host's report of the outcome of one [`FileReadRequest`].
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum FileReadReply {
     /// Answers [`FileReadRequest::Read`]: the requested bytes.
-    Bytes(Vec<u8>),
+    Bytes(Bytes),
 
     /// Answers [`FileReadRequest::Length`]: the stream's total length in
     /// bytes.
@@ -146,7 +146,7 @@ enum Phase<H: FormatHandler> {
         /// The embedded manifest store `Locating` found, if any — answers
         /// [`ReadRequest::ManifestStore`] without ever surfacing it to this
         /// session's own host.
-        manifest_store: Option<Vec<u8>>,
+        manifest_store: Option<Bytes>,
         session: Box<ReadSession>,
     },
 
@@ -221,8 +221,12 @@ impl<H: FormatHandler> FileReadSession<H> {
     /// `Running` — `finish` would then say `SessionNotComplete` — for a
     /// session `advance` has actually abandoned. Routing every such call
     /// through here keeps the two in agreement.
+    ///
+    /// `outer` names this session's own phase, which `target`'s is nested
+    /// under in the failure's report.
     fn checked_fulfill<S>(
         &mut self,
+        outer: &str,
         target: &mut S,
         id: RequestId,
         reply: <S::Request as Request>::Reply,
@@ -233,11 +237,16 @@ impl<H: FormatHandler> FileReadSession<H> {
     {
         match target.fulfill(id, reply) {
             Ok(()) => Ok(()),
-            Err(err) => {
-                self.core.mark_failed();
-                Err(err.into())
-            }
+            Err(err) => Err(self.fail(nested(outer, target), err)),
         }
+    }
+
+    /// Marks this session failed in `phase` because of `err`, and returns
+    /// `err` for the caller to report.
+    fn fail(&mut self, phase: String, err: impl Into<Error>) -> Error {
+        let err = err.into();
+        self.core.mark_failed(phase, &err);
+        err
     }
 }
 
@@ -249,22 +258,22 @@ impl<H: FormatHandler> Session for FileReadSession<H> {
     fn advance(&mut self) -> Result<Step, Error> {
         loop {
             match self.phase.take() {
+                // Left behind only by an earlier failure, which already
+                // recorded where it happened; the message is for the
+                // otherwise unreachable case that something else did.
                 None => {
-                    self.core.mark_failed();
-                    return Err(ProtocolError::SessionFailed.into());
+                    self.core.mark_failed("", &"session state was lost");
+                    return Err(self.core.failed_error().into());
                 }
 
                 Some(Phase::Locating(mut op)) => {
                     for (id, reply) in self.ready_replies() {
-                        self.checked_fulfill(&mut op, id, to_io_reply(reply))?;
+                        self.checked_fulfill(LOCATING, &mut op, id, to_io_reply(reply))?;
                     }
 
                     let step = match op.advance() {
                         Ok(step) => step,
-                        Err(err) => {
-                            self.core.mark_failed();
-                            return Err(err.into());
-                        }
+                        Err(err) => return Err(self.fail(nested(LOCATING, &op), err)),
                     };
 
                     if step == Step::Complete {
@@ -273,12 +282,10 @@ impl<H: FormatHandler> Session for FileReadSession<H> {
                         // checks a handler defers past its last read, for
                         // instance — so this is handled like any other
                         // handler failure rather than assumed impossible.
+                        let phase = nested(LOCATING, &op);
                         let location = match op.finish() {
                             Ok(location) => location,
-                            Err(err) => {
-                                self.core.mark_failed();
-                                return Err(err.into());
-                            }
+                            Err(err) => return Err(self.fail(phase, err)),
                         };
 
                         self.phase = Some(Phase::Reading {
@@ -312,6 +319,7 @@ impl<H: FormatHandler> Session for FileReadSession<H> {
                             // host to actually do.
                             None => {
                                 self.checked_fulfill(
+                                    LOCATING,
                                     &mut op,
                                     request.id,
                                     IoReply::Failed(HostError::new("unsupported request")),
@@ -334,27 +342,27 @@ impl<H: FormatHandler> Session for FileReadSession<H> {
                     mut session,
                 }) => {
                     for (id, reply) in self.ready_replies() {
-                        self.checked_fulfill(&mut *session, id, to_read_host_reply(reply))?;
+                        self.checked_fulfill(
+                            READING,
+                            &mut *session,
+                            id,
+                            to_read_host_reply(reply),
+                        )?;
                     }
 
                     let step = match session.advance() {
                         Ok(step) => step,
-                        Err(err) => {
-                            self.core.mark_failed();
-                            return Err(err.into());
-                        }
+                        Err(err) => return Err(self.fail(nested(READING, &*session), err)),
                     };
 
                     if step == ReadStep::Complete {
                         // As with the locate operation above: `finish` is
                         // not assumed infallible just because `advance`
                         // reported completion.
+                        let phase = nested(READING, &*session);
                         let report = match session.finish() {
                             Ok(report) => report,
-                            Err(err) => {
-                                self.core.mark_failed();
-                                return Err(err.into());
-                            }
+                            Err(err) => return Err(self.fail(phase, err)),
                         };
 
                         self.core.mark_complete();
@@ -371,6 +379,7 @@ impl<H: FormatHandler> Session for FileReadSession<H> {
 
                         if let ReadRequest::ManifestStore { .. } = request.kind {
                             self.checked_fulfill(
+                                READING,
                                 &mut *session,
                                 request.id,
                                 ReadHostReply::ManifestStore(manifest_store.clone()),
@@ -393,6 +402,7 @@ impl<H: FormatHandler> Session for FileReadSession<H> {
                             // nothing outstanding for the host to answer.
                             None => {
                                 self.checked_fulfill(
+                                    READING,
                                     &mut *session,
                                     request.id,
                                     ReadHostReply::Failed(HostError::new("unsupported request")),
@@ -425,6 +435,21 @@ impl<H: FormatHandler> Session for FileReadSession<H> {
         self.core.outstanding_requests()
     }
 
+    /// Names this session's phase — `Locating` or `Reading` — followed by
+    /// the phase of the format operation or [`ReadSession`] running inside
+    /// it, e.g. `Reading > HashingAsset`.
+    fn phase(&self) -> String {
+        if let Some(failure) = self.core.failure() {
+            return failure.phase.clone();
+        }
+        match &self.phase {
+            Some(Phase::Locating(op)) => nested(LOCATING, op),
+            Some(Phase::Reading { session, .. }) => nested(READING, &**session),
+            Some(Phase::Done(_)) => "Complete".into(),
+            None => "Poisoned".into(),
+        }
+    }
+
     fn fulfill(&mut self, id: RequestId, reply: FileReadReply) -> Result<(), Error> {
         Ok(self.core.fulfill(id, reply)?)
     }
@@ -436,6 +461,14 @@ impl<H: FormatHandler> Session for FileReadSession<H> {
             _ => Err(ProtocolError::SessionNotComplete.into()),
         }
     }
+}
+
+const LOCATING: &str = "Locating";
+const READING: &str = "Reading";
+
+/// Names `inner`'s phase as nested under this session's `outer` one.
+fn nested<S: Session + ?Sized>(outer: &str, inner: &S) -> String {
+    format!("{outer} > {}", inner.phase())
 }
 
 fn from_io_request(request: &IoRequest) -> Option<FileReadRequest> {
@@ -528,7 +561,7 @@ mod tests {
 
     fn all_replies() -> Vec<(FileReadReply, &'static str)> {
         vec![
-            (FileReadReply::Bytes(vec![1]), "Bytes"),
+            (FileReadReply::Bytes(vec![1].into()), "Bytes"),
             (FileReadReply::Length(4), "Length"),
             (
                 FileReadReply::CurrentDateTime(1_700_000_000),
@@ -606,8 +639,8 @@ mod tests {
     #[test]
     fn replies_translate_to_io_replies() {
         assert!(matches!(
-            to_io_reply(FileReadReply::Bytes(vec![1])),
-            IoReply::Bytes(bytes) if bytes == [1]
+            to_io_reply(FileReadReply::Bytes(vec![1].into())),
+            IoReply::Bytes(bytes) if bytes[..] == [1]
         ));
         assert!(matches!(
             to_io_reply(FileReadReply::Length(4)),
@@ -639,8 +672,8 @@ mod tests {
     #[test]
     fn replies_translate_to_read_host_replies() {
         assert!(matches!(
-            to_read_host_reply(FileReadReply::Bytes(vec![1])),
-            ReadHostReply::AssetBytes(bytes) if bytes == [1]
+            to_read_host_reply(FileReadReply::Bytes(vec![1].into())),
+            ReadHostReply::AssetBytes(bytes) if bytes[..] == [1]
         ));
         assert!(matches!(
             to_read_host_reply(FileReadReply::Length(4)),
@@ -674,10 +707,11 @@ mod tests {
         let foreign_id = foreign.outstanding_requests()[0].id;
 
         let mut op = JpegFormat.locate(StreamId::new(0));
-        let result = session.checked_fulfill(&mut op, foreign_id, IoReply::Length(0));
+        let result = session.checked_fulfill(LOCATING, &mut op, foreign_id, IoReply::Length(0));
 
         assert!(matches!(result, Err(Error::Format(_))), "{result:?}");
         assert!(session.core.is_failed());
+        assert_eq!(session.phase(), "Locating > Scanning > Start");
     }
 
     /// `advance` treats a `None` phase as a poisoned session rather than
@@ -696,7 +730,8 @@ mod tests {
 
         assert!(matches!(
             session.advance(),
-            Err(Error::Protocol(ProtocolError::SessionFailed))
+            Err(Error::Protocol(ProtocolError::SessionFailed(failure)))
+                if failure.cause == "session state was lost"
         ));
         assert!(session.core.is_failed());
     }

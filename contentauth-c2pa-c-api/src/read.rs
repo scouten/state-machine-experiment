@@ -18,7 +18,7 @@ use std::{collections::HashMap, ffi::CString};
 use contentauth_c2pa_file_reader::{FileReadReply, FileReadRequest, FileReadSession, ReadReport};
 use contentauth_c2pa_format_registry::AnyFormat;
 use contentauth_c2pa_js_compat::{Context, ManifestStore};
-use contentauth_c2pa_primitives::HostError;
+use contentauth_c2pa_primitives::{Bytes, HostError};
 use contentauth_state_machine::{RequestId, Session};
 
 use crate::{error::Error, format::resolve_format, C2PA_SM_STEP_COMPLETE, C2PA_SM_STEP_PENDING};
@@ -164,7 +164,7 @@ impl ReadSession {
 
     /// Fulfills a read request with bytes.
     pub fn fulfill_bytes(&mut self, id: u64, bytes: &[u8]) -> Result<(), Error> {
-        self.fulfill_reply(id, FileReadReply::Bytes(bytes.to_vec()))
+        self.fulfill_reply(id, FileReadReply::Bytes(Bytes::copy_from_slice(bytes)))
     }
 
     /// Fulfills a length request with asset length.
@@ -185,6 +185,16 @@ impl ReadSession {
     /// Fulfills a request with a failure report.
     pub fn fulfill_failed(&mut self, id: u64, msg: &str) -> Result<(), Error> {
         self.fulfill_reply(id, FileReadReply::Failed(HostError::new(msg)))
+    }
+
+    /// Where the underlying session is — the phase it is waiting in, or
+    /// the one it failed in — for diagnostics only; `"Finished"` once
+    /// [`Self::finish`] has consumed it. See
+    /// [`contentauth_state_machine::Session::phase`].
+    pub fn phase(&self) -> String {
+        self.inner
+            .as_ref()
+            .map_or_else(|| "Finished".to_owned(), Session::phase)
     }
 
     /// Finishes the read session, returning JSON and whether a manifest store was found.

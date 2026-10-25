@@ -21,6 +21,82 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  javascript-host:
+    name: Shared JavaScript host (Node and three browsers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Match js/package-lock.json; the image supplies browsers and OS libraries.
+      PLAYWRIGHT_IMAGE: mcr.microsoft.com/playwright:v1.60.0-noble@sha256:9bd26ad900bb5e0f4dee75839e957a89ae89c2b7ab1e76050e559790e946b948
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master@2026-06-30
+        with:
+          toolchain: stable
+          components: clippy
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: |
+            c2pa-node-compat-addon -> target
+            c2pa-node-sign-addon -> target
+            contentauth-c2pa-wasm -> target
+
+      - name: Install Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Install JavaScript dependencies
+        timeout-minutes: 5
+        working-directory: js
+        run: npm ci
+
+      - name: Pull matching browser image
+        timeout-minutes: 5
+        run: |
+          node <<'NODE'
+          const assert = require("node:assert/strict");
+          const { version } = require("./js/node_modules/playwright/package.json");
+          assert.ok(
+            process.env.PLAYWRIGHT_IMAGE.startsWith(`mcr.microsoft.com/playwright:v${version}-noble@sha256:`),
+            "Update PLAYWRIGHT_IMAGE and its digest to match the installed Playwright version",
+          );
+          NODE
+          docker pull "$PLAYWRIGHT_IMAGE"
+
+      - name: Install matching Wasm binding CLI
+        run: cargo install wasm-bindgen-cli --version 0.2.122 --locked
+
+      - name: Build real bindings and fixtures
+        working-directory: js
+        run: |
+          npm run build:bindings
+          npm run fixtures
+
+      - name: Lint synchronous Wasm boundary
+        run: cargo clippy --manifest-path contentauth-c2pa-wasm/Cargo.toml --target wasm32-unknown-unknown -- -Dwarnings
+
+      - name: Node preservation contracts
+        timeout-minutes: 5
+        working-directory: js
+        run: npm test
+
+      - name: Browser preservation contracts (Chromium, Firefox, WebKit)
+        timeout-minutes: 15
+        run: |
+          docker run --rm --init --ipc=host \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp --env CI=true \
+            --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            --workdir "$GITHUB_WORKSPACE/js" \
+            "$PLAYWRIGHT_IMAGE" npm run test:browser
+
   tests:
     name: Unit tests + code coverage
     runs-on: ubuntu-latest
@@ -43,10 +119,20 @@ jobs:
         with:
           tool: cargo-llvm-cov
 
+      - name: Check C API feature configurations and generated header
+        run: |
+          bash contentauth-c2pa-c-api/tests/check-features.sh
+          cargo test -p contentauth-c2pa-c-api --no-default-features --features read
+          cargo test -p contentauth-c2pa-c-api --no-default-features --features build
+          cargo test -p contentauth-c2pa-c-api --no-default-features
+
       - name: Generate code coverage
         env:
           RUST_BACKTRACE: "1"
         run: cargo llvm-cov --all-features --tests --lcov --output-path lcov.info
+
+      - name: Test standalone Wasm request encoding
+        run: cargo test --manifest-path contentauth-c2pa-wasm/Cargo.toml --locked
 
       # Test code itself shouldn't count for or against coverage.
       - name: Filter out tests
@@ -107,6 +193,9 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --all-features --all-targets -- -Dwarnings
 
+      - name: Run Clippy for standalone Wasm binding
+        run: cargo clippy --manifest-path contentauth-c2pa-wasm/Cargo.toml --all-targets --locked -- -Dwarnings
+
   cargo_fmt:
     name: Enforce Rust code format
     runs-on: ubuntu-latest
@@ -123,7 +212,9 @@ jobs:
           components: rustfmt
 
       - name: Check format
-        run: cargo +nightly-2026-01-16 fmt --all -- --check
+        run: |
+          cargo +nightly-2026-01-16 fmt --all -- --check
+          cargo +nightly-2026-01-16 fmt --manifest-path contentauth-c2pa-wasm/Cargo.toml -- --check
 
   docs:
     name: Doc build (stable, warnings denied)
@@ -181,6 +272,9 @@ jobs:
 
       - name: "`cargo check` for wasm32-unknown-unknown"
         run: cargo check --all-features --target wasm32-unknown-unknown --workspace --exclude contentauth-c2pa-rs-compat --exclude contentauth-c2pa-rs-compat-sign
+
+      - name: Check standalone Wasm binding
+        run: cargo check --manifest-path contentauth-c2pa-wasm/Cargo.toml --target wasm32-unknown-unknown --locked
 
       - name: "`cargo check` for wasm32-wasip2"
         run: cargo check --all-features --target wasm32-wasip2 --workspace --exclude contentauth-c2pa-rs-compat --exclude contentauth-c2pa-rs-compat-sign
@@ -421,11 +515,12 @@ jobs:
     name: C++ binding (${{ matrix.name }})
     runs-on: ubuntu-latest
 
-    # `contentauth-c2pa-cpp` is a Rust static library behind a C ABI plus
-    # C++17 readers, compiled signing/thread pools and C++20 coroutines.
-    # Its Rust half is an ordinary workspace member, tested by
-    # the jobs above; this job builds the C++ half against it with CMake
-    # and runs the C++ tests and examples three ways:
+    # `contentauth-c2pa-cpp` is C++17 readers, compiled signing/thread pools
+    # and C++20 coroutines over the canonical `contentauth-c2pa-c-api` C
+    # library and header. It holds no Rust of its own; the C API is an
+    # ordinary workspace member, tested by the jobs above, and this job
+    # builds it with cargo through CMake (along with a plain C client of the
+    # same library) and runs the C++ tests and examples three ways:
     #   - plain, with coverage of C++ headers and sources (uploaded to Codecov);
     #   - under AddressSanitizer (leaks, use-after-free on cancellation);
     #   - under ThreadSanitizer (the session handed between threads, and
@@ -487,8 +582,7 @@ jobs:
         run: >
           gcovr --root . --object-directory contentauth-c2pa-cpp/build
           --filter 'contentauth-c2pa-cpp/include/'
-          --filter 'contentauth-c2pa-cpp/cpp/src/'
-          --filter 'contentauth-c2pa-cpp/cpp/include/scope_exit\.hpp$'
+          --filter 'contentauth-c2pa-cpp/src/'
           --gcov-ignore-parse-errors negative_hits.warn_once_per_file
           --exclude-throw-branches --exclude-unreachable-branches
           --lcov lcov.cpp.info --txt

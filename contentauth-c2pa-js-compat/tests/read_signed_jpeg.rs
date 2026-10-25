@@ -302,6 +302,38 @@ fn a_jpeg_format_with_unparseable_content_surfaces_as_a_read_error() {
 }
 
 #[test]
-fn supported_formats_lists_jpeg_as_mime_type_and_extensions() {
-    assert_eq!(Reader::supported_formats(), ["image/jpeg", "jpeg", "jpg"]);
+fn supported_formats_lists_registered_mime_types_and_extensions() {
+    assert_eq!(
+        Reader::supported_formats(),
+        [
+            "image/jpeg",
+            "image/jpg",
+            "jpeg",
+            "jpg",
+            "image/tiff",
+            "image/dng",
+            "image/x-adobe-dng",
+            "tif",
+            "tiff",
+            "dng",
+        ]
+    );
+}
+
+#[test]
+fn tiff_and_dng_hints_use_the_tiff_handler() {
+    let tiff = b"II\x2a\0\x08\0\0\0\x01\0\0\x01\x03\0\x01\0\0\0\x01\0\0\0\0\0\0\0";
+    for format in ["image/tiff", "TIFF", "tif", "dng", "image/x-adobe-dng"] {
+        let err = block_on(Reader::from_blob(
+            format,
+            tiff.as_slice(),
+            None,
+            &FixedClock,
+        ))
+        .expect_err("valid TIFF without a manifest store");
+        assert!(
+            matches!(err, Error::C2pa(C2paError::JumbfNotFound)),
+            "{err:?}"
+        );
+    }
 }

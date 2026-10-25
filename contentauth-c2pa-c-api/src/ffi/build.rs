@@ -320,6 +320,28 @@ pub unsafe extern "C" fn c2pa_sm_exclusions_data(
     })
 }
 
+/// Describes where the build session is: the phase it is waiting in, or
+/// the one it failed in. Meant for logs and error reports, not for control
+/// flow — the wording is not a stable interface. Returns `"Finished"` once
+/// `c2pa_sm_build_finish` has been called.
+///
+/// The caller owns the returned string and must free it with
+/// `c2pa_sm_string_free`. Returns null on error.
+///
+/// # Safety
+/// `session` must be a live session. A non-null `err_out` must point to
+/// writable storage.
+#[no_mangle]
+pub unsafe extern "C" fn c2pa_sm_build_phase(
+    session: *mut C2paSmBuildSession,
+    err_out: *mut *mut c_char,
+) -> *mut c_char {
+    ffi_call(err_out, ptr::null_mut(), || {
+        let session = cimpl::deref_mut_or_return_null!(session, C2paSmBuildSession);
+        cimpl::to_c_string(session.inner.phase())
+    })
+}
+
 /// Frees a build session.
 ///
 /// # Safety

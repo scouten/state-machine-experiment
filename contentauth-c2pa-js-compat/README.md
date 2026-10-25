@@ -5,6 +5,13 @@ reader API — the Rust side of the C2PA web SDK — reproduced on top of this
 workspace's sans-I/O read engine, with the asynchrony that API promises
 living *here*, at the interface-specific layer, and nowhere below it.
 
+**Status:** retained alternative Rust-owned async host. The preferred shared
+JavaScript implementation is now in [`js/`](../js/), driving neutral
+[`session bridges`](../contentauth-c2pa-session-bridge/) through synchronous
+Wasm/Neon bindings. This crate keeps its async API and tests, and reexports
+the compatibility vocabulary now owned by the bridge's `compat` module.
+It is not called by the shared JS driver's session loop.
+
 ## Why this crate exists
 
 [`contentauth-c2pa-rs-compat`](../contentauth-c2pa-rs-compat) asked how
@@ -34,9 +41,10 @@ it — so that *every* host interaction, asset bytes included, is a real
 
 ## What this covers
 
-One use case, worked through end to end: **read and validate a C2PA
-manifest store from an asynchronously-readable JPEG, and report it the
-way c2pa-wasm does.**
+**Read and validate a C2PA manifest store from an asynchronously-readable
+JPEG or TIFF/BigTIFF/DNG, and report it the way c2pa-wasm does.**
+Format selection uses the neutral bridge's standard registry; asset I/O
+still belongs to the async host.
 
 ```rust,no_run
 use contentauth_c2pa_js_compat::{OfflinePlatform, Reader};
@@ -116,8 +124,8 @@ produce, including the exact `C2pa(JumbfNotFound)` string.
   with two `Blob`s.
 * **`resourceToBytes`, `crJson`** — depend on resource and thumbnail data
   the engine does not decode yet.
-* **Formats other than JPEG** — `src/format.rs` is the seam, exactly as
-  in `contentauth-c2pa-rs-compat`.
+* **Formats other than JPEG and TIFF/BigTIFF/DNG** — the bridge's
+  `compat::format` selects from the workspace's format registry.
 * **The full `@contentauth/c2pa-types` `ManifestStore`** — ingredients,
   decoded assertion values, thumbnails. `ManifestStore` carries the
   top-level contract, populated with what the engine reports today, in

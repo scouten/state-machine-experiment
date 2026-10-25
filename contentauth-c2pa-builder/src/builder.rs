@@ -15,7 +15,7 @@
 
 use core::mem::replace;
 
-use contentauth_c2pa_primitives::{ByteRange, SigningAlg, StreamId};
+use contentauth_c2pa_primitives::{ByteRange, Bytes, SigningAlg, StreamId};
 pub use contentauth_state_machine::Step as BuilderStep;
 use contentauth_state_machine::{
     HostRequest, ProtocolError, RequestId, Session, SessionCore, Step,
@@ -274,6 +274,12 @@ pub struct BuilderSession {
     settings: BuilderSettings,
     core: SessionCore<BuilderRequest>,
     state: State,
+
+    /// The name of the state [`BuilderSession::run`] is processing, kept
+    /// because `state` itself is [`State::Poisoned`] while that happens —
+    /// so an error exit can be blamed on the phase it occurred in.
+    active: &'static str,
+
     report: Option<BuilderReport>,
 }
 
@@ -322,7 +328,7 @@ enum State {
     },
     AwaitingCommit {
         request: RequestId,
-        manifest: Vec<u8>,
+        manifest: Bytes,
         exclusions: Vec<ByteRange>,
     },
 
@@ -333,6 +339,23 @@ enum State {
     /// that into [`SessionCore::mark_failed`], so a later call finds this
     /// variant again and reports [`ProtocolError::SessionFailed`].
     Poisoned,
+}
+
+impl State {
+    /// This state's name, for [`Session::phase`].
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Start => "Start",
+            Self::AwaitingPlaceholderReserved { .. } => "AwaitingPlaceholderReserved",
+            Self::AwaitingAssetLength { .. } => "AwaitingAssetLength",
+            Self::HashingAsset { .. } => "HashingAsset",
+            Self::AwaitingIdentitySignature { .. } => "AwaitingIdentitySignature",
+            Self::AwaitingSignature { .. } => "AwaitingSignature",
+            Self::AwaitingTimestamp { .. } => "AwaitingTimestamp",
+            Self::AwaitingCommit { .. } => "AwaitingCommit",
+            Self::Poisoned => "Poisoned",
+        }
+    }
 }
 
 impl BuilderSession {
@@ -348,6 +371,7 @@ impl BuilderSession {
             settings,
             core: SessionCore::default(),
             state: State::Start,
+            active: State::Start.name(),
             report: None,
         }
     }
@@ -361,6 +385,7 @@ impl BuilderSession {
                 return Ok(Step::Complete);
             }
 
+            self.active = self.state.name();
             let outcome = match replace(&mut self.state, State::Poisoned) {
                 State::Start => self.handle_start(),
 
@@ -406,7 +431,7 @@ impl BuilderSession {
                     exclusions,
                 } => self.handle_awaiting_commit(request, manifest, exclusions),
 
-                State::Poisoned => return Err(ProtocolError::SessionFailed.into()),
+                State::Poisoned => return Err(self.core.failed_error().into()),
             }?;
 
             if let Some(step) = outcome {
@@ -504,7 +529,9 @@ impl BuilderSession {
         };
 
         let manifest = ManifestBuilder::build_placeholder(&inputs)?;
-        let placeholder = manifest.placeholder_bytes().to_vec();
+        // The one copy on this path: the session keeps patching its own
+        // buffer after this, so the host's must be separate.
+        let placeholder = Bytes::copy_from_slice(manifest.placeholder_bytes());
 
         let request = self.core.issue(BuilderRequest::ReservePlaceholder {
             stream: Self::PRIMARY_STREAM,
@@ -856,7 +883,7 @@ impl BuilderSession {
         signature: &[u8],
         timestamp_token: Option<&[u8]>,
     ) -> Result<(), Error> {
-        let final_bytes = manifest.finish(signature, timestamp_token)?;
+        let final_bytes = Bytes::from(manifest.finish(signature, timestamp_token)?);
 
         let request = self.core.issue(BuilderRequest::CommitManifest {
             stream: Self::PRIMARY_STREAM,
@@ -876,7 +903,7 @@ impl BuilderSession {
     fn handle_awaiting_commit(
         &mut self,
         request: RequestId,
-        manifest: Vec<u8>,
+        manifest: Bytes,
         exclusions: Vec<ByteRange>,
     ) -> Result<Option<Step>, Error> {
         match self.core.take_reply(request) {
@@ -940,7 +967,7 @@ impl Session for BuilderSession {
         match self.run() {
             Ok(step) => Ok(step),
             Err(err) => {
-                self.core.mark_failed();
+                self.core.mark_failed(self.active, &err);
                 Err(err)
             }
         }
@@ -949,6 +976,16 @@ impl Session for BuilderSession {
     /// Returns the requests the host has not yet fulfilled.
     fn outstanding_requests(&self) -> &[HostRequest<BuilderRequest>] {
         self.core.outstanding_requests()
+    }
+
+    fn phase(&self) -> String {
+        if let Some(failure) = self.core.failure() {
+            failure.phase.clone()
+        } else if self.core.is_complete() {
+            "Complete".into()
+        } else {
+            self.state.name().into()
+        }
     }
 
     /// Reports the outcome of one outstanding request.
@@ -964,8 +1001,7 @@ impl Session for BuilderSession {
     /// an error.
     fn finish(self) -> Result<BuilderReport, Error> {
         self.core.finish_check()?;
-        self.report
-            .ok_or_else(|| ProtocolError::SessionFailed.into())
+        self.report.ok_or_else(|| self.core.failed_error().into())
     }
 }
 
@@ -974,8 +1010,9 @@ impl Session for BuilderSession {
 #[non_exhaustive]
 pub struct BuilderReport {
     /// The final, signed C2PA manifest store bytes — identical to what was
-    /// patched into the asset via `BuilderRequest::CommitManifest`.
-    pub manifest: Vec<u8>,
+    /// patched into the asset via `BuilderRequest::CommitManifest`, and
+    /// the same buffer: shared, not copied.
+    pub manifest: Bytes,
 
     /// The hard binding's exclusions, as the host reported them via
     /// `BuilderHostReply::PlaceholderReserved`: the container structure
@@ -1030,7 +1067,7 @@ mod tests {
                     BuilderRequest::AssetBytes { range, .. } => {
                         let start = range.start as usize;
                         BuilderHostReply::AssetBytes(
-                            asset[start..start + range.len as usize].to_vec(),
+                            asset[start..start + range.len as usize].to_vec().into(),
                         )
                     }
                     BuilderRequest::Sign { purpose, .. } => {
@@ -1050,6 +1087,7 @@ mod tests {
     #[test]
     fn a_reply_of_the_wrong_kind_to_an_identity_signature_request_is_refused() {
         let (mut session, id) = session_at_identity_signature();
+        assert_eq!(session.phase(), "AwaitingIdentitySignature");
 
         session
             .core
@@ -1062,6 +1100,23 @@ mod tests {
                 ..
             })
         ));
+
+        // The phase that failed outlives the failure, in `phase` and in
+        // every later report.
+        assert_eq!(session.phase(), "AwaitingIdentitySignature");
+        match session.advance().unwrap_err() {
+            Error::Protocol(ProtocolError::SessionFailed(failure)) => {
+                assert_eq!(failure.phase, "AwaitingIdentitySignature");
+                assert!(failure.cause.contains("expected Signature"), "{failure}");
+            }
+            other => panic!("expected SessionFailed, got {other:?}"),
+        }
+        match session.finish().unwrap_err() {
+            Error::Protocol(ProtocolError::SessionFailed(failure)) => {
+                assert_eq!(failure.phase, "AwaitingIdentitySignature");
+            }
+            other => panic!("expected SessionFailed, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1073,5 +1128,53 @@ mod tests {
             session.state,
             State::AwaitingIdentitySignature { index: 0, .. }
         ));
+    }
+
+    /// The manifest the host is asked to commit and the one the report
+    /// hands back are one buffer, not two copies.
+    #[test]
+    fn the_committed_manifest_and_the_reported_one_share_a_buffer() {
+        let mut session = BuilderSession::new(BuilderSettings::new(
+            "xmp:iid:1",
+            "urn:uuid:1",
+            GeneratorInfo::new("test", "1"),
+            SigningAlg::Es256,
+            vec![CERT.to_vec()],
+        ));
+        let mut asset = vec![0u8; 4000];
+        let mut committed = None;
+
+        while session.advance().unwrap() == Step::AwaitHost {
+            for request in session.outstanding_requests().to_vec() {
+                let reply = match &request.kind {
+                    BuilderRequest::ReservePlaceholder { placeholder, .. } => {
+                        asset.splice(100..100, placeholder.iter().copied());
+                        BuilderHostReply::PlaceholderReserved(vec![ByteRange {
+                            start: 100,
+                            len: placeholder.len() as u64,
+                        }])
+                    }
+                    BuilderRequest::AssetLength { .. } => {
+                        BuilderHostReply::AssetLength(asset.len() as u64)
+                    }
+                    BuilderRequest::AssetBytes { range, .. } => {
+                        let start = range.start as usize;
+                        BuilderHostReply::AssetBytes(Bytes::copy_from_slice(
+                            &asset[start..start + range.len as usize],
+                        ))
+                    }
+                    BuilderRequest::Sign { .. } => BuilderHostReply::Signature(vec![0u8; 64]),
+                    BuilderRequest::CommitManifest { manifest, .. } => {
+                        committed = Some(manifest.clone());
+                        BuilderHostReply::ManifestCommitted
+                    }
+                    other => panic!("unexpected request {other:?}"),
+                };
+                session.fulfill(request.id, reply).unwrap();
+            }
+        }
+
+        let report = session.finish().unwrap();
+        assert_eq!(report.manifest.as_ptr(), committed.unwrap().as_ptr());
     }
 }

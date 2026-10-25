@@ -13,6 +13,8 @@ using BuildCompletion = std::function<void(BuildReply)>;
 /// Takes ownership of each request. start returns promptly and may complete inline.
 /// Invoke done once work no longer accesses borrowed host resources. Throwing
 /// from start means no outstanding work was accepted (or it already completed).
+/// Read requests own writable storage: retain it until I/O stops, then seal and
+/// move the CompletedRead into done. Cancellation does not revoke that storage.
 class AsyncBuildHost {
 public:
     virtual ~AsyncBuildHost();

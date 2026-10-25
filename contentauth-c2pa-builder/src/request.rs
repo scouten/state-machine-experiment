@@ -21,7 +21,9 @@
 //! [`Session::fulfill`](contentauth_state_machine::Session::fulfill) with a
 //! matching [`BuilderHostReply`] (or [`BuilderHostReply::Failed`]).
 
-use contentauth_c2pa_primitives::{ByteRange, HashAlgorithm, HostError, SigningAlg, StreamId};
+use contentauth_c2pa_primitives::{
+    ByteRange, Bytes, HashAlgorithm, HostError, SigningAlg, StreamId,
+};
 use contentauth_state_machine::Request;
 
 /// What a [`BuilderRequest::Sign`] is a signature *for*.
@@ -75,8 +77,9 @@ pub enum BuilderRequest {
         /// The asset stream to embed the placeholder into.
         stream: StreamId,
 
-        /// The placeholder bytes to embed verbatim.
-        placeholder: Vec<u8>,
+        /// The placeholder bytes to embed verbatim. Cloning it is a
+        /// refcount bump, not a copy.
+        placeholder: Bytes,
     },
 
     /// Report the total length of a stream, in bytes.
@@ -156,8 +159,10 @@ pub enum BuilderRequest {
         /// [`BuilderHostReply::PlaceholderReserved`].
         exclusions: Vec<ByteRange>,
 
-        /// The final manifest store bytes.
-        manifest: Vec<u8>,
+        /// The final manifest store bytes — the same buffer
+        /// [`BuilderReport::manifest`](crate::BuilderReport::manifest)
+        /// holds, shared rather than copied.
+        manifest: Bytes,
     },
 }
 
@@ -199,7 +204,7 @@ impl Request for BuilderRequest {
 }
 
 /// The host's report of the outcome of one host request.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum BuilderHostReply {
     /// Answers [`BuilderRequest::ReservePlaceholder`]: the byte ranges the
@@ -214,7 +219,10 @@ pub enum BuilderHostReply {
     AssetLength(u64),
 
     /// Answers [`BuilderRequest::AssetBytes`]: the requested bytes.
-    AssetBytes(Vec<u8>),
+    ///
+    /// A [`Bytes`], so a host holding the asset in memory (or mapped)
+    /// answers with a slice of it rather than a copy.
+    AssetBytes(Bytes),
 
     /// Answers [`BuilderRequest::Sign`]: the raw signature bytes.
     Signature(Vec<u8>),
@@ -246,7 +254,7 @@ mod tests {
         vec![
             BuilderRequest::ReservePlaceholder {
                 stream,
-                placeholder: vec![0; 4],
+                placeholder: vec![0; 4].into(),
             },
             BuilderRequest::AssetLength { stream },
             BuilderRequest::AssetBytes { stream, range },
@@ -262,7 +270,7 @@ mod tests {
             BuilderRequest::CommitManifest {
                 stream,
                 exclusions: vec![range],
-                manifest: vec![0; 4],
+                manifest: vec![0; 4].into(),
             },
         ]
     }
@@ -277,7 +285,7 @@ mod tests {
                 "PlaceholderReserved",
             ),
             (BuilderHostReply::AssetLength(1024), "AssetLength"),
-            (BuilderHostReply::AssetBytes(vec![1]), "AssetBytes"),
+            (BuilderHostReply::AssetBytes(vec![1].into()), "AssetBytes"),
             (BuilderHostReply::Signature(vec![0; 64]), "Signature"),
             (BuilderHostReply::Timestamp(vec![9; 8]), "Timestamp"),
             (BuilderHostReply::ManifestCommitted, "ManifestCommitted"),

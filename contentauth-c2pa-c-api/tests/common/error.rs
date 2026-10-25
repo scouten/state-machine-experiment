@@ -14,3 +14,13 @@ pub fn assert_error(error: *mut c_char, expected: &str) {
     unsafe { contentauth_c2pa_c_api::c2pa_sm_string_free(error) };
     assert!(message.contains(expected), "{message}");
 }
+
+/// Takes ownership of a phase string returned by `c2pa_sm_*_phase`.
+pub fn take_phase(phase: *mut c_char) -> String {
+    assert!(!phase.is_null(), "expected a phase");
+    let text = unsafe { CStr::from_ptr(phase) }
+        .to_string_lossy()
+        .into_owned();
+    unsafe { contentauth_c2pa_c_api::c2pa_sm_string_free(phase) };
+    text
+}

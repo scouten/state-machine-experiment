@@ -102,7 +102,7 @@ where
             // of defense against one that does not: a short (or long)
             // read handed through would be hashed as though it were the
             // real thing.
-            Ok(bytes) if bytes.len() as u64 == range.len => FileReadReply::Bytes(bytes),
+            Ok(bytes) if bytes.len() as u64 == range.len => FileReadReply::Bytes(bytes.into()),
             Ok(bytes) => FileReadReply::Failed(HostError::new(format!(
                 "asked for {} bytes at {}, but the blob returned {}",
                 range.len,
@@ -196,7 +196,7 @@ mod tests {
     #[test]
     fn a_read_returning_exactly_the_requested_length_is_passed_through() {
         let reply = block_on(answer(&Canned(Ok(vec![1, 2, 3])), &Nothing, &read(3)));
-        assert!(matches!(reply, FileReadReply::Bytes(bytes) if bytes == [1, 2, 3]));
+        assert!(matches!(reply, FileReadReply::Bytes(bytes) if bytes[..] == [1, 2, 3]));
     }
 
     #[test]

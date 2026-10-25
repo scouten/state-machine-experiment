@@ -24,7 +24,7 @@
 
 use std::collections::HashMap;
 
-use contentauth_c2pa_primitives::{HostError, StreamId};
+use contentauth_c2pa_primitives::{Bytes, HostError, StreamId};
 use contentauth_state_machine::{ProtocolError, Session, Step};
 
 use crate::request::{IoReply, IoRequest};
@@ -32,11 +32,11 @@ use crate::request::{IoReply, IoRequest};
 /// The stream [`MemoryHost::of`] places its single asset on.
 pub const STREAM: StreamId = StreamId::new(0);
 
-/// A host whose streams are byte vectors, answering [`IoRequest`]s from
-/// them.
+/// A host whose streams are in-memory buffers, answering [`IoRequest`]s
+/// from them with slices that share the buffer rather than copy it.
 #[derive(Debug, Default)]
 pub struct MemoryHost {
-    streams: HashMap<StreamId, Vec<u8>>,
+    streams: HashMap<StreamId, Bytes>,
 }
 
 impl MemoryHost {
@@ -52,7 +52,7 @@ impl MemoryHost {
 
     /// Adds (or replaces) the asset on `stream`.
     pub fn with_stream(mut self, stream: StreamId, bytes: impl Into<Vec<u8>>) -> Self {
-        self.streams.insert(stream, bytes.into());
+        self.streams.insert(stream, Bytes::from(bytes.into()));
         self
     }
 
@@ -74,14 +74,11 @@ impl MemoryHost {
                 return session.finish();
             }
 
-            let requests = session.outstanding_requests().to_vec();
-            if requests.is_empty() {
+            if session.outstanding_requests().is_empty() {
                 return Err(ProtocolError::SessionNotComplete.into());
             }
 
-            for request in requests {
-                session.fulfill(request.id, self.reply(&request.kind))?;
-            }
+            session.respond(|request| self.reply(request))?;
         }
     }
 
@@ -93,7 +90,7 @@ impl MemoryHost {
                 };
                 let end = range.start.checked_add(range.len);
                 match end.filter(|end| *end <= bytes.len() as u64) {
-                    Some(end) => IoReply::Bytes(bytes[range.start as usize..end as usize].to_vec()),
+                    Some(end) => IoReply::Bytes(bytes.slice(range.start as usize..end as usize)),
                     None => IoReply::Failed(HostError::new(format!(
                         "range {}+{} lies past the end of {stream} ({} bytes)",
                         range.start,
@@ -122,10 +119,15 @@ impl MemoryHost {
 /// `APP11` segment from any other JUMBF) will need them to start like
 /// one; the handler's own tests know what that takes.
 pub mod conformance {
+    use contentauth_c2pa_primitives::HostError;
+    use contentauth_state_machine::{ProtocolError, Session, Step};
+
     use crate::{
+        error::FormatError,
         handler::FormatHandler,
         location::ManifestLocation,
         plan::EmbedPlan,
+        request::IoReply,
         test_util::{MemoryHost, STREAM},
     };
 
@@ -262,6 +264,56 @@ pub mod conformance {
         );
     }
 
+    /// A `locate` operation whose host fails its first request reports
+    /// that failure, and from then on remembers where and why it failed:
+    /// [`Session::phase`] names a phase, and every later call reports a
+    /// [`ProtocolError::SessionFailed`] naming that same phase and the
+    /// original error — so a host that only sees a later report can still
+    /// tell what went wrong.
+    pub fn a_failure_is_remembered_with_its_phase<H: FormatHandler>(handler: &H) {
+        let mut op = handler.locate(STREAM);
+
+        let original = loop {
+            match op.advance() {
+                Ok(Step::AwaitHost) => {}
+                Ok(step) => panic!("locate finished ({step:?}) with every request failing"),
+                Err(err) => break err,
+            }
+            let requests = op.outstanding_requests().to_vec();
+            assert!(
+                !requests.is_empty(),
+                "locate reported AwaitHost with nothing outstanding"
+            );
+            for request in requests {
+                op.fulfill(request.id, IoReply::Failed(HostError::new("unreadable")))
+                    .expect("fulfill refused a Failed reply");
+            }
+        };
+
+        let phase = op.phase();
+        assert!(!phase.is_empty(), "a failed operation reported no phase");
+
+        match op.advance() {
+            Err(FormatError::Protocol(ProtocolError::SessionFailed(failure))) => {
+                assert_eq!(
+                    failure.phase, phase,
+                    "SessionFailed names a different phase than Session::phase"
+                );
+                assert_eq!(
+                    failure.cause,
+                    original.to_string(),
+                    "SessionFailed does not carry the original error"
+                );
+            }
+            other => panic!("advancing a failed operation reported {other:?}"),
+        }
+        assert_eq!(op.phase(), phase, "a failed operation's phase changed");
+        assert!(matches!(
+            op.finish(),
+            Err(FormatError::Protocol(ProtocolError::SessionFailed(_)))
+        ));
+    }
+
     /// Runs every check in this module. `first` and `second` should
     /// differ in length as well as content, so a handler that sizes its
     /// framing from the store's length is exercised on a replacement that
@@ -276,6 +328,7 @@ pub mod conformance {
         embed_then_locate_round_trips(handler, unsigned_source, first);
         embed_then_locate_round_trips(handler, unsigned_source, second);
         re_embedding_replaces_rather_than_duplicates(handler, unsigned_source, first, second);
+        a_failure_is_remembered_with_its_phase(handler);
     }
 }
 
@@ -284,6 +337,22 @@ mod tests {
     use contentauth_c2pa_primitives::ByteRange;
 
     use super::*;
+
+    #[test]
+    fn a_memory_host_answers_a_read_with_a_slice_of_its_stream_not_a_copy() {
+        let host = MemoryHost::of(vec![1, 2, 3, 4]);
+        let stream = host.streams.get(&STREAM).expect("the stream").clone();
+
+        let IoReply::Bytes(bytes) = host.reply(&IoRequest::Read {
+            stream: STREAM,
+            range: ByteRange { start: 1, len: 2 },
+        }) else {
+            panic!("expected bytes");
+        };
+
+        assert_eq!(bytes[..], [2, 3]);
+        assert_eq!(bytes.as_ptr(), stream[1..].as_ptr());
+    }
 
     #[test]
     fn a_memory_host_answers_from_its_streams() {
@@ -298,7 +367,7 @@ mod tests {
                 stream: StreamId::new(7),
                 range: ByteRange { start: 0, len: 1 }
             }),
-            IoReply::Bytes(bytes) if bytes == [9]
+            IoReply::Bytes(bytes) if bytes[..] == [9]
         ));
         assert!(matches!(
             host.reply(&IoRequest::Read {

@@ -27,7 +27,7 @@
 //! buffered), bounding peak memory at `WINDOW × CHUNK_SIZE` no matter how
 //! large the asset is.
 
-use contentauth_c2pa_primitives::{hash::Hasher, ByteRange, HashAlgorithm, StreamId};
+use contentauth_c2pa_primitives::{hash::Hasher, ByteRange, Bytes, HashAlgorithm, StreamId};
 use contentauth_state_machine::{ProtocolError, RequestId, SessionCore};
 
 use crate::{
@@ -64,7 +64,7 @@ pub(crate) struct HashStream {
     outstanding: Vec<(RequestId, usize)>,
 
     /// Chunks that arrived before their turn.
-    buffered: Vec<(usize, Vec<u8>)>,
+    buffered: Vec<(usize, Bytes)>,
 
     /// Bytes folded so far, checked against the total on completion.
     folded: u64,
@@ -198,7 +198,7 @@ impl HashStream {
 
     /// Places a chunk: folds it if it is next, otherwise buffers it, then
     /// drains anything the fold unblocked.
-    fn place(&mut self, index: usize, bytes: Vec<u8>) {
+    fn place(&mut self, index: usize, bytes: Bytes) {
         if index != self.next_to_fold {
             self.buffered.push((index, bytes));
             return;
@@ -350,7 +350,7 @@ mod tests {
                 let (id, range) = pending[position];
                 let start = range.start as usize;
                 let bytes = asset[start..start + range.len as usize].to_vec();
-                core.fulfill(id, BuilderHostReply::AssetBytes(bytes))
+                core.fulfill(id, BuilderHostReply::AssetBytes(bytes.into()))
                     .unwrap();
                 stream.absorb(&mut core).unwrap();
             }
@@ -408,7 +408,7 @@ mod tests {
         let range = range(200, 100);
         core.fulfill(
             last,
-            BuilderHostReply::AssetBytes(vec![0u8; range.len as usize]),
+            BuilderHostReply::AssetBytes(vec![0u8; range.len as usize].into()),
         )
         .unwrap();
         stream.absorb(&mut core).unwrap();
@@ -430,7 +430,7 @@ mod tests {
         let id = core.outstanding_requests()[0].id;
 
         // One byte short: tolerating this would shift every later byte.
-        core.fulfill(id, BuilderHostReply::AssetBytes(vec![0u8; 99]))
+        core.fulfill(id, BuilderHostReply::AssetBytes(vec![0u8; 99].into()))
             .unwrap();
 
         assert!(matches!(

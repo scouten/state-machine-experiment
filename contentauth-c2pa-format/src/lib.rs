@@ -96,8 +96,10 @@ mod request;
 #[cfg(any(test, feature = "test-util"))]
 pub mod test_util;
 
-pub use contentauth_c2pa_primitives::{ByteRange, HostError, StreamId};
-pub use contentauth_state_machine::{HostRequest, ProtocolError, RequestId, Session, Step};
+pub use contentauth_c2pa_primitives::{ByteRange, Bytes, HostError, StreamId};
+pub use contentauth_state_machine::{
+    Failure, HostRequest, ProtocolError, RequestId, Session, Step,
+};
 pub use descriptor::{FormatDescriptor, Signature};
 pub use error::FormatError;
 pub use handler::{FormatHandler, FormatOp};

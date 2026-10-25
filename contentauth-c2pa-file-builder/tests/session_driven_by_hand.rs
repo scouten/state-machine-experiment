@@ -71,7 +71,7 @@ fn answer(output: &mut Vec<u8>, request: &FileBuilderRequest) -> FileBuilderRepl
                 output.as_slice()
             };
             match source.get(start..end) {
-                Some(bytes) => FileBuilderReply::Bytes(bytes.to_vec()),
+                Some(bytes) => FileBuilderReply::Bytes(bytes.to_vec().into()),
                 None => FileBuilderReply::Failed(HostError::new("range out of bounds")),
             }
         }
@@ -238,7 +238,9 @@ fn a_host_returning_the_wrong_number_of_bytes_fails_the_build() {
                                 session
                                     .fulfill(
                                         request.id,
-                                        FileBuilderReply::Bytes(vec![0; range.len as usize - 1]),
+                                        FileBuilderReply::Bytes(
+                                            vec![0; range.len as usize - 1].into(),
+                                        ),
                                     )
                                     .unwrap();
                                 continue;
@@ -328,5 +330,103 @@ fn a_host_that_cannot_timestamp_fails_the_build_when_one_is_requested() {
     assert!(
         matches!(err, contentauth_c2pa_file_builder::Error::Build(_)),
         "{err:?}"
+    );
+}
+
+#[test]
+fn the_phase_names_every_stage_a_build_passes_through() {
+    let mut session = FileBuilderSession::new(JpegFormat, settings());
+    let mut output = Vec::new();
+    let mut phases = vec![session.phase()];
+
+    while session.advance().unwrap() == Step::AwaitHost {
+        phases.push(session.phase());
+        for request in session.outstanding_requests().to_vec() {
+            session
+                .fulfill(request.id, answer(&mut output, &request.kind))
+                .unwrap();
+        }
+    }
+    phases.push(session.phase());
+
+    assert_eq!(phases[0], "Building > Start");
+    for expected in [
+        "Building > Planning > Scanning > Length",
+        "Building > Validating",
+        "Building > Writing",
+        "Building > AwaitingSignature",
+    ] {
+        assert!(
+            phases.iter().any(|p| p == expected),
+            "{expected}: {phases:#?}"
+        );
+    }
+    assert_eq!(phases.last().unwrap(), "Complete");
+}
+
+#[test]
+fn a_refused_signature_is_blamed_on_the_inner_session_phase() {
+    let mut session = FileBuilderSession::new(JpegFormat, settings());
+    let mut output = Vec::new();
+
+    let err = loop {
+        match session.advance() {
+            Ok(Step::AwaitHost) => {}
+            Ok(step) => panic!("unexpected step {step:?}"),
+            Err(err) => break err,
+        }
+        for request in session.outstanding_requests().to_vec() {
+            let reply = match request.kind {
+                FileBuilderRequest::Sign { .. } => {
+                    FileBuilderReply::Failed(HostError::new("HSM unavailable"))
+                }
+                ref kind => answer(&mut output, kind),
+            };
+            session.fulfill(request.id, reply).unwrap();
+        }
+    };
+
+    assert!(err.to_string().contains("HSM unavailable"), "{err}");
+    assert_eq!(session.phase(), "Building > AwaitingSignature");
+    match session.advance() {
+        Err(contentauth_c2pa_file_builder::Error::Protocol(
+            contentauth_state_machine::ProtocolError::SessionFailed(failure),
+        )) => {
+            assert_eq!(failure.phase, "Building > AwaitingSignature");
+            assert_eq!(failure.cause, err.to_string());
+        }
+        other => panic!("expected SessionFailed, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_failed_source_read_is_blamed_on_the_planning_scan() {
+    let mut session = FileBuilderSession::new(JpegFormat, settings());
+    let mut output = Vec::new();
+
+    let err = loop {
+        match session.advance() {
+            Ok(Step::AwaitHost) => {}
+            Ok(step) => panic!("unexpected step {step:?}"),
+            Err(err) => break err,
+        }
+        for request in session.outstanding_requests().to_vec() {
+            let reply = match request.kind {
+                FileBuilderRequest::Read { stream, .. } if stream == source_stream() => {
+                    FileBuilderReply::Failed(HostError::new("bad sector"))
+                }
+                ref kind => answer(&mut output, kind),
+            };
+            session.fulfill(request.id, reply).unwrap();
+        }
+    };
+
+    assert!(err.to_string().contains("bad sector"), "{err}");
+    assert!(
+        session
+            .phase()
+            .starts_with("Building > Planning > Scanning > "),
+        "{}",
+        session.phase()
     );
 }

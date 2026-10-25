@@ -32,7 +32,7 @@
 #![allow(dead_code, clippy::unwrap_used, clippy::panic)]
 
 use contentauth_state_machine::{
-    HostRequest, ProtocolError, Request, RequestId, Session, SessionCore, Step,
+    Failure, HostRequest, ProtocolError, Request, RequestId, Session, SessionCore, Step,
 };
 
 /// A two-kind request vocabulary: enough to exercise reply-shape
@@ -80,6 +80,10 @@ pub struct Ids {
 
 /// The largest ID number a script can name by [`Target::Raw`].
 const RAW_RANGE: u64 = 64;
+
+fn core_failure() -> Failure {
+    Failure::new("Model", &"requested failure")
+}
 
 impl Ids {
     pub fn new() -> Self {
@@ -259,7 +263,7 @@ pub fn run_core(ops: &[CoreOp]) {
                 let raw = model.resolve(target);
                 let expected = match model.life() {
                     Life::Complete => Err(ProtocolError::SessionComplete),
-                    Life::Failed => Err(ProtocolError::SessionFailed),
+                    Life::Failed => Err(ProtocolError::SessionFailed(core_failure())),
                     Life::Running => match model.outstanding.iter().position(|(i, _)| *i == raw) {
                         None => Err(ProtocolError::UnknownRequest(ids.id(raw))),
                         Some(pos) if !model.outstanding[pos].1.accepts(&reply) => {
@@ -294,14 +298,14 @@ pub fn run_core(ops: &[CoreOp]) {
             }
 
             CoreOp::MarkFailed => {
-                core.mark_failed();
+                core.mark_failed("Model", &"requested failure");
                 model.life = Some(Life::Failed);
             }
 
             CoreOp::FinishCheck => {
                 let expected = match model.life() {
                     Life::Complete => Ok(()),
-                    Life::Failed => Err(ProtocolError::SessionFailed),
+                    Life::Failed => Err(ProtocolError::SessionFailed(core_failure())),
                     Life::Running => Err(ProtocolError::SessionNotComplete),
                 };
                 assert_eq!(core.finish_check(), expected);
@@ -366,6 +370,10 @@ impl FanOut {
     }
 }
 
+fn fan_failure() -> Failure {
+    Failure::new("AwaitingReplies", &"the host reported a failure")
+}
+
 impl Session for FanOut {
     type Error = FanError;
     type Output = usize;
@@ -373,7 +381,7 @@ impl Session for FanOut {
 
     fn advance(&mut self) -> Result<Step, FanError> {
         if self.core.is_failed() {
-            return Err(ProtocolError::SessionFailed.into());
+            return Err(self.core.failed_error().into());
         }
         if self.core.is_complete() {
             return Ok(Step::Complete);
@@ -389,8 +397,10 @@ impl Session for FanOut {
         for id in self.ids.clone().unwrap_or_default() {
             match self.core.take_reply(id) {
                 Some(Reply::Failed) => {
-                    self.core.mark_failed();
-                    return Err(FanError::HostFailed);
+                    let error = FanError::HostFailed;
+                    let phase = self.phase();
+                    self.core.mark_failed(phase, &error);
+                    return Err(error);
                 }
                 Some(_) => self.received += 1,
                 None => {}
@@ -407,6 +417,19 @@ impl Session for FanOut {
 
     fn outstanding_requests(&self) -> &[HostRequest<Kind>] {
         self.core.outstanding_requests()
+    }
+
+    fn phase(&self) -> String {
+        if let Some(failure) = self.core.failure() {
+            return failure.phase.clone();
+        }
+        if self.core.is_complete() {
+            "Complete".into()
+        } else if self.ids.is_none() {
+            "Start".into()
+        } else {
+            "AwaitingReplies".into()
+        }
     }
 
     fn fulfill(&mut self, id: RequestId, reply: Reply) -> Result<(), FanError> {
@@ -506,7 +529,9 @@ pub fn run_session(script: &SessionScript) {
         match *op {
             SessionOp::Advance => {
                 let expected = match model.life {
-                    Life::Failed => Err(FanError::Protocol(ProtocolError::SessionFailed)),
+                    Life::Failed => Err(FanError::Protocol(ProtocolError::SessionFailed(
+                        fan_failure(),
+                    ))),
                     Life::Complete => Ok(Step::Complete),
                     Life::Running => {
                         if model.issued.is_none() {
@@ -534,7 +559,7 @@ pub fn run_session(script: &SessionScript) {
                 let raw = model.resolve(target);
                 let expected = match model.life {
                     Life::Complete => Err(ProtocolError::SessionComplete),
-                    Life::Failed => Err(ProtocolError::SessionFailed),
+                    Life::Failed => Err(ProtocolError::SessionFailed(fan_failure())),
                     Life::Running if !model.outstanding().contains(&raw) => {
                         Err(ProtocolError::UnknownRequest(ids.id(raw)))
                     }
@@ -571,7 +596,9 @@ pub fn run_session(script: &SessionScript) {
 
     let expected = match model.life {
         Life::Complete => Ok(n),
-        Life::Failed => Err(FanError::Protocol(ProtocolError::SessionFailed)),
+        Life::Failed => Err(FanError::Protocol(ProtocolError::SessionFailed(
+            fan_failure(),
+        ))),
         Life::Running => Err(FanError::Protocol(ProtocolError::SessionNotComplete)),
     };
     assert_eq!(session.finish(), expected);

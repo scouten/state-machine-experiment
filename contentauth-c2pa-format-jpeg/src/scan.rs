@@ -24,7 +24,7 @@
 use core::mem::{replace, take};
 
 use contentauth_c2pa_format::{
-    take_bytes, take_length, ByteRange, FormatError, IoRequest, ProtocolError, RequestId, StreamId,
+    take_bytes, take_length, ByteRange, FormatError, IoRequest, RequestId, StreamId,
 };
 use contentauth_state_machine::SessionCore;
 
@@ -239,6 +239,21 @@ impl Scanner {
         }
     }
 
+    /// Names the scan's current phase — with the byte offset it concerns,
+    /// where there is one — for [`Session::phase`](contentauth_c2pa_format::Session::phase).
+    pub(crate) fn phase(&self) -> String {
+        match &self.phase {
+            Phase::Start => "Start".into(),
+            Phase::Length(_) => "Length".into(),
+            Phase::Soi(_) => "Soi".into(),
+            Phase::Marker { range, .. } => format!("Marker at byte {}", range.start),
+            Phase::Contents { segment, .. } => {
+                format!("Contents of segment at byte {}", segment.start)
+            }
+            Phase::Poisoned => "Poisoned".into(),
+        }
+    }
+
     /// Makes as much progress as the host's replies allow. Returns the
     /// [`Layout`] once the scan reaches `SOS` or `EOI`; `Ok(None)` means a
     /// request is outstanding.
@@ -279,7 +294,7 @@ impl Scanner {
                     Ok(None)
                 }
                 Some(bytes) => {
-                    if bytes != [MARKER_PREFIX, SOI] {
+                    if bytes[..] != [MARKER_PREFIX, SOI] {
                         return Err(malformed("does not begin with an SOI marker"));
                     }
                     self.pos = 2;
@@ -319,7 +334,7 @@ impl Scanner {
                 }
             },
 
-            Phase::Poisoned => Err(ProtocolError::SessionFailed.into()),
+            Phase::Poisoned => Err(core.failed_error().into()),
         }
     }
 
@@ -481,6 +496,7 @@ pub(crate) mod tests {
             if self.core.is_complete() {
                 return Ok(Step::Complete);
             }
+            let phase = self.phase();
             match self.scanner.advance(&mut self.core) {
                 Ok(None) => Ok(Step::AwaitHost),
                 Ok(Some(layout)) => {
@@ -489,7 +505,7 @@ pub(crate) mod tests {
                     Ok(Step::Complete)
                 }
                 Err(err) => {
-                    self.core.mark_failed();
+                    self.core.mark_failed(phase, &err);
                     Err(err)
                 }
             }
@@ -497,6 +513,13 @@ pub(crate) mod tests {
 
         fn outstanding_requests(&self) -> &[HostRequest<IoRequest>] {
             self.core.outstanding_requests()
+        }
+
+        fn phase(&self) -> String {
+            match self.core.failure() {
+                Some(failure) => failure.phase.clone(),
+                None => self.scanner.phase(),
+            }
         }
 
         fn fulfill(
@@ -509,7 +532,7 @@ pub(crate) mod tests {
 
         fn finish(self) -> Result<Layout, FormatError> {
             self.core.finish_check()?;
-            self.layout.ok_or(ProtocolError::SessionFailed.into())
+            self.layout.ok_or(self.core.failed_error().into())
         }
     }
 

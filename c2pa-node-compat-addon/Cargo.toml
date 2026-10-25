@@ -16,6 +16,6 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-contentauth-c2pa-node-compat = { path = "../contentauth-c2pa-node-compat" }
+contentauth-c2pa-session-bridge = { path = "../contentauth-c2pa-session-bridge" }
 # No `futures` feature, on purpose: nothing in this addon is asynchronous.
 neon = { version = "1", default-features = false, features = ["napi-6"] }
