@@ -42,7 +42,7 @@ contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
 
 # The `Workflow`/`Step` interaction contract `src/drive.rs` drives
 # `FileReadSession` through.
-contentauth-sans-io-core = { path = "../contentauth-sans-io-core" }
+contentauth-sans-io-core = "0.2.0"
 
 # `Reader::from_blob`'s `context_json` argument is c2pa-rs's own settings
 # JSON; `Reader::json`/`manifest_store` reproduce c2pa-wasm's JSON-string

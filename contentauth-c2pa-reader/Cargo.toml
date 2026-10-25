@@ -13,7 +13,7 @@ categories = ["api-bindings"]
 publish = false
 
 [dependencies]
-contentauth-sans-io-core = { path = "../contentauth-sans-io-core" }
+contentauth-sans-io-core = "0.2.0"
 
 # Shared C2PA vocabulary (StreamId, ByteRange, HashAlgorithm, SigningAlg,
 # HostError) and the deterministic Sig_structure encoder, held in common
@@ -91,7 +91,7 @@ sha1 = { version = "0.10", default-features = false }
 # Enables `ManualWorkflowCore::fulfill_unchecked`, which this crate's own tests use
 # to exercise `ReadSession`'s defense-in-depth check against a reply payload
 # `fulfill` itself would reject.
-contentauth-sans-io-core = { path = "../contentauth-sans-io-core", features = [
+contentauth-sans-io-core = { version = "0.2.0", features = [
     "test-util",
 ] }
 # Used only by `test_support.rs`, to compute an assertion's expected hash

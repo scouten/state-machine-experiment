@@ -7,28 +7,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A Cargo workspace prototyping synchronous, sans-I/O state machines for C2PA
 (Content Credentials) workflows. Crates today:
 
-- **`contentauth-sans-io-core`** — shared host-driven workflow infrastructure
+- **[`contentauth-sans-io-core`](https://github.com/contentauth/contentauth-sans-io-core)** —
+  a published 0.2.0 dependency, not a workspace member. Shared host-driven workflow infrastructure
   for C2PA/CAWG, not a general-purpose state-machine framework. The host
   owns I/O, concurrency, and scheduling; the core contains no domain logic:
   a request/reply vocabulary trait, request tracking, a protocol-error
   vocabulary, and the `advance` / `fulfill` / `finish` interaction
-  contract. Its session core is held to model-based `proptest` tests and
-  `cargo-fuzz` targets (`fuzz/`, outside the workspace; see the engine's README, "Testing and fuzzing");
-  a change to `ManualWorkflowCore`/`RequestTracker` must keep
-  `cargo test -p contentauth-sans-io-core` passing and should be
-  fuzzed briefly. See [`src/workflow.rs`](contentauth-sans-io-core/src/workflow.rs)
+  contract. Its model-based `proptest` tests and `cargo-fuzz` targets
+  are maintained in its own repository, not here.
+  See [`src/workflow.rs`](https://github.com/contentauth/contentauth-sans-io-core/blob/main/src/workflow.rs)
   for the common `Workflow` contract and `ManualWorkflowCore` bookkeeping
   (a hand-written phase enum), and
-  [`src/coroutine.rs`](contentauth-sans-io-core/src/coroutine.rs) for
+  [`src/coroutine.rs`](https://github.com/contentauth/contentauth-sans-io-core/blob/main/src/coroutine.rs) for
   `CoroutineWorkflow`/`Host` (the same contract, with the workflow written as an
   `async fn` the compiler turns into the state machine — no runtime;
-  `BuilderSession` uses it, `ReadSession` does not yet), and [`README.md`](contentauth-sans-io-core/README.md)
+  `BuilderSession` uses it, `ReadSession` does not yet), and [`README.md`](https://github.com/contentauth/contentauth-sans-io-core/blob/main/README.md)
   for the interaction contract diagram. Every session reports a
   diagnostic `phase()` (nested sessions as `"Outer > Inner"`) and records
   where and why it failed via `ManualWorkflowCore::mark_failed(phase, &err)` or
   automatically in `CoroutineWorkflow` using the current `Host::set_phase`,
-  which later calls report as `ProtocolError::SessionFailed(Failure)`;
-  `Recorder`/`replay` ([`src/recorder.rs`](contentauth-sans-io-core/src/recorder.rs))
+  which later calls report as `ProtocolError::WorkflowFailed(Failure)`;
+  `Recorder`/`replay` ([`src/recorder.rs`](https://github.com/contentauth/contentauth-sans-io-core/blob/main/src/recorder.rs))
   record a host conversation as a `Transcript` and reproduce it
   deterministically.
 - **`contentauth-c2pa-reader`** — a from-scratch, sans-I/O reader/validator

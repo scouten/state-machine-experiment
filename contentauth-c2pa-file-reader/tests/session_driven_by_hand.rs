@@ -331,11 +331,11 @@ fn a_failure_inside_the_read_session_is_reported_with_both_phases() {
     assert_eq!(session.phase(), "Reading > Start");
 
     match session.advance() {
-        Err(Error::Protocol(ProtocolError::SessionFailed(failure))) => {
+        Err(Error::Protocol(ProtocolError::WorkflowFailed(failure))) => {
             assert_eq!(failure.phase, "Reading > Start");
             assert_eq!(failure.cause, err.to_string());
         }
-        other => panic!("expected SessionFailed, got {other:?}"),
+        other => panic!("expected WorkflowFailed, got {other:?}"),
     }
 }
 
@@ -352,7 +352,7 @@ fn a_host_failure_while_locating_is_reported_with_both_phases() {
     assert_eq!(session.phase(), "Locating > Scanning > Length");
     assert!(matches!(
         session.fulfill(id, FileReadReply::Length(0)),
-        Err(Error::Protocol(ProtocolError::SessionFailed(failure)))
+        Err(Error::Protocol(ProtocolError::WorkflowFailed(failure)))
             if failure.phase == "Locating > Scanning > Length"
                 && failure.cause.contains("disk on fire")
     ));

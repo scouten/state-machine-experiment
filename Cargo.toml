@@ -17,7 +17,6 @@ members = [
     "contentauth-c2pa-sign-baseline",
     "contentauth-c2pa-rs-compat",
     "contentauth-c2pa-rs-compat-sign",
-    "contentauth-sans-io-core",
 ]
 
 [workspace.package]

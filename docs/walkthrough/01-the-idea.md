@@ -95,7 +95,7 @@ close to it:
 ## The engine, for reference
 
 Four calls, from the `Workflow` trait in
-[`contentauth-sans-io-core/src/workflow.rs`](../../contentauth-sans-io-core/src/workflow.rs):
+[`contentauth-sans-io-core/src/workflow.rs`](https://github.com/contentauth/contentauth-sans-io-core/blob/main/src/workflow.rs):
 
 ```mermaid
 sequenceDiagram

@@ -19,7 +19,7 @@ publish = false
 test-util = []
 
 [dependencies]
-contentauth-sans-io-core = { path = "../contentauth-sans-io-core" }
+contentauth-sans-io-core = "0.2.0"
 # `StreamId`, `ByteRange`, `HostError` — the same handles every sans-I/O
 # session in this workspace addresses its host with.
 contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
@@ -29,6 +29,6 @@ thiserror = "2.0.20"
 # Enables `ManualWorkflowCore::fulfill_unchecked`, which this crate's own tests use
 # to exercise the reply helpers' defense-in-depth check against a reply
 # payload `fulfill` itself would reject.
-contentauth-sans-io-core = { path = "../contentauth-sans-io-core", features = [
+contentauth-sans-io-core = { version = "0.2.0", features = [
     "test-util",
 ] }

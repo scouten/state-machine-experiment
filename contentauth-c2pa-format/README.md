@@ -30,7 +30,7 @@ three operations, all format-specific, all pure:
 | `commit(plan, manifest)` | `Vec<Patch>` | Once the final store bytes are known, the output bytes that depend on them (a PNG chunk's CRC); nothing at all for JPEG. |
 
 The first two read the asset, so each is itself a session built on
-[`contentauth-sans-io-core`](../contentauth-sans-io-core), speaking the
+[`contentauth-sans-io-core`](https://github.com/contentauth/contentauth-sans-io-core), speaking the
 one request vocabulary this crate defines — `IoRequest::Read` and
 `IoRequest::Length`. A handler never writes: it *describes* the output,
 and the host (or an orchestrating session) materializes it.

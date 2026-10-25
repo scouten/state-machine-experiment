@@ -250,19 +250,19 @@ fn a_failed_operation_stays_failed() {
     // Every later report says where the operation failed, and why.
     assert_eq!(op.phase(), "Scanning > Length");
     match op.advance() {
-        Err(FormatError::Protocol(ProtocolError::SessionFailed(failure))) => {
+        Err(FormatError::Protocol(ProtocolError::WorkflowFailed(failure))) => {
             assert_eq!(failure.phase, "Scanning > Length");
             assert!(failure.cause.contains("unreadable"), "{failure}");
         }
-        other => panic!("expected SessionFailed, got {other:?}"),
+        other => panic!("expected WorkflowFailed, got {other:?}"),
     }
     assert!(matches!(
         op.fulfill(id, IoReply::Length(0)),
-        Err(FormatError::Protocol(ProtocolError::SessionFailed(_)))
+        Err(FormatError::Protocol(ProtocolError::WorkflowFailed(_)))
     ));
     assert!(matches!(
         op.finish(),
-        Err(FormatError::Protocol(ProtocolError::SessionFailed(_)))
+        Err(FormatError::Protocol(ProtocolError::WorkflowFailed(_)))
     ));
 }
 
@@ -301,7 +301,7 @@ fn a_completed_operation_stays_complete() {
     let op = JpegFormat.locate(STREAM);
     assert!(matches!(
         op.finish(),
-        Err(FormatError::Protocol(ProtocolError::SessionNotComplete))
+        Err(FormatError::Protocol(ProtocolError::WorkflowNotComplete))
     ));
 }
 

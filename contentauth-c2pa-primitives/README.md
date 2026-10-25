@@ -4,7 +4,7 @@ Shared vocabulary and deterministic encoders for the sans-I/O C2PA crates in
 this workspace: [`contentauth-c2pa-reader`](../contentauth-c2pa-reader) and
 `contentauth-c2pa-builder`.
 
-Both of those crates are independent [`contentauth-sans-io-core`](../contentauth-sans-io-core)
+Both of those crates are independent [`contentauth-sans-io-core`](https://github.com/contentauth/contentauth-sans-io-core)
 sessions, each with its own request vocabulary and settings/result types —
 that separation is deliberate (see the workspace [`CLAUDE.md`](../CLAUDE.md)).
 This crate exists for the narrow slice of the two that is genuinely the same

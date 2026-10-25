@@ -100,7 +100,7 @@ impl<G: Goal> Workflow for ScanOp<G> {
     /// Performs as much synchronous work as possible.
     ///
     /// If this returns an error the operation is spent: every later call
-    /// reports [`ProtocolError::SessionFailed`](contentauth_c2pa_format::ProtocolError::SessionFailed), naming the phase that
+    /// reports [`ProtocolError::WorkflowFailed`](contentauth_c2pa_format::ProtocolError::WorkflowFailed), naming the phase that
     /// failed and why.
     fn advance(&mut self) -> Result<Step, FormatError> {
         if self.core.is_complete() {
@@ -161,7 +161,7 @@ macro_rules! delegate_session {
             ///
             /// If this returns an error the operation is spent: every
             /// later call reports
-            /// [`ProtocolError::SessionFailed`](::contentauth_c2pa_format::ProtocolError::SessionFailed),
+            /// [`ProtocolError::WorkflowFailed`](::contentauth_c2pa_format::ProtocolError::WorkflowFailed),
             /// naming the phase that failed and why.
             fn advance(
                 &mut self,

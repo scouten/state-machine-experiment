@@ -10,10 +10,13 @@ Arrows point from a crate to what it depends on. Dashed edges include the
 standalone Wasm and Neon bindings, plus the standalone JavaScript package.
 The C++ reader/signing binding is a consumer of the canonical C API, which wraps the bridges. The outlined
 Python node and its dotted edge indicate prospective reuse only.
+`contentauth-sans-io-core` is an external crates.io dependency at version
+0.2.0, maintained in its [own repository](https://github.com/contentauth/contentauth-sans-io-core);
+all other Rust nodes are local crates (some in standalone workspaces).
 
 ```mermaid
 flowchart BT
-    SM["contentauth-sans-io-core<br/><i>host-driven workflow contract</i>"]
+    SM["contentauth-sans-io-core 0.2.0<br/><i>external crates.io dependency</i>"]
     PR["c2pa-primitives<br/><i>shared vocabulary</i>"]
 
     RD["c2pa-reader"]
@@ -107,7 +110,7 @@ flowchart TB
     end
     subgraph L1["Foundation — no C2PA workflow logic"]
         direction LR
-        e1[sans-io-core] ~~~ e2[primitives]
+        e1["sans-io-core 0.2.0 (external)"] ~~~ e2[primitives]
     end
     L5 --> L4 --> L2 --> L1
     L4 --> L3 --> L1
@@ -117,7 +120,7 @@ flowchart TB
 
 | Crate | Layer | What it is |
 |---|---|---|
-| `contentauth-sans-io-core` | Foundation | Shared C2PA/CAWG infrastructure: the host-driven `Workflow` contract, `ManualWorkflowCore` bookkeeping for an explicit state machine, or `CoroutineWorkflow` for an `async fn` with no runtime. Also `Nested` composition, request tracking, protocol errors, failure context (`phase()`, `Failure`), and `Recorder`/`replay` transcripts. No domain logic or host I/O/scheduling policy. |
+| [`contentauth-sans-io-core`](https://github.com/contentauth/contentauth-sans-io-core) | Foundation (external, 0.2.0) | Published crates.io dependency: the host-driven `Workflow` contract, `ManualWorkflowCore` bookkeeping for an explicit state machine, or `CoroutineWorkflow` for an `async fn` with no runtime. Also `Nested` composition, request tracking, protocol errors, failure context (`phase()`, `Failure`), and `Recorder`/`replay` transcripts. No domain logic or host I/O/scheduling policy. |
 | `contentauth-c2pa-primitives` | Foundation | The narrow shared slice: `StreamId`, `ByteRange`, hash/signing algorithms, `HostError`, COSE `Sig_structure`, RFC 3161 encode/unwrap. |
 | `contentauth-c2pa-reader` | Workflow | `ReadSession`: JUMBF, claims (v1+v2), integrity, signature, trust, timestamps, OCSP, CAWG identity assertions (X.509). |
 | `contentauth-c2pa-builder` | Workflow | `BuilderSession`: v2 claim generation and signing via a two-pass placeholder scheme, plus optional CAWG identity assertions. |

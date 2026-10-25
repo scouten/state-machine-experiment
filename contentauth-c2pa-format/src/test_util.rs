@@ -64,7 +64,7 @@ impl MemoryHost {
     /// would do — so an operation's handling of host failure is exercised
     /// rather than short-circuited. A session that parks with nothing
     /// outstanding can never finish; that is reported as
-    /// [`ProtocolError::SessionNotComplete`].
+    /// [`ProtocolError::WorkflowNotComplete`].
     pub fn run<S>(&self, mut session: S) -> Result<S::Output, S::Error>
     where
         S: Workflow<Request = IoRequest>,
@@ -75,7 +75,7 @@ impl MemoryHost {
             }
 
             if session.outstanding_requests().is_empty() {
-                return Err(ProtocolError::SessionNotComplete.into());
+                return Err(ProtocolError::WorkflowNotComplete.into());
             }
 
             session.respond(|request| self.reply(request))?;
@@ -267,7 +267,7 @@ pub mod conformance {
     /// A `locate` operation whose host fails its first request reports
     /// that failure, and from then on remembers where and why it failed:
     /// [`Workflow::phase`] names a phase, and every later call reports a
-    /// [`ProtocolError::SessionFailed`] naming that same phase and the
+    /// [`ProtocolError::WorkflowFailed`] naming that same phase and the
     /// original error — so a host that only sees a later report can still
     /// tell what went wrong.
     pub fn a_failure_is_remembered_with_its_phase<H: FormatHandler>(handler: &H) {
@@ -294,15 +294,15 @@ pub mod conformance {
         assert!(!phase.is_empty(), "a failed operation reported no phase");
 
         match op.advance() {
-            Err(FormatError::Protocol(ProtocolError::SessionFailed(failure))) => {
+            Err(FormatError::Protocol(ProtocolError::WorkflowFailed(failure))) => {
                 assert_eq!(
                     failure.phase, phase,
-                    "SessionFailed names a different phase than Workflow::phase"
+                    "WorkflowFailed names a different phase than Workflow::phase"
                 );
                 assert_eq!(
                     failure.cause,
                     original.to_string(),
-                    "SessionFailed does not carry the original error"
+                    "WorkflowFailed does not carry the original error"
                 );
             }
             other => panic!("advancing a failed operation reported {other:?}"),
@@ -310,7 +310,7 @@ pub mod conformance {
         assert_eq!(op.phase(), phase, "a failed operation's phase changed");
         assert!(matches!(
             op.finish(),
-            Err(FormatError::Protocol(ProtocolError::SessionFailed(_)))
+            Err(FormatError::Protocol(ProtocolError::WorkflowFailed(_)))
         ));
     }
 
