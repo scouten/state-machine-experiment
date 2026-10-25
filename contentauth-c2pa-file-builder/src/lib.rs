@@ -173,7 +173,8 @@ pub fn build_and_sign<H, S, O>(
     identity_sign: Option<&mut IdentitySignFn<'_>>,
 ) -> Result<FileBuilderReport, Error>
 where
-    H: FormatHandler + Send,
+    H: FormatHandler + Send + 'static,
+    H::PlanEmbed: Send,
     S: Read + Seek,
     O: Read + Write + Seek,
 {
@@ -208,7 +209,8 @@ pub fn build_and_sign_file<H>(
     identity_sign: Option<&mut IdentitySignFn<'_>>,
 ) -> Result<FileBuilderReport, Error>
 where
-    H: FormatHandler + Send,
+    H: FormatHandler + Send + 'static,
+    H::PlanEmbed: Send,
 {
     let source_path = source_path.as_ref();
     let source = std::fs::File::open(source_path).map_err(|source| Error::Io {

@@ -36,7 +36,8 @@ pub(crate) async fn build<H, B, S>(
     tsa_url: Option<&str>,
 ) -> Result<SignedAsset, Error>
 where
-    H: FormatHandler + Send,
+    H: FormatHandler + Send + 'static,
+    H::PlanEmbed: Send,
     B: Blob + ?Sized,
     S: AsyncSigner + ?Sized,
 {
