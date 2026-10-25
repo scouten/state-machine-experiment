@@ -16,7 +16,7 @@
 //!
 //! # The big idea
 //!
-//! This crate builds on [`contentauth_state_machine`], the same reusable
+//! This crate builds on [`contentauth_sans_io_core`], the same reusable
 //! engine [`contentauth_c2pa_reader`](https://docs.rs/contentauth-c2pa-reader)
 //! is built on: a session performs all of its work synchronously and
 //! externalizes anything that might need to be asynchronous (embedding
@@ -24,7 +24,7 @@
 //! to its host through an explicit request/reply protocol.
 //!
 //! [`BuilderSession`] is this crate's session: it implements the
-//! [`contentauth_state_machine::Session`] trait, and builds and signs a
+//! [`contentauth_sans_io_core::Workflow`] trait, and builds and signs a
 //! C2PA manifest store for a digital asset. (Compare to `Builder` in
 //! c2pa-rs.) When it needs something that may require an asynchronous
 //! action in the host environment — embedding a placeholder, signing,
@@ -99,7 +99,7 @@ pub use builder::{
 pub use contentauth_c2pa_primitives::{
     ByteRange, Bytes, HashAlgorithm, HostError, SigningAlg, StreamId,
 };
-pub use contentauth_state_machine::{HostRequest, ProtocolError, RequestId, Session};
+pub use contentauth_sans_io_core::{HostRequest, ProtocolError, RequestId, Workflow};
 pub use data_hash::MAX_EXCLUSIONS;
 pub use error::Error;
 pub use identity::{IdentityCredential, IdentitySettings};

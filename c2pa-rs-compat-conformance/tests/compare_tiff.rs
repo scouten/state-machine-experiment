@@ -31,7 +31,7 @@ use contentauth_c2pa_sign_baseline::{
     fixtures::{TEST_SIGNER_CERT, TEST_SIGNER_KEY_PEM},
     Definition, BASELINE_DEFINITION,
 };
-use contentauth_state_machine::Session;
+use contentauth_sans_io_core::Workflow;
 
 /// Builds and signs a manifest and embeds it into `source` through
 /// `handler`, as a host writing a file would.

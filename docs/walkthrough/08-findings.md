@@ -64,7 +64,7 @@ about C2PA itself.
   waits on its host cost an enum variant carrying every live local, a
   handler, and the same `None` / `Failed` / wrong-reply arms again. The
   builder now writes its workflow as an `async fn` over the engine's
-  `Workflow` instead — same host contract, same request vocabulary, every
+  `CoroutineWorkflow` instead — same host contract, same request vocabulary, every
   existing test and binding unchanged — and the compiler generates that
   state machine. The duplicated arms, and the coverage gaps they left,
   collapsed into one helper; `HashStream`'s chunk table and reorder buffer

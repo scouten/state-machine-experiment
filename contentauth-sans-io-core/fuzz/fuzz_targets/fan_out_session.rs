@@ -11,9 +11,10 @@
 // specific language governing permissions and limitations under
 // each license.
 
-//! Fuzzes `SessionCore` (and the `RequestTracker` beneath it): arbitrary
-//! bytes decode to a script of issue / fulfill / take / mark calls, many of
-//! them illegal, checked against a reference model after every step.
+//! Fuzzes a complete `Workflow` through the public `advance` / `fulfill` /
+//! `outstanding_requests` / `finish` contract, with a host that replies
+//! out of order, with the wrong payload, to IDs it was never given, and
+//! after the session has finished or failed.
 
 #![no_main]
 
@@ -23,5 +24,5 @@ use libfuzzer_sys::fuzz_target;
 mod model;
 
 fuzz_target!(|data: &[u8]| {
-    model::run_core(&model::decode_core(data));
+    model::run_session(&model::decode_session(data));
 });

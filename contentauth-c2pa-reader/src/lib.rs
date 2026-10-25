@@ -16,7 +16,7 @@
 //!
 //! # The big idea
 //!
-//! This crate builds on [`contentauth_state_machine`], a reusable engine
+//! This crate builds on [`contentauth_sans_io_core`], a reusable engine
 //! for sessions that never block: a session performs all of its work
 //! synchronously and externalizes anything that might need to be
 //! asynchronous (file I/O, container format parsing, network access, a
@@ -24,7 +24,7 @@
 //! a state machine struct that is handed back and forth.
 //!
 //! [`ReadSession`] is this crate's session: it implements the
-//! [`contentauth_state_machine::Session`] trait, and reads and validates a
+//! [`contentauth_sans_io_core::Workflow`] trait, and reads and validates a
 //! C2PA manifest store from a digital asset. (Compare to `Reader` in
 //! c2pa-rs.) When it needs something that may require an asynchronous
 //! action in the host environment, it parks itself and hands the host a set
@@ -42,7 +42,7 @@
 //!
 //! * The request vocabulary and interaction contract are real and
 //!   exercised by tests, built directly on
-//!   [`contentauth_state_machine::SessionCore`].
+//!   [`contentauth_sans_io_core::ManualWorkflowCore`].
 //! * [`ReadSession`] reads a manifest store end to end: JUMBF box parsing
 //!   (via the [`jumbf`] crate), claim decoding ([`claim`]), and report
 //!   population ([`ReadReport`]).
@@ -106,7 +106,7 @@ pub use claim::{Claim, ClaimError, ClaimVersion, GeneratorInfo, HashedUri};
 pub use contentauth_c2pa_primitives::{
     ByteRange, Bytes, HashAlgorithm, HostError, SigningAlg, StreamId,
 };
-pub use contentauth_state_machine::{HostRequest, ProtocolError, RequestId, Session};
+pub use contentauth_sans_io_core::{HostRequest, ProtocolError, RequestId, Workflow};
 pub use data_hash::DataHash;
 pub use error::Error;
 pub use identity::{IdentityAssertion, IdentityCredential};

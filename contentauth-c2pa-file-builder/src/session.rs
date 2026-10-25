@@ -46,8 +46,8 @@ use contentauth_c2pa_format::{Edit, EmbedPlan, FormatHandler, IoReply, IoRequest
 use contentauth_c2pa_primitives::{
     ByteRange, Bytes, HashAlgorithm, HostError, SigningAlg, StreamId,
 };
-use contentauth_state_machine::{
-    HostRequest, ProtocolError, Request, RequestId, Session, SessionCore, Step,
+use contentauth_sans_io_core::{
+    HostRequest, ManualWorkflowCore, ProtocolError, Request, RequestId, Step, Workflow,
 };
 
 use crate::error::Error;
@@ -335,7 +335,7 @@ enum Phase<H: FormatHandler> {
 /// function) can use that convenience function instead of driving this
 /// session by hand.
 pub struct FileBuilderSession<H: FormatHandler + Send> {
-    core: SessionCore<FileBuilderRequest>,
+    core: ManualWorkflowCore<FileBuilderRequest>,
 
     /// Maps a request this session issued to its own host (the key) back
     /// to the [`BuilderSession`] request it stands in for (the value).
@@ -348,7 +348,7 @@ pub struct FileBuilderSession<H: FormatHandler + Send> {
     handler: H,
     phase: Option<Phase<H>>,
 
-    /// [`Session::phase`]'s answer as of the start of the current pass of
+    /// [`Workflow::phase`]'s answer as of the start of the current pass of
     /// `advance`'s loop, captured before `phase` is taken out so a failure
     /// can still be blamed on the phase it happened in.
     active: String,
@@ -358,8 +358,8 @@ pub struct FileBuilderSession<H: FormatHandler + Send> {
 /// while the inner [`BuilderSession`] is still running.
 const BUILDING: &str = "Building";
 
-/// `outer > inner`, the way [`Session::phase`] joins nested phases.
-fn nested<S: Session + ?Sized>(outer: &str, inner: &S) -> String {
+/// `outer > inner`, the way [`Workflow::phase`] joins nested phases.
+fn nested<S: Workflow + ?Sized>(outer: &str, inner: &S) -> String {
     format!("{outer} > {}", inner.phase())
 }
 
@@ -379,7 +379,7 @@ impl<H: FormatHandler + Send> FileBuilderSession<H> {
     /// writing the result to [`Self::OUTPUT_STREAM`].
     pub fn new(handler: H, settings: BuilderSettings) -> Self {
         Self {
-            core: SessionCore::default(),
+            core: ManualWorkflowCore::default(),
             pending: HashMap::new(),
             handler,
             phase: Some(Phase::Building {
@@ -392,7 +392,7 @@ impl<H: FormatHandler + Send> FileBuilderSession<H> {
     }
 
     /// Where this session is, not counting a recorded failure — see
-    /// [`Session::phase`].
+    /// [`Workflow::phase`].
     fn describe(&self) -> String {
         match &self.phase {
             None => "Poisoned".to_string(),
@@ -458,7 +458,7 @@ impl<H: FormatHandler + Send> FileBuilderSession<H> {
     }
 }
 
-impl<H: FormatHandler + Send> Session for FileBuilderSession<H> {
+impl<H: FormatHandler + Send> Workflow for FileBuilderSession<H> {
     type Error = Error;
     type Output = FileBuilderReport;
     type Request = FileBuilderRequest;
@@ -797,7 +797,7 @@ enum PlanningStep<H: FormatHandler> {
 /// forwarded [`IoRequest`]s have received, advances it, and forwards
 /// whatever it asks for next.
 fn step_planning<H: FormatHandler>(
-    core: &mut SessionCore<FileBuilderRequest>,
+    core: &mut ManualWorkflowCore<FileBuilderRequest>,
     mut op: H::PlanEmbed,
     placeholder: Bytes,
     request: RequestId,
@@ -887,7 +887,7 @@ enum ValidatingStep<H: FormatHandler> {
 /// necessarily done yet for a plan built by hand rather than through
 /// [`EmbedPlan::splice`] — before ever indexing into it.
 fn step_validating<H: FormatHandler>(
-    core: &mut SessionCore<FileBuilderRequest>,
+    core: &mut ManualWorkflowCore<FileBuilderRequest>,
     plan: EmbedPlan,
     placeholder: Bytes,
     request: RequestId,
@@ -926,7 +926,7 @@ enum WritingStep<H: FormatHandler> {
 /// Drives one round of [`Sub::Writing`]: resolves whatever request is
 /// currently inflight, then issues the next task's request.
 fn step_writing<H: FormatHandler>(
-    core: &mut SessionCore<FileBuilderRequest>,
+    core: &mut ManualWorkflowCore<FileBuilderRequest>,
     mut tasks: VecDeque<WriteTask>,
     inflight: Option<Inflight>,
     request: RequestId,
@@ -1178,7 +1178,7 @@ fn to_io_reply(reply: FileBuilderReply) -> IoReply {
         FileBuilderReply::Length(len) => IoReply::Length(len),
         FileBuilderReply::Failed(err) => IoReply::Failed(err),
 
-        // `SessionCore::fulfill` validates a reply against
+        // `ManualWorkflowCore::fulfill` validates a reply against
         // `FileBuilderRequest::accepts` before this function ever sees
         // it, and only `Read`/`Length` requests are ever forwarded to
         // `plan_embed`'s operation — kept for exhaustiveness.
@@ -1214,7 +1214,7 @@ fn to_builder_host_reply(reply: FileBuilderReply) -> BuilderHostReply {
 /// Consumes the reply to a [`FileBuilderRequest::Length`], if the host has
 /// provided one.
 fn take_length(
-    core: &mut SessionCore<FileBuilderRequest>,
+    core: &mut ManualWorkflowCore<FileBuilderRequest>,
     id: RequestId,
 ) -> Result<Option<u64>, Error> {
     match core.take_reply(id) {
@@ -1236,7 +1236,7 @@ fn take_length(
 /// Consumes the reply to a [`FileBuilderRequest::Read`] for `range`, if
 /// the host has provided one.
 fn take_bytes(
-    core: &mut SessionCore<FileBuilderRequest>,
+    core: &mut ManualWorkflowCore<FileBuilderRequest>,
     id: RequestId,
     range: ByteRange,
 ) -> Result<Option<Bytes>, Error> {
@@ -1265,7 +1265,7 @@ fn take_bytes(
 /// Consumes the reply to a [`FileBuilderRequest::Write`], if the host has
 /// provided one.
 fn take_write_ack(
-    core: &mut SessionCore<FileBuilderRequest>,
+    core: &mut ManualWorkflowCore<FileBuilderRequest>,
     id: RequestId,
 ) -> Result<Option<()>, Error> {
     match core.take_reply(id) {
@@ -1650,7 +1650,7 @@ mod tests {
     #[test]
     fn advance_fails_defensively_if_phase_is_ever_none() {
         let mut session: FileBuilderSession<JpegFormat> = FileBuilderSession {
-            core: SessionCore::default(),
+            core: ManualWorkflowCore::default(),
             pending: HashMap::new(),
             handler: JpegFormat,
             phase: None,
@@ -1666,13 +1666,13 @@ mod tests {
         assert_eq!(session.phase(), "");
     }
 
-    /// `finish` does not trust `SessionCore`'s lifecycle alone: it also
+    /// `finish` does not trust `ManualWorkflowCore`'s lifecycle alone: it also
     /// checks that `phase` actually holds a result. The two can only
     /// disagree if something bypasses `advance`'s own bookkeeping, as this
     /// test does directly.
     #[test]
     fn finish_fails_defensively_if_core_and_phase_disagree() {
-        let mut core = SessionCore::default();
+        let mut core = ManualWorkflowCore::default();
         core.mark_complete();
 
         let session: FileBuilderSession<JpegFormat> = FileBuilderSession {
@@ -1710,7 +1710,7 @@ mod tests {
     /// isolated to `step_writing` itself.
     #[test]
     fn step_writing_does_not_reissue_a_still_pending_source_read() {
-        let mut core = SessionCore::default();
+        let mut core = ManualWorkflowCore::default();
         let outer_request = core.issue(FileBuilderRequest::Sign {
             purpose: SignPurpose::Claim,
             alg: SigningAlg::Es256,
@@ -1764,7 +1764,7 @@ mod tests {
     /// The mirror of the above for a `Write` a task has already issued.
     #[test]
     fn step_writing_does_not_reissue_a_still_pending_write() {
-        let mut core = SessionCore::default();
+        let mut core = ManualWorkflowCore::default();
         let outer_request = core.issue(FileBuilderRequest::Sign {
             purpose: SignPurpose::Claim,
             alg: SigningAlg::Es256,
@@ -1821,7 +1821,7 @@ mod tests {
     /// using its offsets, not silently trusted.
     #[test]
     fn step_validating_rejects_a_plan_that_does_not_check_out() {
-        let mut core = SessionCore::default();
+        let mut core = ManualWorkflowCore::default();
         let request = core.issue(FileBuilderRequest::Sign {
             purpose: SignPurpose::Claim,
             alg: SigningAlg::Es256,
@@ -1845,7 +1845,7 @@ mod tests {
 
     #[test]
     fn step_validating_awaits_a_still_pending_source_length() {
-        let mut core = SessionCore::default();
+        let mut core = ManualWorkflowCore::default();
         let request = core.issue(FileBuilderRequest::Sign {
             purpose: SignPurpose::Claim,
             alg: SigningAlg::Es256,
@@ -1869,7 +1869,7 @@ mod tests {
     /// host failure.
     #[test]
     fn take_bytes_reports_outstanding_wrong_length_and_failure() {
-        let mut core = SessionCore::default();
+        let mut core = ManualWorkflowCore::default();
         let range = ByteRange { start: 4, len: 3 };
 
         let id = core.issue(FileBuilderRequest::Read {
@@ -1912,7 +1912,7 @@ mod tests {
     /// for `take_write_ack`.
     #[test]
     fn take_write_ack_reports_outstanding_and_failure() {
-        let mut core = SessionCore::default();
+        let mut core = ManualWorkflowCore::default();
 
         let id = core.issue(FileBuilderRequest::Write {
             stream: stream(),

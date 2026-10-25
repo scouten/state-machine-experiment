@@ -18,7 +18,7 @@ use std::fmt;
 
 use crate::types::RequestId;
 
-/// A misuse of the [`Session`](crate::Session) API, as opposed to a failure
+/// A misuse of the [`Workflow`](crate::Workflow) API, as opposed to a failure
 /// of the workflow the session carries out.
 ///
 /// Every one of these but [`Self::WorkflowStalled`] and
@@ -62,7 +62,7 @@ pub enum ProtocolError {
     ///
     /// A failed workflow typically leaves a session's internal state
     /// half-built, so handing anything out as if it were a result would be
-    /// misleading. Sessions built with [`SessionCore`](crate::SessionCore)
+    /// misleading. Sessions built with [`ManualWorkflowCore`](crate::ManualWorkflowCore)
     /// poison themselves on error: the original error is returned when it
     /// happens, and every later call reports this instead — carrying the
     /// phase the session failed in and the original error's message, so a
@@ -70,7 +70,7 @@ pub enum ProtocolError {
     #[error("{0}")]
     SessionFailed(Failure),
 
-    /// A [`Workflow`](crate::Workflow) is waiting, yet has nothing
+    /// A [`CoroutineWorkflow`](crate::CoroutineWorkflow) is waiting, yet has nothing
     /// outstanding that the host could answer to unblock it.
     ///
     /// This is a bug in the workflow rather than its host: it awaited
@@ -88,13 +88,13 @@ pub enum ProtocolError {
 }
 
 /// Where and why a session failed, as remembered by
-/// [`SessionCore::mark_failed`](crate::SessionCore::mark_failed) and
+/// [`ManualWorkflowCore::mark_failed`](crate::ManualWorkflowCore::mark_failed) and
 /// reported by [`ProtocolError::SessionFailed`].
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct Failure {
     /// The phase the session was in when it failed, as reported by
-    /// [`Session::phase`](crate::Session::phase). Empty if unknown.
+    /// [`Workflow::phase`](crate::Workflow::phase). Empty if unknown.
     pub phase: String,
 
     /// The message of the error that ended the session. Empty if unknown.

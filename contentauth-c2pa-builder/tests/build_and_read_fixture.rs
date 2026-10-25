@@ -28,7 +28,7 @@ use contentauth_c2pa_builder::{
 use contentauth_c2pa_reader::{
     ClaimVersion, ReadHostReply, ReadRequest, ReadSession, ReadSettings, ReadStep, ValidationState,
 };
-use contentauth_state_machine::Session;
+use contentauth_sans_io_core::Workflow;
 
 /// The end-entity certificate for [`TEST_SIGNER_KEY`], self-signed so
 /// tests can configure it directly as a trust anchor. Generated for this

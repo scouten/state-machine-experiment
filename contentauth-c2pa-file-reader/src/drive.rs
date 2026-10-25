@@ -43,7 +43,7 @@ use std::{
 use contentauth_c2pa_format::FormatHandler;
 use contentauth_c2pa_primitives::{ByteRange, HostError};
 use contentauth_c2pa_reader::{ReadReport, ReadSettings};
-use contentauth_state_machine::{Session, Step};
+use contentauth_sans_io_core::{Step, Workflow};
 
 use crate::{
     error::Error,

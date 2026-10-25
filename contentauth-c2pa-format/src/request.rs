@@ -20,7 +20,7 @@
 //! which handler issued it.
 
 use contentauth_c2pa_primitives::{ByteRange, Bytes, HostError, StreamId};
-use contentauth_state_machine::{ProtocolError, Request, RequestId, SessionCore};
+use contentauth_sans_io_core::{ManualWorkflowCore, ProtocolError, Request, RequestId};
 
 use crate::error::FormatError;
 
@@ -102,7 +102,7 @@ pub enum IoReply {
 /// next thing" shape most container parsers take is exactly one of these
 /// per phase.
 pub fn take_bytes(
-    core: &mut SessionCore<IoRequest>,
+    core: &mut ManualWorkflowCore<IoRequest>,
     id: RequestId,
     range: ByteRange,
 ) -> Result<Option<Bytes>, FormatError> {
@@ -134,7 +134,7 @@ pub fn take_bytes(
 ///
 /// Returns `Ok(None)` while the request is still outstanding.
 pub fn take_length(
-    core: &mut SessionCore<IoRequest>,
+    core: &mut ManualWorkflowCore<IoRequest>,
     id: RequestId,
 ) -> Result<Option<u64>, FormatError> {
     match core.take_reply(id) {
@@ -196,7 +196,7 @@ mod tests {
     fn take_bytes_reports_outstanding_wrong_length_and_failure() {
         let stream = StreamId::new(0);
         let range = ByteRange { start: 4, len: 3 };
-        let mut core = SessionCore::default();
+        let mut core = ManualWorkflowCore::default();
 
         let id = core.issue(IoRequest::Read { stream, range });
         assert!(take_bytes(&mut core, id, range).unwrap().is_none());
@@ -226,7 +226,7 @@ mod tests {
     #[test]
     fn take_length_reports_outstanding_and_failure() {
         let stream = StreamId::new(0);
-        let mut core = SessionCore::default();
+        let mut core = ManualWorkflowCore::default();
 
         let id = core.issue(IoRequest::Length { stream });
         assert!(take_length(&mut core, id).unwrap().is_none());
@@ -246,7 +246,7 @@ mod tests {
     fn a_mismatched_stored_reply_is_defensively_rejected() {
         let stream = StreamId::new(0);
         let range = ByteRange { start: 0, len: 1 };
-        let mut core = SessionCore::default();
+        let mut core = ManualWorkflowCore::default();
 
         let id = core.issue(IoRequest::Read { stream, range });
         core.fulfill_unchecked(id, IoReply::Length(1));

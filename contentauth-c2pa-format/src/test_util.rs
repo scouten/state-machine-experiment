@@ -25,7 +25,7 @@
 use std::collections::HashMap;
 
 use contentauth_c2pa_primitives::{Bytes, HostError, StreamId};
-use contentauth_state_machine::{ProtocolError, Session, Step};
+use contentauth_sans_io_core::{ProtocolError, Step, Workflow};
 
 use crate::request::{IoReply, IoRequest};
 
@@ -67,7 +67,7 @@ impl MemoryHost {
     /// [`ProtocolError::SessionNotComplete`].
     pub fn run<S>(&self, mut session: S) -> Result<S::Output, S::Error>
     where
-        S: Session<Request = IoRequest>,
+        S: Workflow<Request = IoRequest>,
     {
         loop {
             if session.advance()? == Step::Complete {
@@ -120,7 +120,7 @@ impl MemoryHost {
 /// one; the handler's own tests know what that takes.
 pub mod conformance {
     use contentauth_c2pa_primitives::HostError;
-    use contentauth_state_machine::{ProtocolError, Session, Step};
+    use contentauth_sans_io_core::{ProtocolError, Step, Workflow};
 
     use crate::{
         error::FormatError,
@@ -266,7 +266,7 @@ pub mod conformance {
 
     /// A `locate` operation whose host fails its first request reports
     /// that failure, and from then on remembers where and why it failed:
-    /// [`Session::phase`] names a phase, and every later call reports a
+    /// [`Workflow::phase`] names a phase, and every later call reports a
     /// [`ProtocolError::SessionFailed`] naming that same phase and the
     /// original error — so a host that only sees a later report can still
     /// tell what went wrong.
@@ -297,7 +297,7 @@ pub mod conformance {
             Err(FormatError::Protocol(ProtocolError::SessionFailed(failure))) => {
                 assert_eq!(
                     failure.phase, phase,
-                    "SessionFailed names a different phase than Session::phase"
+                    "SessionFailed names a different phase than Workflow::phase"
                 );
                 assert_eq!(
                     failure.cause,

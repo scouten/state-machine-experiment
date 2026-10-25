@@ -41,7 +41,7 @@ use contentauth_c2pa_format_tiff::TiffFormat;
 use contentauth_c2pa_reader::{
     ReadHostReply, ReadReport, ReadRequest, ReadSession, ReadSettings, ReadStep, ValidationState,
 };
-use contentauth_state_machine::Session;
+use contentauth_sans_io_core::Workflow;
 
 /// The self-signed test certificate and key `contentauth-c2pa-builder`'s
 /// own tests sign with. They protect nothing.

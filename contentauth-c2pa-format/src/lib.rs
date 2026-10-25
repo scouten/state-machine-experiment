@@ -45,7 +45,7 @@
 //!   as [`Patch`]es.
 //!
 //! The first two need to read the asset, so they are themselves sessions
-//! built on `contentauth-state-machine` — each is a [`FormatOp`] speaking
+//! built on `contentauth-sans-io-core` — each is a [`FormatOp`] speaking
 //! the one request vocabulary this crate defines, [`IoRequest`]: read a
 //! range, report a length. A handler never writes: it *describes* the
 //! output, and the host (or an orchestrating session) materializes it.
@@ -97,8 +97,8 @@ mod request;
 pub mod test_util;
 
 pub use contentauth_c2pa_primitives::{ByteRange, Bytes, HostError, StreamId};
-pub use contentauth_state_machine::{
-    Failure, HostRequest, ProtocolError, RequestId, Session, Step,
+pub use contentauth_sans_io_core::{
+    Failure, HostRequest, ProtocolError, RequestId, Step, Workflow,
 };
 pub use descriptor::{FormatDescriptor, Signature};
 pub use error::FormatError;

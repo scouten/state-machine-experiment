@@ -1,7 +1,7 @@
 [package]
-name = "contentauth-state-machine"
+name = "contentauth-sans-io-core"
 version = "0.1.0"
-description = "Reusable engine for building synchronous, sans-I/O state machines"
+description = "Host-driven, sans-I/O workflows for C2PA and CAWG crates"
 authors.workspace = true
 license.workspace = true
 edition.workspace = true

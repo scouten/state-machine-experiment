@@ -29,7 +29,7 @@ use contentauth_c2pa_file_reader::{
     Error, FileReadReply, FileReadRequest, FileReadSession, FormatHandler, ReadReport, ReadSettings,
 };
 use contentauth_c2pa_primitives::HostError;
-use contentauth_state_machine::{Session, Step};
+use contentauth_sans_io_core::{Step, Workflow};
 
 use crate::{blob::Blob, platform::Platform};
 

@@ -24,7 +24,7 @@
 //! lengths surface promptly; valid chunks wait in shared buffers until
 //! their turn to be hashed.
 //!
-//! [`PendingReply`]: contentauth_state_machine::PendingReply
+//! [`PendingReply`]: contentauth_sans_io_core::PendingReply
 //!
 //! # Memory
 //!
@@ -40,7 +40,7 @@ use std::{
 };
 
 use contentauth_c2pa_primitives::{hash::Hasher, ByteRange, Bytes, HashAlgorithm, StreamId};
-use contentauth_state_machine::{Host, PendingReply, ProtocolError};
+use contentauth_sans_io_core::{Host, PendingReply, ProtocolError};
 
 use crate::{
     error::Error,
@@ -194,7 +194,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use contentauth_c2pa_primitives::HostError;
-    use contentauth_state_machine::{RequestId, Session, Step, Workflow};
+    use contentauth_sans_io_core::{CoroutineWorkflow, RequestId, Step, Workflow};
 
     use super::*;
 
@@ -246,14 +246,14 @@ mod tests {
         assert_eq!(included_ranges(&[range(u64::MAX, 2)], 100), None);
     }
 
-    type HashSession = Workflow<BuilderRequest, Vec<u8>, Error>;
+    type HashSession = CoroutineWorkflow<BuilderRequest, Vec<u8>, Error>;
 
     /// A hash over `ranges` of a 1000-byte asset, run as a session of its
     /// own: an `async fn` sub-workflow needs no session around it to be
     /// tested.
     fn session(ranges: &[ByteRange], chunk_size: u64, window: usize) -> HashSession {
         let ranges = ranges.to_vec();
-        Workflow::new(move |host| async move {
+        CoroutineWorkflow::new(move |host| async move {
             hash_with_limits(
                 &host,
                 StreamId::new(0),

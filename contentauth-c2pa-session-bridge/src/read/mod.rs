@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use contentauth_c2pa_file_reader::{FileReadReply, FileReadRequest, FileReadSession};
 use contentauth_c2pa_format_registry::AnyFormat;
 use contentauth_c2pa_primitives::HostError;
-use contentauth_state_machine::{RequestId, Session};
+use contentauth_sans_io_core::{RequestId, Workflow};
 
 use crate::compat::for_format;
 
@@ -162,7 +162,7 @@ impl ReadSessionBridge {
     /// Synchronous and bounded: one slice of parsing or hashing, then
     /// either completion or the requests that stand in its way.
     pub fn advance(&mut self) -> Result<Step, Error> {
-        use contentauth_state_machine::Step as Engine;
+        use contentauth_sans_io_core::Step as Engine;
 
         match self.inner.advance().map_err(C2paError::from)? {
             Engine::Complete => Ok(Step::Complete),
@@ -208,7 +208,7 @@ impl ReadSessionBridge {
 
     /// Where the engine is — the phase it is waiting in, or the one it
     /// failed in — for logs and error reports, not control flow. See
-    /// [`contentauth_state_machine::Session::phase`].
+    /// [`contentauth_sans_io_core::Workflow::phase`].
     pub fn phase(&self) -> String {
         self.inner.phase()
     }

@@ -35,7 +35,7 @@ use contentauth_c2pa_format::{
 use contentauth_c2pa_format_jpeg::JpegFormat;
 use contentauth_c2pa_js_compat::Platform;
 use contentauth_c2pa_primitives::HostError;
-use contentauth_state_machine::Session;
+use contentauth_sans_io_core::Workflow;
 
 pub const TEST_SIGNER_CERT: &[u8] =
     include_bytes!("../../../contentauth-c2pa-builder/tests/fixtures/test-signer.der");

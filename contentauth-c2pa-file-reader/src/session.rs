@@ -32,8 +32,8 @@ use contentauth_c2pa_primitives::{ByteRange, Bytes, HostError, StreamId};
 use contentauth_c2pa_reader::{
     ReadHostReply, ReadReport, ReadRequest, ReadSession, ReadSettings, ReadStep,
 };
-use contentauth_state_machine::{
-    HostRequest, ProtocolError, Request, RequestId, Session, SessionCore, Step,
+use contentauth_sans_io_core::{
+    HostRequest, ManualWorkflowCore, ProtocolError, Request, RequestId, Step, Workflow,
 };
 
 use crate::error::Error;
@@ -167,7 +167,7 @@ enum Phase<H: FormatHandler> {
 /// [`crate::read_manifest`]: a host with only synchronous, local access can
 /// use that convenience function instead of driving this session by hand.
 pub struct FileReadSession<H: FormatHandler> {
-    core: SessionCore<FileReadRequest>,
+    core: ManualWorkflowCore<FileReadRequest>,
 
     /// Maps a request this session issued to its own host (the key) back to
     /// the inner session's request it stands in for (the value).
@@ -182,7 +182,7 @@ impl<H: FormatHandler> FileReadSession<H> {
     /// reads and validates it per `settings`.
     pub fn new(handler: &H, settings: ReadSettings) -> Self {
         Self {
-            core: SessionCore::default(),
+            core: ManualWorkflowCore::default(),
             pending: HashMap::new(),
             phase: Some(Phase::Locating(handler.locate(ReadSession::PRIMARY_STREAM))),
             settings: Some(settings),
@@ -232,7 +232,7 @@ impl<H: FormatHandler> FileReadSession<H> {
         reply: <S::Request as Request>::Reply,
     ) -> Result<(), Error>
     where
-        S: Session,
+        S: Workflow,
         Error: From<S::Error>,
     {
         match target.fulfill(id, reply) {
@@ -250,7 +250,7 @@ impl<H: FormatHandler> FileReadSession<H> {
     }
 }
 
-impl<H: FormatHandler> Session for FileReadSession<H> {
+impl<H: FormatHandler> Workflow for FileReadSession<H> {
     type Error = Error;
     type Output = ReadReport;
     type Request = FileReadRequest;
@@ -467,7 +467,7 @@ const LOCATING: &str = "Locating";
 const READING: &str = "Reading";
 
 /// Names `inner`'s phase as nested under this session's `outer` one.
-fn nested<S: Session + ?Sized>(outer: &str, inner: &S) -> String {
+fn nested<S: Workflow + ?Sized>(outer: &str, inner: &S) -> String {
     format!("{outer} > {}", inner.phase())
 }
 
@@ -652,7 +652,7 @@ mod tests {
         ));
 
         // `locate` never issues `FileReadRequest::CurrentDateTime`, and
-        // `SessionCore::fulfill` validates a reply against
+        // `ManualWorkflowCore::fulfill` validates a reply against
         // `FileReadRequest::accepts` before this function ever sees it, so
         // a real host cannot produce this pairing — kept for exhaustiveness
         // now that `FileReadReply` has a variant this function must still
@@ -722,7 +722,7 @@ mod tests {
     #[test]
     fn advance_fails_defensively_if_phase_is_ever_none() {
         let mut session: FileReadSession<JpegFormat> = FileReadSession {
-            core: SessionCore::default(),
+            core: ManualWorkflowCore::default(),
             pending: HashMap::new(),
             phase: None,
             settings: None,
@@ -736,13 +736,13 @@ mod tests {
         assert!(session.core.is_failed());
     }
 
-    /// `finish` does not trust `SessionCore`'s lifecycle alone: it also
+    /// `finish` does not trust `ManualWorkflowCore`'s lifecycle alone: it also
     /// checks that `phase` actually holds a result. The two can only
     /// disagree if something bypasses `advance`'s own bookkeeping, as this
     /// test does directly.
     #[test]
     fn finish_fails_defensively_if_core_and_phase_disagree() {
-        let mut core = SessionCore::default();
+        let mut core = ManualWorkflowCore::default();
         core.mark_complete();
 
         let session: FileReadSession<JpegFormat> = FileReadSession {

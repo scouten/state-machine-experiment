@@ -26,7 +26,7 @@ use core::mem::{replace, take};
 use contentauth_c2pa_format::{
     take_bytes, take_length, ByteRange, FormatError, IoRequest, RequestId, StreamId,
 };
-use contentauth_state_machine::SessionCore;
+use contentauth_sans_io_core::ManualWorkflowCore;
 
 use crate::segment::{
     classify_box_head, is_standalone, parse_preamble, BoxHead, Preamble, APP0, APP11,
@@ -215,7 +215,7 @@ enum Phase {
 }
 
 /// The scan itself. Owned by an operation, which owns the
-/// [`SessionCore`] and passes it in.
+/// [`ManualWorkflowCore`] and passes it in.
 pub(crate) struct Scanner {
     stream: StreamId,
     phase: Phase,
@@ -240,7 +240,7 @@ impl Scanner {
     }
 
     /// Names the scan's current phase — with the byte offset it concerns,
-    /// where there is one — for [`Session::phase`](contentauth_c2pa_format::Session::phase).
+    /// where there is one — for [`Workflow::phase`](contentauth_c2pa_format::Workflow::phase).
     pub(crate) fn phase(&self) -> String {
         match &self.phase {
             Phase::Start => "Start".into(),
@@ -259,7 +259,7 @@ impl Scanner {
     /// request is outstanding.
     pub(crate) fn advance(
         &mut self,
-        core: &mut SessionCore<IoRequest>,
+        core: &mut ManualWorkflowCore<IoRequest>,
     ) -> Result<Option<Layout>, FormatError> {
         // Each phase issues at most one request, so one reply advances
         // the scan by exactly one phase: no loop is needed here.
@@ -338,7 +338,7 @@ impl Scanner {
         }
     }
 
-    fn read(&self, core: &mut SessionCore<IoRequest>, range: ByteRange) -> RequestId {
+    fn read(&self, core: &mut ManualWorkflowCore<IoRequest>, range: ByteRange) -> RequestId {
         core.issue(IoRequest::Read {
             stream: self.stream,
             range,
@@ -347,7 +347,10 @@ impl Scanner {
 
     /// Asks for the marker at `pos` and, if there is room, its length
     /// field too.
-    fn issue_marker(&mut self, core: &mut SessionCore<IoRequest>) -> Result<(), FormatError> {
+    fn issue_marker(
+        &mut self,
+        core: &mut ManualWorkflowCore<IoRequest>,
+    ) -> Result<(), FormatError> {
         let available = self.source_len - self.pos;
         if available < 2 {
             return Err(malformed("ends without an SOS or EOI marker"));
@@ -366,7 +369,7 @@ impl Scanner {
     /// layout if this marker ends the header.
     fn handle_marker(
         &mut self,
-        core: &mut SessionCore<IoRequest>,
+        core: &mut ManualWorkflowCore<IoRequest>,
         bytes: &[u8],
     ) -> Result<Option<Layout>, FormatError> {
         if bytes[0] != MARKER_PREFIX {
@@ -464,7 +467,7 @@ pub(crate) mod tests {
 
     use contentauth_c2pa_format::{
         test_util::{MemoryHost, STREAM},
-        HostRequest, Session, Step,
+        HostRequest, Step, Workflow,
     };
 
     use super::*;
@@ -472,7 +475,7 @@ pub(crate) mod tests {
 
     /// Wraps a scanner as a session so `MemoryHost` can drive it.
     struct ScanSession {
-        core: SessionCore<IoRequest>,
+        core: ManualWorkflowCore<IoRequest>,
         scanner: Scanner,
         layout: Option<Layout>,
     }
@@ -480,14 +483,14 @@ pub(crate) mod tests {
     impl ScanSession {
         fn new() -> Self {
             Self {
-                core: SessionCore::default(),
+                core: ManualWorkflowCore::default(),
                 scanner: Scanner::new(STREAM),
                 layout: None,
             }
         }
     }
 
-    impl Session for ScanSession {
+    impl Workflow for ScanSession {
         type Error = FormatError;
         type Output = Layout;
         type Request = IoRequest;

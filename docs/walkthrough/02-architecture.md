@@ -13,7 +13,7 @@ Python node and its dotted edge indicate prospective reuse only.
 
 ```mermaid
 flowchart BT
-    SM["contentauth-state-machine<br/><i>engine</i>"]
+    SM["contentauth-sans-io-core<br/><i>host-driven workflow contract</i>"]
     PR["c2pa-primitives<br/><i>shared vocabulary</i>"]
 
     RD["c2pa-reader"]
@@ -78,7 +78,7 @@ flowchart BT
     class PY proposed
 ```
 
-(Edges to `primitives` and `state-machine` from most crates are omitted
+(Edges to `primitives` and `sans-io-core` from most crates are omitted
 where they would only add noise; every session crate depends on both.)
 The C API's `read` and `build` features independently select its exported
 workflows; either enables its shared session-bridge backend. Both are on
@@ -107,7 +107,7 @@ flowchart TB
     end
     subgraph L1["Foundation — no C2PA workflow logic"]
         direction LR
-        e1[state-machine] ~~~ e2[primitives]
+        e1[sans-io-core] ~~~ e2[primitives]
     end
     L5 --> L4 --> L2 --> L1
     L4 --> L3 --> L1
@@ -117,7 +117,7 @@ flowchart TB
 
 | Crate | Layer | What it is |
 |---|---|---|
-| `contentauth-state-machine` | Foundation | The engine: `Session`, `SessionCore` (hand-written phase enum) or `Workflow` (an `async fn`, no runtime), `Nested` for composing sessions inside workflows, request tracking, protocol errors, failure context (`phase()`, `Failure`), and `Recorder`/`replay` transcripts. Domain-agnostic. |
+| `contentauth-sans-io-core` | Foundation | Shared C2PA/CAWG infrastructure: the host-driven `Workflow` contract, `ManualWorkflowCore` bookkeeping for an explicit state machine, or `CoroutineWorkflow` for an `async fn` with no runtime. Also `Nested` composition, request tracking, protocol errors, failure context (`phase()`, `Failure`), and `Recorder`/`replay` transcripts. No domain logic or host I/O/scheduling policy. |
 | `contentauth-c2pa-primitives` | Foundation | The narrow shared slice: `StreamId`, `ByteRange`, hash/signing algorithms, `HostError`, COSE `Sig_structure`, RFC 3161 encode/unwrap. |
 | `contentauth-c2pa-reader` | Workflow | `ReadSession`: JUMBF, claims (v1+v2), integrity, signature, trust, timestamps, OCSP, CAWG identity assertions (X.509). |
 | `contentauth-c2pa-builder` | Workflow | `BuilderSession`: v2 claim generation and signing via a two-pass placeholder scheme, plus optional CAWG identity assertions. |
@@ -166,8 +166,10 @@ explicit `compat` module. They are not generic engine requirements.
 * **Formats never mention a session.** A handler speaks only `IoRequest`
   and returns plain data.
 * **Only the registry names more than one format**, behind features.
-* **Nothing is async below the host.** Even `js-compat`, the async one, has
-  its `.await`s in a single function.
+* **The host owns I/O, concurrency, and scheduling.** `CoroutineWorkflow`
+  uses Rust `async`/`.await` to author library logic, but exposes the same
+  synchronous `Workflow` contract as a hand-written state machine. It
+  awaits host replies, not runtime-owned I/O or timers.
 * **Lints enforce discipline:** `unsafe_code`, `missing_docs`,
   `unwrap_used`, `expect_used`, `panic` are denied at crate roots.
 

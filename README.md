@@ -1,18 +1,17 @@
 # state-machine-experiment
 
-A suite of prototypes exploring synchronous, sans-I/O state machines for
-C2PA workflows.
+A suite of prototypes exploring host-driven, sans-I/O workflows for C2PA
+and CAWG.
 
-The foundation is [`contentauth-state-machine`](contentauth-state-machine),
-a reusable engine for building sessions that never block: a session runs
-entirely synchronously and externalizes anything that might need to be
-asynchronous (I/O, the network, a clock, signing) to its host through an
-explicit request/reply protocol, rather than blocking or spawning. It
-carries no C2PA-specific logic of its own — it just distills the session
-shape (a request/reply vocabulary trait, request tracking, a protocol-error
-vocabulary, and the `advance` / `fulfill` / `finish` interaction contract)
-into pieces any subcomponent of a larger workflow can build on
-independently.
+The foundation is [`contentauth-sans-io-core`](contentauth-sans-io-core),
+shared infrastructure for Content Authenticity's C2PA and CAWG crates, not
+a general-purpose state-machine engine. The host application owns I/O,
+concurrency, and scheduling, ideally in its own language and runtime.
+Library logic exposes requests for external operations through the
+`Workflow` trait's synchronous `advance` / `fulfill` / `finish` contract.
+It can be authored as an explicit state machine with `ManualWorkflowCore`
+or as an `async fn` with `CoroutineWorkflow`; neither style chooses the
+host's runtime or performs I/O itself.
 
 Concrete C2PA workflows built on top of that engine — reading and
 validating a manifest store, generating and signing one, and so on — are
@@ -35,9 +34,9 @@ where it could go next — written in Markdown with Mermaid diagrams.
 
 ## Crates
 
-* [`contentauth-state-machine`](contentauth-state-machine) — the
-  sans-I/O session engine. See its
-  [README](contentauth-state-machine/README.md) for the interaction
+* [`contentauth-sans-io-core`](contentauth-sans-io-core) — the
+  host-driven workflow contract and its manual/coroutine implementations. See its
+  [README](contentauth-sans-io-core/README.md) for the interaction
   contract and build instructions.
 * [`contentauth-c2pa-reader`](contentauth-c2pa-reader) — reads and
   validates C2PA manifest stores, built on top of the engine above. See its
@@ -80,7 +79,7 @@ where it could go next — written in Markdown with Mermaid diagrams.
   compatibility layer reproducing a slice of [c2pa-rs]'s own `Reader` API
   (reading a manifest store from a file and reporting it as JSON) on top
   of the crates above, for a caller that wants c2pa-rs's existing surface
-  rather than this workspace's `Session` contract.
+  rather than this workspace's `Workflow` contract.
 * [`contentauth-c2pa-cpp`](contentauth-c2pa-cpp) — an exploration of a C++
   binding: C++ blocking,
   thread-pool and C++20 coroutine drivers over the canonical C API, written to show what the session

@@ -19,7 +19,7 @@ use contentauth_c2pa_file_reader::{FileReadReply, FileReadRequest, FileReadSessi
 use contentauth_c2pa_format_registry::AnyFormat;
 use contentauth_c2pa_js_compat::{Context, ManifestStore};
 use contentauth_c2pa_primitives::{Bytes, HostError};
-use contentauth_state_machine::{RequestId, Session};
+use contentauth_sans_io_core::{RequestId, Workflow};
 
 use crate::{error::Error, format::resolve_format, C2PA_SM_STEP_COMPLETE, C2PA_SM_STEP_PENDING};
 
@@ -98,7 +98,7 @@ impl ReadSession {
 
     /// Advances the session.
     pub fn advance(&mut self) -> Result<i32, Error> {
-        use contentauth_state_machine::Step as Engine;
+        use contentauth_sans_io_core::Step as Engine;
 
         let inner = self.inner.as_mut().ok_or(Error::AlreadyFinished)?;
 
@@ -190,11 +190,11 @@ impl ReadSession {
     /// Where the underlying session is — the phase it is waiting in, or
     /// the one it failed in — for diagnostics only; `"Finished"` once
     /// [`Self::finish`] has consumed it. See
-    /// [`contentauth_state_machine::Session::phase`].
+    /// [`contentauth_sans_io_core::Workflow::phase`].
     pub fn phase(&self) -> String {
         self.inner
             .as_ref()
-            .map_or_else(|| "Finished".to_owned(), Session::phase)
+            .map_or_else(|| "Finished".to_owned(), Workflow::phase)
     }
 
     /// Finishes the read session, returning JSON and whether a manifest store was found.

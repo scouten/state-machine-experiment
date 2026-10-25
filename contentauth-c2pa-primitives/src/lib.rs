@@ -16,7 +16,7 @@
 //!
 //! [`contentauth_c2pa_reader`](https://docs.rs/contentauth-c2pa-reader) and
 //! `contentauth-c2pa-builder` are independent sans-I/O sessions built on
-//! `contentauth-state-machine`, each with its own request vocabulary and
+//! `contentauth-sans-io-core`, each with its own request vocabulary and
 //! settings/result types, per that crate's design. This crate holds the
 //! narrow slice of the two that is genuinely the same thing in both
 //! directions — the same algorithms, the same wire format, the same

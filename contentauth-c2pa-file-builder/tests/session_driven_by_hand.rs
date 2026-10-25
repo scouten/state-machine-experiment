@@ -35,7 +35,7 @@ use contentauth_c2pa_file_builder::{
     HostError, SigningAlg, TimestampSettings,
 };
 use contentauth_c2pa_format_jpeg::JpegFormat;
-use contentauth_state_machine::{RequestId, Session, Step};
+use contentauth_sans_io_core::{RequestId, Step, Workflow};
 
 const TEST_SIGNER_CERT: &[u8] =
     include_bytes!("../../contentauth-c2pa-builder/tests/fixtures/test-signer.der");
@@ -390,7 +390,7 @@ fn a_refused_signature_is_blamed_on_the_inner_session_phase() {
     assert_eq!(session.phase(), "Building > AwaitingSignature");
     match session.advance() {
         Err(contentauth_c2pa_file_builder::Error::Protocol(
-            contentauth_state_machine::ProtocolError::SessionFailed(failure),
+            contentauth_sans_io_core::ProtocolError::SessionFailed(failure),
         )) => {
             assert_eq!(failure.phase, "Building > AwaitingSignature");
             assert_eq!(failure.cause, err.to_string());

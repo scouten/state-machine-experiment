@@ -14,7 +14,7 @@
 //! The error vocabulary every format handler reports through.
 
 use contentauth_c2pa_primitives::{ByteRange, HostError};
-use contentauth_state_machine::{ProtocolError, RequestId};
+use contentauth_sans_io_core::{ProtocolError, RequestId};
 
 /// Errors a format handler's operations can fail with.
 ///
@@ -27,7 +27,7 @@ use contentauth_state_machine::{ProtocolError, RequestId};
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum FormatError {
-    /// The host used the [`contentauth_state_machine::Session`] API
+    /// The host used the [`contentauth_sans_io_core::Workflow`] API
     /// incorrectly.
     #[error(transparent)]
     Protocol(#[from] ProtocolError),

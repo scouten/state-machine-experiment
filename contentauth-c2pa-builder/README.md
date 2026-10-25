@@ -2,7 +2,7 @@
 
 An experimental, fully-synchronous, sans-I/O crate for generating and
 signing C2PA manifest stores, built on
-[`contentauth-state-machine`](../contentauth-state-machine).
+[`contentauth-sans-io-core`](../contentauth-sans-io-core).
 
 This is a personal prototype exploring an alternative architecture for the
 [c2pa-rs] SDK: a builder that implements C2PA manifest generation and
@@ -15,18 +15,18 @@ to the host application.
 
 This crate carries no engine logic of its own: request tracking, session
 lifecycle bookkeeping, and protocol-level errors all come from
-`contentauth-state-machine`. [`BuilderSession`] implements that crate's
-`Session` trait, adding only the build/sign workflow and its own request
+`contentauth-sans-io-core`. [`BuilderSession`] implements that crate's
+`Workflow` trait, adding only the build/sign workflow and its own request
 vocabulary. That workflow is written as one `async fn` over the engine's
-`Workflow` — the compiler, not a hand-written phase enum, generates the
+`CoroutineWorkflow` — the compiler, not a hand-written phase enum, generates the
 state machine — so the whole build reads top to bottom in
 [`src/builder.rs`](src/builder.rs)'s `build`. No async runtime is involved,
-and hosts see exactly the `Session` contract they always did. See the
+and hosts see exactly the `Workflow` contract they always did. See the
 workflow's `Host::set_phase` calls for its diagnostic stage names: these
-are exposed through `Session::phase` and retained alongside the cause
+are exposed through `Workflow::phase` and retained alongside the cause
 after a failure, including when driven through `Recorder`/`replay`. See the
 sibling crate's
-[README](../contentauth-state-machine/README.md) for the interaction
+[README](../contentauth-sans-io-core/README.md) for the interaction
 contract and the `advance` / `outstanding_requests` / `fulfill` / `finish`
 cycle itself. [`contentauth-c2pa-primitives`](../contentauth-c2pa-primitives)
 holds the handful of types and encoders genuinely shared with the reader

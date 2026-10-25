@@ -14,7 +14,7 @@
 //! Foundation types shared by every sans-I/O C2PA session in this
 //! workspace.
 //!
-//! `contentauth_state_machine::RequestId` is a session's request-ID type
+//! `contentauth_sans_io_core::RequestId` is a session's request-ID type
 //! too, but it lives in the engine crate rather than here since it carries
 //! no C2PA-specific meaning.
 

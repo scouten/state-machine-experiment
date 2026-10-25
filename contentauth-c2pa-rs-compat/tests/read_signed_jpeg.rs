@@ -40,7 +40,7 @@ use contentauth_c2pa_format_jpeg::JpegFormat;
 use contentauth_c2pa_rs_compat::{
     ClaimVersion, Context, Error, ReadSettings, Reader, TrustList, ValidationState,
 };
-use contentauth_state_machine::Session;
+use contentauth_sans_io_core::Workflow;
 use jumbf::{
     builder::{DataBoxBuilder, SuperBoxBuilder},
     BoxType,

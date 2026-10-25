@@ -2,7 +2,7 @@
 
 An experimental, fully-synchronous, sans-I/O crate for reading and
 validating C2PA manifest stores, built on
-[`contentauth-state-machine`](../contentauth-state-machine).
+[`contentauth-sans-io-core`](../contentauth-sans-io-core).
 
 This is a personal prototype exploring an alternative architecture for the
 [c2pa-rs] SDK: a reader that implements C2PA manifest reading and
@@ -15,10 +15,10 @@ language and runtime.
 
 This crate carries no engine logic of its own: request tracking, session
 lifecycle bookkeeping, and protocol-level errors all come from
-`contentauth-state-machine`. [`ReadSession`] implements that crate's
-`Session` trait, adding only the read/validate workflow and its own
+`contentauth-sans-io-core`. [`ReadSession`] implements that crate's
+`Workflow` trait, adding only the read/validate workflow and its own
 request vocabulary. See the sibling crate's
-[README](../contentauth-state-machine/README.md) for the interaction
+[README](../contentauth-sans-io-core/README.md) for the interaction
 contract and the `advance` / `outstanding_requests` / `fulfill` / `finish`
 cycle itself.
 

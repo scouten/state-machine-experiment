@@ -23,7 +23,7 @@ use contentauth_c2pa_reader::{
     validation::status_code, ByteRange, Error, HostError, ReadHostReply, ReadReport, ReadRequest,
     ReadSession, ReadSettings, ReadStep, RequestId, TrustList, ValidationState,
 };
-use contentauth_state_machine::Session;
+use contentauth_sans_io_core::Workflow;
 
 /// A raw manifest store produced by make_test_images 0.33.1 / c2pa-rs
 /// 0.33.1.

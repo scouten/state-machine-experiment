@@ -40,10 +40,10 @@ contentauth-c2pa-format-registry = { path = "../contentauth-c2pa-format-registry
 # with.
 contentauth-c2pa-primitives = { path = "../contentauth-c2pa-primitives" }
 
-# The `Session`/`Step` interaction contract `src/host.rs` drives
+# The `Workflow`/`Step` interaction contract `src/host.rs` drives
 # `FileReadSession` through directly, in place of
 # `contentauth-c2pa-file-reader`'s own `read_manifest_from_file`.
-contentauth-state-machine = { path = "../contentauth-state-machine" }
+contentauth-sans-io-core = { path = "../contentauth-sans-io-core" }
 
 thiserror = "2.0.20"
 

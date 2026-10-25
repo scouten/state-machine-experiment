@@ -30,7 +30,7 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use contentauth_c2pa_builder::{BuilderSettings, SignPurpose};
 use contentauth_c2pa_format::FormatHandler;
 use contentauth_c2pa_primitives::{ByteRange, HashAlgorithm, HostError, SigningAlg, StreamId};
-use contentauth_state_machine::{Session, Step};
+use contentauth_sans_io_core::{Step, Workflow};
 
 use crate::{
     error::Error,

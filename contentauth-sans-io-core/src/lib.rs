@@ -11,15 +11,17 @@
 // specific language governing permissions and limitations under
 // each license.
 
-//! A reusable engine for building synchronous, sans-I/O state machines.
+//! Host-driven, sans-I/O workflows for C2PA and CAWG crates.
 //!
-//! This crate carries no domain logic of its own. It distills the session
-//! shape of a fully synchronous core that never blocks, and externalizes
-//! anything that might need to be asynchronous (I/O, the network, a clock,
-//! signing) to its host through an explicit request/reply protocol carried
-//! by a state machine struct handed back and forth, into pieces any
-//! subcomponent of a larger workflow can build on, independently of what
-//! that subcomponent actually does.
+//! The host application owns I/O, concurrency, and scheduling, ideally in
+//! its own language and runtime. A workflow exposes external operations
+//! (files, networking, the clock, signing) through an explicit request/reply
+//! protocol; it never performs I/O, blocks on a host operation, or spawns
+//! threads itself.
+//!
+//! This is shared infrastructure for Content Authenticity's C2PA and CAWG
+//! crates, not a general-purpose workflow framework. The core contains no
+//! domain-specific validation or signing logic.
 //!
 //! Concretely, this crate provides:
 //!
@@ -32,26 +34,26 @@
 //! * [`ProtocolError`] — the host-binding-is-buggy error vocabulary common
 //!   to every session (an unknown request ID, a mismatched reply, driving a
 //!   session past a terminal state).
-//! * [`Step`] and [`Session`] — the `advance` / `outstanding_requests` /
+//! * [`Step`] and [`Workflow`] — the `advance` / `outstanding_requests` /
 //!   `fulfill` / `finish` interaction contract itself, as a trait so
 //!   host-side code can be written once against any session built here.
-//! * [`SessionCore`] — a struct a concrete session embeds to get request
+//! * [`ManualWorkflowCore`] — a struct a concrete session embeds to get request
 //!   tracking and terminal-state bookkeeping for free, leaving only its own
 //!   workflow logic to write.
-//! * [`Workflow`], [`Host`], and [`PendingReply`] — the alternative to
-//!   [`SessionCore`]: write the workflow as an `async fn` that awaits its
+//! * [`CoroutineWorkflow`], [`Host`], and [`PendingReply`] — the alternative to
+//!   [`ManualWorkflowCore`]: write the workflow as an `async fn` that awaits its
 //!   host's replies, and let the compiler generate the state machine. No
-//!   async runtime is involved, and the host sees the same [`Session`]
+//!   async runtime is involved, and the host sees the same [`Workflow`]
 //!   contract either way.
-//! * [`Nested`] — a [`Session`] driven from inside a [`Workflow`], so a
+//! * [`Nested`] — a [`Workflow`] driven from inside a [`CoroutineWorkflow`], so a
 //!   session that composes others can answer their requests itself or
 //!   forward them to its own host from a plain `async` loop.
 //!
-//! A concrete workflow — reading and validating a C2PA manifest store,
-//! generating and signing one, or an unrelated state machine entirely —
-//! lives in its own crate built on top of this one, with its own request
-//! vocabulary, its own settings, and its own result type. See [`SessionCore`]
-//! for a complete (if trivial) example of assembling one.
+//! A concrete workflow — reading and validating a C2PA manifest store or
+//! generating and signing one — lives in its own crate built on top of
+//! this one, with its own request vocabulary, settings, and result type.
+//! See [`ManualWorkflowCore`] for a complete (if trivial) example of
+//! assembling one.
 
 #![deny(clippy::expect_used)]
 #![deny(clippy::panic)]
@@ -59,22 +61,22 @@
 #![deny(missing_docs)]
 #![deny(unsafe_code)]
 
+mod coroutine;
 mod error;
 mod nested;
 mod recorder;
 mod request;
-mod session;
 #[cfg(test)]
 mod test_session;
 mod tracker;
 mod types;
 mod workflow;
 
+pub use coroutine::{CoroutineWorkflow, Host, PendingReply};
 pub use error::{Failure, ProtocolError};
 pub use nested::Nested;
 pub use recorder::{replay, Divergence, Event, Outcome, Recorder, Transcript};
 pub use request::{HostRequest, Request};
-pub use session::{Session, SessionCore, Step};
 pub use tracker::RequestTracker;
 pub use types::RequestId;
-pub use workflow::{Host, PendingReply, Workflow};
+pub use workflow::{ManualWorkflowCore, Step, Workflow};

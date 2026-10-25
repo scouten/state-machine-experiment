@@ -14,7 +14,7 @@
 //! Writing a session's workflow as an `async fn`, so the compiler — not
 //! a hand-written phase enum — generates its state machine.
 //!
-//! [`Workflow`] is a [`Session`] like any other: the host sees the same
+//! [`CoroutineWorkflow`] is a [`Workflow`] like any other: the host sees the same
 //! `advance` / `outstanding_requests` / `fulfill` / `finish` contract, the
 //! same request vocabulary, and the same [`RequestId`]s. Only the inside
 //! differs. Instead of one enum variant per point where the workflow waits
@@ -27,17 +27,17 @@
 //! None of this needs an async runtime. A [`PendingReply`] is ready exactly
 //! when the host has fulfilled its request. Reply wakers notify enclosing
 //! combinators that their children are ready, without polling the workflow.
-//! Only [`Session::advance`] polls the root future, with a no-op waker,
+//! Only [`Workflow::advance`] polls the root future, with a no-op waker,
 //! until every branch is waiting on the host — [`Step::AwaitHost`].
 //!
 //! A workflow must only `.await` [`PendingReply`]s (or futures built from
 //! them, such as another workflow `async fn`). A future that waits on
 //! anything else — a timer, a channel, an async runtime's I/O — would
-//! never be woken, and [`Session::advance`] reports it as
+//! never be woken, and [`Workflow::advance`] reports it as
 //! [`ProtocolError::WorkflowStalled`] rather than hang.
 //!
 //! Call [`Host::set_phase`] before each stage to expose its name through
-//! [`Session::phase`]. Errors retain that phase and their original message
+//! [`Workflow::phase`]. Errors retain that phase and their original message
 //! in [`Failure`], including on later `advance`, `fulfill`, or `finish`
 //! calls. [`crate::Recorder`] and [`crate::replay`] work unchanged.
 
@@ -53,14 +53,14 @@ use std::{
 use crate::{
     error::{Failure, ProtocolError},
     request::{HostRequest, Request},
-    session::{Session, Step},
     types::RequestId,
+    workflow::{Step, Workflow},
 };
 
-/// Requests issued and replies received, shared between a [`Workflow`] and
+/// Requests issued and replies received, shared between a [`CoroutineWorkflow`] and
 /// the [`Host`] handle its future holds.
 ///
-/// Kept apart from [`Workflow::outstanding`] so that issuing a request
+/// Kept apart from [`CoroutineWorkflow::outstanding`] so that issuing a request
 /// never needs the session itself: a request issued from inside the future
 /// lands here, and the session moves it into its own outstanding list —
 /// which it can then lend out by reference — once the poll returns.
@@ -121,7 +121,7 @@ impl<Req: Request> Host<Req> {
         decode(id, pending.await)
     }
 
-    /// Names the current workflow phase for [`Session::phase`] and failure
+    /// Names the current workflow phase for [`Workflow::phase`] and failure
     /// reports. Set this before entering a new stage, including before any
     /// fallible work in that stage. The initial phase is `"Start"`.
     ///
@@ -151,7 +151,7 @@ impl<Req: Request> Host<Req> {
 }
 
 /// A request a workflow has issued, as a future that resolves to the
-/// host's reply once [`Session::fulfill`] has delivered it.
+/// host's reply once [`Workflow::fulfill`] has delivered it.
 ///
 /// The reply has already passed [`Request::accepts`] for this request by
 /// the time it resolves.
@@ -217,7 +217,7 @@ enum State<T, E> {
     Failed(Failure),
 }
 
-/// A [`Session`] whose workflow is an `async fn` rather than a hand-written
+/// A [`Workflow`] whose workflow is an `async fn` rather than a hand-written
 /// state machine.
 ///
 /// On completion or failure, pending requests are cancelled: outstanding
@@ -227,10 +227,12 @@ enum State<T, E> {
 /// [`PendingReply`] while running does not cancel its request.
 ///
 /// A concrete session wraps one of these and delegates the
-/// [`Session`] methods to it:
+/// [`Workflow`] methods to it:
 ///
 /// ```
-/// use contentauth_state_machine::{Host, ProtocolError, Request, Session, Step, Workflow};
+/// use contentauth_sans_io_core::{
+///     CoroutineWorkflow, Host, ProtocolError, Request, Step, Workflow,
+/// };
 ///
 /// #[derive(Debug)]
 /// enum Ask {
@@ -263,7 +265,7 @@ enum State<T, E> {
 ///     Ok(x + y)
 /// }
 ///
-/// let mut session = Workflow::new(|host| sum_of_doubles(host, 2, 5));
+/// let mut session = CoroutineWorkflow::new(|host| sum_of_doubles(host, 2, 5));
 /// assert_eq!(session.advance()?, Step::AwaitHost);
 ///
 /// // Both requests are outstanding; answer them in reverse.
@@ -288,13 +290,13 @@ enum State<T, E> {
 /// assert_eq!(session.finish()?, 14);
 /// # Ok::<(), ProtocolError>(())
 /// ```
-pub struct Workflow<Req: Request, T, E> {
+pub struct CoroutineWorkflow<Req: Request, T, E> {
     shared: Shared<Req>,
     outstanding: Vec<HostRequest<Req>>,
     state: State<T, E>,
 }
 
-impl<Req, T, E> Workflow<Req, T, E>
+impl<Req, T, E> CoroutineWorkflow<Req, T, E>
 where
     Req: Request + Send + 'static,
     Req::Reply: Send,
@@ -303,7 +305,7 @@ where
     ///
     /// `start` is called at once, with the [`Host`] the workflow asks
     /// through; the future it returns is not polled until the first
-    /// [`Session::advance`], so an `async fn` workflow does no work — and
+    /// [`Workflow::advance`], so an `async fn` workflow does no work — and
     /// reports no error — before then.
     pub fn new<F, Fut>(start: F) -> Self
     where
@@ -331,7 +333,7 @@ where
         workflow
     }
 
-    /// Records a reply without the payload validation [`Session::fulfill`]
+    /// Records a reply without the payload validation [`Workflow::fulfill`]
     /// performs, for a concrete session's tests of its own
     /// defense-in-depth check against a reply of the wrong kind.
     #[cfg(any(test, feature = "test-util"))]
@@ -363,7 +365,7 @@ where
     }
 }
 
-impl<Req: Request, T, E> Workflow<Req, T, E> {
+impl<Req: Request, T, E> CoroutineWorkflow<Req, T, E> {
     fn clear_pending(&mut self) {
         self.outstanding.clear();
         let pending = {
@@ -378,14 +380,14 @@ impl<Req: Request, T, E> Workflow<Req, T, E> {
     }
 }
 
-impl<Req: Request, T, E> Drop for Workflow<Req, T, E> {
+impl<Req: Request, T, E> Drop for CoroutineWorkflow<Req, T, E> {
     fn drop(&mut self) {
         // Collection wakers may retain futures that themselves hold the mailbox.
         self.clear_pending();
     }
 }
 
-impl<Req, T, E> Session for Workflow<Req, T, E>
+impl<Req, T, E> Workflow for CoroutineWorkflow<Req, T, E>
 where
     Req: Request + Send + 'static,
     Req::Reply: Send,
@@ -453,7 +455,7 @@ where
     }
 
     /// Delivers a reply, after the same checks
-    /// [`SessionCore::fulfill`](crate::SessionCore::fulfill) makes.
+    /// [`ManualWorkflowCore::fulfill`](crate::ManualWorkflowCore::fulfill) makes.
     fn fulfill(&mut self, id: RequestId, reply: Req::Reply) -> Result<(), E> {
         match &self.state {
             State::Running(_) => {}
@@ -492,7 +494,7 @@ where
     }
 }
 
-impl<Req: Request, T, E> fmt::Debug for Workflow<Req, T, E> {
+impl<Req: Request, T, E> fmt::Debug for CoroutineWorkflow<Req, T, E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let state = match self.state {
             State::Running(_) => "Running",
@@ -500,7 +502,7 @@ impl<Req: Request, T, E> fmt::Debug for Workflow<Req, T, E> {
             State::Failed(_) => "Failed",
         };
 
-        f.debug_struct("Workflow")
+        f.debug_struct("CoroutineWorkflow")
             .field("state", &state)
             .field("outstanding", &self.outstanding)
             .finish_non_exhaustive()
@@ -571,7 +573,7 @@ mod tests {
         }
     }
 
-    type TestWorkflow<T> = Workflow<Ask, T, TestError>;
+    type TestWorkflow<T> = CoroutineWorkflow<Ask, T, TestError>;
 
     #[test]
     fn wake_driven_collections_finish_only_when_advanced() {
@@ -579,7 +581,7 @@ mod tests {
             for count in [3, 100] {
                 let polls = Arc::new(AtomicUsize::new(0));
                 let observed = Arc::clone(&polls);
-                let mut session: TestWorkflow<usize> = Workflow::new(|host| async move {
+                let mut session: TestWorkflow<usize> = CoroutineWorkflow::new(|host| async move {
                     let replies: Vec<_> = (0..count).map(|_| host.request(Ask::Number)).collect();
                     observed.fetch_add(1, Ordering::SeqCst);
                     if unordered {
@@ -624,7 +626,7 @@ mod tests {
 
     #[test]
     fn reply_wakers_are_replaced_notified_outside_the_lock_and_removed_on_drop() {
-        let mut session: TestWorkflow<()> = Workflow::new(|_| async { Ok(()) });
+        let mut session: TestWorkflow<()> = CoroutineWorkflow::new(|_| async { Ok(()) });
         let host = Host {
             shared: Arc::clone(&session.shared),
         };
@@ -666,7 +668,7 @@ mod tests {
     #[test]
     fn terminal_transitions_discard_unawaited_requests_replies_and_wakers() {
         for fail in [false, true] {
-            let mut session: TestWorkflow<()> = Workflow::new(|host| async move {
+            let mut session: TestWorkflow<()> = CoroutineWorkflow::new(|host| async move {
                 let unused = host.request(Ask::Text);
                 let answer = number(&host).await?;
                 drop(unused);
@@ -705,7 +707,7 @@ mod tests {
 
     #[test]
     fn early_failure_cancels_pending_collection_children_and_releases_the_mailbox() {
-        let mut session: TestWorkflow<()> = Workflow::new(|host| async move {
+        let mut session: TestWorkflow<()> = CoroutineWorkflow::new(|host| async move {
             let mut replies: FuturesUnordered<_> =
                 (0..3).map(|_| host.request(Ask::Number)).collect();
             match replies.next().await {
@@ -726,7 +728,7 @@ mod tests {
 
     #[test]
     fn dropping_a_running_collection_does_not_leak_the_mailbox() {
-        let mut session: TestWorkflow<Vec<Answer>> = Workflow::new(|host| async move {
+        let mut session: TestWorkflow<Vec<Answer>> = CoroutineWorkflow::new(|host| async move {
             Ok(join_all((0..100).map(|_| host.request(Ask::Number))).await)
         });
         session.advance().unwrap();
@@ -737,7 +739,7 @@ mod tests {
 
     #[test]
     fn unchecked_delivery_also_notifies_collection_children() {
-        let mut session: TestWorkflow<Vec<Answer>> = Workflow::new(|host| async move {
+        let mut session: TestWorkflow<Vec<Answer>> = CoroutineWorkflow::new(|host| async move {
             Ok(join_all((0..100).map(|_| host.request(Ask::Number))).await)
         });
         session.advance().unwrap();
@@ -758,7 +760,7 @@ mod tests {
 
     #[test]
     fn requests_issued_and_abandoned_on_the_first_poll_are_cancelled() {
-        let mut session: TestWorkflow<()> = Workflow::new(|host| async move {
+        let mut session: TestWorkflow<()> = CoroutineWorkflow::new(|host| async move {
             drop(host.request(Ask::Text));
             Ok(())
         });
@@ -773,7 +775,7 @@ mod tests {
 
     #[test]
     fn ask_decodes_with_the_request_id_and_defers_issuing_until_polled() {
-        let mut session: TestWorkflow<u32> = Workflow::new(|host| async move {
+        let mut session: TestWorkflow<u32> = CoroutineWorkflow::new(|host| async move {
             let answer = host.ask(Ask::Number, |id, reply| {
                 assert_eq!(id, RequestId(0));
                 match reply {
@@ -813,7 +815,8 @@ mod tests {
 
     #[test]
     fn a_sequential_workflow_asks_one_thing_at_a_time() {
-        let mut session: TestWorkflow<u32> = Workflow::new(|host| sum_sequentially(host, 3));
+        let mut session: TestWorkflow<u32> =
+            CoroutineWorkflow::new(|host| sum_sequentially(host, 3));
         assert!(
             session.outstanding_requests().is_empty(),
             "nothing runs before the first advance"
@@ -832,7 +835,8 @@ mod tests {
 
     #[test]
     fn advancing_without_a_reply_waits() {
-        let mut session: TestWorkflow<u32> = Workflow::new(|host| sum_sequentially(host, 1));
+        let mut session: TestWorkflow<u32> =
+            CoroutineWorkflow::new(|host| sum_sequentially(host, 1));
 
         assert_eq!(session.advance().unwrap(), Step::AwaitHost);
         let id = only_outstanding(&session);
@@ -846,7 +850,7 @@ mod tests {
 
     #[test]
     fn requests_issued_together_are_outstanding_together_and_answerable_in_any_order() {
-        let mut session: TestWorkflow<(u32, String)> = Workflow::new(|host| async move {
+        let mut session: TestWorkflow<(u32, String)> = CoroutineWorkflow::new(|host| async move {
             let number = host.request(Ask::Number);
             let text = host.request(Ask::Text);
             match (text.await, number.await) {
@@ -874,7 +878,7 @@ mod tests {
 
     #[test]
     fn a_request_issued_by_the_start_closure_is_outstanding_at_once() {
-        let session: TestWorkflow<Answer> = Workflow::new(|host| {
+        let session: TestWorkflow<Answer> = CoroutineWorkflow::new(|host| {
             let reply = host.request(Ask::Text);
             async move { Ok(reply.await) }
         });
@@ -884,7 +888,8 @@ mod tests {
 
     #[test]
     fn a_workflow_error_is_returned_once_and_poisons_the_session() {
-        let mut session: TestWorkflow<u32> = Workflow::new(|host| sum_sequentially(host, 2));
+        let mut session: TestWorkflow<u32> =
+            CoroutineWorkflow::new(|host| sum_sequentially(host, 2));
 
         session.advance().unwrap();
         let id = only_outstanding(&session);
@@ -902,7 +907,7 @@ mod tests {
 
     #[test]
     fn phases_follow_stages_and_preserve_the_one_that_fails() {
-        let mut session: TestWorkflow<u32> = Workflow::new(|host| async move {
+        let mut session: TestWorkflow<u32> = CoroutineWorkflow::new(|host| async move {
             host.set_phase("Reading > First");
             let first = number(&host).await?;
             host.set_phase("Reading > Second");
@@ -935,7 +940,7 @@ mod tests {
 
     #[test]
     fn phases_can_be_set_before_polling_and_complete_after_success() {
-        let mut session: TestWorkflow<u32> = Workflow::new(|host| {
+        let mut session: TestWorkflow<u32> = CoroutineWorkflow::new(|host| {
             host.set_phase("Initialized");
             async move {
                 host.set_phase("Calculating");
@@ -951,7 +956,7 @@ mod tests {
 
     #[test]
     fn a_stalled_workflow_preserves_its_phase_on_every_later_call() {
-        let mut session: TestWorkflow<u32> = Workflow::new(|host| async move {
+        let mut session: TestWorkflow<u32> = CoroutineWorkflow::new(|host| async move {
             host.set_phase("InvalidWait");
             pending().await
         });
@@ -975,7 +980,7 @@ mod tests {
     #[test]
     fn workflows_record_and_replay_success_and_failure_with_phases() {
         fn session() -> TestWorkflow<u32> {
-            Workflow::new(|host| async move {
+            CoroutineWorkflow::new(|host| async move {
                 host.set_phase("AwaitingNumber");
                 number(&host).await
             })
@@ -1002,7 +1007,8 @@ mod tests {
 
     #[test]
     fn fulfill_rejects_an_unknown_id_and_a_reply_of_the_wrong_kind() {
-        let mut session: TestWorkflow<u32> = Workflow::new(|host| sum_sequentially(host, 1));
+        let mut session: TestWorkflow<u32> =
+            CoroutineWorkflow::new(|host| sum_sequentially(host, 1));
         session.advance().unwrap();
         let id = only_outstanding(&session);
 
@@ -1032,7 +1038,7 @@ mod tests {
 
     #[test]
     fn a_finished_session_refuses_further_replies() {
-        let mut session: TestWorkflow<u32> = Workflow::new(|_| async { Ok(1) });
+        let mut session: TestWorkflow<u32> = CoroutineWorkflow::new(|_| async { Ok(1) });
 
         assert_eq!(session.advance().unwrap(), Step::Complete);
         assert_eq!(
@@ -1043,7 +1049,7 @@ mod tests {
 
     #[test]
     fn finishing_early_is_refused() {
-        let session: TestWorkflow<u32> = Workflow::new(|host| sum_sequentially(host, 1));
+        let session: TestWorkflow<u32> = CoroutineWorkflow::new(|host| sum_sequentially(host, 1));
 
         assert_eq!(
             session.finish(),
@@ -1053,7 +1059,7 @@ mod tests {
 
     #[test]
     fn waiting_on_something_the_host_cannot_answer_is_reported_not_hung() {
-        let mut session: TestWorkflow<u32> = Workflow::new(|_| pending());
+        let mut session: TestWorkflow<u32> = CoroutineWorkflow::new(|_| pending());
 
         assert_eq!(
             session.advance(),
@@ -1070,7 +1076,7 @@ mod tests {
     #[test]
     fn fulfill_unchecked_bypasses_payload_validation() {
         let mut session: TestWorkflow<Answer> =
-            Workflow::new(|host| async move { Ok(host.request(Ask::Number).await) });
+            CoroutineWorkflow::new(|host| async move { Ok(host.request(Ask::Number).await) });
         session.advance().unwrap();
         let id = only_outstanding(&session);
 
@@ -1083,7 +1089,8 @@ mod tests {
 
     #[test]
     fn debug_output_names_the_state_and_what_is_outstanding() {
-        let mut session: TestWorkflow<u32> = Workflow::new(|host| sum_sequentially(host, 1));
+        let mut session: TestWorkflow<u32> =
+            CoroutineWorkflow::new(|host| sum_sequentially(host, 1));
         session.advance().unwrap();
 
         let host = Host::<Ask> {
@@ -1099,11 +1106,11 @@ mod tests {
             format!("PendingReply {{ id: {:?}, .. }}", pending.id())
         );
 
-        let mut done: TestWorkflow<u32> = Workflow::new(|_| async { Ok(0) });
+        let mut done: TestWorkflow<u32> = CoroutineWorkflow::new(|_| async { Ok(0) });
         done.advance().unwrap();
         assert!(format!("{done:?}").contains("Complete"));
 
-        let mut failed: TestWorkflow<u32> = Workflow::new(|_| pending_forever());
+        let mut failed: TestWorkflow<u32> = CoroutineWorkflow::new(|_| pending_forever());
         let _ = failed.advance();
         assert!(format!("{failed:?}").contains("Failed"));
     }

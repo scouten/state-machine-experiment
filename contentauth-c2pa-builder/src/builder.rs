@@ -14,9 +14,9 @@
 //! The build/sign workflow: [`BuilderSession`].
 
 use contentauth_c2pa_primitives::{ByteRange, Bytes, SigningAlg, StreamId};
-pub use contentauth_state_machine::Step as BuilderStep;
-use contentauth_state_machine::{
-    Host, HostRequest, ProtocolError, RequestId, Session, Step, Workflow,
+pub use contentauth_sans_io_core::Step as BuilderStep;
+use contentauth_sans_io_core::{
+    CoroutineWorkflow, Host, HostRequest, ProtocolError, RequestId, Step, Workflow,
 };
 
 use crate::{
@@ -245,22 +245,22 @@ impl GeneratorInfo {
 /// Generates and signs a C2PA manifest store for a digital asset.
 ///
 /// This is the synchronous, sans-I/O counterpart of `Builder` in c2pa-rs.
-/// It implements the [`Session`] trait from `contentauth-state-machine`: it
+/// It implements the [`Workflow`] trait from `contentauth-sans-io-core`: it
 /// never touches the asset, a signing key, the network, or a clock itself;
 /// it issues host requests and the host reports outcomes back.
 ///
 /// # Interaction contract
 ///
-/// See the [`Session`] trait for the full contract. Concretely:
+/// See the [`Workflow`] trait for the full contract. Concretely:
 ///
 /// 1. Create the session with [`BuilderSession::new`].
-/// 2. Call [`Session::advance`] to let the session do as much synchronous
+/// 2. Call [`Workflow::advance`] to let the session do as much synchronous
 ///    work as it can. It returns [`BuilderStep::AwaitHost`] when blocked on
 ///    the host, or [`BuilderStep::Complete`] when done.
-/// 3. While `AwaitHost`: service [`Session::outstanding_requests`], report
-///    each outcome via [`Session::fulfill`], and call
-///    [`Session::advance`] again.
-/// 4. On `Complete`: consume the session with [`Session::finish`] to obtain
+/// 3. While `AwaitHost`: service [`Workflow::outstanding_requests`], report
+///    each outcome via [`Workflow::fulfill`], and call
+///    [`Workflow::advance`] again.
+/// 4. On `Complete`: consume the session with [`Workflow::finish`] to obtain
 ///    the [`BuilderReport`].
 ///
 /// Unlike [`contentauth_c2pa_reader::ReadSession`], every host failure here
@@ -269,7 +269,7 @@ impl GeneratorInfo {
 /// [`contentauth_c2pa_reader::ReadSession`]: https://docs.rs/contentauth-c2pa-reader/latest/contentauth_c2pa_reader/struct.ReadSession.html
 #[derive(Debug)]
 pub struct BuilderSession {
-    workflow: Workflow<BuilderRequest, BuilderReport, Error>,
+    workflow: CoroutineWorkflow<BuilderRequest, BuilderReport, Error>,
 }
 
 impl BuilderSession {
@@ -282,7 +282,7 @@ impl BuilderSession {
     /// as [`Self::PRIMARY_STREAM`].
     pub fn new(settings: BuilderSettings) -> Self {
         Self {
-            workflow: Workflow::new(|host| build(host, settings)),
+            workflow: CoroutineWorkflow::new(|host| build(host, settings)),
         }
     }
 }
@@ -538,7 +538,7 @@ fn assemble_placeholder(settings: &BuilderSettings) -> Result<ManifestBuilder, E
     ManifestBuilder::build_placeholder(&inputs)
 }
 
-impl Session for BuilderSession {
+impl Workflow for BuilderSession {
     type Error = Error;
     type Output = BuilderReport;
     type Request = BuilderRequest;
@@ -550,7 +550,7 @@ impl Session for BuilderSession {
     /// finished (idempotently, on subsequent calls as well).
     ///
     /// If this returns an error, the session is spent: it cannot be
-    /// advanced or fulfilled again, and [`Session::finish`] will refuse to
+    /// advanced or fulfilled again, and [`Workflow::finish`] will refuse to
     /// hand over a manifest that was never actually completed. Every later
     /// call reports [`ProtocolError::SessionFailed`].
     fn advance(&mut self) -> Result<Step, Error> {
@@ -575,7 +575,7 @@ impl Session for BuilderSession {
     ///
     /// Fails with [`ProtocolError::SessionNotComplete`] if the workflow
     /// has not reached [`BuilderStep::Complete`], or with
-    /// [`ProtocolError::SessionFailed`] if [`Session::advance`] returned
+    /// [`ProtocolError::SessionFailed`] if [`Workflow::advance`] returned
     /// an error.
     fn finish(self) -> Result<BuilderReport, Error> {
         self.workflow.finish()

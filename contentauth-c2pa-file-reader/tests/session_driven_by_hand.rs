@@ -39,7 +39,7 @@ use contentauth_c2pa_file_reader::{
 use contentauth_c2pa_format_jpeg::JpegFormat;
 use contentauth_c2pa_primitives::HostError;
 use contentauth_c2pa_reader::ValidationState;
-use contentauth_state_machine::{replay, ProtocolError, Recorder, RequestId, Session, Step};
+use contentauth_sans_io_core::{replay, ProtocolError, Recorder, RequestId, Step, Workflow};
 
 const C_JPG: &[u8] = include_bytes!("../../contentauth-c2pa-reader/tests/fixtures/C.jpg");
 const FIXTURE_ISSUER: &[u8] =
@@ -115,7 +115,7 @@ fn advancing_past_complete_is_idempotent() {
         }
     }
 
-    // The session already finished the workflow; the `Session` contract
+    // The session already finished the workflow; the `Workflow` contract
     // promises `advance` keeps reporting so idempotently rather than
     // erroring or re-running anything.
     assert_eq!(session.advance().unwrap(), Step::Complete);

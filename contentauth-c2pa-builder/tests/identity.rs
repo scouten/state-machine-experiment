@@ -27,7 +27,7 @@ use contentauth_c2pa_reader::{
     identity::IdentityCredential as ReadCredential, ReadHostReply, ReadReport, ReadRequest,
     ReadSession, ReadSettings, ReadStep, ValidationState,
 };
-use contentauth_state_machine::Session;
+use contentauth_sans_io_core::Workflow;
 
 const TEST_SIGNER_CERT: &[u8] = include_bytes!("fixtures/test-signer.der");
 const TEST_SIGNER_KEY: &[u8] = include_bytes!("fixtures/test-signer.key.pem");

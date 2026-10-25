@@ -23,7 +23,7 @@ mod common;
 use common::{expected_exclusions, store, tiff, Kind, ALL_KINDS, PIXELS};
 use contentauth_c2pa_format::{
     test_util::{conformance, MemoryHost, STREAM},
-    ByteRange, Edit, FormatError, FormatHandler, HostError, IoReply, ProtocolError, Session, Step,
+    ByteRange, Edit, FormatError, FormatHandler, HostError, IoReply, ProtocolError, Step, Workflow,
 };
 use contentauth_c2pa_format_tiff::TiffFormat;
 

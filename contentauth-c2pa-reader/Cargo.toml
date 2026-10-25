@@ -13,7 +13,7 @@ categories = ["api-bindings"]
 publish = false
 
 [dependencies]
-contentauth-state-machine = { path = "../contentauth-state-machine" }
+contentauth-sans-io-core = { path = "../contentauth-sans-io-core" }
 
 # Shared C2PA vocabulary (StreamId, ByteRange, HashAlgorithm, SigningAlg,
 # HostError) and the deterministic Sig_structure encoder, held in common
@@ -88,10 +88,10 @@ x509-ocsp = { version = "0.2.1", default-features = false }
 sha1 = { version = "0.10", default-features = false }
 
 [dev-dependencies]
-# Enables `SessionCore::fulfill_unchecked`, which this crate's own tests use
+# Enables `ManualWorkflowCore::fulfill_unchecked`, which this crate's own tests use
 # to exercise `ReadSession`'s defense-in-depth check against a reply payload
 # `fulfill` itself would reject.
-contentauth-state-machine = { path = "../contentauth-state-machine", features = [
+contentauth-sans-io-core = { path = "../contentauth-sans-io-core", features = [
     "test-util",
 ] }
 # Used only by `test_support.rs`, to compute an assertion's expected hash

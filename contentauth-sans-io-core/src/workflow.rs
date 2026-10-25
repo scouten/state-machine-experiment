@@ -36,8 +36,12 @@ pub enum Step {
     Complete,
 }
 
-/// The interaction contract every session built on this engine offers its
-/// host.
+/// The host-driven interaction contract, independent of implementation style.
+///
+/// Implement this with an explicit state machine using [`ManualWorkflowCore`],
+/// or with a coroutine-style `async fn` using
+/// [`CoroutineWorkflow`](crate::CoroutineWorkflow). Both expose the same
+/// synchronous interface; the host owns external operations and scheduling.
 ///
 /// This is the "sans-I/O" pattern applied to a state machine: a session runs
 /// entirely synchronously and never blocks. When it cannot make further
@@ -57,8 +61,8 @@ pub enum Step {
 ///         advance() │                       │ fulfill(id, reply)
 ///                   ▼                       │
 ///              ┌────────────────────────────────────────────────┐
-///              │                    SESSION                     │
-///              │  synchronous state machine + request tracker   │
+///              │                    WORKFLOW                    │
+///              │  host-driven progress + request/reply tracking │
 ///              └────────────────────────────────────────────────┘
 /// ```
 ///
@@ -74,7 +78,7 @@ pub enum Step {
 ///
 /// A session is a `Send` value meant to be handed across threads or tasks,
 /// not accessed concurrently. Implementations may use internal shared
-/// state: [`Workflow`](crate::Workflow) uses a synchronized mailbox shared
+/// state: [`CoroutineWorkflow`](crate::CoroutineWorkflow) uses a synchronized mailbox shared
 /// with its future.
 ///
 /// # Not re-entrant; host calls must be serialized
@@ -99,7 +103,7 @@ pub enum Step {
 /// harness, an FFI dispatcher, a generic driver loop) can be written once
 /// against any session built on this engine, whatever workflow it carries
 /// out.
-pub trait Session: Send {
+pub trait Workflow: Send {
     /// This session's request vocabulary.
     type Request: Request;
 
@@ -187,9 +191,9 @@ pub trait Session: Send {
 ///
 /// Kept separate from a concrete session's own workflow-phase state (its
 /// "where in the workflow am I" enum) so that phase enum never needs
-/// `Complete` or `Failed` variants of its own — [`SessionCore`] is the single
-/// place that decides whether [`SessionCore::fulfill`] and
-/// [`SessionCore::finish_check`] should still succeed.
+/// `Complete` or `Failed` variants of its own — [`ManualWorkflowCore`] is the single
+/// place that decides whether [`ManualWorkflowCore::fulfill`] and
+/// [`ManualWorkflowCore::finish_check`] should still succeed.
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Lifecycle {
     Running,
@@ -197,12 +201,16 @@ enum Lifecycle {
     Failed(Failure),
 }
 
-/// The bookkeeping every [`Session`] implementation needs, factored out so a
-/// concrete session only has to write the workflow logic itself.
+/// Request and lifecycle bookkeeping for a hand-written [`Workflow`].
+///
+/// This helper does not implement the workflow's state machine: the caller
+/// writes its own explicit phases and transitions. For a compiler-generated
+/// state machine written with `async`/`.await`, use
+/// [`CoroutineWorkflow`](crate::CoroutineWorkflow) instead.
 ///
 /// A concrete session embeds one of these alongside its own workflow-phase
-/// state and delegates [`Session::outstanding_requests`] and
-/// [`Session::fulfill`] to it directly. Its `advance` method issues requests
+/// state and delegates [`Workflow::outstanding_requests`] and
+/// [`Workflow::fulfill`] to it directly. Its `advance` method issues requests
 /// through [`Self::issue`] and consumes replies through [`Self::take_reply`],
 /// and calls [`Self::mark_complete`] or [`Self::mark_failed`] when the
 /// workflow reaches a terminal state. Its `finish` method calls
@@ -211,8 +219,8 @@ enum Lifecycle {
 /// # Example
 ///
 /// ```
-/// use contentauth_state_machine::{
-///     HostRequest, ProtocolError, Request, RequestId, Session, SessionCore, Step,
+/// use contentauth_sans_io_core::{
+///     HostRequest, ManualWorkflowCore, ProtocolError, Request, RequestId, Step, Workflow,
 /// };
 ///
 /// #[derive(Clone, Debug)]
@@ -248,20 +256,20 @@ enum Lifecycle {
 /// }
 ///
 /// struct PingSession {
-///     core: SessionCore<PingRequest>,
+///     core: ManualWorkflowCore<PingRequest>,
 ///     request: Option<RequestId>,
 /// }
 ///
 /// impl PingSession {
 ///     fn new() -> Self {
 ///         Self {
-///             core: SessionCore::default(),
+///             core: ManualWorkflowCore::default(),
 ///             request: None,
 ///         }
 ///     }
 /// }
 ///
-/// impl Session for PingSession {
+/// impl Workflow for PingSession {
 ///     type Error = PingError;
 ///     type Output = ();
 ///     type Request = PingRequest;
@@ -329,12 +337,12 @@ enum Lifecycle {
 /// # Ok::<(), PingError>(())
 /// ```
 #[derive(Debug)]
-pub struct SessionCore<Req: Request> {
+pub struct ManualWorkflowCore<Req: Request> {
     tracker: RequestTracker<Req>,
     lifecycle: Lifecycle,
 }
 
-impl<Req: Request> Default for SessionCore<Req> {
+impl<Req: Request> Default for ManualWorkflowCore<Req> {
     fn default() -> Self {
         Self {
             tracker: RequestTracker::default(),
@@ -343,7 +351,7 @@ impl<Req: Request> Default for SessionCore<Req> {
     }
 }
 
-impl<Req: Request> SessionCore<Req> {
+impl<Req: Request> ManualWorkflowCore<Req> {
     /// Issues a new request with a session-unique ID and returns that ID.
     pub fn issue(&mut self, kind: Req) -> RequestId {
         self.tracker.issue(kind)
@@ -392,7 +400,7 @@ impl<Req: Request> SessionCore<Req> {
     /// workflow-phase enum applies here to the session's lifecycle, so a
     /// half-built result is never mistaken for a finished one. Pass the
     /// phase the session was in *before* it began the work that failed
-    /// (what [`Session::phase`] reported then), not the placeholder the
+    /// (what [`Workflow::phase`] reported then), not the placeholder the
     /// failure left behind, and the error being returned as `cause`.
     ///
     /// Only the first failure is remembered: a later call (for example, an
@@ -468,7 +476,7 @@ mod tests {
 
     #[test]
     fn the_first_failure_is_the_one_remembered() {
-        let mut core = SessionCore::<Ping>::default();
+        let mut core = ManualWorkflowCore::<Ping>::default();
         assert!(core.failure().is_none());
 
         core.mark_failed("Reading", &"the first thing that went wrong");
@@ -482,7 +490,7 @@ mod tests {
 
     #[test]
     fn every_later_call_reports_the_failure() {
-        let mut core = SessionCore::<Ping>::default();
+        let mut core = ManualWorkflowCore::<Ping>::default();
         let id = core.issue(Ping::Ping(0));
         core.mark_failed("AwaitingPong", &"boom");
 
@@ -498,7 +506,7 @@ mod tests {
 
     #[test]
     fn failed_error_without_a_failure_reports_one_generically() {
-        let core = SessionCore::<Ping>::default();
+        let core = ManualWorkflowCore::<Ping>::default();
         assert_eq!(
             core.failed_error(),
             ProtocolError::SessionFailed(Failure::default())
@@ -508,7 +516,7 @@ mod tests {
 
     #[test]
     fn unchecked_fulfillment_records_a_reply_without_validation() {
-        let mut core = SessionCore::<Ping>::default();
+        let mut core = ManualWorkflowCore::<Ping>::default();
         let id = core.issue(Ping::Ping(0));
 
         core.fulfill_unchecked(id, Pong::Unrelated);
@@ -574,11 +582,11 @@ mod tests {
 
     #[derive(Default)]
     struct TestSession {
-        core: SessionCore<TestRequest>,
+        core: ManualWorkflowCore<TestRequest>,
         advances: usize,
     }
 
-    impl Session for TestSession {
+    impl Workflow for TestSession {
         type Error = ProtocolError;
         type Output = ();
         type Request = TestRequest;

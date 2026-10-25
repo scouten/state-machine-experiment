@@ -24,7 +24,7 @@ use contentauth_c2pa_primitives::{
     tsa::{timestamp_request, timestamp_token},
     ByteRange, Bytes, HashAlgorithm, HostError,
 };
-use contentauth_state_machine::{Session, Step};
+use contentauth_sans_io_core::{Step, Workflow};
 
 use crate::{builder::SignedAsset, error::Error, signer::AsyncSigner};
 

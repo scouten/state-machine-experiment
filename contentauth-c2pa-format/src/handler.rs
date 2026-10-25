@@ -14,7 +14,7 @@
 //! The trait a container-format handler implements.
 
 use contentauth_c2pa_primitives::StreamId;
-use contentauth_state_machine::Session;
+use contentauth_sans_io_core::Workflow;
 
 use crate::{
     descriptor::FormatDescriptor,
@@ -31,12 +31,12 @@ use crate::{
 /// their operations' concrete types through this bound rather than
 /// spelling out the three associated types each time.
 pub trait FormatOp<Output>:
-    Session<Request = IoRequest, Output = Output, Error = FormatError>
+    Workflow<Request = IoRequest, Output = Output, Error = FormatError>
 {
 }
 
 impl<Output, S> FormatOp<Output> for S where
-    S: Session<Request = IoRequest, Output = Output, Error = FormatError>
+    S: Workflow<Request = IoRequest, Output = Output, Error = FormatError>
 {
 }
 
