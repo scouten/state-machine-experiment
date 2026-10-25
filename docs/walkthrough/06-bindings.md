@@ -38,6 +38,11 @@ host arrangement: the same JS `advance`/`fulfill` driver runs inside a browser
 module Worker or Node Worker thread. A small synchronous Wasm adapter exposes
 the existing read bridge on the browser side; Node reuses Neon unchanged.
 One facade/protocol handles input snapshots, queued reads/builds, results and disposal.
+Private snapshots now transfer into Workers without another payload clone.
+An explicit `ownership: "transfer"` read/sign option also consumes a complete
+caller-owned buffer before any await, avoiding its snapshot; default copy
+semantics remain unchanged. Pooled/subview/shared/nontransferable inputs cannot
+use consuming transfer. All other read/write boundary copies are unchanged.
 Actual tests compare complete reports and request bytes across all three
 browsers and Node, including 64 MiB signed reads and application task progress.
 No Tokio, new domain behavior or cooperative scheduling is needed for this

@@ -115,6 +115,10 @@ flowchart TB
 
 ## Crate table
 
+The shared JS input boundary transfers private snapshots into the Worker.
+An explicit consuming input option can also avoid the initial snapshot while
+preserving default attached-buffer semantics. Crate dependencies are unchanged.
+
 | Crate | Layer | What it is |
 |---|---|---|
 | `contentauth-state-machine` | Foundation | The engine: `Session`, `SessionCore` (hand-written phase enum) or `Workflow` (an `async fn`, no runtime), `Nested` for composing sessions inside workflows, request tracking, protocol errors, failure context (`phase()`, `Failure`), and `Recorder`/`replay` transcripts. Domain-agnostic. |

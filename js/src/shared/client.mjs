@@ -10,7 +10,8 @@
  * rejected and the Worker terminated.
  *
  * @typedef {object} Port Transport abstraction over `Worker`/`worker_threads`.
- * @property {(message: object) => void} post
+ * @property {(message: object, transfer?: ArrayBuffer[]) => void} post
+ * @property {(buffer: ArrayBuffer) => boolean} [canTransfer]
  * @property {(handler: (message: object) => void) => void} onMessage
  * @property {(handler: (error: Error) => void) => void} onError
  * @property {() => unknown} terminate
@@ -18,6 +19,17 @@
 
 /** Wire-protocol version; both ends reject any other value. */
 export const protocol = "shared-worker-proof-v2";
+
+function input(asset, ownership, port) {
+  if (ownership === "copy") return new Uint8Array(asset);
+  if (ownership !== "transfer") throw new TypeError("ownership must be copy or transfer");
+  const buffer = asset.buffer;
+  if (!(buffer instanceof ArrayBuffer) || asset.byteOffset !== 0 ||
+      asset.byteLength !== buffer.byteLength || port.canTransfer?.(buffer) === false)
+    throw new TypeError("transfer requires an exclusively owned full ArrayBuffer view");
+  // Consume before any await, so a queued operation owns an immutable snapshot.
+  return new Uint8Array(buffer.transferToFixedLength());
+}
 
 /** Serializes an error for the wire (structured clone drops prototypes). */
 export function failure(error) {
@@ -70,41 +82,42 @@ export class Client {
   }
   /**
    * Reads and validates an asset.
-   * @param {Uint8Array} asset Copied synchronously, before any await.
-   * @param {{settings?: object, now?: number}} [options] `now` is Unix seconds
+   * @param {Uint8Array} asset Snapshotted or consumed synchronously, before any await.
+   * @param {{settings?: object, now?: number, ownership?: "copy"|"transfer"}} [options] `now` is Unix seconds
    *   (signed 32-bit) used as the validation clock; defaults to the current time.
    * @returns {Promise<{report: object|null, stats: object, workerMs: number}>}
    */
-  async read(asset, { settings, now = Math.floor(Date.now() / 1000) } = {}) {
+  async read(asset, { settings, now = Math.floor(Date.now() / 1000), ownership = "copy" } = {}) {
     if (this.#closed) throw this.#closed;
     if (!(asset instanceof Uint8Array)) throw new TypeError("asset must be Uint8Array");
     if (!Number.isInteger(now) || now < -2147483648 || now > 2147483647)
       throw new TypeError("proof clock must be signed 32-bit Unix seconds");
-    // Snapshot before await; no transfer means caller's bytes stay attached.
-    const snapshot = new Uint8Array(asset);
     const json = settings === undefined ? undefined : JSON.stringify(settings);
+    const snapshot = input(asset, ownership, this.#port);
     await this.#ready;
     if (this.#closed) throw this.#closed;
     return this.#call({ method: "read", asset: snapshot, settings: json, now });
   }
   /**
    * Signs an asset with a manifest built from `definition`.
-   * @param {Uint8Array} asset Copied synchronously, before any await.
+   * @param {Uint8Array} asset Snapshotted or consumed synchronously, before any await.
    * @param {object|string} definition Manifest definition (object or JSON).
    * @param {{alg: "es256", certs: Uint8Array[], sign(data: Uint8Array): Promise<Uint8Array>|Uint8Array}} signer
    *   Runs on the caller's thread; its key never leaves it.
+   * @param {{ownership?: "copy"|"transfer"}} [options] Transfer consumes the
+   *   complete input backing buffer immediately, including any aliases.
    */
-  async sign(asset, definition, signer) {
+  async sign(asset, definition, signer, { ownership = "copy" } = {}) {
     if (this.#closed) throw this.#closed;
     if (!(asset instanceof Uint8Array)) throw new TypeError("asset must be Uint8Array");
     if (signer?.alg !== "es256" || typeof signer.sign !== "function")
       throw new TypeError("proof signer must supply es256 and sign(data)");
     if (!Array.isArray(signer.certs) || !signer.certs.every((cert) => cert instanceof Uint8Array))
       throw new TypeError("signer certs must be Uint8Array[]");
-    const snapshot = new Uint8Array(asset);
     const certs = signer.certs.map((cert) => new Uint8Array(cert));
     const json = typeof definition === "string" ? definition : JSON.stringify(definition);
     const sign = signer.sign.bind(signer);
+    const snapshot = input(asset, ownership, this.#port);
     await this.#ready;
     if (this.#closed) throw this.#closed;
     return this.#call({ method: "build", asset: snapshot, definition: json, certs }, sign);
@@ -114,7 +127,8 @@ export class Client {
     const id = this.#next++;
     return new Promise((resolve, reject) => {
       this.#pending.set(id, { resolve, reject, sign, signing: false });
-      try { this.#port.post({ protocol, id, ...command }) }
+      const transfer = [command.asset.buffer, ...(command.certs ?? []).map((cert) => cert.buffer)];
+      try { this.#port.post({ protocol, id, ...command }, transfer) }
       catch (error) { this.#pending.delete(id); reject(error) }
     });
   }
