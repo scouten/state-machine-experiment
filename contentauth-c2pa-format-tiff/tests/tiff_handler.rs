@@ -172,6 +172,105 @@ fn a_plan_copies_the_source_around_its_one_rewritten_pointer() {
     assert_eq!(plan.replaced, None);
 }
 
+// Regression for the exploit in c2pa-rs PR #2282 (memory amplification when
+// cloning strip/tile/BigTable data): a crafted TIFF whose strip byte counts sum
+// to far more than the file makes a re-serializing cloner re-copy the input
+// until it runs out of memory. The fixture is hostile on purpose — sixteen
+// overlapping strips that all alias the header, each declaring a ~1 GB byte
+// count (~16 GB in all, millions of times the file). This handler never
+// re-serializes strips — it splices the source verbatim and appends the store
+// ("nothing moves"), so the bytes it copies from the source always sum to
+// exactly the source length, whatever the strip entries claim.
+#[test]
+fn embedding_copies_the_source_exactly_once_so_strips_cannot_amplify() {
+    const STRIPS: u64 = 16;
+    const GIB: u64 = 1_000_000_000;
+    for kind in ALL_KINDS {
+        // StripOffsets/StripByteCounts as arrays of `STRIPS` overlapping strips
+        // (every offset aliases the header, every byte count claims `GIB`), so
+        // the declared strip bytes dwarf the file. Both are `LONG` (4 bytes).
+        let hl = kind.header_len() as u64;
+        let offsets = hl + kind.ifd_len(2) as u64;
+        let counts = offsets + STRIPS * 4;
+        let mut source = kind.header(hl);
+        source.extend(kind.ifd(
+            &[
+                kind.entry(273, 4, STRIPS, offsets), // StripOffsets
+                kind.entry(279, 4, STRIPS, counts),  // StripByteCounts
+            ],
+            0,
+        ));
+        source.extend((0..STRIPS).flat_map(|_| kind.uint(hl, 4)));
+        source.extend((0..STRIPS).flat_map(|_| kind.uint(GIB, 4)));
+
+        let plan = MemoryHost::of(source.clone())
+            .run(TiffFormat.plan_embed(STREAM, 64))
+            .unwrap();
+
+        let copied: u64 = plan
+            .edits
+            .iter()
+            .filter_map(|edit| match edit {
+                Edit::Copy(range) => Some(range.len),
+                _ => None,
+            })
+            .sum();
+        // The amplification invariant: cumulative source copy never exceeds the
+        // source length (here it is the whole file minus the one rewritten
+        // pointer), so strips can never make it re-copy the input.
+        assert!(
+            copied <= source.len() as u64,
+            "cumulative source copy ({copied}) must not exceed the source length ({})",
+            source.len()
+        );
+        assert!(
+            copied + u64::from(kind.word() as u32) >= source.len() as u64,
+            "the source should be copied nearly whole, minus the rewritten pointer"
+        );
+    }
+}
+
+// Regression for the exploit in c2pa-rs PR #2669 (cumulative amplification
+// across many IFD entries): a TIFF whose many private tags — including the
+// 8-byte element types that had no size check at all — all alias the same
+// bytes with large counts, summing to many times the file size. This handler
+// reads no entry's data except the single C2PA store entry (`continue`s past
+// every other tag) and splices the source verbatim on embed, so neither the
+// count of entries nor their claimed sizes can amplify anything.
+#[test]
+fn many_aliasing_entries_do_not_amplify_on_embed() {
+    for kind in [ALL_KINDS[2], ALL_KINDS[3]] {
+        let hl = kind.header_len() as u64;
+
+        // 200 private tags, each a Long8 (8-byte type) claiming 600 KB at the
+        // same aliasing offset.
+        let entries: Vec<Vec<u8>> = (0..200u16)
+            .map(|i| kind.entry(0x8000 + i, 16, 600_000, hl))
+            .collect();
+        let mut asset = kind.header(hl);
+        asset.extend(kind.ifd(&entries, 0));
+        asset.extend(vec![0u8; 100]);
+
+        let plan = MemoryHost::of(asset.clone())
+            .run(TiffFormat.plan_embed(STREAM, 64))
+            .unwrap();
+
+        let copied: u64 = plan
+            .edits
+            .iter()
+            .filter_map(|edit| match edit {
+                Edit::Copy(range) => Some(range.len),
+                _ => None,
+            })
+            .sum();
+        assert!(
+            copied <= asset.len() as u64,
+            "cumulative source copy ({copied}) must not exceed the source length ({})",
+            asset.len()
+        );
+    }
+}
+
 /// A TIFF written by another tool: its C2PA entry sits among IFD 0's
 /// others, with the store's data in the middle of the file.
 fn foreign(kind: Kind, manifest: &[u8]) -> Vec<u8> {
@@ -332,6 +431,126 @@ fn refuses_a_malformed_store_entry() {
     ));
     two.extend(&manifest);
     assert!(matches!(locate_err(two), FormatError::Malformed(m) if m.contains("more than one")));
+}
+
+// Regression for the exploit in c2pa-rs PR #2012 (integer-overflow panic in
+// BigTIFF processing): a crafted 64-bit `value_count` of 0x2000000000000001
+// that, multiplied by a wide type's size, overflows `u64`. This handler never
+// multiplies a count by a type size — it reads the store entry as UNDEFINED
+// (one byte per value) and bounds the range with `checked_add` — so the
+// crafted count is refused as malformed rather than panicking.
+#[test]
+fn a_bigtiff_store_entry_with_an_overflowing_value_count_is_refused_not_panicked() {
+    for kind in [ALL_KINDS[2], ALL_KINDS[3]] {
+        assert!(
+            kind.big,
+            "this regression is specific to BigTIFF's 64-bit counts"
+        );
+
+        let mut asset = foreign(kind, &store(64));
+
+        // The C2PA entry is the second in the IFD; overwrite its `count`
+        // field with the PoC value.
+        let count_len = kind.ifd_len(0) - kind.word();
+        let entry_len = kind.ifd_len(1) - kind.ifd_len(0);
+        let count_at = kind.header_len() + count_len + entry_len + 4;
+        asset[count_at..count_at + kind.word()]
+            .copy_from_slice(&kind.uint(0x2000_0000_0000_0001, kind.word()));
+
+        assert!(
+            matches!(locate_err(asset), FormatError::Malformed(_)),
+            "a crafted BigTIFF value_count must be refused, not overflow"
+        );
+    }
+}
+
+// Regression for the exploit in c2pa-rs PR #2059 (forged IFD entry count →
+// multi-GB allocation / OOM): a BigTIFF store entry of Byte type whose count
+// claims ~10 billion bytes. This handler validates the store's byte range
+// against the source length before any read (`check_entry`), so the forged
+// count is refused rather than driving an allocation the file could never fill.
+#[test]
+fn a_bigtiff_byte_entry_claiming_billions_of_bytes_is_refused_not_allocated() {
+    const TEN_BILLION: u64 = 10_000_000_000;
+    for kind in [ALL_KINDS[2], ALL_KINDS[3]] {
+        let hl = kind.header_len() as u64;
+        let data = hl + kind.ifd_len(1) as u64;
+        let mut asset = kind.header(hl);
+        // Store entry (tag 0xCD41) of Byte type claiming billions of bytes.
+        asset.extend(kind.ifd(&[kind.entry(0xcd41, 1, TEN_BILLION, data)], 0));
+        asset.extend(vec![0u8; 100]);
+
+        assert!(
+            matches!(locate_err(asset), FormatError::Malformed(m) if m.contains("past the end")),
+            "a forged BigTIFF entry count must be refused, not allocated"
+        );
+    }
+}
+
+// Regression for the exploit in c2pa-rs PR #2068 (cyclic IFD chain → infinite
+// loop / OOM): an IFD whose `next` pointer points to an already-visited offset.
+// This handler tracks visited IFD offsets in a set (`seen`) and refuses a
+// pointer back to any of them, so a self-referential IFD (A→A, the 14-byte PoC)
+// is rejected rather than looped on. The mutual cycle (A→B→A) is covered by
+// `refuses_what_is_malformed`.
+#[test]
+fn a_self_referential_ifd_chain_is_refused_not_looped() {
+    for kind in ALL_KINDS {
+        let mut asset = tiff(kind, 1, 0);
+
+        // The single IFD sits right after the header; point its `next`
+        // field back at itself.
+        let next_at = kind.header_len() + kind.ifd_len(3) - kind.word();
+        asset[next_at..next_at + kind.word()]
+            .copy_from_slice(&kind.uint(kind.header_len() as u64, kind.word()));
+
+        assert!(
+            matches!(locate_err(asset), FormatError::Malformed(m) if m.contains("loops")),
+            "a self-referential IFD chain must be refused, not looped on"
+        );
+    }
+}
+
+// The two proof-of-concept cycles from c2pa-rs PR #2068 (cyclic IFD chain →
+// infinite loop / OOM), as explicit little-endian byte layouts. Each IFD here
+// carries one dummy entry so it passes this handler's non-empty-IFD check and
+// the chain is actually followed — proving the cycle itself is what gets
+// refused (via the `seen`-offset set), not the empty IFD. Against the unfixed
+// c2pa-rs parser each would loop forever.
+#[test]
+fn cyclic_ifd_self_loop_is_refused() {
+    // 14-byte PoC's shape: IFD at offset 8 whose next-offset is 8 (A → A).
+    #[rustfmt::skip]
+    let crafted: Vec<u8> = vec![
+        0x49, 0x49, // byte order: little-endian
+        0x2A, 0x00, // magic: 42
+        0x08, 0x00, 0x00, 0x00, // first IFD at offset 8
+        // IFD at offset 8:
+        0x01, 0x00, // entry count: 1
+        0x00, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, // dummy entry (tag 256)
+        0x08, 0x00, 0x00, 0x00, // next IFD offset: 8 (self-loop)
+    ];
+    assert!(matches!(locate_err(crafted), FormatError::Malformed(m) if m.contains("loops")));
+}
+
+#[test]
+fn cyclic_ifd_two_node_cycle_is_refused() {
+    // 20-byte PoC's shape: A (offset 8) → B (offset 26) → A (offset 8).
+    #[rustfmt::skip]
+    let crafted: Vec<u8> = vec![
+        0x49, 0x49, // byte order: little-endian
+        0x2A, 0x00, // magic: 42
+        0x08, 0x00, 0x00, 0x00, // first IFD at offset 8
+        // IFD A at offset 8:
+        0x01, 0x00, // entry count: 1
+        0x00, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, // dummy entry
+        0x1A, 0x00, 0x00, 0x00, // next IFD offset: 26 (IFD B)
+        // IFD B at offset 26:
+        0x01, 0x00, // entry count: 1
+        0x00, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, // dummy entry
+        0x08, 0x00, 0x00, 0x00, // next IFD offset: 8 (back to IFD A)
+    ];
+    assert!(matches!(locate_err(crafted), FormatError::Malformed(m) if m.contains("loops")));
 }
 
 #[test]
